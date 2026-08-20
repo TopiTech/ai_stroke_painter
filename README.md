@@ -1,6 +1,6 @@
 # AI Stroke Painter MVP
 
-Krita 上で、決定論的な描画計画から編集可能な筆圧付きストロークを描くオフライン MVP です。LLM・画像生成・ネットワーク通信は使いません。
+Krita 上で、筆圧付きストロークの描画計画を生成して編集可能なペイントレイヤーへ描く MVP です。オフラインのルールベース Planner に加え、OpenAI Chat Completions 互換 API を使う LLM Planner を選べます。
 
 ## できること
 
@@ -9,8 +9,9 @@ Krita 上で、決定論的な描画計画から編集可能な筆圧付きス�
 - `AI Strokes (editable)` ペイントレイヤーへ `Node.paintLine` で筆圧 0.0–1.0 の線分として描画
 - 同名レイヤーを再利用。停止ボタンは線分の途中ではなく安全な描画境界で反映
 - 検証済みの schema version 付き JSON をユーザーデータ領域へ保存
+- OpenAI 互換の `POST /chat/completions` から JSON 計画を取得し、描画前に検証
 
-現在のブラシプリセットと前景色で描画します。ブラシプリセットの自動切替、画像生成、VLM 評価、LLM 接続、非同期ワーカーは対象外です。
+現在のブラシプリセットと前景色で描画します。ブラシプリセットの自動切替、画像生成、VLM 評価、連続ネイティブストロークは対象外です。
 
 ## 動作要件
 
@@ -38,10 +39,19 @@ python build_plugin.py
 
 描画結果は通常のペイントレイヤー上のピクセルなので、Krita のレイヤー・消しゴム・Undo で編集できます。Krita のビルドによって Undo の粒度が細かくなる場合があります。
 
+### OpenAI 互換 LLM を使う
+
+1. Planner で **OpenAI 互換 LLM** を選びます。
+2. Base URL に API のバージョン付きルート（例: `https://api.openai.com/v1`、またはローカルサーバーの `http://127.0.0.1:PORT/v1`）を設定します。フルの `/chat/completions` URL も指定できます。
+3. Chat Completions 対応のモデル名を入力します。API Key は入力欄、または `OPENAI_API_KEY` 環境変数で渡します。
+
+キーは設定ファイルや JSON 計画へ保存されません。互換性を優先して、リクエストは `model` と `messages` を用いる標準的な Chat Completions 形式です。LLM 出力は、schema・本数・座標範囲・筆圧などを検証し、満たさない場合は描画せずエラーにします。LLM モードの Seed はモデルへの指示の一部であり、出力の完全な再現性はプロバイダー側の機能に依存します。
+
 ## 設計
 
 - `domain.py`: 検証・JSON 変換を備えた Krita 非依存の `Stroke` / `DrawingPlan`
 - `planner.py`: 交換可能なルールベース Planner
+- `llm_planner.py`: OpenAI 互換 Chat Completions Adapter と応答検証
 - `ports.py`: Planner / Canvas / 将来の Native Bridge 境界
 - `krita_adapter.py`: Krita 描画と対象レイヤー管理
 - `docker.py`: Docker UI とユースケース制御
@@ -51,7 +61,7 @@ python build_plugin.py
 
 ## 検証
 
-Krita を起動せずに、決定性、キャンバス境界、圧力値域、JSON 往復、保存名衝突、レイヤー再利用、停止を確認できます。
+Krita を起動せずに、決定性、キャンバス境界、圧力値域、JSON 往復、保存名衝突、レイヤー再利用、停止、ローカル HTTP サーバー経由の OpenAI 互換呼び出しを確認できます。
 
 ```powershell
 Set-Location ..
@@ -60,4 +70,4 @@ python -m unittest ai_stroke_painter.self_test -v
 
 ## 安全性と制約
 
-外部通信・任意コード実行は行いません。保存するユーザーデータは計画 JSON のみです。連続したネイティブ 1 ストロークではなく、短い `paintLine` の列で近似しているため、ブラシや Krita ビルドにより見た目と Undo 粒度が変化する可能性があります。
+オフライン Planner は外部通信を行いません。OpenAI 互換 LLM モードでは、設定した Base URL に描画指示とキャンバス寸法を送信します。保存するユーザーデータは計画 JSON のみで、API キーは保存しません。連続したネイティブ 1 ストロークではなく、短い `paintLine` の列で近似しているため、ブラシや Krita ビルドにより見た目と Undo 粒度が変化する可能性があります。

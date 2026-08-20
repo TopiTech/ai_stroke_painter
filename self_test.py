@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import tempfile
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 import unittest
 from pathlib import Path
 
 from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint
 from .krita_adapter import KritaCanvasAdapter
+from .llm_planner import OpenAICompatiblePlanner, OpenAICompatibleSettings
 from .planner import RuleBasedPlanner
 from .storage import load_plan, save_plan
 
@@ -92,6 +96,86 @@ class PlannerAndStorageTests(unittest.TestCase):
             Stroke("one-point", [StrokePoint(0, 0, 0.5, 0)])
         with self.assertRaises(PlanValidationError):
             DrawingPlan.from_dict({"schema_version": 99, "prompt": "", "seed": 0, "strokes": []})
+
+
+class OpenAICompatiblePlannerTests(unittest.TestCase):
+    def test_calls_chat_completions_and_validates_plan(self):
+        expected_plan = {
+            "schema_version": 1,
+            "prompt": "a blue curve",
+            "seed": 12,
+            "strokes": [
+                {
+                    "id": "llm-stroke-1",
+                    "points": [
+                        {"x": 10, "y": 12, "pressure": 0.2, "time_ms": 0},
+                        {"x": 40, "y": 35, "pressure": 0.8, "time_ms": 20},
+                    ],
+                    "brush_preset": "Basic-5 Size",
+                    "color": "#3366cc",
+                    "size_px": 7,
+                }
+            ],
+        }
+
+        class Handler(BaseHTTPRequestHandler):
+            received = None
+
+            def do_POST(self):
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                type(self).received = {"path": self.path, "authorization": self.headers.get("Authorization"), "body": json.loads(body)}
+                response = {"choices": [{"message": {"content": "```json\n" + json.dumps(expected_plan) + "\n```"}}]}
+                encoded = json.dumps(response).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, _format, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            planner = OpenAICompatiblePlanner(
+                OpenAICompatibleSettings("http://127.0.0.1:%d/v1" % server.server_port, "test-model", "test-key", 2)
+            )
+            plan = planner.plan("a blue curve", 12, 1, 100, 100)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+        self.assertEqual(plan, DrawingPlan.from_dict(expected_plan))
+        self.assertEqual(Handler.received["path"], "/v1/chat/completions")
+        self.assertEqual(Handler.received["authorization"], "Bearer test-key")
+        self.assertEqual(Handler.received["body"]["model"], "test-model")
+        self.assertEqual(Handler.received["body"]["messages"][1]["content"], '{"prompt": "a blue curve", "seed": 12, "stroke_count": 1, "canvas": {"width": 100.0, "height": 100.0}}')
+
+    def test_rejects_out_of_bounds_llm_plan(self):
+        response = {
+            "choices": [
+                {"message": {"content": json.dumps({"schema_version": 1, "prompt": "curve", "seed": 1, "strokes": [{"id": "s", "points": [{"x": 0, "y": 0, "pressure": 0.5, "time_ms": 0}, {"x": 200, "y": 0, "pressure": 0.5, "time_ms": 1}]}]})}}
+            ]
+        }
+
+        class Response:
+            def read(self, _size):
+                return json.dumps(response).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "model"), opener=lambda *_args, **_kwargs: Response()
+        )
+        with self.assertRaisesRegex(RuntimeError, "キャンバス範囲外"):
+            planner.plan("curve", 1, 1, 100, 100)
 
 
 class CanvasAdapterTests(unittest.TestCase):

@@ -34,18 +34,22 @@ def _valid_dimension(value, name):
     return float(value)
 
 
+def validate_plan_request(prompt, seed, count, width, height):
+    """Planner 実装で共通の入力契約を検証して正規化する。"""
+    if not isinstance(prompt, str):
+        raise ValueError("prompt は文字列である必要があります")
+    if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+        raise ValueError("seed は 0 以上の整数である必要があります")
+    if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 200:
+        raise ValueError("count は 1 から 200 の整数である必要があります")
+    return prompt, seed, count, _valid_dimension(width, "width"), _valid_dimension(height, "height")
+
+
 class RuleBasedPlanner(PlannerPort):
     """決定論的でオフラインの Planner。将来 LLM Adapter と差し替え可能。"""
 
     def plan(self, prompt, seed, count, width, height):
-        if not isinstance(prompt, str):
-            raise ValueError("prompt は文字列である必要があります")
-        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
-            raise ValueError("seed は 0 以上の整数である必要があります")
-        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 200:
-            raise ValueError("count は 1 から 200 の整数である必要があります")
-        width = _valid_dimension(width, "width")
-        height = _valid_dimension(height, "height")
+        prompt, seed, count, width, height = validate_plan_request(prompt, seed, count, width, height)
 
         rng = random.Random(seed)
         strokes = []

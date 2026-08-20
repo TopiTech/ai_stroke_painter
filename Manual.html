@@ -7,7 +7,7 @@
 </head>
 <body>
   <h1>AI Stroke Painter MVP</h1>
-  <p>外部通信を使わず、再現可能な筆圧付きストロークを Krita のペイントレイヤーへ描画する実験的な MVP です。</p>
+  <p>筆圧付きストロークを Krita のペイントレイヤーへ描画する MVP です。オフラインのルールベース Planner と OpenAI 互換 LLM を選べます。</p>
   <h2>使い方</h2>
   <ol>
     <li>ドキュメントを開き、使いたいブラシと前景色を選択します。</li>
@@ -18,7 +18,10 @@
   <h2>結果と停止</h2>
   <p>描画先は <code>AI Strokes (editable)</code> レイヤーです。すでに同名のレイヤーがあれば再利用します。停止を押すと、現在の線分の安全な境界で描画を終えます。結果は通常のペイントレイヤーなので、Krita のレイヤー操作・消しゴム・Undo で編集できます。</p>
   <p>既定では schema version 付きの計画 JSON をユーザーデータ領域に保存し、保存先を Docker に表示します。</p>
+  <h2>OpenAI 互換 LLM</h2>
+  <p>Planner で <strong>OpenAI 互換 LLM</strong> を選び、Base URL（例: <code>https://api.openai.com/v1</code>）、Chat Completions 対応の Model、API Key を入力します。API Key 欄が空の場合は <code>OPENAI_API_KEY</code> 環境変数を使います。キーは保存しません。</p>
+  <p>指定した API に指示とキャンバス寸法を送信し、<code>/chat/completions</code> の JSON 応答を描画計画として検証します。スキーマ、本数、座標、筆圧が不正な応答は描画しません。LLM モードの Seed は完全な再現性を保証しません。</p>
   <h2>制約</h2>
-  <p>現在のブラシプリセットと前景色で描画します。ブラシの自動切替、LLM、画像生成、VLM 評価、連続ネイティブストロークは含みません。描画は <code>Node.paintLine</code> の短い線分列による近似のため、ブラシや Krita のビルドによって見た目と Undo 粒度が変わる場合があります。</p>
+  <p>現在のブラシプリセットと前景色で描画します。ブラシの自動切替、画像生成、VLM 評価、連続ネイティブストロークは含みません。描画は <code>Node.paintLine</code> の短い線分列による近似のため、ブラシや Krita のビルドによって見た目と Undo 粒度が変わる場合があります。</p>
 </body>
 </html>

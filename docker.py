@@ -1,33 +1,44 @@
 try:
     from PyQt5.QtWidgets import (
         QCheckBox,
+        QComboBox,
+        QFormLayout,
         QHBoxLayout,
         QLabel,
+        QLineEdit,
         QMessageBox,
         QPlainTextEdit,
         QProgressBar,
         QPushButton,
         QSpinBox,
+        QGroupBox,
         QVBoxLayout,
         QWidget,
     )
 except ImportError:
     from PyQt6.QtWidgets import (
         QCheckBox,
+        QComboBox,
+        QFormLayout,
         QHBoxLayout,
         QLabel,
+        QLineEdit,
         QMessageBox,
         QPlainTextEdit,
         QProgressBar,
         QPushButton,
         QSpinBox,
+        QGroupBox,
         QVBoxLayout,
         QWidget,
     )
 
+import os
+
 from krita import DockWidget, Krita
 
 from .krita_adapter import KritaCanvasAdapter
+from .llm_planner import OpenAICompatiblePlanner, OpenAICompatibleSettings
 from .planner import RuleBasedPlanner
 from .storage import save_plan
 
@@ -60,6 +71,29 @@ class AIStrokePainterDocker(DockWidget):
         controls.addWidget(self.count)
         layout.addLayout(controls)
 
+        self.planner_mode = QComboBox()
+        self.planner_mode.addItem("オフライン（ルールベース）", "offline")
+        self.planner_mode.addItem("OpenAI 互換 LLM", "openai_compatible")
+        layout.addWidget(QLabel("Planner"))
+        layout.addWidget(self.planner_mode)
+
+        self.llm_settings = QGroupBox("OpenAI 互換 API 設定（API キーは保存しません）")
+        llm_form = QFormLayout(self.llm_settings)
+        self.base_url = QLineEdit("https://api.openai.com/v1")
+        self.base_url.setPlaceholderText("例: https://api.openai.com/v1")
+        llm_form.addRow("Base URL", self.base_url)
+        self.model = QLineEdit()
+        self.model.setPlaceholderText("例: 使用する Chat Completions 対応モデル")
+        llm_form.addRow("Model", self.model)
+        self.api_key = QLineEdit()
+        try:
+            self.api_key.setEchoMode(QLineEdit.Password)
+        except AttributeError:
+            self.api_key.setEchoMode(QLineEdit.EchoMode.Password)
+        self.api_key.setPlaceholderText("空欄なら OPENAI_API_KEY")
+        llm_form.addRow("API Key", self.api_key)
+        layout.addWidget(self.llm_settings)
+
         self.save_json = QCheckBox("計画JSONを保存")
         self.save_json.setChecked(True)
         layout.addWidget(self.save_json)
@@ -84,6 +118,8 @@ class AIStrokePainterDocker(DockWidget):
 
         self.run_btn.clicked.connect(self.run)
         self.stop_btn.clicked.connect(self.cancel)
+        self.planner_mode.currentIndexChanged.connect(self._update_planner_settings_state)
+        self._update_planner_settings_state()
 
     def canvasChanged(self, canvas):
         pass
@@ -91,6 +127,20 @@ class AIStrokePainterDocker(DockWidget):
     def cancel(self):
         self._cancel = True
         self.status.setText("停止要求を受け付けました。現在の線分を完了後に停止します。")
+
+    def _update_planner_settings_state(self):
+        self.llm_settings.setEnabled(self.planner_mode.currentData() == "openai_compatible")
+
+    def _planner(self):
+        if self.planner_mode.currentData() == "offline":
+            return self.planner
+        return OpenAICompatiblePlanner(
+            OpenAICompatibleSettings(
+                base_url=self.base_url.text(),
+                model=self.model.text(),
+                api_key=self.api_key.text() or os.environ.get("OPENAI_API_KEY", ""),
+            )
+        )
 
     def run(self):
         document = Krita.instance().activeDocument()
@@ -103,7 +153,10 @@ class AIStrokePainterDocker(DockWidget):
         self.stop_btn.setEnabled(True)
         self.progress.setRange(0, 0)
         try:
-            plan = self.planner.plan(
+            planner = self._planner()
+            if self.planner_mode.currentData() == "openai_compatible":
+                self.status.setText("LLM に描画計画を問い合わせ中…")
+            plan = planner.plan(
                 self.prompt.toPlainText().strip(),
                 self.seed.value(),
                 self.count.value(),
