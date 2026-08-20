@@ -9,12 +9,19 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 PACKAGE_NAME = "ai_stroke_painter"
 EXCLUDED_NAMES = {"__pycache__", ".git", "dist"}
-EXCLUDED_FILES = {".gitignore", "ARCHITECTURE.md", "README.md", "build_plugin.py", "self_test.py"}
+EXCLUDED_FILES = {
+    ".gitignore",
+    "ARCHITECTURE.md",
+    "README.md",
+    "build_plugin.py",
+    "self_test.py",
+    PACKAGE_NAME + ".desktop",
+}
 
 
 def build(output: Path) -> Path:
     source = Path(__file__).resolve().parent
-    manifest = source.parent / (PACKAGE_NAME + ".desktop")
+    manifest = source / (PACKAGE_NAME + ".desktop")
     if not manifest.is_file():
         raise FileNotFoundError("Krita manifest が見つかりません: %s" % manifest)
     output.parent.mkdir(parents=True, exist_ok=True)

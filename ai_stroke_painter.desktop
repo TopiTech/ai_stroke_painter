@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=ai_stroke_painter
+X-Python-2-Compatible=false
+X-Krita-Manual=Manual.html
+Name=AI Stroke Painter MVP
+Name[ja]=AI Stroke Painter MVP
+Comment=Plan and render editable pressure-aware strokes in Krita
+Comment[ja]=Krita上で編集可能な筆圧付きストロークを計画・描画します

@@ -8,7 +8,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 import unittest
 from pathlib import Path
+from zipfile import ZipFile
 
+from .build_plugin import PACKAGE_NAME, build
 from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint
 from .krita_adapter import KritaCanvasAdapter
 from .llm_planner import OpenAICompatiblePlanner, OpenAICompatibleSettings
@@ -96,6 +98,19 @@ class PlannerAndStorageTests(unittest.TestCase):
             Stroke("one-point", [StrokePoint(0, 0, 0.5, 0)])
         with self.assertRaises(PlanValidationError):
             DrawingPlan.from_dict({"schema_version": 99, "prompt": "", "seed": 0, "strokes": []})
+
+
+class PluginBuildTests(unittest.TestCase):
+    def test_build_includes_manifest_once_at_archive_root(self):
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / (PACKAGE_NAME + ".zip")
+            self.assertEqual(build(output), output)
+            with ZipFile(output) as archive:
+                names = archive.namelist()
+
+        self.assertIn(PACKAGE_NAME + ".desktop", names)
+        self.assertIn(PACKAGE_NAME + "/__init__.py", names)
+        self.assertNotIn(PACKAGE_NAME + "/" + PACKAGE_NAME + ".desktop", names)
 
 
 class OpenAICompatiblePlannerTests(unittest.TestCase):
