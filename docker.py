@@ -5,6 +5,7 @@ import datetime
 import importlib
 import os
 from pathlib import Path
+import threading
 import traceback
 from typing import TYPE_CHECKING, Any
 
@@ -427,6 +428,7 @@ class PlanWorker(QThread):
         self.max_iterations = max_iterations
         self.palette_name = palette_name
         self._is_cancelled = False
+        self._render_done_event = threading.Event()
 
         # プランナーがログコールバックをサポートしている場合はワーカーシグナルに接続
         if hasattr(self.planner, "log_callback"):
@@ -435,8 +437,13 @@ class PlanWorker(QThread):
     def _emit_debug_log(self, message: str) -> None:
         self.debug_log.emit(message)
 
+    def notify_render_done(self) -> None:
+        """メインスレッドでの描画完了を受け取り、次イテレーションの進行を再開する。"""
+        self._render_done_event.set()
+
     def cancel(self) -> None:
         self._is_cancelled = True
+        self._render_done_event.set()
         self.debug_log.emit("[ワーカー] キャンセル要求を受信しました")
 
     def is_cancelled(self) -> bool:
@@ -483,7 +490,16 @@ class PlanWorker(QThread):
                 self.debug_log.emit(
                     f"[イテレーション {iter_idx}] 計画生成完了。メインスレッドへ描画を要求します (ストローク数: {len(current_plan.strokes)})"
                 )
-                self.plan_ready.emit(current_plan)
+                if iter_idx < self.max_iterations:
+                    self._render_done_event.clear()
+                    self.plan_ready.emit(current_plan)
+                    # 次のイテレーションでキャンバスキャプチャを行う前に、メインスレッドの描画完了を待機
+                    while not self._render_done_event.wait(timeout=0.05):
+                        if self.is_cancelled():
+                            self.debug_log.emit("[ワーカー] 描画待機中にキャンセルを確認しました")
+                            return
+                else:
+                    self.plan_ready.emit(current_plan)
 
             if not self.is_cancelled():
                 self.iteration_progress.emit(self.max_iterations, self.max_iterations, "全イテレーションが完了しました")
@@ -899,6 +915,8 @@ class AIStrokePainterDocker(DockWidget):
             self._log_debug(f"[描画レンダリング例外] {exc}\n{traceback.format_exc()}")
             self.status.setText(f"描画エラー: {exc}")
         finally:
+            if self._worker is not None and hasattr(self._worker, "notify_render_done"):
+                self._worker.notify_render_done()
             if self._worker is None or not self._worker.isRunning():
                 self._reset_run_state()
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
@@ -12,7 +13,7 @@ import unittest
 from zipfile import ZipFile
 
 from .build_plugin import PACKAGE_NAME, build
-from .docker import AIStrokePainterDocker, PlanWorker
+from .docker import AIStrokePainterDocker, PlanWorker, QApplication
 from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint, VisionCritique
 from .image_converter import ImageStrokeConverter
 from .krita_adapter import KritaCanvasAdapter
@@ -534,6 +535,16 @@ class CanvasAdapterTests(unittest.TestCase):
 
 
 class WorkerAndDockerTests(unittest.TestCase):
+    _app: Any = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if hasattr(QApplication, "instance"):
+            cls._app = QApplication.instance()
+            if cls._app is None:
+                with contextlib.suppress(Exception):
+                    cls._app = QApplication(["test", "-platform", "offscreen"])
+
     def test_plan_worker_emits_plan_on_success(self) -> None:
         planner = RuleBasedPlanner()
         adapter = KritaCanvasAdapter()
@@ -608,11 +619,77 @@ class WorkerAndDockerTests(unittest.TestCase):
             max_iterations=3,
         )
         received_plans: list[Any] = []
-        worker.plan_ready.connect(lambda p: received_plans.append(p))
+
+        def on_plan_ready(plan: Any) -> None:
+            received_plans.append(plan)
+            worker.notify_render_done()
+
+        worker.plan_ready.connect(on_plan_ready)
 
         worker.run()
         self.assertEqual(len(received_plans), 3)
         self.assertEqual(adapter.render_call_count, 0)
+
+    def test_plan_worker_waits_for_render_done_between_iterations(self) -> None:
+        import time
+
+        from ai_stroke_painter.krita_adapter import _process_events
+
+        planner = RuleBasedPlanner()
+        doc = _FakeDocument()
+
+        class SpyCanvasAdapter(KritaCanvasAdapter):
+            def __init__(self) -> None:
+                super().__init__()
+                self.captures: list[int] = []
+
+            def capture_canvas(self, document: Any, width: int = 512, height: int = 512) -> bytes:
+                self.captures.append(len(self.captures) + 1)
+                return b"fake-capture-bytes"
+
+        adapter = SpyCanvasAdapter()
+        worker = PlanWorker(
+            planner=planner,
+            canvas_port=adapter,
+            document=doc,
+            prompt="cat",
+            seed=1,
+            count=2,
+            width=200,
+            height=200,
+            max_iterations=2,
+        )
+
+        plans: list[DrawingPlan] = []
+        worker.plan_ready.connect(lambda p: plans.append(p))
+
+        thread = Thread(target=worker.run)
+        thread.start()
+
+        # イテレーション 1 の計画生成完了を待機
+        for _ in range(100):
+            _process_events()
+            if len(plans) == 1:
+                break
+            time.sleep(0.01)
+
+        self.assertEqual(len(plans), 1)
+        # メインスレッドの描画完了通知前はイテレーション 2 のキャンバスキャプチャが行われていないこと
+        self.assertEqual(len(adapter.captures), 0)
+
+        # メインスレッドでの描画完了を通知
+        worker.notify_render_done()
+        thread.join(timeout=2.0)
+
+        for _ in range(50):
+            _process_events()
+            if len(plans) == 2:
+                break
+            time.sleep(0.01)
+
+        self.assertEqual(len(plans), 2)
+        # 描画完了通知後にイテレーション 2 のキャンバスキャプチャが実行されたこと
+        self.assertEqual(len(adapter.captures), 1)
 
     def test_plan_worker_forwards_palette_name_to_planner(self) -> None:
         received: list[str] = []
