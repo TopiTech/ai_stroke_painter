@@ -297,27 +297,41 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
             thread.join()
 
         self.assertEqual(plan, DrawingPlan.from_dict(expected_plan))
+        self.assertEqual(plan, DrawingPlan.from_dict(expected_plan))
         assert Handler.received is not None
         self.assertEqual(Handler.received["path"], "/v1/chat/completions")
         self.assertEqual(Handler.received["authorization"], "Bearer test-key")
         self.assertEqual(Handler.received["body"]["model"], "test-model")
+        self.assertEqual(Handler.received["body"]["response_format"], {"type": "json_object"})
 
-    def test_rejects_out_of_bounds_llm_plan(self) -> None:
-        response = {
+    def test_smart_endpoint_resolution(self) -> None:
+        s1 = OpenAICompatibleSettings("http://localhost:11434", "llama3")
+        self.assertEqual(s1.endpoint_url, "http://localhost:11434/v1/chat/completions")
+
+        s2 = OpenAICompatibleSettings("https://api.openai.com", "gpt-4o")
+        self.assertEqual(s2.endpoint_url, "https://api.openai.com/v1/chat/completions")
+
+        s3 = OpenAICompatibleSettings("https://api.openai.com/v1", "gpt-4o")
+        self.assertEqual(s3.endpoint_url, "https://api.openai.com/v1/chat/completions")
+
+        s4 = OpenAICompatibleSettings("https://custom.api/v1/chat/completions", "gpt-4o")
+        self.assertEqual(s4.endpoint_url, "https://custom.api/v1/chat/completions")
+
+    def test_sanitizes_out_of_bounds_and_normalizes_coords_llm_plan(self) -> None:
+        # 1. 範囲外座標が安全にクランプされること
+        response_clamped = {
             "choices": [
                 {
                     "message": {
                         "content": json.dumps(
                             {
-                                "schema_version": 1,
                                 "prompt": "curve",
-                                "seed": 1,
                                 "strokes": [
                                     {
                                         "id": "s",
                                         "points": [
-                                            {"x": 0, "y": 0, "pressure": 0.5, "time_ms": 0},
-                                            {"x": 200, "y": 0, "pressure": 0.5, "time_ms": 1},
+                                            {"x": -10, "y": -5, "pressure": 0.5, "time_ms": 0},
+                                            {"x": 200, "y": 150, "pressure": 0.5, "time_ms": 1},
                                         ],
                                     }
                                 ],
@@ -328,11 +342,14 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
             ]
         }
 
-        class Response:
-            def read(self, _size: int) -> bytes:
-                return json.dumps(response).encode("utf-8")
+        class FakeResponse:
+            def __init__(self, data: dict[str, Any]) -> None:
+                self._data = data
 
-            def __enter__(self) -> Response:
+            def read(self, _size: int) -> bytes:
+                return json.dumps(self._data).encode("utf-8")
+
+            def __enter__(self) -> FakeResponse:
                 return self
 
             def __exit__(self, *_args: Any) -> None:
@@ -340,13 +357,51 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
 
         planner = OpenAICompatiblePlanner(
             OpenAICompatibleSettings("https://example.test/v1", "model"),
-            opener=lambda *_args, **_kwargs: Response(),
+            opener=lambda *_args, **_kwargs: FakeResponse(response_clamped),
         )
-        with self.assertRaisesRegex(RuntimeError, "キャンバス範囲外"):
-            planner.plan("curve", 1, 1, 100, 100)
+        plan = planner.plan("curve", 1, 1, 100, 100)
+        self.assertEqual(len(plan.strokes), 1)
+        pts = plan.strokes[0].points
+        self.assertGreaterEqual(pts[0].x, 0.0)
+        self.assertLessEqual(pts[1].x, 100.0)
+
+        # 2. 0.0〜1.0 の正規化座標がキャンバスサイズに自動スケーリングされること
+        response_norm = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "strokes": [
+                                    {
+                                        "id": "norm_stroke",
+                                        "points": [
+                                            {"x": 0.1, "y": 0.2, "pressure": 0.5, "time_ms": 0},
+                                            {"x": 0.9, "y": 0.8, "pressure": 0.8, "time_ms": 20},
+                                        ],
+                                    }
+                                ],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+        planner_norm = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "model"),
+            opener=lambda *_args, **_kwargs: FakeResponse(response_norm),
+        )
+        scaled_plan = planner_norm.plan("norm curve", 42, 1, 1000, 500)
+        scaled_pts = scaled_plan.strokes[0].points
+        self.assertAlmostEqual(scaled_pts[0].x, 100.0, places=1)
+        self.assertAlmostEqual(scaled_pts[0].y, 100.0, places=1)
+        self.assertAlmostEqual(scaled_pts[1].x, 900.0, places=1)
+        self.assertAlmostEqual(scaled_pts[1].y, 400.0, places=1)
 
     def test_extracts_json_with_surrounding_markdown_and_commentary(self) -> None:
         raw_text = (
+            "<think>Thinking about generating high quality strokes...</think>\n"
             "Here is your drawing plan:\n"
             "```json\n"
             "{\n"
@@ -371,6 +426,36 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertEqual(plan.prompt, "hair curve")
         self.assertEqual(plan.seed, 42)
         self.assertEqual(len(plan.strokes), 1)
+
+    def test_drawing_plan_from_dict_without_schema_version(self) -> None:
+        plan_dict = {
+            "prompt": "no schema version",
+            "seed": 7,
+            "strokes": [
+                {
+                    "id": "s1",
+                    "points": [
+                        {"x": 0.0, "y": 0.0, "pressure": 0.5, "time_ms": 0},
+                        {"x": 10.0, "y": 10.0, "pressure": 0.5, "time_ms": 1},
+                    ],
+                }
+            ],
+        }
+        plan = DrawingPlan.from_dict(plan_dict)
+        self.assertEqual(plan.prompt, "no schema version")
+        self.assertEqual(plan.seed, 7)
+        self.assertEqual(len(plan.strokes), 1)
+
+    def test_openai_planner_logs_to_callback(self) -> None:
+        logs: list[str] = []
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "model"),
+            opener=lambda *_args, **_kwargs: None,
+            log_callback=lambda msg: logs.append(msg),
+        )
+        planner._log("テストログメッセージ")
+        self.assertEqual(len(logs), 1)
+        self.assertIn("テストログメッセージ", logs[0])
 
 
 class CanvasAdapterTests(unittest.TestCase):
@@ -564,6 +649,67 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertIs(docker._canvas, fake_canvas)
         AIStrokePainterDocker.canvasChanged(docker, None)
         self.assertIsNone(docker._canvas)
+
+    def test_plan_worker_emits_debug_logs(self) -> None:
+        planner = RuleBasedPlanner()
+        adapter = KritaCanvasAdapter()
+        doc = _FakeDocument()
+        worker = PlanWorker(
+            planner=planner,
+            canvas_port=adapter,
+            document=doc,
+            prompt="cat",
+            seed=1,
+            count=2,
+            width=200,
+            height=200,
+            max_iterations=1,
+        )
+        logs: list[str] = []
+        worker.debug_log.connect(lambda msg: logs.append(msg))
+        worker.run()
+        self.assertTrue(len(logs) > 0)
+        self.assertTrue(any("ワーカー開始" in log for log in logs))
+        self.assertTrue(any("ワーカー完了" in log for log in logs))
+
+    def test_docker_debug_mode_toggle_and_copy(self) -> None:
+        class _TestWidget:
+            def __init__(self) -> None:
+                self.visible = False
+                self._text = ""
+
+            def setVisible(self, v: bool) -> None:  # noqa: N802
+                self.visible = v
+
+            def isVisible(self) -> bool:  # noqa: N802
+                return self.visible
+
+            def toPlainText(self) -> str:  # noqa: N802
+                return "Log sample line 1\nLog sample line 2"
+
+            def clear(self) -> None:
+                self._text = ""
+
+            def appendPlainText(self, text: str) -> None:  # noqa: N802
+                self._text += text
+
+            def setText(self, text: str) -> None:  # noqa: N802
+                self._text = text
+
+        docker = AIStrokePainterDocker.__new__(AIStrokePainterDocker)
+        debug_box = _TestWidget()
+        debug_log_edit = _TestWidget()
+        status_label = _TestWidget()
+
+        docker.debug_box = debug_box  # type: ignore[assignment]
+        docker.debug_log_edit = debug_log_edit  # type: ignore[assignment]
+        docker.status = status_label  # type: ignore[assignment]
+
+        docker._toggle_debug_panel(True)
+        self.assertTrue(debug_box.isVisible())
+
+        docker._copy_debug_log()
+        docker._clear_debug_log()
 
 
 def run() -> bool:

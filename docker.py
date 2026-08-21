@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import contextlib
+import datetime
 import importlib
 import os
 from pathlib import Path
+import traceback
 from typing import TYPE_CHECKING, Any
 
 from .domain import DrawingPlan
@@ -16,6 +18,7 @@ from .storage import save_plan, save_svg
 if TYPE_CHECKING:
     from PyQt5.QtCore import QObject, QThread, pyqtSignal
     from PyQt5.QtWidgets import (
+        QApplication,
         QCheckBox,
         QComboBox,
         QFileDialog,
@@ -36,6 +39,7 @@ else:
     try:
         from PyQt5.QtCore import QObject, QThread, pyqtSignal
         from PyQt5.QtWidgets import (
+            QApplication,
             QCheckBox,
             QComboBox,
             QFileDialog,
@@ -56,6 +60,7 @@ else:
         try:
             from PyQt6.QtCore import QObject, QThread, pyqtSignal
             from PyQt6.QtWidgets import (
+                QApplication,
                 QCheckBox,
                 QComboBox,
                 QFileDialog,
@@ -107,6 +112,7 @@ else:
             class QWidget(QObject):  # type: ignore[no-redef]
                 def __init__(self, *args: Any, **kwargs: Any) -> None:
                     super().__init__()
+                    self._visible = True
 
                 def setLayout(self, *args: Any) -> None: ...
                 def update(self) -> None: ...
@@ -114,6 +120,11 @@ else:
                 def setMinimumHeight(self, *args: Any) -> None: ...
                 def setMaximumHeight(self, *args: Any) -> None: ...
                 def setEnabled(self, *args: Any) -> None: ...
+                def setVisible(self, visible: bool) -> None:
+                    self._visible = visible
+
+                def isVisible(self) -> bool:
+                    return self._visible
 
             class QLabel(QWidget):  # type: ignore[no-redef]
                 def __init__(self, text: str = "", *args: Any, **kwargs: Any) -> None:
@@ -160,6 +171,13 @@ else:
                 def setPlainText(self, text: str) -> None:
                     self._text = text
 
+                def appendPlainText(self, text: str) -> None:
+                    self._text += ("\n" if self._text else "") + text
+
+                def clear(self) -> None:
+                    self._text = ""
+
+                def setReadOnly(self, *args: Any) -> None: ...
                 def setMaximumHeight(self, *args: Any) -> None: ...
 
             class QSpinBox(QWidget):  # type: ignore[no-redef]
@@ -174,17 +192,20 @@ else:
                     self._val = v
 
                 def setRange(self, *args: Any) -> None: ...
+                def setSuffix(self, *args: Any) -> None: ...
 
             class QCheckBox(QWidget):  # type: ignore[no-redef]
                 def __init__(self, text: str = "", *args: Any, **kwargs: Any) -> None:
                     super().__init__()
                     self._checked = False
+                    self.toggled = _FakeSignal()
 
                 def isChecked(self) -> bool:
                     return self._checked
 
                 def setChecked(self, c: bool) -> None:
                     self._checked = c
+                    self.toggled.emit(c)
 
             class QComboBox(QWidget):  # type: ignore[no-redef]
                 def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -256,6 +277,27 @@ else:
                 @staticmethod
                 def getOpenFileName(*args: Any) -> tuple[str, str]:
                     return "", ""
+
+                @staticmethod
+                def getSaveFileName(*args: Any) -> tuple[str, str]:
+                    return "", ""
+
+            class _FakeClipboard:
+                def __init__(self) -> None:
+                    self._text = ""
+
+                def setText(self, text: str) -> None:
+                    self._text = text
+
+                def text(self) -> str:
+                    return self._text
+
+            class QApplication:  # type: ignore[no-redef]
+                _clip = _FakeClipboard()
+
+                @classmethod
+                def clipboard(cls) -> Any:
+                    return cls._clip
 
 
 try:
@@ -355,6 +397,7 @@ class PlanWorker(QThread):
     plan_ready = pyqtSignal(object)
     iteration_progress = pyqtSignal(int, int, str)
     plan_failed = pyqtSignal(str)
+    debug_log = pyqtSignal(str)
 
     def __init__(
         self,
@@ -385,25 +428,40 @@ class PlanWorker(QThread):
         self.palette_name = palette_name
         self._is_cancelled = False
 
+        # プランナーがログコールバックをサポートしている場合はワーカーシグナルに接続
+        if hasattr(self.planner, "log_callback"):
+            self.planner.log_callback = self._emit_debug_log
+
+    def _emit_debug_log(self, message: str) -> None:
+        self.debug_log.emit(message)
+
     def cancel(self) -> None:
         self._is_cancelled = True
+        self.debug_log.emit("[ワーカー] キャンセル要求を受信しました")
 
     def is_cancelled(self) -> bool:
         return self._is_cancelled
 
     def run(self) -> None:
         try:
+            self.debug_log.emit(
+                f"[ワーカー開始] Total Iterations: {self.max_iterations}, Target Size: {self.width:.0f}x{self.height:.0f}"
+            )
+
             for iter_idx in range(1, self.max_iterations + 1):
                 if self.is_cancelled():
+                    self.debug_log.emit("[ワーカー] 処理が中断されました")
                     return
 
-                self.iteration_progress.emit(
-                    iter_idx, self.max_iterations, f"イテレーション {iter_idx}/{self.max_iterations}: 計画を生成中..."
-                )
+                msg = f"イテレーション {iter_idx}/{self.max_iterations}: 計画を生成中..."
+                self.iteration_progress.emit(iter_idx, self.max_iterations, msg)
+                self.debug_log.emit(f"[イテレーション {iter_idx}/{self.max_iterations}] 計画生成処理を開始")
 
                 canvas_img: bytes | None = None
                 if iter_idx > 1 and self.document is not None:
+                    self.debug_log.emit("[自律改善] キャンバスキャプチャを取得中...")
                     canvas_img = self.canvas_port.capture_canvas(self.document, 512, 512)
+                    self.debug_log.emit(f"[自律改善] キャプチャ完了 ({len(canvas_img) if canvas_img else 0} bytes)")
 
                 current_plan = self.planner.plan(
                     prompt=self.prompt,
@@ -419,14 +477,21 @@ class PlanWorker(QThread):
                 )
 
                 if self.is_cancelled():
+                    self.debug_log.emit("[ワーカー] 描画計画受領後にキャンセルを確認しました")
                     return
 
+                self.debug_log.emit(
+                    f"[イテレーション {iter_idx}] 計画生成完了。メインスレッドへ描画を要求します (ストローク数: {len(current_plan.strokes)})"
+                )
                 self.plan_ready.emit(current_plan)
 
             if not self.is_cancelled():
                 self.iteration_progress.emit(self.max_iterations, self.max_iterations, "全イテレーションが完了しました")
+                self.debug_log.emit("[ワーカー完了] 全ての処理が正常に完了しました")
 
         except Exception as exc:
+            tb = traceback.format_exc()
+            self.debug_log.emit(f"[例外発生] {exc}\nスタックトレース:\n{tb}")
             if not self._is_cancelled:
                 self.plan_failed.emit(str(exc))
 
@@ -551,6 +616,12 @@ class AIStrokePainterDocker(DockWidget):
         self.api_key.setPlaceholderText("空欄なら OPENAI_API_KEY")
         llm_form.addRow("API Key", self.api_key)
 
+        self.timeout_sec = QSpinBox()
+        self.timeout_sec.setRange(10, 600)
+        self.timeout_sec.setValue(120)
+        self.timeout_sec.setSuffix(" 秒")
+        llm_form.addRow("タイムアウト", self.timeout_sec)
+
         test_conn_btn = QPushButton("API 接続テスト")
         test_conn_btn.clicked.connect(self._test_api_connection)
         llm_form.addRow("", test_conn_btn)
@@ -560,7 +631,7 @@ class AIStrokePainterDocker(DockWidget):
         self.preview = PreviewWidget(self)
         root_layout.addWidget(self.preview)
 
-        # 8. 保存オプション
+        # 8. 保存オプション & デバッグモード切替
         save_layout = QHBoxLayout()
         self.save_json = QCheckBox("計画 JSON 保存")
         self.save_json.setChecked(True)
@@ -570,7 +641,38 @@ class AIStrokePainterDocker(DockWidget):
         save_layout.addWidget(self.save_svg_chk)
         root_layout.addLayout(save_layout)
 
-        # 9. 描画・停止ボタン
+        debug_toggle_layout = QHBoxLayout()
+        self.debug_mode_chk = QCheckBox("🐞 デバッグモード (詳細ログを表示)")
+        self.debug_mode_chk.setChecked(False)
+        debug_toggle_layout.addWidget(self.debug_mode_chk)
+        root_layout.addLayout(debug_toggle_layout)
+
+        # 9. デバッグログパネル
+        self.debug_box = QGroupBox("デバッグログ (リアルタイム通信・処理ログ)")
+        debug_box_layout = QVBoxLayout(self.debug_box)
+        self.debug_log_edit = QPlainTextEdit()
+        self.debug_log_edit.setReadOnly(True)
+        self.debug_log_edit.setMaximumHeight(140)
+        debug_box_layout.addWidget(self.debug_log_edit)
+
+        debug_btn_layout = QHBoxLayout()
+        self.copy_log_btn = QPushButton("📋 ログをコピー")
+        self.clear_log_btn = QPushButton("🗑️ クリア")
+        self.save_log_btn = QPushButton("💾 ログを保存...")
+        debug_btn_layout.addWidget(self.copy_log_btn)
+        debug_btn_layout.addWidget(self.clear_log_btn)
+        debug_btn_layout.addWidget(self.save_log_btn)
+        debug_box_layout.addLayout(debug_btn_layout)
+
+        self.copy_log_btn.clicked.connect(self._copy_debug_log)
+        self.clear_log_btn.clicked.connect(self._clear_debug_log)
+        self.save_log_btn.clicked.connect(self._save_debug_log)
+        self.debug_mode_chk.toggled.connect(self._toggle_debug_panel)
+
+        self.debug_box.setVisible(False)
+        root_layout.addWidget(self.debug_box)
+
+        # 10. 描画・停止ボタン
         self.run_btn = QPushButton("🎨 AIストロークを描画")
         self.stop_btn = QPushButton("⏹ 停止")
         self.stop_btn.setEnabled(False)
@@ -579,7 +681,7 @@ class AIStrokePainterDocker(DockWidget):
         btn_layout.addWidget(self.stop_btn)
         root_layout.addLayout(btn_layout)
 
-        # 10. プログレスバー & ステータス
+        # 11. プログレスバー & ステータス
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
@@ -601,6 +703,40 @@ class AIStrokePainterDocker(DockWidget):
         """Kritaからキャンバス切り替えイベント通知を受け取る (DockWidgetの必須抽象メソッド)。"""
         self._canvas = canvas
 
+    def _toggle_debug_panel(self, checked: bool) -> None:
+        self.debug_box.setVisible(checked)
+        if checked and not self.debug_log_edit.toPlainText():
+            self._log_debug("デバッグモードが有効化されました。")
+
+    def _log_debug(self, message: str) -> None:
+        self.debug_log_edit.appendPlainText(message)
+
+    def _copy_debug_log(self) -> None:
+        text = self.debug_log_edit.toPlainText()
+        if text:
+            clipboard = QApplication.clipboard()
+            if clipboard is not None:
+                clipboard.setText(text)
+                self.status.setText("デバッグログをクリップボードにコピーしました")
+
+    def _clear_debug_log(self) -> None:
+        self.debug_log_edit.clear()
+
+    def _save_debug_log(self) -> None:
+        text = self.debug_log_edit.toPlainText()
+        if not text:
+            QMessageBox.information(self, "ログ保存", "保存するログがありません。")
+            return
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "デバッグログを保存", "ai_stroke_painter_debug.log", "テキストログ (*.log *.txt)"
+        )
+        if file_path:
+            try:
+                Path(file_path).write_text(text, encoding="utf-8")
+                QMessageBox.information(self, "ログ保存", f"ログを保存しました:\n{file_path}")
+            except Exception as exc:
+                QMessageBox.critical(self, "エラー", f"ログの保存に失敗しました: {exc}")
+
     def _apply_preset(self) -> None:
         data = self.preset_combo.currentData()
         if data:
@@ -611,6 +747,7 @@ class AIStrokePainterDocker(DockWidget):
                 if self.palette_combo.itemData(i) == palette:
                     self.palette_combo.setCurrentIndex(i)
                     break
+            self._log_debug(f"[プリセット適用] {self.preset_combo.currentText()}")
 
     def _select_reference_image(self) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
@@ -621,6 +758,7 @@ class AIStrokePainterDocker(DockWidget):
                 self._image_bytes = Path(file_path).read_bytes()
                 self.image_status_label.setText(Path(file_path).name)
                 self.clear_image_btn.setEnabled(True)
+                self._log_debug(f"[参照画像読込] {file_path} ({len(self._image_bytes)} bytes)")
             except Exception as exc:
                 QMessageBox.critical(self, "エラー", f"画像を読み込めませんでした: {exc}")
 
@@ -628,24 +766,29 @@ class AIStrokePainterDocker(DockWidget):
         self._image_bytes = None
         self.image_status_label.setText("画像なし")
         self.clear_image_btn.setEnabled(False)
+        self._log_debug("[参照画像クリア]")
 
     def _test_api_connection(self) -> None:
+        self._log_debug("[API 接続テスト開始]")
         try:
             planner = OpenAICompatiblePlanner(
                 OpenAICompatibleSettings(
                     base_url=self.base_url.text(),
                     model=self.model.text(),
                     api_key=self.api_key.text() or os.environ.get("OPENAI_API_KEY", ""),
-                    timeout_seconds=10.0,
-                )
+                    timeout_seconds=min(15.0, float(self.timeout_sec.value())),
+                ),
+                log_callback=self._log_debug,
             )
             msg = planner.test_connection()
             QMessageBox.information(self, "API 接続テスト", msg)
         except Exception as exc:
+            self._log_debug(f"[API 接続テスト失敗] {exc}")
             QMessageBox.critical(self, "接続テスト失敗", str(exc))
 
     def _update_planner_settings_state(self, *_args: Any) -> None:
-        self.llm_settings.setEnabled(self.planner_mode.currentData() == "openai_compatible")
+        is_openai = self.planner_mode.currentData() == "openai_compatible"
+        self.llm_settings.setEnabled(is_openai)
 
     def _planner(self) -> PlannerPort:
         if self.planner_mode.currentData() == "offline":
@@ -655,7 +798,9 @@ class AIStrokePainterDocker(DockWidget):
                 base_url=self.base_url.text(),
                 model=self.model.text(),
                 api_key=self.api_key.text() or os.environ.get("OPENAI_API_KEY", ""),
-            )
+                timeout_seconds=float(self.timeout_sec.value()),
+            ),
+            log_callback=self._log_debug,
         )
 
     def is_cancelled(self) -> bool:
@@ -666,6 +811,7 @@ class AIStrokePainterDocker(DockWidget):
         if self._worker is not None and hasattr(self._worker, "cancel"):
             self._worker.cancel()
         self.status.setText("停止要求を受け付けました。現在の処理完了後に停止します。")
+        self._log_debug("[UI] 停止ボタンが押下されました")
 
     def run(self) -> None:
         document: Any | None = Krita.instance().activeDocument()
@@ -684,6 +830,9 @@ class AIStrokePainterDocker(DockWidget):
         max_iters = self.iterations.value() if self.auto_refine.isChecked() else 1
         palette = self.palette_combo.currentData() or "anime"
 
+        now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._log_debug(f"\n========== 描画タスク開始 [{now_str}] ==========")
+        self._log_debug(f"モード: {self.planner_mode.currentText()}, 反復数: {max_iters}, パレット: {palette}")
         self.status.setText("描画計画を生成中… 停止できます。")
 
         try:
@@ -703,12 +852,14 @@ class AIStrokePainterDocker(DockWidget):
                 parent=self,
             )
             self._worker = worker
+            worker.debug_log.connect(self._log_debug)
             worker.plan_ready.connect(self._on_plan_ready)
             worker.iteration_progress.connect(self._on_iteration_progress)
             worker.plan_failed.connect(self._on_plan_failed)
             worker.finished.connect(self._reset_run_state)
             worker.start()
         except Exception as exc:
+            self._log_debug(f"[タスク起動例外] {exc}\n{traceback.format_exc()}")
             self.status.setText(f"エラー: {exc}")
             QMessageBox.critical(self, "AI Stroke Painter", str(exc))
             self._reset_run_state()
@@ -727,17 +878,25 @@ class AIStrokePainterDocker(DockWidget):
         try:
             paths = []
             if self.save_json.isChecked():
-                paths.append(str(save_plan(plan)))
+                saved_json_path = save_plan(plan)
+                paths.append(str(saved_json_path))
+                self._log_debug(f"[JSON保存] {saved_json_path}")
             if self.save_svg_chk.isChecked():
-                paths.append(str(save_svg(plan)))
+                saved_svg_path = save_svg(plan)
+                paths.append(str(saved_svg_path))
+                self._log_debug(f"[SVG保存] {saved_svg_path}")
 
+            self._log_debug(f"[描画レンダリング開始] ストローク本数={len(plan.strokes)}")
             rendered = self.canvas_port.render(document, plan, self.is_cancelled)
             suffix = f" ({', '.join(paths)})" if paths else ""
             if self.is_cancelled():
                 self.status.setText(f"{rendered}本を描画して停止しました{suffix}")
+                self._log_debug(f"[描画停止] {rendered} 本を描画後に停止")
             else:
                 self.status.setText(f"描画完了: {rendered}本を生成しました{suffix}")
+                self._log_debug(f"[描画完了] 合計 {rendered} 本をキャンバスに描画しました")
         except Exception as exc:
+            self._log_debug(f"[描画レンダリング例外] {exc}\n{traceback.format_exc()}")
             self.status.setText(f"描画エラー: {exc}")
         finally:
             if self._worker is None or not self._worker.isRunning():
@@ -745,9 +904,13 @@ class AIStrokePainterDocker(DockWidget):
 
     def _on_plan_failed(self, error_msg: str) -> None:
         self._worker = None
+        self._log_debug(f"[計画生成失敗] {error_msg}")
         if not self.is_cancelled():
-            self.status.setText(f"エラー: {error_msg}")
-            QMessageBox.critical(self, "AI Stroke Painter", error_msg)
+            if self.debug_mode_chk.isChecked():
+                self.status.setText(f"エラー: {error_msg} (詳細はデバッグログ参照)")
+            else:
+                self.status.setText(f"エラー: {error_msg}")
+            QMessageBox.critical(self, "AI Stroke Painter エラー", error_msg)
         self._reset_run_state()
 
     def _reset_run_state(self) -> None:

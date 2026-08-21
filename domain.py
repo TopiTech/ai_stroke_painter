@@ -215,16 +215,17 @@ class DrawingPlan:
     def from_dict(cls, value: Mapping[str, Any]) -> DrawingPlan:
         if not isinstance(value, Mapping):
             raise PlanValidationError("drawing plan はオブジェクトである必要があります")
-        if value.get("schema_version") != SCHEMA_VERSION:
-            raise PlanValidationError(f"未対応の plan schema_version: {value.get('schema_version')!r}")
+        version = value.get("schema_version", SCHEMA_VERSION)
+        if version != SCHEMA_VERSION:
+            raise PlanValidationError(f"未対応の plan schema_version: {version!r}")
         try:
             strokes = tuple(Stroke.from_dict(stroke) for stroke in value["strokes"])
             return cls(
-                prompt=value["prompt"],
-                seed=value["seed"],
+                prompt=str(value.get("prompt", "")),
+                seed=int(value.get("seed", 0)),
                 strokes=strokes,
-                title=value.get("title", ""),
-                iteration=value.get("iteration", 1),
+                title=str(value.get("title", "")),
+                iteration=int(value.get("iteration", 1)),
                 layers=value.get("layers", ()),
                 metadata=value.get("metadata", {}),
             )
