@@ -207,7 +207,7 @@ class OpenAICompatiblePlanner(PlannerPort):
 
         user_content: Any = user_content_parts if len(user_content_parts) > 1 else req_json
 
-        payload = {
+        payload: dict[str, Any] = {
             "model": self.settings.model.strip(),
             "messages": [
                 {"role": "system", "content": _system_instruction(iteration, max_iterations)},
@@ -218,8 +218,19 @@ class OpenAICompatiblePlanner(PlannerPort):
             "temperature": 0.7,
         }
 
-        self._log(f"LLM API へリクエスト送信中 (max_tokens={self.settings.max_tokens})...")
-        response = self._post(payload)
+        self._log(f"LLM API へリクエスト送信中 ({self.settings.endpoint_url})...")
+        try:
+            response = self._post(payload)
+        except LLMPlannerError as exc:
+            # もし response_format が原因で 400 が返った場合はフォールバック送信
+            if "response_format" in payload and "400" in str(exc):
+                self._log("response_format を除外してリトライ送信します...")
+                fallback_payload = dict(payload)
+                del fallback_payload["response_format"]
+                response = self._post(fallback_payload)
+            else:
+                raise
+
         self._log("LLM API 応答受信。JSON パースとストローク構築を実行中...")
 
         plan = _plan_from_response(response, log_func=self._log)

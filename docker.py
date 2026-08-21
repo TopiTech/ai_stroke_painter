@@ -17,7 +17,7 @@ from .ports import PlannerPort
 from .storage import save_plan, save_svg
 
 if TYPE_CHECKING:
-    from PyQt5.QtCore import QObject, QThread, pyqtSignal
+    from PyQt5.QtCore import QObject, pyqtSignal
     from PyQt5.QtWidgets import (
         QApplication,
         QCheckBox,
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     )
 else:
     try:
-        from PyQt5.QtCore import QObject, QThread, pyqtSignal
+        from PyQt5.QtCore import QObject, pyqtSignal
         from PyQt5.QtWidgets import (
             QApplication,
             QCheckBox,
@@ -59,7 +59,7 @@ else:
         )
     except ImportError:
         try:
-            from PyQt6.QtCore import QObject, QThread, pyqtSignal
+            from PyQt6.QtCore import QObject, pyqtSignal
             from PyQt6.QtWidgets import (
                 QApplication,
                 QCheckBox,
@@ -96,19 +96,6 @@ else:
 
             def pyqtSignal(*_args: Any) -> Any:  # type: ignore[no-redef]
                 return _FakeSignal()
-
-            class QThread(QObject):  # type: ignore[no-redef]
-                def __init__(self, *args: Any, **kwargs: Any) -> None:
-                    super().__init__()
-                    self.finished = _FakeSignal()
-
-                def start(self) -> None:
-                    self.run()
-                    self.finished.emit()
-
-                def run(self) -> None: ...
-                def isRunning(self) -> bool:
-                    return False
 
             class QWidget(QObject):  # type: ignore[no-redef]
                 def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -235,6 +222,9 @@ else:
                     if self._items and 0 <= self._idx < len(self._items):
                         return self._items[self._idx][0]
                     return ""
+
+                def currentIndex(self) -> int:
+                    return self._idx
 
                 def setCurrentIndex(self, i: int) -> None:
                     self._idx = i
@@ -392,13 +382,14 @@ class PreviewWidget(QWidget):
             painter.end()
 
 
-class PlanWorker(QThread):
+class PlanWorker(QObject):
     """自律ビジョン改善ループおよびバックグラウンド計画生成ワーカー。"""
 
     plan_ready = pyqtSignal(object)
     iteration_progress = pyqtSignal(int, int, str)
     plan_failed = pyqtSignal(str)
     debug_log = pyqtSignal(str)
+    finished = pyqtSignal()
 
     def __init__(
         self,
@@ -415,7 +406,7 @@ class PlanWorker(QThread):
         palette_name: str = "anime",
         parent: Any | None = None,
     ) -> None:
-        super().__init__(parent)
+        super().__init__()
         self.planner = planner
         self.canvas_port = canvas_port
         self.document = document
@@ -429,6 +420,8 @@ class PlanWorker(QThread):
         self.palette_name = palette_name
         self._is_cancelled = False
         self._render_done_event = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._is_running = False
 
         # プランナーがログコールバックをサポートしている場合はワーカーシグナルに接続
         if hasattr(self.planner, "log_callback"):
@@ -448,6 +441,21 @@ class PlanWorker(QThread):
 
     def is_cancelled(self) -> bool:
         return self._is_cancelled
+
+    def isRunning(self) -> bool:  # noqa: N802
+        return self._is_running or (self._thread is not None and self._thread.is_alive())
+
+    def start(self) -> None:
+        self._is_running = True
+        self._thread = threading.Thread(target=self._run_wrapper, daemon=True)
+        self._thread.start()
+
+    def _run_wrapper(self) -> None:
+        try:
+            self.run()
+        finally:
+            self._is_running = False
+            self.finished.emit()
 
     def run(self) -> None:
         try:
@@ -803,12 +811,25 @@ class AIStrokePainterDocker(DockWidget):
             QMessageBox.critical(self, "接続テスト失敗", str(exc))
 
     def _update_planner_settings_state(self, *_args: Any) -> None:
-        is_openai = self.planner_mode.currentData() == "openai_compatible"
+        mode_data = self.planner_mode.currentData()
+        mode_text = self.planner_mode.currentText()
+        idx = self.planner_mode.currentIndex()
+        is_openai = mode_data == "openai_compatible" or "OpenAI" in mode_text or idx == 1
         self.llm_settings.setEnabled(is_openai)
 
     def _planner(self) -> PlannerPort:
-        if self.planner_mode.currentData() == "offline":
+        mode_data = self.planner_mode.currentData()
+        mode_text = self.planner_mode.currentText()
+        idx = self.planner_mode.currentIndex()
+        is_openai = mode_data == "openai_compatible" or "OpenAI" in mode_text or idx == 1
+
+        if not is_openai:
+            self._log_debug("[エンジン選択] プロシージャル (オフライン)")
             return self.planner
+
+        self._log_debug(
+            f"[エンジン選択] OpenAI 互換 API (Base URL: {self.base_url.text()}, Model: {self.model.text()})"
+        )
         return OpenAICompatiblePlanner(
             OpenAICompatibleSettings(
                 base_url=self.base_url.text(),
@@ -848,7 +869,7 @@ class AIStrokePainterDocker(DockWidget):
 
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._log_debug(f"\n========== 描画タスク開始 [{now_str}] ==========")
-        self._log_debug(f"モード: {self.planner_mode.currentText()}, 反復数: {max_iters}, パレット: {palette}")
+        self._log_debug(f"選択モード: {self.planner_mode.currentText()}, 反復数: {max_iters}, パレット: {palette}")
         self.status.setText("描画計画を生成中… 停止できます。")
 
         try:
@@ -865,7 +886,6 @@ class AIStrokePainterDocker(DockWidget):
                 image_data=self._image_bytes,
                 max_iterations=max_iters,
                 palette_name=palette,
-                parent=self,
             )
             self._worker = worker
             worker.debug_log.connect(self._log_debug)
