@@ -29,10 +29,11 @@ def build(output: Path) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     with ZipFile(output, "w", ZIP_DEFLATED) as archive:
         archive.write(manifest, manifest.name)
+        archive.writestr(f"{PACKAGE_NAME}/", "")
         for relative_path in PACKAGE_FILES:
             path = source / relative_path
             if path.is_file():
-                archive.write(path, str(Path(PACKAGE_NAME) / relative_path))
+                archive.write(path, f"{PACKAGE_NAME}/{Path(relative_path).as_posix()}")
     return output
 
 

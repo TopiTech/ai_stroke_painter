@@ -122,6 +122,7 @@ class PluginBuildTests(unittest.TestCase):
                 names = archive.namelist()
 
         self.assertIn(PACKAGE_NAME + ".desktop", names)
+        self.assertIn(PACKAGE_NAME + "/", names)
         self.assertIn(PACKAGE_NAME + "/__init__.py", names)
         self.assertNotIn(PACKAGE_NAME + "/" + PACKAGE_NAME + ".desktop", names)
 
