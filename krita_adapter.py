@@ -50,7 +50,7 @@ class KritaCanvasAdapter(CanvasPort):
             for stroke in plan.strokes:
                 if cancelled():
                     break
-                for start, end in zip(stroke.points, stroke.points[1:], strict=False):
+                for start, end in zip(stroke.points, stroke.points[1:]):
                     if cancelled():
                         return rendered
                     # Krita の paintLine は pressure を 0.0–1.0 で受け取る。

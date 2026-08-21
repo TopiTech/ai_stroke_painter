@@ -403,6 +403,29 @@ class CanvasAdapterTests(unittest.TestCase):
 
         self.assertEqual(target.lines, [])
 
+    def test_render_does_not_pass_keyword_arguments_to_zip(self) -> None:
+        """Python 3.9 では zip() がキーワード引数を受け付けないため位置引数のみで呼ぶ必要がある。"""
+        import builtins
+
+        original_zip = builtins.zip
+
+        def strict_rejecting_zip(*args: Any, **kwargs: Any) -> Any:
+            if kwargs:
+                raise TypeError("zip() takes no keyword arguments")
+            return original_zip(*args)
+
+        document = _FakeDocument()
+        plan = RuleBasedPlanner().plan("curve", 3, 1, 100, 100)
+        adapter = KritaCanvasAdapter()
+
+        with (
+            patch("builtins.zip", side_effect=strict_rejecting_zip),
+            patch("ai_stroke_painter.krita_adapter._qpoint", lambda x, y: (x, y)),
+        ):
+            rendered = adapter.render(document, plan)
+
+        self.assertEqual(rendered, 1)
+
 
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))
