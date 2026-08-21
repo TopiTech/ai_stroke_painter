@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
+import re
 import socket
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -137,7 +138,7 @@ class OpenAICompatiblePlanner(PlannerPort):
             with self._opener(request, timeout=float(self.settings.timeout_seconds)) as response:
                 raw = response.read(self.MAX_RESPONSE_BYTES + 1)
         except _CrossOriginRedirectError as exc:
-            raise LLMPlannerError("LLM API の別オリジンへのリダイレクトを拒予しました") from exc
+            raise LLMPlannerError("LLM API の別オリジンへのリダイレクトを拒否しました") from exc
         except HTTPError as exc:
             detail = _read_http_error(exc)
             suffix = f": {detail}" if detail else ""
@@ -188,19 +189,35 @@ def _plan_from_response(response: Mapping[str, Any]) -> DrawingPlan:
 
 
 def _extract_json_object(content: str) -> Mapping[str, Any]:
-    candidate = content.strip()
-    if candidate.startswith("```"):
-        first_newline = candidate.find("\n")
-        if first_newline < 0 or not candidate.endswith("```"):
-            raise json.JSONDecodeError("不完全な Markdown code fence", candidate, 0)
-        candidate = candidate[first_newline + 1 : -3].strip()
+    text = content.strip()
+    # Markdown code fence ```json ... ``` または ``` ... ``` があれば内部を優先抽出
+    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+    candidate = fence_match.group(1).strip() if fence_match is not None else text
+
+    # まず candidate 全体のパースを試行
     try:
         value = json.loads(candidate)
     except json.JSONDecodeError:
+        # candidate 内の最初の '{' から raw_decode を試行
         start = candidate.find("{")
-        if start < 0:
-            raise
-        value, _ = json.JSONDecoder().raw_decode(candidate[start:])
+        if start >= 0:
+            try:
+                value, _ = json.JSONDecoder().raw_decode(candidate[start:])
+            except json.JSONDecodeError:
+                value = None
+        else:
+            value = None
+
+    # code fence 内で失敗した場合、元のテキスト全体から '{' を探す
+    if value is None and candidate is not text:
+        start = text.find("{")
+        if start >= 0:
+            value, _ = json.JSONDecoder().raw_decode(text[start:])
+        else:
+            raise json.JSONDecodeError("JSON オブジェクトが見つかりません", text, 0)
+    elif value is None:
+        raise json.JSONDecodeError("JSON オブジェクトが見つかりません", text, 0)
+
     if not isinstance(value, Mapping):
         raise ValueError("DrawingPlan は JSON オブジェクトである必要があります")
     return value

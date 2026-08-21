@@ -81,28 +81,32 @@ class KritaCanvasAdapter(CanvasPort):
         return None
 
 
-def _qpoint(x: float, y: float) -> Any:
-    for module_name in ("PyQt5.QtCore", "PyQt6.QtCore"):
+def _resolve_qt() -> tuple[Any, Any]:
+    for module_base in ("PyQt5", "PyQt6"):
         try:
-            module = importlib.import_module(module_name)
-            qpoint_cls = getattr(module, "QPoint", None)
-            if qpoint_cls is not None:
-                # Krita の Node.paintLine は整数座標の QPoint を要求する。
-                return qpoint_cls(int(round(x)), int(round(y)))
+            core = importlib.import_module(f"{module_base}.QtCore")
+            widgets = importlib.import_module(f"{module_base}.QtWidgets")
+            qpoint = getattr(core, "QPoint", None)
+            qapp = getattr(widgets, "QApplication", None)
+            if qpoint is not None:
+                return qpoint, qapp
         except (ImportError, AttributeError):
             continue
+    return None, None
+
+
+_QPOINT_CLS, _QAPP_CLS = _resolve_qt()
+
+
+def _qpoint(x: float, y: float) -> Any:
+    if _QPOINT_CLS is not None:
+        # Krita の Node.paintLine は整数座標の QPoint を要求する。
+        return _QPOINT_CLS(int(round(x)), int(round(y)))
     # PyQt がない環境（テスト等）用のフォールバック
     return (int(round(x)), int(round(y)))
 
 
 def _process_events() -> None:
     """長い描画中にも停止ボタンのクリックを処理する。"""
-    for module_name in ("PyQt5.QtWidgets", "PyQt6.QtWidgets"):
-        try:
-            module = importlib.import_module(module_name)
-            app_cls = getattr(module, "QApplication", None)
-            if app_cls is not None and hasattr(app_cls, "processEvents"):
-                app_cls.processEvents()
-                return
-        except (ImportError, AttributeError):
-            continue
+    if _QAPP_CLS is not None and hasattr(_QAPP_CLS, "processEvents"):
+        _QAPP_CLS.processEvents()

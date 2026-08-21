@@ -4,6 +4,7 @@ import os
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from PyQt5.QtCore import QObject, QThread, pyqtSignal
     from PyQt5.QtWidgets import (
         QCheckBox,
         QComboBox,
@@ -22,6 +23,7 @@ if TYPE_CHECKING:
     )
 else:
     try:
+        from PyQt5.QtCore import QObject, QThread, pyqtSignal
         from PyQt5.QtWidgets import (
             QCheckBox,
             QComboBox,
@@ -39,9 +41,8 @@ else:
             QWidget,
         )
     except ImportError:
-        import contextlib
-
-        with contextlib.suppress(ImportError):
+        try:
+            from PyQt6.QtCore import QObject, QThread, pyqtSignal
             from PyQt6.QtWidgets import (
                 QCheckBox,
                 QComboBox,
@@ -58,6 +59,36 @@ else:
                 QVBoxLayout,
                 QWidget,
             )
+        except ImportError:
+            # PyQt がない環境（CI/テスト等）用のフォールバックスタブ
+            class QObject:  # type: ignore[no-redef]
+                def __init__(self, *args: Any, **kwargs: Any) -> None: ...
+
+            class QThread(QObject):  # type: ignore[no-redef]
+                def __init__(self, *args: Any, **kwargs: Any) -> None:
+                    super().__init__()
+
+                def start(self) -> None:
+                    self.run()
+
+                def run(self) -> None: ...
+                def isRunning(self) -> bool:
+                    return False
+
+            class _FakeSignal:
+                def __init__(self) -> None:
+                    self._slots: list[Any] = []
+
+                def connect(self, slot: Any) -> None:
+                    self._slots.append(slot)
+
+                def emit(self, *args: Any) -> None:
+                    for slot in list(self._slots):
+                        slot(*args)
+
+            def pyqtSignal(*_args: Any) -> Any:  # type: ignore[no-redef]
+                return _FakeSignal()
+
 
 try:
     from krita import DockWidget, Krita
@@ -80,6 +111,55 @@ from .ports import PlannerPort
 from .storage import save_plan
 
 
+class PlanWorker(QThread):
+    """メイン UI スレッドをブロックせずに計画生成を行うバックグラウンドワーカー。"""
+
+    plan_ready = pyqtSignal(object)
+    plan_failed = pyqtSignal(str)
+
+    def __init__(
+        self,
+        planner: PlannerPort,
+        prompt: str,
+        seed: int,
+        count: int,
+        width: float,
+        height: float,
+        parent: Any | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.planner = planner
+        self.prompt = prompt
+        self.seed = seed
+        self.count = count
+        self.width = width
+        self.height = height
+        self._is_cancelled = False
+
+    def cancel(self) -> None:
+        self._is_cancelled = True
+
+    def is_cancelled(self) -> bool:
+        return self._is_cancelled
+
+    def run(self) -> None:
+        try:
+            if self._is_cancelled:
+                return
+            plan = self.planner.plan(
+                self.prompt,
+                self.seed,
+                self.count,
+                self.width,
+                self.height,
+            )
+            if not self._is_cancelled:
+                self.plan_ready.emit(plan)
+        except Exception as exc:
+            if not self._is_cancelled:
+                self.plan_failed.emit(str(exc))
+
+
 class AIStrokePainterDocker(DockWidget):
     def __init__(self) -> None:
         super().__init__()
@@ -87,6 +167,8 @@ class AIStrokePainterDocker(DockWidget):
         self.planner = RuleBasedPlanner()
         self.canvas_port = KritaCanvasAdapter()
         self._cancel: bool = False
+        self._worker: PlanWorker | None = None
+        self._active_doc: Any | None = None
 
         container = QWidget(self)
         layout = QVBoxLayout(container)
@@ -161,9 +243,14 @@ class AIStrokePainterDocker(DockWidget):
     def canvasChanged(self, canvas: Any) -> None:
         pass
 
+    def is_cancelled(self) -> bool:
+        return self._cancel
+
     def cancel(self) -> None:
         self._cancel = True
-        self.status.setText("停止要求を受け付けました。現在の線分を完了後に停止します。")
+        if self._worker is not None and hasattr(self._worker, "cancel"):
+            self._worker.cancel()
+        self.status.setText("停止要求を受け付けました。現在の処理を完了後に停止します。")
 
     def _update_planner_settings_state(self, *_args: Any) -> None:
         self.llm_settings.setEnabled(self.planner_mode.currentData() == "openai_compatible")
@@ -187,26 +274,58 @@ class AIStrokePainterDocker(DockWidget):
             )
             return
 
+        self._active_doc = document
         self._cancel = False
         self.run_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.progress.setRange(0, 0)
+
+        if self.planner_mode.currentData() == "openai_compatible":
+            self.status.setText("LLM に描画計画を問い合わせ中… 停止できます。")
+        else:
+            self.status.setText("描画計画を生成中… 停止できます。")
+
         try:
             planner = self._planner()
-            if self.planner_mode.currentData() == "openai_compatible":
-                self.status.setText("LLM に描画計画を問い合わせ中…")
-            plan = planner.plan(
-                self.prompt.toPlainText().strip(),
-                self.seed.value(),
-                self.count.value(),
-                float(document.width()),
-                float(document.height()),
+            worker = PlanWorker(
+                planner=planner,
+                prompt=self.prompt.toPlainText().strip(),
+                seed=self.seed.value(),
+                count=self.count.value(),
+                width=float(document.width()),
+                height=float(document.height()),
+                parent=self,
             )
+            self._worker = worker
+            worker.plan_ready.connect(self._on_plan_ready)
+            worker.plan_failed.connect(self._on_plan_failed)
+            worker.start()
+        except Exception as exc:
+            self.status.setText(f"エラー: {exc}")
+            QMessageBox.critical(self, "AI Stroke Painter", str(exc))
+            self._reset_run_state()
+
+    def _on_plan_ready(self, plan: Any) -> None:
+        self._worker = None
+        if self.is_cancelled():
+            self.status.setText("描画前に停止要求を受け付けたため中止しました")
+            self._reset_run_state()
+            return
+
+        document = self._active_doc
+        if document is None:
+            document = Krita.instance().activeDocument()
+        if document is None:
+            self.status.setText("エラー: 描画先ドキュメントが見つかりません")
+            self._reset_run_state()
+            return
+
+        try:
             path = save_plan(plan) if self.save_json.isChecked() else None
             self.status.setText("描画中… 停止できます。")
-            rendered = self.canvas_port.render(document, plan, lambda: self._cancel)
+            rendered = self.canvas_port.render(document, plan, self.is_cancelled)
             suffix = f" / {path}" if path else ""
-            if self._cancel:
+            if self.is_cancelled():
                 self.status.setText(f"{rendered}本を描画して停止しました{suffix}")
             else:
                 self.status.setText(f"{rendered}本を描画しました{suffix}")
@@ -214,7 +333,21 @@ class AIStrokePainterDocker(DockWidget):
             self.status.setText(f"エラー: {exc}")
             QMessageBox.critical(self, "AI Stroke Painter", str(exc))
         finally:
-            self.progress.setRange(0, 1)
-            self.progress.setValue(1)
-            self.run_btn.setEnabled(True)
-            self.stop_btn.setEnabled(False)
+            self._reset_run_state()
+
+    def _on_plan_failed(self, error_msg: str) -> None:
+        self._worker = None
+        if self.is_cancelled():
+            self.status.setText("停止要求を受け付けたため処理を中止しました")
+        else:
+            self.status.setText(f"エラー: {error_msg}")
+            QMessageBox.critical(self, "AI Stroke Painter", error_msg)
+        self._reset_run_state()
+
+    def _reset_run_state(self) -> None:
+        self.progress.setRange(0, 1)
+        self.progress.setValue(1)
+        self.run_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self._active_doc = None
+        self._worker = None

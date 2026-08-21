@@ -14,12 +14,14 @@ from zipfile import ZipFile
 
 from . import build_plugin as build_plugin_module
 from .build_plugin import PACKAGE_NAME, build
+from .docker import PlanWorker
 from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint
 from .krita_adapter import KritaCanvasAdapter
 from .llm_planner import (
     LLMPlannerError,
     OpenAICompatiblePlanner,
     OpenAICompatibleSettings,
+    _extract_json_object,
 )
 from .planner import RuleBasedPlanner
 from .storage import load_plan, save_plan
@@ -356,6 +358,44 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
 
         self.assertFalse(TargetHandler.reached)
 
+    def test_extracts_json_with_surrounding_markdown_and_commentary(self) -> None:
+        raw_text = (
+            "Here is your drawing plan:\n"
+            "```json\n"
+            "{\n"
+            '  "schema_version": 1,\n'
+            '  "prompt": "hair curve",\n'
+            '  "seed": 42,\n'
+            '  "strokes": [\n'
+            "    {\n"
+            '      "id": "s1",\n'
+            '      "points": [\n'
+            '        {"x": 10.0, "y": 20.0, "pressure": 0.5, "time_ms": 0},\n'
+            '        {"x": 30.0, "y": 40.0, "pressure": 0.8, "time_ms": 10}\n'
+            "      ]\n"
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "```\n"
+            "Let me know if you need any adjustments!"
+        )
+        parsed = _extract_json_object(raw_text)
+        plan = DrawingPlan.from_dict(parsed)
+        self.assertEqual(plan.prompt, "hair curve")
+        self.assertEqual(plan.seed, 42)
+        self.assertEqual(len(plan.strokes), 1)
+
+    def test_extracts_json_without_code_fence_but_with_text(self) -> None:
+        raw_text = (
+            "Sure! Plan: "
+            '{"schema_version": 1, "prompt": "line", "seed": 1, "strokes": [{"id": "s", "points": [{"x": 0, "y": 0, "pressure": 0.5, "time_ms": 0}, {"x": 1, "y": 1, "pressure": 0.5, "time_ms": 1}]}]} '
+            "Enjoy painting."
+        )
+        parsed = _extract_json_object(raw_text)
+        plan = DrawingPlan.from_dict(parsed)
+        self.assertEqual(plan.prompt, "line")
+        self.assertEqual(len(plan.strokes), 1)
+
 
 class CanvasAdapterTests(unittest.TestCase):
     def test_existing_target_layer_is_reused_and_pressure_is_unit_range(self) -> None:
@@ -425,6 +465,55 @@ class CanvasAdapterTests(unittest.TestCase):
             rendered = adapter.render(document, plan)
 
         self.assertEqual(rendered, 1)
+
+    def test_qt_cached_resolver_and_process_events(self) -> None:
+        import ai_stroke_painter.krita_adapter as module
+
+        # _resolve_qt と _process_events が例外なく実行できること
+        qpoint, qapp = module._resolve_qt()
+        self.assertTrue(qpoint is None or callable(qpoint))
+        self.assertTrue(qapp is None or callable(qapp))
+        module._process_events()
+
+
+class WorkerAndDockerTests(unittest.TestCase):
+    def test_plan_worker_emits_plan_on_success(self) -> None:
+        planner = RuleBasedPlanner()
+        worker = PlanWorker(
+            planner=planner,
+            prompt="curve",
+            seed=1,
+            count=2,
+            width=200,
+            height=200,
+        )
+        received_plans: list[Any] = []
+        received_errors: list[str] = []
+        worker.plan_ready.connect(lambda p: received_plans.append(p))
+        worker.plan_failed.connect(lambda e: received_errors.append(e))
+
+        worker.run()
+        self.assertEqual(len(received_plans), 1)
+        self.assertEqual(len(received_errors), 0)
+        self.assertIsInstance(received_plans[0], DrawingPlan)
+
+    def test_plan_worker_suppresses_emission_when_cancelled(self) -> None:
+        planner = RuleBasedPlanner()
+        worker = PlanWorker(
+            planner=planner,
+            prompt="curve",
+            seed=1,
+            count=2,
+            width=200,
+            height=200,
+        )
+        received_plans: list[Any] = []
+        worker.plan_ready.connect(lambda p: received_plans.append(p))
+
+        worker.cancel()
+        self.assertTrue(worker.is_cancelled())
+        worker.run()
+        self.assertEqual(len(received_plans), 0)
 
 
 def run() -> bool:
