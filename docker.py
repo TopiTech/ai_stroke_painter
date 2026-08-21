@@ -1,8 +1,14 @@
-try:
+from __future__ import annotations
+
+import os
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
     from PyQt5.QtWidgets import (
         QCheckBox,
         QComboBox,
         QFormLayout,
+        QGroupBox,
         QHBoxLayout,
         QLabel,
         QLineEdit,
@@ -11,45 +17,76 @@ try:
         QProgressBar,
         QPushButton,
         QSpinBox,
-        QGroupBox,
         QVBoxLayout,
         QWidget,
     )
+else:
+    try:
+        from PyQt5.QtWidgets import (
+            QCheckBox,
+            QComboBox,
+            QFormLayout,
+            QGroupBox,
+            QHBoxLayout,
+            QLabel,
+            QLineEdit,
+            QMessageBox,
+            QPlainTextEdit,
+            QProgressBar,
+            QPushButton,
+            QSpinBox,
+            QVBoxLayout,
+            QWidget,
+        )
+    except ImportError:
+        import contextlib
+
+        with contextlib.suppress(ImportError):
+            from PyQt6.QtWidgets import (
+                QCheckBox,
+                QComboBox,
+                QFormLayout,
+                QGroupBox,
+                QHBoxLayout,
+                QLabel,
+                QLineEdit,
+                QMessageBox,
+                QPlainTextEdit,
+                QProgressBar,
+                QPushButton,
+                QSpinBox,
+                QVBoxLayout,
+                QWidget,
+            )
+
+try:
+    from krita import DockWidget, Krita
 except ImportError:
-    from PyQt6.QtWidgets import (
-        QCheckBox,
-        QComboBox,
-        QFormLayout,
-        QHBoxLayout,
-        QLabel,
-        QLineEdit,
-        QMessageBox,
-        QPlainTextEdit,
-        QProgressBar,
-        QPushButton,
-        QSpinBox,
-        QGroupBox,
-        QVBoxLayout,
-        QWidget,
-    )
+    # Krita 外での型チェック / スタブ用フォールバック
+    class DockWidget:  # type: ignore[no-redef]
+        def __init__(self) -> None: ...
+        def setWindowTitle(self, title: str) -> None: ...
+        def setWidget(self, widget: Any) -> None: ...
 
-import os
+    class Krita:  # type: ignore[no-redef]
+        @staticmethod
+        def instance() -> Any: ...
 
-from krita import DockWidget, Krita
 
 from .krita_adapter import KritaCanvasAdapter
 from .llm_planner import OpenAICompatiblePlanner, OpenAICompatibleSettings
 from .planner import RuleBasedPlanner
+from .ports import PlannerPort
 from .storage import save_plan
 
 
 class AIStrokePainterDocker(DockWidget):
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("AI Stroke Painter MVP")
         self.planner = RuleBasedPlanner()
         self.canvas_port = KritaCanvasAdapter()
-        self._cancel = False
+        self._cancel: bool = False
 
         container = QWidget(self)
         layout = QVBoxLayout(container)
@@ -121,17 +158,17 @@ class AIStrokePainterDocker(DockWidget):
         self.planner_mode.currentIndexChanged.connect(self._update_planner_settings_state)
         self._update_planner_settings_state()
 
-    def canvasChanged(self, canvas):
+    def canvasChanged(self, canvas: Any) -> None:
         pass
 
-    def cancel(self):
+    def cancel(self) -> None:
         self._cancel = True
         self.status.setText("停止要求を受け付けました。現在の線分を完了後に停止します。")
 
-    def _update_planner_settings_state(self, *_args):
+    def _update_planner_settings_state(self, *_args: Any) -> None:
         self.llm_settings.setEnabled(self.planner_mode.currentData() == "openai_compatible")
 
-    def _planner(self):
+    def _planner(self) -> PlannerPort:
         if self.planner_mode.currentData() == "offline":
             return self.planner
         return OpenAICompatiblePlanner(
@@ -142,10 +179,12 @@ class AIStrokePainterDocker(DockWidget):
             )
         )
 
-    def run(self):
-        document = Krita.instance().activeDocument()
+    def run(self) -> None:
+        document: Any | None = Krita.instance().activeDocument()
         if document is None:
-            QMessageBox.warning(self, "AI Stroke Painter", "先にドキュメントを開いてください。描画先キャンバスがありません。")
+            QMessageBox.warning(
+                self, "AI Stroke Painter", "先にドキュメントを開いてください。描画先キャンバスがありません。"
+            )
             return
 
         self._cancel = False
@@ -160,19 +199,19 @@ class AIStrokePainterDocker(DockWidget):
                 self.prompt.toPlainText().strip(),
                 self.seed.value(),
                 self.count.value(),
-                document.width(),
-                document.height(),
+                float(document.width()),
+                float(document.height()),
             )
             path = save_plan(plan) if self.save_json.isChecked() else None
             self.status.setText("描画中… 停止できます。")
             rendered = self.canvas_port.render(document, plan, lambda: self._cancel)
-            suffix = (" / " + str(path)) if path else ""
+            suffix = f" / {path}" if path else ""
             if self._cancel:
-                self.status.setText("%d本を描画して停止しました%s" % (rendered, suffix))
+                self.status.setText(f"{rendered}本を描画して停止しました{suffix}")
             else:
-                self.status.setText("%d本を描画しました%s" % (rendered, suffix))
+                self.status.setText(f"{rendered}本を描画しました{suffix}")
         except Exception as exc:
-            self.status.setText("エラー: " + str(exc))
+            self.status.setText(f"エラー: {exc}")
             QMessageBox.critical(self, "AI Stroke Painter", str(exc))
         finally:
             self.progress.setRange(0, 1)

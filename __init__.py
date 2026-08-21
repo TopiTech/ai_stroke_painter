@@ -14,6 +14,4 @@ else:
         "DockRight",
         getattr(DockWidgetFactoryBase, "DockRight", None),
     )
-    Krita.instance().addDockWidgetFactory(
-        DockWidgetFactory(DOCKER_ID, dock_position, AIStrokePainterDocker)
-    )
+    Krita.instance().addDockWidgetFactory(DockWidgetFactory(DOCKER_ID, dock_position, AIStrokePainterDocker))

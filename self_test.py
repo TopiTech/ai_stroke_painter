@@ -2,78 +2,83 @@
 
 from __future__ import annotations
 
-import tempfile
-import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+from pathlib import Path
+import tempfile
 from threading import Event, Thread
+from typing import Any
 import unittest
 from unittest.mock import patch
-from pathlib import Path
 from zipfile import ZipFile
 
 from . import build_plugin as build_plugin_module
 from .build_plugin import PACKAGE_NAME, build
 from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint
 from .krita_adapter import KritaCanvasAdapter
-from .llm_planner import LLMPlannerError, OpenAICompatiblePlanner, OpenAICompatibleSettings
+from .llm_planner import (
+    LLMPlannerError,
+    OpenAICompatiblePlanner,
+    OpenAICompatibleSettings,
+)
 from .planner import RuleBasedPlanner
 from .storage import load_plan, save_plan
 
 
 class _FakeNode:
-    def __init__(self, name, node_type="paintlayer", paint_ability="PAINT"):
+    def __init__(self, name: str, node_type: str = "paintlayer", paint_ability: str = "PAINT") -> None:
         self._name = name
         self._type = node_type
         self._paint_ability = paint_ability
-        self._children = []
-        self.lines = []
+        self._children: list[Any] = []
+        self.lines: list[tuple[Any, Any, float, float]] = []
 
-    def name(self):
+    def name(self) -> str:
         return self._name
 
-    def type(self):
+    def type(self) -> str:
         return self._type
 
-    def childNodes(self):
+    def childNodes(self) -> list[Any]:
         return list(self._children)
 
-    def addChildNode(self, child, _before):
+    def addChildNode(self, child: Any, _before: Any) -> None:
         self._children.append(child)
 
-    def paintAbility(self):
+    def paintAbility(self) -> str:
         return self._paint_ability
 
-    def paintLine(self, start, end, start_pressure, end_pressure):
+    def paintLine(self, start: Any, end: Any, start_pressure: float, end_pressure: float) -> None:
         if self.paintAbility() == "PAINT":
             self.lines.append((start, end, start_pressure, end_pressure))
 
 
 class _FakeDocument:
-    def __init__(self, active=None, root=None):
+    def __init__(self, active: Any | None = None, root: Any | None = None) -> None:
         self.active = active
         self.root = root or _FakeNode("root", "grouplayer")
         self.created = 0
         self.refreshed = 0
 
-    def activeNode(self):
+    def activeNode(self) -> Any | None:
         return self.active
 
-    def rootNode(self):
+    def rootNode(self) -> Any:
         return self.root
 
-    def createNode(self, name, node_type):
+    def createNode(self, name: str, node_type: str) -> _FakeNode:
         self.created += 1
         return _FakeNode(name, node_type)
 
-    def setActiveNode(self, node):
+    def setActiveNode(self, node: Any) -> None:
         self.active = node
 
-    def refreshProjection(self):
+    def refreshProjection(self) -> None:
         self.refreshed += 1
 
 
 class PlannerAndStorageTests(unittest.TestCase):
-    def test_planner_is_deterministic_and_bounded(self):
+    def test_planner_is_deterministic_and_bounded(self) -> None:
         planner = RuleBasedPlanner()
         first = planner.plan("髪のS字", 42, 10, 1024, 768)
         second = planner.plan("髪のS字", 42, 10, 1024, 768)
@@ -89,7 +94,7 @@ class PlannerAndStorageTests(unittest.TestCase):
                 self.assertGreaterEqual(point.pressure, 0.0)
                 self.assertLessEqual(point.pressure, 1.0)
 
-    def test_plan_json_round_trip_and_collision_free_save(self):
+    def test_plan_json_round_trip_and_collision_free_save(self) -> None:
         plan = RuleBasedPlanner().plan("curve", 9, 2, 300, 200)
         with tempfile.TemporaryDirectory() as temp:
             first_path = save_plan(plan, temp)
@@ -98,7 +103,7 @@ class PlannerAndStorageTests(unittest.TestCase):
             self.assertEqual(load_plan(first_path), plan)
             self.assertEqual(load_plan(second_path), plan)
 
-    def test_invalid_domain_data_is_rejected(self):
+    def test_invalid_domain_data_is_rejected(self) -> None:
         with self.assertRaises(PlanValidationError):
             StrokePoint(0, 0, 1.1, 0)
         with self.assertRaises(PlanValidationError):
@@ -109,24 +114,24 @@ class PlannerAndStorageTests(unittest.TestCase):
 
 class PluginBuildTests(unittest.TestCase):
     @staticmethod
-    def _create_minimal_source(source):
+    def _create_minimal_source(source: Path) -> None:
         source.mkdir(parents=True)
-        (source / (PACKAGE_NAME + ".desktop")).write_text("[Desktop Entry]\n", encoding="utf-8")
+        (source / f"{PACKAGE_NAME}.desktop").write_text("[Desktop Entry]\n", encoding="utf-8")
         (source / "__init__.py").write_text("", encoding="utf-8")
 
-    def test_build_includes_manifest_once_at_archive_root(self):
+    def test_build_includes_manifest_once_at_archive_root(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            output = Path(temp) / (PACKAGE_NAME + ".zip")
+            output = Path(temp) / f"{PACKAGE_NAME}.zip"
             self.assertEqual(build(output), output)
             with ZipFile(output) as archive:
                 names = archive.namelist()
 
-        self.assertIn(PACKAGE_NAME + ".desktop", names)
-        self.assertIn(PACKAGE_NAME + "/", names)
-        self.assertIn(PACKAGE_NAME + "/__init__.py", names)
-        self.assertNotIn(PACKAGE_NAME + "/" + PACKAGE_NAME + ".desktop", names)
+        self.assertIn(f"{PACKAGE_NAME}.desktop", names)
+        self.assertIn(f"{PACKAGE_NAME}/", names)
+        self.assertIn(f"{PACKAGE_NAME}/__init__.py", names)
+        self.assertNotIn(f"{PACKAGE_NAME}/{PACKAGE_NAME}.desktop", names)
 
-    def test_build_excludes_output_inside_source(self):
+    def test_build_excludes_output_inside_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "source"
             self._create_minimal_source(source)
@@ -136,9 +141,9 @@ class PluginBuildTests(unittest.TestCase):
             with ZipFile(output) as archive:
                 names = archive.namelist()
 
-        self.assertNotIn(PACKAGE_NAME + "/custom.zip", names)
+        self.assertNotIn(f"{PACKAGE_NAME}/custom.zip", names)
 
-    def test_build_ignores_excluded_names_above_source(self):
+    def test_build_ignores_excluded_names_above_source(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "dist" / "source"
             self._create_minimal_source(source)
@@ -148,9 +153,9 @@ class PluginBuildTests(unittest.TestCase):
             with ZipFile(output) as archive:
                 names = archive.namelist()
 
-        self.assertIn(PACKAGE_NAME + "/__init__.py", names)
+        self.assertIn(f"{PACKAGE_NAME}/__init__.py", names)
 
-    def test_build_excludes_unlisted_local_files(self):
+    def test_build_excludes_unlisted_local_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             source = Path(temp) / "source"
             self._create_minimal_source(source)
@@ -161,11 +166,11 @@ class PluginBuildTests(unittest.TestCase):
             with ZipFile(output) as archive:
                 names = archive.namelist()
 
-        self.assertNotIn(PACKAGE_NAME + "/local-not-for-plugin.txt", names)
+        self.assertNotIn(f"{PACKAGE_NAME}/local-not-for-plugin.txt", names)
 
 
 class OpenAICompatiblePlannerTests(unittest.TestCase):
-    def test_calls_chat_completions_and_validates_plan(self):
+    def test_calls_chat_completions_and_validates_plan(self) -> None:
         expected_plan = {
             "schema_version": 1,
             "prompt": "a blue curve",
@@ -185,11 +190,16 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         }
 
         class Handler(BaseHTTPRequestHandler):
-            received = None
+            received: dict[str, Any] | None = None
 
-            def do_POST(self):
-                body = self.rfile.read(int(self.headers["Content-Length"]))
-                type(self).received = {"path": self.path, "authorization": self.headers.get("Authorization"), "body": json.loads(body)}
+            def do_POST(self) -> None:
+                length = int(self.headers.get("Content-Length", 0))
+                body = self.rfile.read(length)
+                type(self).received = {
+                    "path": self.path,
+                    "authorization": self.headers.get("Authorization"),
+                    "body": json.loads(body),
+                }
                 response = {"choices": [{"message": {"content": "```json\n" + json.dumps(expected_plan) + "\n```"}}]}
                 encoded = json.dumps(response).encode("utf-8")
                 self.send_response(200)
@@ -198,7 +208,7 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(encoded)
 
-            def log_message(self, _format, *_args):
+            def log_message(self, _format: str, *_args: Any) -> None:
                 pass
 
         server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -206,7 +216,7 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         thread.start()
         try:
             planner = OpenAICompatiblePlanner(
-                OpenAICompatibleSettings("http://127.0.0.1:%d/v1" % server.server_port, "test-model", "test-key", 2)
+                OpenAICompatibleSettings(f"http://127.0.0.1:{server.server_port}/v1", "test-model", "test-key", 2)
             )
             plan = planner.plan("a blue curve", 12, 1, 100, 100)
         finally:
@@ -215,35 +225,59 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
             thread.join()
 
         self.assertEqual(plan, DrawingPlan.from_dict(expected_plan))
+        assert Handler.received is not None
         self.assertEqual(Handler.received["path"], "/v1/chat/completions")
         self.assertEqual(Handler.received["authorization"], "Bearer test-key")
         self.assertEqual(Handler.received["body"]["model"], "test-model")
-        self.assertEqual(Handler.received["body"]["messages"][1]["content"], '{"prompt": "a blue curve", "seed": 12, "stroke_count": 1, "canvas": {"width": 100.0, "height": 100.0}}')
+        self.assertEqual(
+            Handler.received["body"]["messages"][1]["content"],
+            '{"prompt": "a blue curve", "seed": 12, "stroke_count": 1, "canvas": {"width": 100.0, "height": 100.0}}',
+        )
 
-    def test_rejects_out_of_bounds_llm_plan(self):
+    def test_rejects_out_of_bounds_llm_plan(self) -> None:
         response = {
             "choices": [
-                {"message": {"content": json.dumps({"schema_version": 1, "prompt": "curve", "seed": 1, "strokes": [{"id": "s", "points": [{"x": 0, "y": 0, "pressure": 0.5, "time_ms": 0}, {"x": 200, "y": 0, "pressure": 0.5, "time_ms": 1}]}]})}}
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "schema_version": 1,
+                                "prompt": "curve",
+                                "seed": 1,
+                                "strokes": [
+                                    {
+                                        "id": "s",
+                                        "points": [
+                                            {"x": 0, "y": 0, "pressure": 0.5, "time_ms": 0},
+                                            {"x": 200, "y": 0, "pressure": 0.5, "time_ms": 1},
+                                        ],
+                                    }
+                                ],
+                            }
+                        )
+                    }
+                }
             ]
         }
 
         class Response:
-            def read(self, _size):
+            def read(self, _size: int) -> bytes:
                 return json.dumps(response).encode("utf-8")
 
-            def __enter__(self):
+            def __enter__(self) -> Response:
                 return self
 
-            def __exit__(self, *_args):
-                return False
+            def __exit__(self, *_args: Any) -> None:
+                pass
 
         planner = OpenAICompatiblePlanner(
-            OpenAICompatibleSettings("https://example.test/v1", "model"), opener=lambda *_args, **_kwargs: Response()
+            OpenAICompatibleSettings("https://example.test/v1", "model"),
+            opener=lambda *_args, **_kwargs: Response(),
         )
         with self.assertRaisesRegex(RuntimeError, "キャンバス範囲外"):
             planner.plan("curve", 1, 1, 100, 100)
 
-    def test_rejects_cross_origin_redirect_before_forwarding_credentials(self):
+    def test_rejects_cross_origin_redirect_before_forwarding_credentials(self) -> None:
         expected_plan = {
             "schema_version": 1,
             "prompt": "curve",
@@ -262,8 +296,8 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         class TargetHandler(BaseHTTPRequestHandler):
             reached = False
 
-            def do_GET(self):
-                type(self).reached = True
+            def do_GET(self) -> None:
+                TargetHandler.reached = True
                 response = {"choices": [{"message": {"content": json.dumps(expected_plan)}}]}
                 encoded = json.dumps(response).encode("utf-8")
                 self.send_response(200)
@@ -271,18 +305,18 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
                 self.end_headers()
                 self.wfile.write(encoded)
 
-            def log_message(self, _format, *_args):
+            def log_message(self, _format: str, *_args: Any) -> None:
                 pass
 
         class RedirectHandler(BaseHTTPRequestHandler):
-            target_port = None
+            target_port: int | None = None
 
-            def do_POST(self):
+            def do_POST(self) -> None:
                 self.send_response(302)
                 self.send_header("Location", f"http://127.0.0.1:{self.target_port}/result")
                 self.end_headers()
 
-            def log_message(self, _format, *_args):
+            def log_message(self, _format: str, *_args: Any) -> None:
                 pass
 
         target_server = ThreadingHTTPServer(("127.0.0.1", 0), TargetHandler)
@@ -290,7 +324,7 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         redirect_server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
         ready_events = [Event(), Event()]
 
-        def serve(server, ready):
+        def serve(server: ThreadingHTTPServer, ready: Event) -> None:
             ready.set()
             server.serve_forever()
 
@@ -324,7 +358,7 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
 
 
 class CanvasAdapterTests(unittest.TestCase):
-    def test_existing_target_layer_is_reused_and_pressure_is_unit_range(self):
+    def test_existing_target_layer_is_reused_and_pressure_is_unit_range(self) -> None:
         target = _FakeNode(KritaCanvasAdapter.LAYER_NAME)
         document = _FakeDocument(active=_FakeNode("other"), root=_FakeNode("root", "grouplayer"))
         document.root.addChildNode(target, None)
@@ -332,6 +366,7 @@ class CanvasAdapterTests(unittest.TestCase):
         adapter = KritaCanvasAdapter()
 
         import ai_stroke_painter.krita_adapter as module
+
         original_qpoint = module._qpoint
         module._qpoint = lambda x, y: (x, y)
         try:
@@ -345,15 +380,16 @@ class CanvasAdapterTests(unittest.TestCase):
         self.assertTrue(target.lines)
         self.assertTrue(all(0.0 <= line[2] <= 1.0 and 0.0 <= line[3] <= 1.0 for line in target.lines))
 
-    def test_cancel_before_drawing_does_not_paint(self):
+    def test_cancel_before_drawing_does_not_paint(self) -> None:
         document = _FakeDocument()
         plan = RuleBasedPlanner().plan("curve", 3, 1, 100, 100)
         adapter = KritaCanvasAdapter()
         self.assertEqual(adapter.render(document, plan, cancelled=lambda: True), 0)
+        assert document.active is not None
         self.assertEqual(document.active.lines, [])
         self.assertEqual(document.refreshed, 1)
 
-    def test_unpaintable_target_is_rejected(self):
+    def test_unpaintable_target_is_rejected(self) -> None:
         target = _FakeNode(KritaCanvasAdapter.LAYER_NAME, paint_ability="UNPAINTABLE")
         document = _FakeDocument(active=target)
         plan = RuleBasedPlanner().plan("curve", 3, 1, 100, 100)
@@ -368,7 +404,7 @@ class CanvasAdapterTests(unittest.TestCase):
         self.assertEqual(target.lines, [])
 
 
-def run():
+def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return result.wasSuccessful()

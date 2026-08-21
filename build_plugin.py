@@ -6,7 +6,6 @@ import argparse
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-
 PACKAGE_NAME = "ai_stroke_painter"
 PACKAGE_FILES = (
     "Manual.html",
@@ -23,9 +22,9 @@ PACKAGE_FILES = (
 
 def build(output: Path) -> Path:
     source = Path(__file__).resolve().parent
-    manifest = source / (PACKAGE_NAME + ".desktop")
+    manifest = source / f"{PACKAGE_NAME}.desktop"
     if not manifest.is_file():
-        raise FileNotFoundError("Krita manifest が見つかりません: %s" % manifest)
+        raise FileNotFoundError(f"Krita manifest が見つかりません: {manifest}")
     output.parent.mkdir(parents=True, exist_ok=True)
     with ZipFile(output, "w", ZIP_DEFLATED) as archive:
         archive.write(manifest, manifest.name)
@@ -37,9 +36,9 @@ def build(output: Path) -> Path:
     return output
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("-o", "--output", type=Path, default=Path("dist") / (PACKAGE_NAME + ".zip"))
+    parser.add_argument("-o", "--output", type=Path, default=Path("dist") / f"{PACKAGE_NAME}.zip")
     args = parser.parse_args()
     print(build(args.output.resolve()))
 

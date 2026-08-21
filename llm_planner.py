@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
 import socket
-from typing import Any, Callable, Mapping, Optional
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -23,7 +24,7 @@ class _CrossOriginRedirectError(RuntimeError):
     pass
 
 
-def _url_origin(url: str):
+def _url_origin(url: str) -> tuple[str, str, int] | None:
     parsed = urlsplit(url)
     try:
         port = parsed.port
@@ -35,8 +36,16 @@ def _url_origin(url: str):
 
 
 class _SameOriginRedirectHandler(HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+    def redirect_request(
+        self,
+        req: Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> Request | None:
+        redirected: Request | None = super().redirect_request(req, fp, code, msg, headers, newurl)
         source_origin = _url_origin(req.full_url)
         target_origin = _url_origin(redirected.full_url) if redirected is not None else None
         if redirected is not None and (source_origin is None or source_origin != target_origin):
@@ -61,13 +70,17 @@ class OpenAICompatibleSettings:
             raise ValueError("Base URL はクエリを含まない http(s) URL にしてください")
         if not isinstance(self.model, str) or not self.model.strip():
             raise ValueError("Model を入力してください")
-        if isinstance(self.timeout_seconds, bool) or not isinstance(self.timeout_seconds, (int, float)) or self.timeout_seconds <= 0:
+        if (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, (int, float))
+            or self.timeout_seconds <= 0
+        ):
             raise ValueError("timeout_seconds は正の数値である必要があります")
 
     @property
     def endpoint_url(self) -> str:
         base = self.base_url.strip().rstrip("/")
-        return base if base.endswith("/chat/completions") else base + "/chat/completions"
+        return base if base.endswith("/chat/completions") else f"{base}/chat/completions"
 
 
 class OpenAICompatiblePlanner(PlannerPort):
@@ -78,13 +91,15 @@ class OpenAICompatiblePlanner(PlannerPort):
     def __init__(
         self,
         settings: OpenAICompatibleSettings,
-        opener: Optional[Callable[..., Any]] = None,
+        opener: Callable[..., Any] | None = None,
     ) -> None:
         self.settings = settings
         self._opener = opener or build_opener(_SameOriginRedirectHandler()).open
 
-    def plan(self, prompt, seed, count, width, height):
-        prompt, seed, count, width, height = validate_plan_request(prompt, seed, count, width, height)
+    def plan(self, prompt: str, seed: int, count: int, width: float, height: float) -> DrawingPlan:
+        valid_prompt, valid_seed, valid_count, valid_width, valid_height = validate_plan_request(
+            prompt, seed, count, width, height
+        )
         payload = {
             "model": self.settings.model.strip(),
             "messages": [
@@ -93,10 +108,10 @@ class OpenAICompatiblePlanner(PlannerPort):
                     "role": "user",
                     "content": json.dumps(
                         {
-                            "prompt": prompt,
-                            "seed": seed,
-                            "stroke_count": count,
-                            "canvas": {"width": width, "height": height},
+                            "prompt": valid_prompt,
+                            "seed": valid_seed,
+                            "stroke_count": valid_count,
+                            "canvas": {"width": valid_width, "height": valid_height},
                         },
                         ensure_ascii=False,
                     ),
@@ -105,13 +120,13 @@ class OpenAICompatiblePlanner(PlannerPort):
         }
         response = self._post(payload)
         plan = _plan_from_response(response)
-        _validate_plan_contract(plan, prompt, seed, count, width, height)
+        _validate_plan_contract(plan, valid_prompt, valid_seed, valid_count, valid_width, valid_height)
         return plan
 
     def _post(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         headers = {"Content-Type": "application/json", "Accept": "application/json"}
         if self.settings.api_key.strip():
-            headers["Authorization"] = "Bearer " + self.settings.api_key.strip()
+            headers["Authorization"] = f"Bearer {self.settings.api_key.strip()}"
         request = Request(
             self.settings.endpoint_url,
             data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -122,12 +137,13 @@ class OpenAICompatiblePlanner(PlannerPort):
             with self._opener(request, timeout=float(self.settings.timeout_seconds)) as response:
                 raw = response.read(self.MAX_RESPONSE_BYTES + 1)
         except _CrossOriginRedirectError as exc:
-            raise LLMPlannerError("LLM API の別オリジンへのリダイレクトを拒否しました") from exc
+            raise LLMPlannerError("LLM API の別オリジンへのリダイレクトを拒予しました") from exc
         except HTTPError as exc:
             detail = _read_http_error(exc)
-            raise LLMPlannerError("LLM API が HTTP %d を返しました%s" % (exc.code, (": " + detail) if detail else "")) from exc
+            suffix = f": {detail}" if detail else ""
+            raise LLMPlannerError(f"LLM API が HTTP {exc.code} を返しました{suffix}") from exc
         except (URLError, socket.timeout, TimeoutError, OSError) as exc:
-            raise LLMPlannerError("LLM API に接続できませんでした: %s" % _safe_error_message(exc)) from exc
+            raise LLMPlannerError(f"LLM API に接続できませんでした: {_safe_error_message(exc)}") from exc
 
         if len(raw) > self.MAX_RESPONSE_BYTES:
             raise LLMPlannerError("LLM API の応答が大きすぎます")
@@ -168,7 +184,7 @@ def _plan_from_response(response: Mapping[str, Any]) -> DrawingPlan:
         value = _extract_json_object(content)
         return DrawingPlan.from_dict(value)
     except (PlanValidationError, json.JSONDecodeError, TypeError, ValueError) as exc:
-        raise LLMPlannerError("LLM が有効な DrawingPlan JSON を返しませんでした: %s" % exc) from exc
+        raise LLMPlannerError(f"LLM が有効な DrawingPlan JSON を返しませんでした: {exc}") from exc
 
 
 def _extract_json_object(content: str) -> Mapping[str, Any]:
@@ -190,11 +206,18 @@ def _extract_json_object(content: str) -> Mapping[str, Any]:
     return value
 
 
-def _validate_plan_contract(plan: DrawingPlan, prompt: str, seed: int, count: int, width: float, height: float) -> None:
+def _validate_plan_contract(
+    plan: DrawingPlan,
+    prompt: str,
+    seed: int,
+    count: int,
+    width: float,
+    height: float,
+) -> None:
     if plan.prompt != prompt or plan.seed != seed:
         raise LLMPlannerError("LLM は要求した prompt と seed をそのまま返す必要があります")
     if len(plan.strokes) != count:
-        raise LLMPlannerError("LLM は要求した本数 (%d) のストロークを返す必要があります" % count)
+        raise LLMPlannerError(f"LLM は要求した本数 ({count}) のストロークを返す必要があります")
     point_count = 0
     for stroke in plan.strokes:
         if len(stroke.points) > 120:

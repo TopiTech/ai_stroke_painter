@@ -59,11 +59,31 @@ python build_plugin.py
 
 将来は `PlannerPort` を LLM Adapter、`CanvasPort` を C++ 拡張または Krita フォーク側 IPC に差し替えられます。ドメイン JSON の `schema_version` はその契約です。
 
-## 検証
+## 検証・コード品質チェック
 
 Krita を起動せずに、決定性、キャンバス境界、圧力値域、JSON 往復、保存名衝突、レイヤー再利用、停止、ローカル HTTP サーバー経由の OpenAI 互換呼び出しを確認できます。
 
+### 一括検証（Lint / Format / 型チェック / 回帰テスト）
+
+プロジェクトディレクトリで次を実行すると、すべての検証をワンコマンドで実行できます。
+
 ```powershell
+python check.py
+```
+
+### 個別の静的解析 & テスト
+
+```powershell
+# Ruff による Lint チェック
+ruff check .
+
+# Ruff によるコードフォーマット確認
+ruff format --check .
+
+# Mypy による静的型チェック
+mypy .
+
+# 回帰セルフテスト
 Set-Location ..
 python -m unittest ai_stroke_painter.self_test -v
 ```
