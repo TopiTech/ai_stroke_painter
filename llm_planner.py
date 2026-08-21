@@ -122,6 +122,7 @@ class OpenAICompatiblePlanner(PlannerPort):
         canvas_image: bytes | None = None,
         iteration: int = 1,
         max_iterations: int = 1,
+        palette_name: str = "anime",
     ) -> DrawingPlan:
         valid_prompt, valid_seed, valid_count, valid_width, valid_height = validate_plan_request(
             prompt, seed, count, width, height

@@ -423,6 +423,8 @@ class CanvasAdapterTests(unittest.TestCase):
             pos += 12 + length
 
     def test_apply_color_to_krita_parses_short_and_full_hex(self) -> None:
+        from unittest.mock import MagicMock, patch
+
         from ai_stroke_painter.krita_adapter import _apply_color_to_krita, _parse_hex_rgb
 
         self.assertEqual(_parse_hex_rgb("#fff"), (1.0, 1.0, 1.0))
@@ -431,10 +433,19 @@ class CanvasAdapterTests(unittest.TestCase):
         self.assertEqual(_parse_hex_rgb("#ff000080"), (1.0, 0.0, 0.0))
         self.assertIsNone(_parse_hex_rgb("invalid"))
 
-        doc = _FakeDocument()
-        _apply_color_to_krita(doc, "#fff")
-        _apply_color_to_krita(doc, "#abcd")
-        _apply_color_to_krita(doc, "#112233")
+        fake_view = MagicMock()
+        with patch.dict("sys.modules", {"krita": MagicMock()}):
+            import sys
+
+            krita_mock = sys.modules["krita"]
+            krita_instance = krita_mock.Krita.instance.return_value
+            krita_instance.activeWindow.return_value.activeView.return_value = fake_view
+
+            _apply_color_to_krita("#fff")
+            _apply_color_to_krita("invalid")
+            _apply_color_to_krita("#112233")
+
+        self.assertEqual(fake_view.setForeGroundColor.call_count, 2)
 
 
 class WorkerAndDockerTests(unittest.TestCase):
@@ -517,6 +528,29 @@ class WorkerAndDockerTests(unittest.TestCase):
         worker.run()
         self.assertEqual(len(received_plans), 3)
         self.assertEqual(adapter.render_call_count, 0)
+
+    def test_plan_worker_forwards_palette_name_to_planner(self) -> None:
+        received: list[str] = []
+
+        class PaletteSpyPlanner(RuleBasedPlanner):
+            def plan(self, *args: Any, **kwargs: Any) -> DrawingPlan:
+                received.append(kwargs.get("palette_name", "<not-forwarded>"))
+                return super().plan(*args, **kwargs)
+
+        worker = PlanWorker(
+            planner=PaletteSpyPlanner(),
+            canvas_port=KritaCanvasAdapter(),
+            document=_FakeDocument(),
+            prompt="cat",
+            seed=1,
+            count=2,
+            width=200,
+            height=200,
+            palette_name="cyberpunk",
+            max_iterations=1,
+        )
+        worker.run()
+        self.assertEqual(received, ["cyberpunk"])
 
 
 def run() -> bool:

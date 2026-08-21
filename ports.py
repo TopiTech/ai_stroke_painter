@@ -21,6 +21,7 @@ class PlannerPort(ABC):
         canvas_image: bytes | None = None,
         iteration: int = 1,
         max_iterations: int = 1,
+        palette_name: str = "anime",
     ) -> DrawingPlan: ...
 
 

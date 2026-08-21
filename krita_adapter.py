@@ -111,7 +111,7 @@ class KritaCanvasAdapter(CanvasPort):
                 if paint_ability != "PAINT":
                     raise RuntimeError(f"対象レイヤーに描画できません（paintAbility: {paint_ability}）")
 
-                _apply_color_to_krita(document, stroke.color)
+                _apply_color_to_krita(stroke.color)
 
                 for start, end in zip(stroke.points, stroke.points[1:]):
                     if cancelled():
@@ -194,20 +194,38 @@ def _parse_hex_rgb(hex_str: str) -> tuple[float, float, float] | None:
     return None
 
 
-def _apply_color_to_krita(document: Any, hex_color: str) -> None:
-    """Krita の描画前景色にストロークカラーを反映する。"""
+def _resolve_qcolor_class() -> Any | None:
+    for module_base in ("PyQt5", "PyQt6"):
+        try:
+            gui = importlib.import_module(f"{module_base}.QtGui")
+            qcolor = getattr(gui, "QColor", None)
+            if qcolor is not None:
+                return qcolor
+        except (ImportError, AttributeError):
+            continue
+    return None
+
+
+def _apply_color_to_krita(hex_color: str) -> None:
+    """Krita の描画前景色にストロークカラーを反映する。
+
+    Node.paintLine は前景色で描画するため、ストローク色をアクティブビューの
+    前景色 (View.setForeGroundColor) へ ManagedColor 経由で適用する。
+    """
     try:
         from krita import Krita, ManagedColor
 
         rgb = _parse_hex_rgb(hex_color)
         if rgb is None:
             return
-        r, g, b = rgb
-        krita_inst = Krita.instance()
-        doc = document or krita_inst.activeDocument()
-        if doc is not None and hasattr(krita_inst, "setManagedColor"):
-            mc = ManagedColor.fromColor(r, g, b, 1.0)
-            doc.setCurrentColor(mc)
+        qcolor_cls = _resolve_qcolor_class()
+        if qcolor_cls is None:
+            return
+        window = getattr(Krita.instance(), "activeWindow", lambda: None)()
+        view = getattr(window, "activeView", lambda: None)() if window is not None else None
+        if view is None:
+            return
+        view.setForeGroundColor(ManagedColor.fromQColor(qcolor_cls.fromRgbF(*rgb)))
     except Exception:
         pass
 

@@ -408,6 +408,7 @@ class PlanWorker(QThread):
                     canvas_image=canvas_img,
                     iteration=iter_idx,
                     max_iterations=self.max_iterations,
+                    palette_name=self.palette_name,
                 )
 
                 if self.is_cancelled():
