@@ -80,6 +80,8 @@ class ImageStrokeConverter:
         # 処理速度と解析精度のバランスのため、グリッドサイズを正規化（最大 160x160）
         grid_w = min(160, qimg.width())
         grid_h = min(160, qimg.height())
+        if grid_w <= 0 or grid_h <= 0:
+            return []
         scaled = qimg.scaled(grid_w, grid_h)
 
         # 輝度マップとカラーマップの構築

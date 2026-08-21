@@ -185,17 +185,27 @@ def _process_events() -> None:
         _QAPP_CLS.processEvents()
 
 
+def _parse_hex_rgb(hex_str: str) -> tuple[float, float, float] | None:
+    h = hex_str.lstrip("#")
+    if len(h) in (3, 4):
+        return int(h[0] * 2, 16) / 255.0, int(h[1] * 2, 16) / 255.0, int(h[2] * 2, 16) / 255.0
+    if len(h) in (6, 8):
+        return int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0
+    return None
+
+
 def _apply_color_to_krita(document: Any, hex_color: str) -> None:
     """Krita の描画前景色にストロークカラーを反映する。"""
     try:
         from krita import Krita, ManagedColor
 
+        rgb = _parse_hex_rgb(hex_color)
+        if rgb is None:
+            return
+        r, g, b = rgb
         krita_inst = Krita.instance()
         doc = document or krita_inst.activeDocument()
         if doc is not None and hasattr(krita_inst, "setManagedColor"):
-            r = int(hex_color[1:3], 16) / 255.0
-            g = int(hex_color[3:5], 16) / 255.0
-            b = int(hex_color[5:7], 16) / 255.0
             mc = ManagedColor.fromColor(r, g, b, 1.0)
             doc.setCurrentColor(mc)
     except Exception:

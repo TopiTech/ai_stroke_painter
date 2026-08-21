@@ -77,17 +77,6 @@ else:
             class QObject:  # type: ignore[no-redef]
                 def __init__(self, *args: Any, **kwargs: Any) -> None: ...
 
-            class QThread(QObject):  # type: ignore[no-redef]
-                def __init__(self, *args: Any, **kwargs: Any) -> None:
-                    super().__init__()
-
-                def start(self) -> None:
-                    self.run()
-
-                def run(self) -> None: ...
-                def isRunning(self) -> bool:
-                    return False
-
             class _FakeSignal:
                 def __init__(self) -> None:
                     self._slots: list[Any] = []
@@ -101,6 +90,19 @@ else:
 
             def pyqtSignal(*_args: Any) -> Any:  # type: ignore[no-redef]
                 return _FakeSignal()
+
+            class QThread(QObject):  # type: ignore[no-redef]
+                def __init__(self, *args: Any, **kwargs: Any) -> None:
+                    super().__init__()
+                    self.finished = _FakeSignal()
+
+                def start(self) -> None:
+                    self.run()
+                    self.finished.emit()
+
+                def run(self) -> None: ...
+                def isRunning(self) -> bool:
+                    return False
 
             class QWidget(QObject):  # type: ignore[no-redef]
                 def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -413,12 +415,6 @@ class PlanWorker(QThread):
 
                 self.plan_ready.emit(current_plan)
 
-                if self.max_iterations > 1 and iter_idx < self.max_iterations:
-                    self.iteration_progress.emit(
-                        iter_idx, self.max_iterations, f"イテレーション {iter_idx}: キャンバスへ描画中..."
-                    )
-                    self.canvas_port.render(self.document, current_plan, self.is_cancelled)
-
             if not self.is_cancelled():
                 self.iteration_progress.emit(self.max_iterations, self.max_iterations, "全イテレーションが完了しました")
 
@@ -697,6 +693,7 @@ class AIStrokePainterDocker(DockWidget):
             worker.plan_ready.connect(self._on_plan_ready)
             worker.iteration_progress.connect(self._on_iteration_progress)
             worker.plan_failed.connect(self._on_plan_failed)
+            worker.finished.connect(self._reset_run_state)
             worker.start()
         except Exception as exc:
             self.status.setText(f"エラー: {exc}")

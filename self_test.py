@@ -184,6 +184,23 @@ class PlannerAndStorageTests(unittest.TestCase):
         self.assertIsInstance(plan, DrawingPlan)
         self.assertTrue(len(plan.strokes) > 0)
 
+    def test_image_converter_zero_dimension_fallback(self) -> None:
+        class FakeZeroDimImage:
+            def width(self) -> int:
+                return 0
+
+            def height(self) -> int:
+                return 0
+
+            def scaled(self, _w: int, _h: int) -> Any:
+                return self
+
+        import random
+
+        converter = ImageStrokeConverter()
+        strokes = converter._process_qimage(FakeZeroDimImage(), 42, 10, 800, 600, random.Random(42))
+        self.assertEqual(strokes, [])
+
 
 class PluginBuildTests(unittest.TestCase):
     @staticmethod
@@ -381,6 +398,20 @@ class CanvasAdapterTests(unittest.TestCase):
         self.assertIsInstance(cap_bytes, bytes)
         self.assertTrue(len(cap_bytes) > 0)
 
+    def test_apply_color_to_krita_parses_short_and_full_hex(self) -> None:
+        from ai_stroke_painter.krita_adapter import _apply_color_to_krita, _parse_hex_rgb
+
+        self.assertEqual(_parse_hex_rgb("#fff"), (1.0, 1.0, 1.0))
+        self.assertEqual(_parse_hex_rgb("#000"), (0.0, 0.0, 0.0))
+        self.assertEqual(_parse_hex_rgb("#ff0000"), (1.0, 0.0, 0.0))
+        self.assertEqual(_parse_hex_rgb("#ff000080"), (1.0, 0.0, 0.0))
+        self.assertIsNone(_parse_hex_rgb("invalid"))
+
+        doc = _FakeDocument()
+        _apply_color_to_krita(doc, "#fff")
+        _apply_color_to_krita(doc, "#abcd")
+        _apply_color_to_krita(doc, "#112233")
+
 
 class WorkerAndDockerTests(unittest.TestCase):
     def test_plan_worker_emits_plan_on_success(self) -> None:
@@ -430,6 +461,38 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertTrue(worker.is_cancelled())
         worker.run()
         self.assertEqual(len(received_plans), 0)
+
+    def test_plan_worker_multi_iteration_does_not_call_render_in_worker(self) -> None:
+        planner = RuleBasedPlanner()
+
+        class SpyCanvasAdapter(KritaCanvasAdapter):
+            def __init__(self) -> None:
+                super().__init__()
+                self.render_call_count = 0
+
+            def render(self, document: Any, plan: DrawingPlan, cancelled: Any = lambda: False) -> int:
+                self.render_call_count += 1
+                return len(plan.strokes)
+
+        adapter = SpyCanvasAdapter()
+        doc = _FakeDocument()
+        worker = PlanWorker(
+            planner=planner,
+            canvas_port=adapter,
+            document=doc,
+            prompt="cat",
+            seed=1,
+            count=2,
+            width=200,
+            height=200,
+            max_iterations=3,
+        )
+        received_plans: list[Any] = []
+        worker.plan_ready.connect(lambda p: received_plans.append(p))
+
+        worker.run()
+        self.assertEqual(len(received_plans), 3)
+        self.assertEqual(adapter.render_call_count, 0)
 
 
 def run() -> bool:
