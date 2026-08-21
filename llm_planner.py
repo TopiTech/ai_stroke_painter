@@ -8,7 +8,7 @@ import socket
 from typing import Any, Callable, Mapping, Optional
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .domain import DrawingPlan, PlanValidationError
 from .planner import validate_plan_request
@@ -17,6 +17,31 @@ from .ports import PlannerPort
 
 class LLMPlannerError(RuntimeError):
     """互換 API の通信、応答形式、または描画契約に関するエラー。"""
+
+
+class _CrossOriginRedirectError(RuntimeError):
+    pass
+
+
+def _url_origin(url: str):
+    parsed = urlsplit(url)
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is None:
+        port = 443 if parsed.scheme.lower() == "https" else 80
+    return parsed.scheme.lower(), (parsed.hostname or "").lower(), port
+
+
+class _SameOriginRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
+        source_origin = _url_origin(req.full_url)
+        target_origin = _url_origin(redirected.full_url) if redirected is not None else None
+        if redirected is not None and (source_origin is None or source_origin != target_origin):
+            raise _CrossOriginRedirectError
+        return redirected
 
 
 @dataclass(frozen=True)
@@ -56,7 +81,7 @@ class OpenAICompatiblePlanner(PlannerPort):
         opener: Optional[Callable[..., Any]] = None,
     ) -> None:
         self.settings = settings
-        self._opener = opener or urlopen
+        self._opener = opener or build_opener(_SameOriginRedirectHandler()).open
 
     def plan(self, prompt, seed, count, width, height):
         prompt, seed, count, width, height = validate_plan_request(prompt, seed, count, width, height)
@@ -96,6 +121,8 @@ class OpenAICompatiblePlanner(PlannerPort):
         try:
             with self._opener(request, timeout=float(self.settings.timeout_seconds)) as response:
                 raw = response.read(self.MAX_RESPONSE_BYTES + 1)
+        except _CrossOriginRedirectError as exc:
+            raise LLMPlannerError("LLM API の別オリジンへのリダイレクトを拒否しました") from exc
         except HTTPError as exc:
             detail = _read_http_error(exc)
             raise LLMPlannerError("LLM API が HTTP %d を返しました%s" % (exc.code, (": " + detail) if detail else "")) from exc

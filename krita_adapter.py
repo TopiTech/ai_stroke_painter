@@ -28,6 +28,9 @@ class KritaCanvasAdapter(CanvasPort):
         node = self.ensure_target(document)
         if not hasattr(node, "paintLine"):
             raise RuntimeError("このKritaには Node.paintLine がありません。Krita 6.0以降を使用してください。")
+        paint_ability = node.paintAbility()
+        if paint_ability != "PAINT":
+            raise RuntimeError(f"現在のブラシでは対象レイヤーに描画できません（paintAbility: {paint_ability}）")
 
         rendered = 0
         segment_count = 0

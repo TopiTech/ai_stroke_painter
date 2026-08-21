@@ -8,15 +8,17 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 
 PACKAGE_NAME = "ai_stroke_painter"
-EXCLUDED_NAMES = {"__pycache__", ".git", "dist"}
-EXCLUDED_FILES = {
-    ".gitignore",
-    "ARCHITECTURE.md",
-    "README.md",
-    "build_plugin.py",
-    "self_test.py",
-    PACKAGE_NAME + ".desktop",
-}
+PACKAGE_FILES = (
+    "Manual.html",
+    "__init__.py",
+    "docker.py",
+    "domain.py",
+    "krita_adapter.py",
+    "llm_planner.py",
+    "planner.py",
+    "ports.py",
+    "storage.py",
+)
 
 
 def build(output: Path) -> Path:
@@ -24,21 +26,13 @@ def build(output: Path) -> Path:
     manifest = source / (PACKAGE_NAME + ".desktop")
     if not manifest.is_file():
         raise FileNotFoundError("Krita manifest が見つかりません: %s" % manifest)
-    resolved_output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     with ZipFile(output, "w", ZIP_DEFLATED) as archive:
         archive.write(manifest, manifest.name)
-        for path in sorted(source.rglob("*")):
-            relative_path = path.relative_to(source)
-            if (
-                not path.is_file()
-                or path.resolve() == resolved_output
-                or any(part in EXCLUDED_NAMES for part in relative_path.parts)
-            ):
-                continue
-            if path.name in EXCLUDED_FILES or path.suffix in {".pyc", ".pyo"}:
-                continue
-            archive.write(path, str(Path(PACKAGE_NAME) / relative_path))
+        for relative_path in PACKAGE_FILES:
+            path = source / relative_path
+            if path.is_file():
+                archive.write(path, str(Path(PACKAGE_NAME) / relative_path))
     return output
 
 

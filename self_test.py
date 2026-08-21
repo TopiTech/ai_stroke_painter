@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from threading import Thread
+from threading import Event, Thread
 import unittest
 from unittest.mock import patch
 from pathlib import Path
@@ -15,15 +15,16 @@ from . import build_plugin as build_plugin_module
 from .build_plugin import PACKAGE_NAME, build
 from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint
 from .krita_adapter import KritaCanvasAdapter
-from .llm_planner import OpenAICompatiblePlanner, OpenAICompatibleSettings
+from .llm_planner import LLMPlannerError, OpenAICompatiblePlanner, OpenAICompatibleSettings
 from .planner import RuleBasedPlanner
 from .storage import load_plan, save_plan
 
 
 class _FakeNode:
-    def __init__(self, name, node_type="paintlayer"):
+    def __init__(self, name, node_type="paintlayer", paint_ability="PAINT"):
         self._name = name
         self._type = node_type
+        self._paint_ability = paint_ability
         self._children = []
         self.lines = []
 
@@ -39,8 +40,12 @@ class _FakeNode:
     def addChildNode(self, child, _before):
         self._children.append(child)
 
+    def paintAbility(self):
+        return self._paint_ability
+
     def paintLine(self, start, end, start_pressure, end_pressure):
-        self.lines.append((start, end, start_pressure, end_pressure))
+        if self.paintAbility() == "PAINT":
+            self.lines.append((start, end, start_pressure, end_pressure))
 
 
 class _FakeDocument:
@@ -144,6 +149,19 @@ class PluginBuildTests(unittest.TestCase):
 
         self.assertIn(PACKAGE_NAME + "/__init__.py", names)
 
+    def test_build_excludes_unlisted_local_files(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "source"
+            self._create_minimal_source(source)
+            (source / "local-not-for-plugin.txt").write_text("dummy", encoding="utf-8")
+            output = Path(temp) / "plugin.zip"
+            with patch.object(build_plugin_module, "__file__", str(source / "build_plugin.py")):
+                build(output)
+            with ZipFile(output) as archive:
+                names = archive.namelist()
+
+        self.assertNotIn(PACKAGE_NAME + "/local-not-for-plugin.txt", names)
+
 
 class OpenAICompatiblePlannerTests(unittest.TestCase):
     def test_calls_chat_completions_and_validates_plan(self):
@@ -224,6 +242,85 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "キャンバス範囲外"):
             planner.plan("curve", 1, 1, 100, 100)
 
+    def test_rejects_cross_origin_redirect_before_forwarding_credentials(self):
+        expected_plan = {
+            "schema_version": 1,
+            "prompt": "curve",
+            "seed": 1,
+            "strokes": [
+                {
+                    "id": "redirected-stroke",
+                    "points": [
+                        {"x": 0, "y": 0, "pressure": 0.5, "time_ms": 0},
+                        {"x": 1, "y": 1, "pressure": 0.5, "time_ms": 1},
+                    ],
+                }
+            ],
+        }
+
+        class TargetHandler(BaseHTTPRequestHandler):
+            reached = False
+
+            def do_GET(self):
+                type(self).reached = True
+                response = {"choices": [{"message": {"content": json.dumps(expected_plan)}}]}
+                encoded = json.dumps(response).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, _format, *_args):
+                pass
+
+        class RedirectHandler(BaseHTTPRequestHandler):
+            target_port = None
+
+            def do_POST(self):
+                self.send_response(302)
+                self.send_header("Location", f"http://127.0.0.1:{self.target_port}/result")
+                self.end_headers()
+
+            def log_message(self, _format, *_args):
+                pass
+
+        target_server = ThreadingHTTPServer(("127.0.0.1", 0), TargetHandler)
+        RedirectHandler.target_port = target_server.server_port
+        redirect_server = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+        ready_events = [Event(), Event()]
+
+        def serve(server, ready):
+            ready.set()
+            server.serve_forever()
+
+        threads = [
+            Thread(target=serve, args=(server, ready), daemon=True)
+            for server, ready in zip((target_server, redirect_server), ready_events)
+        ]
+        for thread in threads:
+            thread.start()
+        for ready in ready_events:
+            self.assertTrue(ready.wait(2))
+        try:
+            planner = OpenAICompatiblePlanner(
+                OpenAICompatibleSettings(
+                    f"http://127.0.0.1:{redirect_server.server_port}/v1",
+                    "model",
+                    "dummy-key",
+                    2,
+                )
+            )
+            with self.assertRaisesRegex(LLMPlannerError, "別オリジン"):
+                planner.plan("curve", 1, 1, 100, 100)
+        finally:
+            for server in (redirect_server, target_server):
+                server.shutdown()
+                server.server_close()
+            for thread in threads:
+                thread.join()
+
+        self.assertFalse(TargetHandler.reached)
+
 
 class CanvasAdapterTests(unittest.TestCase):
     def test_existing_target_layer_is_reused_and_pressure_is_unit_range(self):
@@ -254,6 +351,20 @@ class CanvasAdapterTests(unittest.TestCase):
         self.assertEqual(adapter.render(document, plan, cancelled=lambda: True), 0)
         self.assertEqual(document.active.lines, [])
         self.assertEqual(document.refreshed, 1)
+
+    def test_unpaintable_target_is_rejected(self):
+        target = _FakeNode(KritaCanvasAdapter.LAYER_NAME, paint_ability="UNPAINTABLE")
+        document = _FakeDocument(active=target)
+        plan = RuleBasedPlanner().plan("curve", 3, 1, 100, 100)
+        adapter = KritaCanvasAdapter()
+
+        with (
+            patch("ai_stroke_painter.krita_adapter._qpoint", lambda x, y: (x, y)),
+            self.assertRaisesRegex(RuntimeError, "描画できません"),
+        ):
+            adapter.render(document, plan)
+
+        self.assertEqual(target.lines, [])
 
 
 def run():
