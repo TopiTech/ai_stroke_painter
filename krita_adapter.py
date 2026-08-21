@@ -14,6 +14,7 @@ from .qt_compat import (
     QColor,
     QIODevice,
     QPoint,
+    QPointF,
 )
 
 if TYPE_CHECKING:
@@ -31,10 +32,13 @@ LAYER_STACK_ORDER: dict[str, int] = {
 }
 
 
+_last_applied_color: str | None = None
+
+
 class KritaCanvasAdapter(CanvasPort):
     DEFAULT_GROUP_NAME = "AI Artwork"
     DEFAULT_LAYER_NAME = "AI Strokes (editable)"
-    EVENT_INTERVAL = 15
+    EVENT_INTERVAL = 30
 
     def __init__(self) -> None:
         self._layer_cache: dict[str, Any] = {}
@@ -86,6 +90,10 @@ class KritaCanvasAdapter(CanvasPort):
 
     def capture_canvas(self, document: Any, width: int = 512, height: int = 512) -> bytes:
         """現在のキャンバス状態を PNG 画像バイト列としてキャプチャする（メインスレッド呼出推奨）。"""
+        if hasattr(document, "waitForDone"):
+            with contextlib.suppress(Exception):
+                document.waitForDone()
+
         if hasattr(document, "thumbnail"):
             try:
                 qimage = document.thumbnail(width, height)
@@ -116,7 +124,9 @@ class KritaCanvasAdapter(CanvasPort):
         current_layer_name = first_layer
 
         if cancelled():
-            document.refreshProjection()
+            if hasattr(document, "refreshProjection"):
+                with contextlib.suppress(Exception):
+                    document.refreshProjection()
             return 0
 
         if not hasattr(current_node, "paintLine"):
@@ -127,11 +137,13 @@ class KritaCanvasAdapter(CanvasPort):
 
         rendered = 0
         segment_count = 0
+        old_batchmode: bool | None = None
 
-        # Krita の描画ロック（利用可能な場合）
-        if hasattr(document, "lock"):
+        # バッチモードを有効化して不要な待機ダイアログを抑止
+        if hasattr(document, "setBatchmode") and hasattr(document, "batchmode"):
             with contextlib.suppress(Exception):
-                document.lock()
+                old_batchmode = bool(document.batchmode())
+                document.setBatchmode(True)
 
         try:
             for stroke in plan.strokes:
@@ -155,20 +167,29 @@ class KritaCanvasAdapter(CanvasPort):
                     if cancelled():
                         return rendered
                     current_node.paintLine(
-                        _qpoint(start.x, start.y),
-                        _qpoint(end.x, end.y),
+                        _qpointf(start.x, start.y),
+                        _qpointf(end.x, end.y),
                         start.pressure,
                         end.pressure,
                     )
-                    segment_count += 1
-                    if segment_count % self.EVENT_INTERVAL == 0:
-                        _process_events()
+
                 rendered += 1
+                segment_count += max(1, len(stroke.points) - 1)
+                if segment_count >= self.EVENT_INTERVAL:
+                    segment_count = 0
+                    _process_events()
         finally:
-            if hasattr(document, "unlock"):
+            # キュー内の描画ジョブ完了を安全に待機してからプロジェクションを更新
+            if hasattr(document, "waitForDone"):
                 with contextlib.suppress(Exception):
-                    document.unlock()
-            document.refreshProjection()
+                    document.waitForDone()
+            if hasattr(document, "refreshProjection"):
+                with contextlib.suppress(Exception):
+                    document.refreshProjection()
+            if old_batchmode is not None and hasattr(document, "setBatchmode"):
+                with contextlib.suppress(Exception):
+                    document.setBatchmode(old_batchmode)
+
         return rendered
 
     def _is_layer_match(self, node: Any, layer_name: str) -> bool:
@@ -184,10 +205,12 @@ class KritaCanvasAdapter(CanvasPort):
         return None
 
 
-def _qpoint(x: float, y: float) -> Any:
+def _qpointf(x: float, y: float) -> Any:
+    if QPointF is not None and callable(QPointF):
+        return QPointF(float(x), float(y))
     if QPoint is not None and callable(QPoint):
         return QPoint(int(round(x)), int(round(y)))
-    return (int(round(x)), int(round(y)))
+    return (float(x), float(y))
 
 
 def _process_events() -> None:
@@ -210,6 +233,10 @@ def _apply_color_to_krita(hex_color: str) -> None:
     Node.paintLine は前景色で描画するため、ストローク色をアクティブビューの
     前景色 (View.setForeGroundColor) へ ManagedColor 経由で適用する。
     """
+    global _last_applied_color
+    if hex_color == _last_applied_color:
+        return
+
     try:
         from krita import Krita, ManagedColor
 
@@ -223,6 +250,7 @@ def _apply_color_to_krita(hex_color: str) -> None:
         if view is None:
             return
         view.setForeGroundColor(ManagedColor.fromQColor(QColor.fromRgbF(*rgb)))
+        _last_applied_color = hex_color
     except Exception:
         pass
 

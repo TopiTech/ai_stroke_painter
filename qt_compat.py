@@ -32,6 +32,7 @@ QColor: Any = None
 QPen: Any = None
 QImage: Any = None
 QPoint: Any = None
+QPointF: Any = None
 QByteArray: Any = None
 QBuffer: Any = None
 QIODevice: Any = None
@@ -47,6 +48,7 @@ for binding in ("PyQt5", "PyQt6"):
         QObject = getattr(_core, "QObject", None)
         pyqtSignal = getattr(_core, "pyqtSignal", None)
         QPoint = getattr(_core, "QPoint", None)
+        QPointF = getattr(_core, "QPointF", None)
         QByteArray = getattr(_core, "QByteArray", None)
         QBuffer = getattr(_core, "QBuffer", None)
         QIODevice = getattr(_core, "QIODevice", None)
@@ -360,8 +362,13 @@ if not HAS_QT:
 
     class QPoint:  # type: ignore[no-redef]
         def __init__(self, x: int, y: int) -> None:
-            self.x = x
-            self.y = y
+            self.x = int(x)
+            self.y = int(y)
+
+    class QPointF:  # type: ignore[no-redef]
+        def __init__(self, x: float, y: float) -> None:
+            self.x = float(x)
+            self.y = float(y)
 
     class QColor:  # type: ignore[no-redef]
         def __init__(self, *args: Any) -> None:

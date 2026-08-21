@@ -82,6 +82,8 @@ class _FakeDocument:
         self.refreshed = 0
         self.locked = 0
         self.unlocked = 0
+        self.waited_for_done = 0
+        self._batchmode = False
 
     def activeNode(self) -> Any | None:
         return self.active
@@ -98,6 +100,15 @@ class _FakeDocument:
 
     def refreshProjection(self) -> None:
         self.refreshed += 1
+
+    def waitForDone(self) -> None:
+        self.waited_for_done += 1
+
+    def batchmode(self) -> bool:
+        return self._batchmode
+
+    def setBatchmode(self, mode: bool) -> None:
+        self._batchmode = mode
 
     def lock(self) -> None:
         self.locked += 1
@@ -499,6 +510,10 @@ class CanvasAdapterTests(unittest.TestCase):
         rendered = adapter.render(document, plan)
         self.assertGreaterEqual(rendered, 1)
         self.assertEqual(document.refreshed, 1)
+        self.assertEqual(document.waited_for_done, 1)
+        self.assertEqual(document.locked, 0)
+        self.assertEqual(document.unlocked, 0)
+        self.assertFalse(document.batchmode())
 
     def test_layer_stack_order_placement(self) -> None:
         root = _FakeNode("root", "grouplayer")

@@ -27,6 +27,7 @@ from .qt_compat import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QObject,
     QPainter,
     QPen,
     QPlainTextEdit,
@@ -118,7 +119,7 @@ class PreviewWidget(QWidget):
             painter.end()
 
 
-class PlanWorker(QWidget):
+class PlanWorker(QObject):
     """スレッドセーフな自律ビジョン改善ループおよびバックグラウンド計画生成ワーカー。"""
 
     plan_ready = pyqtSignal(object)
