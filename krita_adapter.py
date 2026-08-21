@@ -118,6 +118,9 @@ class KritaCanvasAdapter(CanvasPort):
         plan: DrawingPlan,
         cancelled: Callable[[], bool] = lambda: False,
     ) -> int:
+        global _last_applied_color
+        _last_applied_color = None
+
         first_layer = plan.strokes[0].layer_name if plan.strokes else self.DEFAULT_LAYER_NAME
         current_node = self.ensure_layer(document, first_layer)
         current_layer_name = first_layer
@@ -229,14 +232,14 @@ def _parse_hex_rgb(hex_str: str) -> tuple[float, float, float] | None:
     return None
 
 
-def _apply_color_to_krita(hex_color: str) -> None:
+def _apply_color_to_krita(hex_color: str, force: bool = False) -> None:
     """Krita の描画前景色にストロークカラーを反映する。
 
     Node.paintLine は前景色で描画するため、ストローク色をアクティブビューの
     前景色 (View.setForeGroundColor) へ ManagedColor 経由で適用する。
     """
     global _last_applied_color
-    if hex_color == _last_applied_color:
+    if not force and hex_color == _last_applied_color:
         return
 
     try:

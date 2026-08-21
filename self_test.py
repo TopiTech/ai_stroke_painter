@@ -601,6 +601,30 @@ class CanvasAdapterTests(unittest.TestCase):
         rendered = adapter.render(document, plan)
         self.assertGreaterEqual(rendered, 1)
 
+    def test_render_resets_color_cache_across_sessions(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        fake_view = MagicMock()
+        with patch.dict("sys.modules", {"krita": MagicMock()}):
+            import sys
+
+            krita_mock = sys.modules["krita"]
+            krita_instance = krita_mock.Krita.instance.return_value
+            krita_instance.activeWindow.return_value.activeView.return_value = fake_view
+
+            document = _FakeDocument(active=_FakeNode(KritaCanvasAdapter.DEFAULT_LAYER_NAME))
+            plan = RuleBasedPlanner().plan("test", 1, 1, 200, 200)
+            adapter = KritaCanvasAdapter()
+
+            # First render session applies color
+            adapter.render(document, plan)
+            first_call_count = fake_view.setForeGroundColor.call_count
+            self.assertGreaterEqual(first_call_count, 1)
+
+            # Second render session with same plan/color must reset cache and re-apply
+            adapter.render(document, plan)
+            self.assertGreater(fake_view.setForeGroundColor.call_count, first_call_count)
+
 
 class WorkerAndDockerTests(unittest.TestCase):
     _app: Any = None
