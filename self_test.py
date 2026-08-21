@@ -7,9 +7,11 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from zipfile import ZipFile
 
+from . import build_plugin as build_plugin_module
 from .build_plugin import PACKAGE_NAME, build
 from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint
 from .krita_adapter import KritaCanvasAdapter
@@ -101,6 +103,12 @@ class PlannerAndStorageTests(unittest.TestCase):
 
 
 class PluginBuildTests(unittest.TestCase):
+    @staticmethod
+    def _create_minimal_source(source):
+        source.mkdir(parents=True)
+        (source / (PACKAGE_NAME + ".desktop")).write_text("[Desktop Entry]\n", encoding="utf-8")
+        (source / "__init__.py").write_text("", encoding="utf-8")
+
     def test_build_includes_manifest_once_at_archive_root(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / (PACKAGE_NAME + ".zip")
@@ -111,6 +119,30 @@ class PluginBuildTests(unittest.TestCase):
         self.assertIn(PACKAGE_NAME + ".desktop", names)
         self.assertIn(PACKAGE_NAME + "/__init__.py", names)
         self.assertNotIn(PACKAGE_NAME + "/" + PACKAGE_NAME + ".desktop", names)
+
+    def test_build_excludes_output_inside_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "source"
+            self._create_minimal_source(source)
+            output = source / "custom.zip"
+            with patch.object(build_plugin_module, "__file__", str(source / "build_plugin.py")):
+                build(output)
+            with ZipFile(output) as archive:
+                names = archive.namelist()
+
+        self.assertNotIn(PACKAGE_NAME + "/custom.zip", names)
+
+    def test_build_ignores_excluded_names_above_source(self):
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / "dist" / "source"
+            self._create_minimal_source(source)
+            output = Path(temp) / "plugin.zip"
+            with patch.object(build_plugin_module, "__file__", str(source / "build_plugin.py")):
+                build(output)
+            with ZipFile(output) as archive:
+                names = archive.namelist()
+
+        self.assertIn(PACKAGE_NAME + "/__init__.py", names)
 
 
 class OpenAICompatiblePlannerTests(unittest.TestCase):

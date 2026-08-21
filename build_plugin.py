@@ -24,15 +24,21 @@ def build(output: Path) -> Path:
     manifest = source / (PACKAGE_NAME + ".desktop")
     if not manifest.is_file():
         raise FileNotFoundError("Krita manifest が見つかりません: %s" % manifest)
+    resolved_output = output.resolve()
     output.parent.mkdir(parents=True, exist_ok=True)
     with ZipFile(output, "w", ZIP_DEFLATED) as archive:
         archive.write(manifest, manifest.name)
         for path in sorted(source.rglob("*")):
-            if not path.is_file() or any(part in EXCLUDED_NAMES for part in path.parts):
+            relative_path = path.relative_to(source)
+            if (
+                not path.is_file()
+                or path.resolve() == resolved_output
+                or any(part in EXCLUDED_NAMES for part in relative_path.parts)
+            ):
                 continue
             if path.name in EXCLUDED_FILES or path.suffix in {".pyc", ".pyo"}:
                 continue
-            archive.write(path, str(Path(PACKAGE_NAME) / path.relative_to(source)))
+            archive.write(path, str(Path(PACKAGE_NAME) / relative_path))
     return output
 
 
