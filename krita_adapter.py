@@ -14,7 +14,6 @@ from .qt_compat import (
     QColor,
     QIODevice,
     QPoint,
-    QPointF,
 )
 
 if TYPE_CHECKING:
@@ -167,8 +166,8 @@ class KritaCanvasAdapter(CanvasPort):
                     if cancelled():
                         return rendered
                     current_node.paintLine(
-                        _qpointf(start.x, start.y),
-                        _qpointf(end.x, end.y),
+                        _qpoint(start.x, start.y),
+                        _qpoint(end.x, end.y),
                         start.pressure,
                         end.pressure,
                     )
@@ -205,12 +204,15 @@ class KritaCanvasAdapter(CanvasPort):
         return None
 
 
-def _qpointf(x: float, y: float) -> Any:
-    if QPointF is not None and callable(QPointF):
-        return QPointF(float(x), float(y))
+def _qpoint(x: float, y: float) -> Any:
+    """Krita の Node.paintLine は QPoint (整数ピクセル座標) を要求するため QPoint を生成する。"""
     if QPoint is not None and callable(QPoint):
         return QPoint(int(round(x)), int(round(y)))
-    return (float(x), float(y))
+    return (int(round(x)), int(round(y)))
+
+
+# 後方互換エイリアス
+_qpointf = _qpoint
 
 
 def _process_events() -> None:

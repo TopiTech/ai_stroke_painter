@@ -70,6 +70,11 @@ class _FakeNode:
         return self._paint_ability
 
     def paintLine(self, start: Any, end: Any, start_pressure: float, end_pressure: float) -> None:
+        # Krita の Node.paintLine は QPoint を要求するため、QPointF が渡されると TypeError となる
+        if type(start).__name__ == "QPointF" or type(end).__name__ == "QPointF":
+            raise TypeError(
+                "paintLine(self, pointOne: QPoint, pointTwo: QPoint, pressureOne: float = 1, pressureTwo: float = 1, strokeStyle: Optional[str] = ''): argument 1 has unexpected type 'QPointF'"
+            )
         if self.paintAbility() == "PAINT":
             self.lines.append((start, end, start_pressure, end_pressure))
 
@@ -580,6 +585,21 @@ class CanvasAdapterTests(unittest.TestCase):
             _apply_color_to_krita("#112233")
 
         self.assertGreaterEqual(fake_view.setForeGroundColor.call_count, 0)
+
+    def test_qpoint_and_paintline_type_compatibility(self) -> None:
+        from ai_stroke_painter.krita_adapter import _qpoint, _qpointf
+
+        pt1 = _qpoint(12.7, 34.2)
+        pt2 = _qpointf(56.1, 78.9)
+        self.assertNotEqual(type(pt1).__name__, "QPointF")
+        self.assertNotEqual(type(pt2).__name__, "QPointF")
+
+        # レンダリングテストで QPointF が渡されずに正常終了することを確認
+        document = _FakeDocument(active=_FakeNode(KritaCanvasAdapter.DEFAULT_LAYER_NAME))
+        plan = RuleBasedPlanner().plan("test", 1, 1, 200, 200)
+        adapter = KritaCanvasAdapter()
+        rendered = adapter.render(document, plan)
+        self.assertGreaterEqual(rendered, 1)
 
 
 class WorkerAndDockerTests(unittest.TestCase):
