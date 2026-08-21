@@ -9,6 +9,11 @@ else:
     from .docker import AIStrokePainterDocker
 
     DOCKER_ID = "ai_stroke_painter_docker"
+    dock_position = getattr(
+        getattr(DockWidgetFactoryBase, "DockPosition", None),
+        "DockRight",
+        getattr(DockWidgetFactoryBase, "DockRight", None),
+    )
     Krita.instance().addDockWidgetFactory(
-        DockWidgetFactory(DOCKER_ID, DockWidgetFactoryBase.DockRight, AIStrokePainterDocker)
+        DockWidgetFactory(DOCKER_ID, dock_position, AIStrokePainterDocker)
     )
