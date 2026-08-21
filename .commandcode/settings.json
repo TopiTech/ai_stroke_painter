@@ -1,0 +1,36 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(python -m ruff check .)",
+      "Shell(python -m ruff format --check .)",
+      "Shell(python -m mypy .)",
+      "Shell(python -m unittest ai_stroke_painter.self_test -v)",
+      "Shell(python -c \" import sys sys.path.insert(0, '..') import xml.etree.ElementTree as ET from ai_stroke_painter.domain import DrawingPlan, Stroke, StrokePoint stroke = Stroke('s1', [StrokePoint(1, 1, 0.5, 0), StrokePoint(50, 50, 0.5, 10)]) plan = DrawingPlan(prompt='attack -- defense', seed=7, strokes=[stroke]) svg = plan.to_svg(100, 100) print(svg.splitlines()[1]) try: ET.fromstring(svg) print('XML PARSE: OK') except ET.ParseError as exc: print('XML PARSE FAILED:', exc) \")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_svg_comment.py\")",
+      "Shell(Get-ChildItem:*)",
+      "Shell(Select-Object:*)",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_city_count.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_layer_name.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_layer_dup.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_json_extract.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_worker.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_small_count.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_focus_lines.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_storage.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_hex.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_worker_fail.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_endpoint.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_empty_llm.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\repro_city_zero.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\check_png.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\check_png2.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\check_png3.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\check_png4.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\check_png6.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\check_png7.py\")",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\bc0f717a-fd73-49ac-b883-b6fcce814fbd\\scratchpad\\check_png_qt.py\")"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

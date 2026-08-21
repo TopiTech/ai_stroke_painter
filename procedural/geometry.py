@@ -35,7 +35,7 @@ def generate_geometry_strokes(
         # =====================================================================
         # サイバーパンク・都市スカイライン (Cyberpunk Skyline & Perspective)
         # =====================================================================
-        building_count = min(count // 2, 20)
+        building_count = min(max(1, count // 2), 20)
         base_y = height * 0.85
         # 1. ビル群のアウトライン
         for b_i in range(building_count):

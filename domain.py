@@ -244,9 +244,11 @@ class DrawingPlan:
             w = float(width)
             h = float(height)
 
+        # XML コメント内で "--" は禁止されているため置換する
+        safe_prompt = html.escape(self.prompt).replace("--", "﹣﹣")
         svg_parts: list[str] = [
             f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w:.1f} {h:.1f}" width="{w:.1f}" height="{h:.1f}">',
-            f"  <!-- AI Stroke Painter: {html.escape(self.prompt)} (Seed: {self.seed}) -->",
+            f"  <!-- AI Stroke Painter: {safe_prompt} (Seed: {self.seed}) -->",
             "  <defs><style>.stroke { stroke-linecap: round; stroke-linejoin: round; fill: none; }</style></defs>",
         ]
 

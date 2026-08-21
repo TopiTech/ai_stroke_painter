@@ -133,6 +133,8 @@ class PlannerAndStorageTests(unittest.TestCase):
         # Geometry & Creature
         mandala_strokes = generate_geometry_strokes("mandala", 42, 20, 800, 600)
         self.assertTrue(len(mandala_strokes) > 0)
+        city_strokes = generate_geometry_strokes("cyberpunk city skyline", 42, 1, 800, 600)
+        self.assertTrue(len(city_strokes) > 0)
         cat_strokes = generate_creature_strokes("cute cat", 42, 20, 800, 600)
         self.assertTrue(len(cat_strokes) > 0)
 
@@ -161,6 +163,13 @@ class PlannerAndStorageTests(unittest.TestCase):
             svg_path = save_svg(plan, temp)
             self.assertTrue(svg_path.is_file())
             self.assertIn("<svg", svg_path.read_text(encoding="utf-8"))
+
+    def test_svg_comment_with_double_hyphen_stays_well_formed(self) -> None:
+        import xml.etree.ElementTree as ET
+
+        plan = RuleBasedPlanner().plan("attack -- defense", 7, 3, 100, 100)
+        svg_content = plan.to_svg(100, 100)
+        ET.fromstring(svg_content)
 
     def test_invalid_domain_data_is_rejected(self) -> None:
         with self.assertRaises(PlanValidationError):
@@ -397,6 +406,21 @@ class CanvasAdapterTests(unittest.TestCase):
         cap_bytes = adapter.capture_canvas(document, 256, 256)
         self.assertIsInstance(cap_bytes, bytes)
         self.assertTrue(len(cap_bytes) > 0)
+
+    def test_fallback_png_is_decodable(self) -> None:
+        import struct
+        import zlib
+
+        from ai_stroke_painter.krita_adapter import _MINIMAL_PNG_BYTES
+
+        self.assertEqual(_MINIMAL_PNG_BYTES[:8], b"\x89PNG\r\n\x1a\n")
+        pos = 8
+        while pos + 12 <= len(_MINIMAL_PNG_BYTES):
+            length = struct.unpack(">I", _MINIMAL_PNG_BYTES[pos : pos + 4])[0]
+            chunk = _MINIMAL_PNG_BYTES[pos + 4 : pos + 12 + length]
+            crc_stored = struct.unpack(">I", chunk[-4:])[0]
+            self.assertEqual(zlib.crc32(chunk[:-4]) & 0xFFFFFFFF, crc_stored)
+            pos += 12 + length
 
     def test_apply_color_to_krita_parses_short_and_full_hex(self) -> None:
         from ai_stroke_painter.krita_adapter import _apply_color_to_krita, _parse_hex_rgb
