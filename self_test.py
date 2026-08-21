@@ -18,9 +18,13 @@ from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint, Visio
 from .image_converter import ImageStrokeConverter
 from .krita_adapter import KritaCanvasAdapter
 from .llm_planner import (
+    LLMPlannerError,
     OpenAICompatiblePlanner,
     OpenAICompatibleSettings,
+    _attempt_json_repair,
+    _extract_content_from_response,
     _extract_json_object,
+    _plan_from_response,
 )
 from .planner import RuleBasedPlanner
 from .procedural import (
@@ -503,6 +507,172 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertEqual(len(logs), 1)
         self.assertIn("テストログメッセージ", logs[0])
 
+    def test_extract_content_various_api_formats(self) -> None:
+        # 1. Standard OpenAI message.content
+        resp_openai = {"choices": [{"message": {"role": "assistant", "content": "hello openai"}}]}
+        self.assertEqual(_extract_content_from_response(resp_openai), "hello openai")
+
+        # 2. Thinking / Reasoning model (content is None/empty, reasoning_content has JSON)
+        resp_thinking = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "reasoning_content": '```json\n{"schema_version": 1, "strokes": []}\n```',
+                    }
+                }
+            ]
+        }
+        self.assertIn("strokes", _extract_content_from_response(resp_thinking))
+
+        # 3. Tool calls arguments fallback
+        resp_tools = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [{"function": {"arguments": '{"strokes": []}'}}],
+                    }
+                }
+            ]
+        }
+        self.assertEqual(_extract_content_from_response(resp_tools), '{"strokes": []}')
+
+        # 4. Google Gemini native candidates
+        resp_gemini = {"candidates": [{"content": {"parts": [{"text": "gemini output text"}]}}]}
+        self.assertEqual(_extract_content_from_response(resp_gemini), "gemini output text")
+
+        # 5. Anthropic native content
+        resp_anthropic = {"content": [{"type": "text", "text": "claude output text"}]}
+        self.assertEqual(_extract_content_from_response(resp_anthropic), "claude output text")
+
+        # 6. Ollama direct message & response
+        resp_ollama_chat = {"message": {"role": "assistant", "content": "ollama chat text"}}
+        self.assertEqual(_extract_content_from_response(resp_ollama_chat), "ollama chat text")
+
+        resp_ollama_gen = {"response": "ollama generate text"}
+        self.assertEqual(_extract_content_from_response(resp_ollama_gen), "ollama generate text")
+
+        # 7. Direct DrawingPlan dictionary
+        resp_direct = {"schema_version": 1, "strokes": []}
+        self.assertEqual(_extract_content_from_response(resp_direct), resp_direct)
+
+    def test_error_and_empty_choices_handling(self) -> None:
+        # API Error JSON detection
+        resp_err = {"error": {"message": "Incorrect API key", "type": "invalid_api_key"}}
+        with self.assertRaises(LLMPlannerError) as ctx:
+            _extract_content_from_response(resp_err)
+        self.assertIn("Incorrect API key", str(ctx.exception))
+        self.assertIn("invalid_api_key", str(ctx.exception))
+
+        # Empty choices detection
+        resp_empty_choices: dict[str, Any] = {"choices": []}
+        with self.assertRaises(LLMPlannerError) as ctx:
+            _extract_content_from_response(resp_empty_choices)
+        self.assertIn("choices 配列が空です", str(ctx.exception))
+
+        # Direct _plan_from_response call on error response
+        with self.assertRaises(LLMPlannerError) as ctx:
+            _plan_from_response(resp_err)
+        self.assertIn("Incorrect API key", str(ctx.exception))
+
+    def test_thinking_tokens_internal_json_rescue(self) -> None:
+        # Model output JSON *inside* <think> tags
+        raw_inside_think = (
+            "<think>\n"
+            "Let's create the drawing plan.\n"
+            "```json\n"
+            '{\n  "schema_version": 1,\n  "prompt": "rescued",\n  "strokes": [\n'
+            '    {"id": "s1", "points": [{"x": 10, "y": 20, "pressure": 0.5, "time_ms": 0}, {"x": 30, "y": 40, "pressure": 0.8, "time_ms": 10}]}\n'
+            "  ]\n}\n"
+            "```\n"
+            "</think>"
+        )
+        parsed = _extract_json_object(raw_inside_think)
+        plan = DrawingPlan.from_dict(parsed)
+        self.assertEqual(plan.prompt, "rescued")
+        self.assertEqual(len(plan.strokes), 1)
+
+        # Unclosed <think> tag (truncated before closing tag)
+        raw_unclosed_think = (
+            "<think>\n"
+            '{"schema_version": 1, "prompt": "unclosed", "strokes": [{"id": "s1", "points": [{"x": 1, "y": 2, "pressure": 0.5, "time_ms": 0}, {"x": 3, "y": 4, "pressure": 0.5, "time_ms": 1}]}]}'
+        )
+        parsed_unclosed = _extract_json_object(raw_unclosed_think)
+        plan_unclosed = DrawingPlan.from_dict(parsed_unclosed)
+        self.assertEqual(plan_unclosed.prompt, "unclosed")
+
+    def test_json_repair_truncated(self) -> None:
+        truncated_text = (
+            '{"schema_version": 1, "prompt": "truncated", "strokes": ['
+            '{"id": "s1", "points": [{"x": 5, "y": 10, "pressure": 0.5, "time_ms": 0}, {"x": 15, "y": 20, "pressure": 0.8, "time_ms": 10}]}'
+        )
+        repaired = _attempt_json_repair(truncated_text)
+        self.assertIsNotNone(repaired)
+        assert repaired is not None
+        plan = DrawingPlan.from_dict(repaired)
+        self.assertEqual(plan.prompt, "truncated")
+        self.assertEqual(len(plan.strokes), 1)
+
+    def test_auto_retry_recovers_from_empty_response(self) -> None:
+        attempts: list[dict[str, Any]] = []
+
+        valid_plan = {
+            "schema_version": 1,
+            "prompt": "retry test",
+            "strokes": [
+                {
+                    "id": "s1",
+                    "points": [
+                        {"x": 10, "y": 10, "pressure": 0.5, "time_ms": 0},
+                        {"x": 20, "y": 20, "pressure": 0.5, "time_ms": 10},
+                    ],
+                }
+            ],
+        }
+
+        class FakeOpener:
+            def __init__(self) -> None:
+                self.call_count = 0
+
+            def __call__(self, request: Any, timeout: float = 10.0) -> Any:
+                self.call_count += 1
+                body = json.loads(request.data.decode("utf-8"))
+                attempts.append(body)
+
+                class MockResponse:
+                    def __init__(self, data: dict[str, Any]) -> None:
+                        self._data = data
+
+                    def read(self, _size: int) -> bytes:
+                        return json.dumps(self._data).encode("utf-8")
+
+                    def __enter__(self) -> MockResponse:
+                        return self
+
+                    def __exit__(self, *_args: Any) -> None:
+                        pass
+
+                # 1回目の呼び出しでは content が空のレスポンスを返す
+                if self.call_count == 1:
+                    return MockResponse({"choices": [{"message": {"role": "assistant", "content": ""}}]})
+                # 2回目の呼び出し（自動リトライ）で有効な計画を返す
+                return MockResponse(
+                    {"choices": [{"message": {"role": "assistant", "content": json.dumps(valid_plan)}}]}
+                )
+
+        opener = FakeOpener()
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "model"),
+            opener=opener,
+        )
+        plan = planner.plan("retry test", 1, 1, 100, 100)
+        self.assertEqual(opener.call_count, 2)
+        self.assertEqual(plan.prompt, "retry test")
+        self.assertEqual(len(plan.strokes), 1)
+
 
 class CanvasAdapterTests(unittest.TestCase):
     def test_existing_target_layer_is_reused_and_pressure_is_unit_range(self) -> None:
@@ -878,6 +1048,7 @@ class WorkerAndDockerTests(unittest.TestCase):
         docker.base_url = FakeTextWidget("https://custom.api/v1")
         docker.model = FakeTextWidget("custom-model-pro")
         docker.timeout_sec = FakeIntWidget(99)
+        docker.max_tokens = FakeIntWidget(16384)
         docker.prompt = FakeTextWidget("test persistent prompt")
         docker.seed = FakeIntWidget(777)
         docker.count = FakeIntWidget(55)
@@ -893,6 +1064,7 @@ class WorkerAndDockerTests(unittest.TestCase):
         docker2.base_url = FakeTextWidget()
         docker2.model = FakeTextWidget()
         docker2.timeout_sec = FakeIntWidget()
+        docker2.max_tokens = FakeIntWidget()
         docker2.prompt = FakeTextWidget()
         docker2.seed = FakeIntWidget()
         docker2.count = FakeIntWidget()
@@ -907,6 +1079,7 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertEqual(docker2.base_url.text(), "https://custom.api/v1")
         self.assertEqual(docker2.model.text(), "custom-model-pro")
         self.assertEqual(docker2.timeout_sec.value(), 99)
+        self.assertEqual(docker2.max_tokens.value(), 16384)
         self.assertEqual(docker2.prompt.toPlainText(), "test persistent prompt")
         self.assertEqual(docker2.seed.value(), 777)
         self.assertEqual(docker2.count.value(), 55)

@@ -135,14 +135,17 @@ class OpenAICompatiblePlanner(PlannerPort):
         start = time.perf_counter()
         response = self._post(payload)
         elapsed = time.perf_counter() - start
-        choices = response.get("choices", [])
-        if choices:
-            msg = f"接続成功: モデルが正常に応答しました ({elapsed:.2f}s)"
+
+        try:
+            extracted = _extract_content_from_response(response, log_func=self._log)
+            preview = str(extracted)[:60].replace("\n", " ")
+            msg = f"接続成功: モデルが正常に応答しました ({elapsed:.2f}s, 応答: {preview!r})"
             self._log(msg)
             return msg
-        msg = f"応答を受信しましたが choices が空でした ({elapsed:.2f}s)"
-        self._log(msg)
-        return msg
+        except Exception as exc:
+            msg = f"接続確認完了 (警告): HTTP 200 を受信しましたが応答の解釈に失敗しました ({elapsed:.2f}s): {exc}"
+            self._log(msg)
+            return msg
 
     def plan(
         self,
@@ -219,37 +222,76 @@ class OpenAICompatiblePlanner(PlannerPort):
         }
 
         self._log(f"LLM API へリクエスト送信中 ({self.settings.endpoint_url})...")
-        try:
-            response = self._post(payload)
-        except LLMPlannerError as exc:
-            # もし response_format が原因で 400 が返った場合はフォールバック送信
-            if "response_format" in payload and "400" in str(exc):
-                self._log("response_format を除外してリトライ送信します...")
-                fallback_payload = dict(payload)
-                del fallback_payload["response_format"]
-                response = self._post(fallback_payload)
+
+        # 自動リカバリー付き計画生成ループ (最大 3 試行)
+        max_attempts = 3
+        last_error: Exception | None = None
+
+        for attempt in range(1, max_attempts + 1):
+            if attempt == 1:
+                current_payload = dict(payload)
+            elif attempt == 2:
+                self._log("[自動リトライ 1/2] response_format を除外し、直接 JSON 出力を指定して再試行します...")
+                current_payload = dict(payload)
+                current_payload.pop("response_format", None)
+                current_payload["messages"] = [
+                    {
+                        "role": "system",
+                        "content": _system_instruction(iteration, max_iterations)
+                        + "\nIMPORTANT: Do NOT output thinking/reasoning tags. Output ONLY the JSON inside ```json ``` codeblock.",
+                    },
+                    {"role": "user", "content": user_content},
+                ]
+                current_payload["temperature"] = 0.4
             else:
-                raise
+                self._log("[自動リトライ 2/2] temperature を最小化 (0.2) し、最速確定 JSON 出力モードで再試行します...")
+                current_payload = dict(payload)
+                current_payload.pop("response_format", None)
+                current_payload["temperature"] = 0.2
+                current_payload["messages"] = [
+                    {
+                        "role": "system",
+                        "content": "Return ONLY valid JSON matching DrawingPlan schema. No thinking, no markdown wrapper, no extra text.",
+                    },
+                    {"role": "user", "content": user_content},
+                ]
 
-        self._log("LLM API 応答受信。JSON パースとストローク構築を実行中...")
+            try:
+                response = self._post(current_payload)
+                self._log("LLM API 応答受信。JSON パースとストローク構築を実行中...")
+                plan = _plan_from_response(response, log_func=self._log)
+                sanitized_plan = _validate_and_sanitize_plan(
+                    plan=plan,
+                    prompt=valid_prompt,
+                    seed=valid_seed,
+                    count=valid_count,
+                    width=valid_width,
+                    height=valid_height,
+                    log_func=self._log,
+                )
+                total_pts = sum(len(s.points) for s in sanitized_plan.strokes)
+                layers_str = ", ".join(sanitized_plan.layers)
+                self._log(
+                    f"描画計画生成成功: ストローク数={len(sanitized_plan.strokes)}, 総点数={total_pts}, レイヤー=[{layers_str}]"
+                )
+                return sanitized_plan
 
-        plan = _plan_from_response(response, log_func=self._log)
-        sanitized_plan = _validate_and_sanitize_plan(
-            plan=plan,
-            prompt=valid_prompt,
-            seed=valid_seed,
-            count=valid_count,
-            width=valid_width,
-            height=valid_height,
-            log_func=self._log,
-        )
+            except LLMPlannerError as exc:
+                last_error = exc
+                err_str = str(exc)
+                # 致命的な認証エラー（401/403/404 等）はリトライせず即座に例外を上げる
+                if any(code in err_str for code in ("HTTP 401", "HTTP 403", "HTTP 404", "認証", "API key")):
+                    raise
+                if attempt < max_attempts:
+                    self._log(f"警告: 試行 {attempt}/{max_attempts} でエラーが発生しました: {exc}")
+                    time.sleep(0.5)
+                else:
+                    self._log(f"エラー: 全 {max_attempts} 回の試行が失敗しました。")
+                    raise last_error from exc
 
-        total_pts = sum(len(s.points) for s in sanitized_plan.strokes)
-        layers_str = ", ".join(sanitized_plan.layers)
-        self._log(
-            f"描画計画生成成功: ストローク数={len(sanitized_plan.strokes)}, 総点数={total_pts}, レイヤー=[{layers_str}]"
-        )
-        return sanitized_plan
+        if last_error is not None:
+            raise last_error
+        raise LLMPlannerError("LLM 描画計画の生成に失敗しました")
 
     def _post(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
         headers = {
@@ -348,17 +390,148 @@ def _system_instruction(iteration: int = 1, max_iterations: int = 1) -> str:
     )
 
 
-def _plan_from_response(response: Mapping[str, Any], log_func: Callable[[str], None] | None = None) -> DrawingPlan:
-    try:
-        choices = response["choices"]
+def _extract_content_from_response(
+    response: Mapping[str, Any],
+    log_func: Callable[[str], None] | None = None,
+) -> str | Mapping[str, Any]:
+    """OpenAI, Ollama, Gemini, Anthropic, Direct JSON 等の多様な API レスポンスから安全・堅牢にコンテンツを抽出する。"""
+    # 1. API エラーオブジェクトの明示的検出
+    if "error" in response:
+        err = response["error"]
+        if isinstance(err, Mapping):
+            err_msg = err.get("message") or err.get("code") or str(err)
+            err_type = err.get("type", "")
+            type_info = f" [{err_type}]" if err_type else ""
+            raise LLMPlannerError(f"LLM API エラー{type_info}: {err_msg}")
+        raise LLMPlannerError(f"LLM API エラー: {err}")
+
+    if "detail" in response and not any(
+        k in response for k in ("choices", "candidates", "content", "message", "strokes")
+    ):
+        raise LLMPlannerError(f"LLM API エラー: {response['detail']}")
+
+    # 2. トップレベルが直接 DrawingPlan 辞書である場合
+    if "strokes" in response and isinstance(response["strokes"], list):
+        if log_func is not None:
+            log_func("通知: レスポンス直下の DrawingPlan JSON 構造を直接検出しました")
+        return response
+
+    # 3. OpenAI Chat Completions 形式 (response["choices"])
+    choices = response.get("choices")
+    if choices is not None:
+        if not isinstance(choices, list) or len(choices) == 0:
+            refusal = response.get("refusal")
+            if refusal:
+                raise LLMPlannerError(f"モデルが出力を拒否しました: {refusal}")
+            raise LLMPlannerError(
+                "LLM API 応答の choices 配列が空です (安全フィルターまたはトークン上限の可能性があります)"
+            )
+
         first_choice = choices[0]
-        content = first_choice["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise LLMPlannerError("LLM API 応答に choices[0].message.content がありません") from exc
+        if isinstance(first_choice, Mapping):
+            finish_reason = first_choice.get("finish_reason")
+            message = first_choice.get("message")
 
-    if isinstance(content, list):
-        content = "".join(part.get("text", "") for part in content if isinstance(part, Mapping))
+            if isinstance(message, Mapping):
+                # 拒否理由の確認
+                refusal = message.get("refusal")
+                if refusal:
+                    raise LLMPlannerError(f"モデルが出力を拒否しました: {refusal}")
 
+                # 本文コンテンツ
+                content = message.get("content")
+                if isinstance(content, list):
+                    content = "".join(part.get("text", "") for part in content if isinstance(part, Mapping))
+
+                if isinstance(content, str) and content.strip():
+                    return content
+
+                # Thinking / Reasoning モデル救済 (DeepSeek R1, QwQ, Gemini Flash Thinking 等)
+                reasoning = message.get("reasoning_content") or message.get("reasoning") or message.get("thought")
+                if isinstance(reasoning, str) and reasoning.strip():
+                    if log_func is not None:
+                        log_func("通知: content が空のため、reasoning_content (思考出力) から JSON 抽出を試みます")
+                    return reasoning
+
+                # Tool Calls 形式の救済
+                tool_calls = message.get("tool_calls")
+                if isinstance(tool_calls, list) and tool_calls:
+                    first_tool = tool_calls[0]
+                    if isinstance(first_tool, Mapping):
+                        args = first_tool.get("function", {}).get("arguments")
+                        if isinstance(args, str) and args.strip():
+                            if log_func is not None:
+                                log_func("通知: tool_calls 引数から JSON データを抽出しました")
+                            return args
+
+            # Legacy completions 形式 (choices[0].text)
+            if "text" in first_choice and isinstance(first_choice["text"], str) and first_choice["text"].strip():
+                return first_choice["text"]
+
+            if finish_reason == "length":
+                raise LLMPlannerError(
+                    "LLM の最大トークン数上限に達したため本文が空になりました。max_tokens を増やすかストローク数を減らしてください"
+                )
+            if finish_reason == "content_filter":
+                raise LLMPlannerError("安全フィルター (content_filter) によりモデル出力が遮断されました")
+
+    # 4. Google Gemini Direct 形式 (candidates[0].content.parts[0].text)
+    candidates = response.get("candidates")
+    if isinstance(candidates, list) and candidates:
+        first_candidate = candidates[0]
+        if isinstance(first_candidate, Mapping):
+            parts = first_candidate.get("content", {}).get("parts", [])
+            if isinstance(parts, list) and parts:
+                text = "".join(p.get("text", "") for p in parts if isinstance(p, Mapping))
+                if text.strip():
+                    return text
+
+    # 5. Anthropic Direct 形式 (content[0].text または content 文字列)
+    content_field = response.get("content")
+    if isinstance(content_field, list) and content_field:
+        text = "".join(p.get("text", "") for p in content_field if isinstance(p, Mapping))
+        if text.strip():
+            return text
+    elif isinstance(content_field, str) and content_field.strip():
+        return content_field
+
+    # 6. Ollama Direct Chat 形式 (message.content)
+    msg_field = response.get("message")
+    if isinstance(msg_field, Mapping):
+        c = msg_field.get("content")
+        if isinstance(c, str) and c.strip():
+            return c
+
+    # 7. Ollama Direct Generate 形式 (response)
+    resp_field = response.get("response")
+    if isinstance(resp_field, str) and resp_field.strip():
+        return resp_field
+
+    # 8. Bedrock / Cohere / AWS 形式 (output.text)
+    out_field = response.get("output")
+    if isinstance(out_field, Mapping) and "text" in out_field:
+        t = out_field["text"]
+        if isinstance(t, str) and t.strip():
+            return t
+
+    # 抽出失敗時の診断情報
+    available_keys = ", ".join(list(response.keys())[:8])
+    if log_func is not None:
+        log_func(f"エラー: 認識可能なコンテンツが見つかりませんでした (レスポンスキー: [{available_keys}])")
+    raise LLMPlannerError(f"LLM API 応答から本文を抽出できませんでした (キー: [{available_keys}])")
+
+
+def _plan_from_response(response: Mapping[str, Any], log_func: Callable[[str], None] | None = None) -> DrawingPlan:
+    extracted = _extract_content_from_response(response, log_func=log_func)
+
+    # すでに辞書オブジェクトとして得られている場合 (Direct JSON)
+    if isinstance(extracted, Mapping):
+        try:
+            return DrawingPlan.from_dict(extracted)
+        except (PlanValidationError, TypeError, ValueError) as exc:
+            raise LLMPlannerError(f"LLM が有効な DrawingPlan JSON を返しませんでした: {exc}") from exc
+
+    content = extracted
     if not isinstance(content, str) or not content.strip():
         raise LLMPlannerError("LLM の応答本文が空です")
 
@@ -376,63 +549,125 @@ def _plan_from_response(response: Mapping[str, Any], log_func: Callable[[str], N
 def _clean_thinking_tokens(text: str) -> str:
     """<think>...</think> や <thought>...</thought> などの思考プロセスを除去する。"""
     cleaned = re.sub(r"<(?:think|thought)>[\s\S]*?</(?:think|thought)>", "", text, flags=re.IGNORECASE)
+    # 閉じられていない <think> タグ（途中で切れた場合）も考慮
+    cleaned = re.sub(r"<(?:think|thought)>[\s\S]*$", "", cleaned, flags=re.IGNORECASE)
     return cleaned.strip()
 
 
 def _extract_json_object(content: str, log_func: Callable[[str], None] | None = None) -> Mapping[str, Any]:
-    text = _clean_thinking_tokens(content.strip())
+    cleaned = _clean_thinking_tokens(content.strip())
 
-    # 1. コードブロック ```json ... ``` の抽出
-    fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
-    candidate = fence_match.group(1).strip() if fence_match is not None else text
+    # 1. 思考タグ除去後のテキストからコードブロック ```json ... ``` の抽出
+    for text_source in (cleaned, content):
+        if not text_source.strip():
+            continue
+        fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text_source)
+        if fence_match is not None:
+            candidate = fence_match.group(1).strip()
+            try:
+                value = json.loads(candidate)
+                if isinstance(value, Mapping):
+                    return value
+            except json.JSONDecodeError:
+                repaired = _attempt_json_repair(candidate)
+                if repaired is not None and isinstance(repaired, Mapping):
+                    if log_func is not None:
+                        log_func("通知: コードブロック内の途切れた JSON を自動修復しました")
+                    return repaired
 
-    # 2. 通常の json.loads 試行
-    try:
-        value = json.loads(candidate)
-        if isinstance(value, Mapping):
-            return value
-    except json.JSONDecodeError:
-        pass
-
-    # 3. 最外郭 { ... } の探索と raw_decode
-    start = candidate.find("{")
-    if start >= 0:
+    # 2. 思考タグ除去後のテキストから raw_decode
+    if cleaned:
         try:
-            value, _ = json.JSONDecoder().raw_decode(candidate[start:])
+            value = json.loads(cleaned)
             if isinstance(value, Mapping):
                 return value
         except json.JSONDecodeError:
             pass
 
-    # 4. 全体テキストからのフォールバック探索
-    if candidate is not text:
-        start = text.find("{")
+        start = cleaned.find("{")
         if start >= 0:
             try:
-                value, _ = json.JSONDecoder().raw_decode(text[start:])
+                value, _ = json.JSONDecoder().raw_decode(cleaned[start:])
                 if isinstance(value, Mapping):
                     return value
             except json.JSONDecodeError:
                 pass
 
-    # 5. 途中で途切れた JSON の末尾修復の試行
-    repaired = _attempt_json_repair(candidate)
-    if repaired is not None and isinstance(repaired, Mapping):
-        if log_func is not None:
-            log_func("警告: 途切れた JSON を自動修復して読み込みました")
-        return repaired
+    # 3. 思考タグ内を含めた全体テキストからのフォールバック探索 (思考内に JSON を出力するモデル対策)
+    start = content.find("{")
+    if start >= 0:
+        try:
+            value, _ = json.JSONDecoder().raw_decode(content[start:])
+            if isinstance(value, Mapping):
+                if log_func is not None:
+                    log_func("通知: 思考タグ内部から DrawingPlan JSON オブジェクトを直接救出しました")
+                return value
+        except json.JSONDecodeError:
+            pass
 
-    raise json.JSONDecodeError("DrawingPlan JSON オブジェクトを抽出できませんでした", text, 0)
+    # 4. 途中で途切れた JSON の高度な末尾修復
+    for text_target in (cleaned, content):
+        if not text_target:
+            continue
+        repaired = _attempt_json_repair(text_target)
+        if repaired is not None and isinstance(repaired, Mapping):
+            if log_func is not None:
+                log_func("警告: トークン上限等で途切れた JSON を自動修復して読み込みました")
+            return repaired
+
+    raise json.JSONDecodeError("DrawingPlan JSON オブジェクトを抽出できませんでした", content, 0)
 
 
 def _attempt_json_repair(text: str) -> Mapping[str, Any] | None:
-    """トークン上限等で末尾が切れた JSON の簡易自動修復を行う。"""
+    """トークン上限等で末尾が切れた JSON のスタック解析および構文修復を行う。"""
     start = text.find("{")
     if start < 0:
         return None
     s = text[start:].strip()
 
-    # 開いている括弧のバランスを補完
+    # 末尾の不完全なトークン（カンマ、中途半端なキー名や文字列）のトリミング
+    # 例: ... "points": [{"x": 10, "y": 20, "pressure": 0.5, "time_
+    s_cleaned = re.sub(r',\s*"[^"]*"?\s*:\s*[^,}\]]*$', "", s)
+    s_cleaned = re.sub(r",\s*$", "", s_cleaned)
+
+    # 1. 開き括弧スタック解析による自動バランシング
+    stack: list[str] = []
+    in_string = False
+    escape = False
+
+    for char in s_cleaned:
+        if escape:
+            escape = False
+            continue
+        if char == "\\":
+            escape = True
+            continue
+        if char == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if char in ("{", "["):
+            stack.append(char)
+        elif (char == "}" and stack and stack[-1] == "{") or (char == "]" and stack and stack[-1] == "["):
+            stack.pop()
+
+    # スタックに残った開き括弧に対応する閉じ括弧を生成
+    closing_suffix = ""
+    if in_string:
+        closing_suffix += '"'
+    for opener in reversed(stack):
+        closing_suffix += "}" if opener == "{" else "]"
+
+    if closing_suffix:
+        try:
+            val = json.loads(s_cleaned + closing_suffix)
+            if isinstance(val, Mapping) and "strokes" in val:
+                return val
+        except json.JSONDecodeError:
+            pass
+
+    # 2. 定型サフィックスによるフォールバック修復
     for suffix in (
         '"]}]}',
         '"}]}',
@@ -440,7 +675,14 @@ def _attempt_json_repair(text: str) -> Mapping[str, Any] | None:
         "}",
         "}]}",
         '0,"time_ms":0}]}]}',
+        "]}]}",
     ):
+        try:
+            val = json.loads(s_cleaned + suffix)
+            if isinstance(val, Mapping) and "strokes" in val:
+                return val
+        except json.JSONDecodeError:
+            continue
         try:
             val = json.loads(s + suffix)
             if isinstance(val, Mapping) and "strokes" in val:

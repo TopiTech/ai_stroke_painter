@@ -386,6 +386,13 @@ class AIStrokePainterDocker(DockWidget):
         self.timeout_sec.setSuffix(" 秒")
         llm_form.addRow("タイムアウト", self.timeout_sec)
 
+        self.max_tokens = QSpinBox()
+        self.max_tokens.setRange(512, 65536)
+        self.max_tokens.setSingleStep(1024)
+        self.max_tokens.setValue(8192)
+        self.max_tokens.setSuffix(" tokens")
+        llm_form.addRow("Max Tokens", self.max_tokens)
+
         test_conn_btn = QPushButton("API 接続テスト")
         test_conn_btn.clicked.connect(self._test_api_connection)
         llm_form.addRow("", test_conn_btn)
@@ -482,6 +489,8 @@ class AIStrokePainterDocker(DockWidget):
                 self.model.setText(str(settings.value("model")))
             if settings.value("timeout_sec"):
                 self.timeout_sec.setValue(int(settings.value("timeout_sec")))
+            if settings.value("max_tokens"):
+                self.max_tokens.setValue(int(settings.value("max_tokens")))
             if settings.value("prompt"):
                 self.prompt.setPlainText(str(settings.value("prompt")))
             if settings.value("seed") is not None:
@@ -508,6 +517,7 @@ class AIStrokePainterDocker(DockWidget):
             settings.setValue("base_url", self.base_url.text())
             settings.setValue("model", self.model.text())
             settings.setValue("timeout_sec", self.timeout_sec.value())
+            settings.setValue("max_tokens", self.max_tokens.value())
             settings.setValue("prompt", self.prompt.toPlainText())
             settings.setValue("seed", self.seed.value())
             settings.setValue("count", self.count.value())
@@ -593,6 +603,7 @@ class AIStrokePainterDocker(DockWidget):
                     model=self.model.text(),
                     api_key=self.api_key.text() or os.environ.get("OPENAI_API_KEY", ""),
                     timeout_seconds=min(15.0, float(self.timeout_sec.value())),
+                    max_tokens=self.max_tokens.value(),
                 ),
                 log_callback=self._log_debug,
             )
@@ -620,7 +631,7 @@ class AIStrokePainterDocker(DockWidget):
             return self.planner
 
         self._log_debug(
-            f"[エンジン選択] OpenAI 互換 API (Base URL: {self.base_url.text()}, Model: {self.model.text()})"
+            f"[エンジン選択] OpenAI 互換 API (Base URL: {self.base_url.text()}, Model: {self.model.text()}, MaxTokens: {self.max_tokens.value()})"
         )
         return OpenAICompatiblePlanner(
             OpenAICompatibleSettings(
@@ -628,6 +639,7 @@ class AIStrokePainterDocker(DockWidget):
                 model=self.model.text(),
                 api_key=self.api_key.text() or os.environ.get("OPENAI_API_KEY", ""),
                 timeout_seconds=float(self.timeout_sec.value()),
+                max_tokens=self.max_tokens.value(),
             ),
             log_callback=self._log_debug,
         )
