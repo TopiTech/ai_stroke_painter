@@ -128,7 +128,7 @@ class AIStrokePainterDocker(DockWidget):
         self._cancel = True
         self.status.setText("停止要求を受け付けました。現在の線分を完了後に停止します。")
 
-    def _update_planner_settings_state(self):
+    def _update_planner_settings_state(self, *_args):
         self.llm_settings.setEnabled(self.planner_mode.currentData() == "openai_compatible")
 
     def _planner(self):
