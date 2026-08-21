@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .domain import DrawingPlan, Stroke
@@ -9,7 +10,18 @@ if TYPE_CHECKING:
 
 class PlannerPort(ABC):
     @abstractmethod
-    def plan(self, prompt: str, seed: int, count: int, width: float, height: float) -> DrawingPlan: ...
+    def plan(
+        self,
+        prompt: str,
+        seed: int,
+        count: int,
+        width: float,
+        height: float,
+        image_data: bytes | None = None,
+        canvas_image: bytes | None = None,
+        iteration: int = 1,
+        max_iterations: int = 1,
+    ) -> DrawingPlan: ...
 
 
 class CanvasPort(ABC):
@@ -18,6 +30,9 @@ class CanvasPort(ABC):
 
     @abstractmethod
     def render(self, document: Any, plan: DrawingPlan, cancelled: Callable[[], bool] = lambda: False) -> int: ...
+
+    @abstractmethod
+    def capture_canvas(self, document: Any, width: int = 512, height: int = 512) -> bytes: ...
 
 
 class NativeStrokeBridgePort(ABC):

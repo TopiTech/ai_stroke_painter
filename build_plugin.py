@@ -12,11 +12,19 @@ PACKAGE_FILES = (
     "__init__.py",
     "docker.py",
     "domain.py",
+    "image_converter.py",
     "krita_adapter.py",
     "llm_planner.py",
     "planner.py",
     "ports.py",
     "storage.py",
+    "procedural/__init__.py",
+    "procedural/base.py",
+    "procedural/character.py",
+    "procedural/creature.py",
+    "procedural/geometry.py",
+    "procedural/landscape.py",
+    "procedural/manga_fx.py",
 )
 
 

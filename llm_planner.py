@@ -1,7 +1,8 @@
-"""OpenAI Chat Completions 互換エンドポイント用の DrawingPlan Adapter。"""
+"""OpenAI Chat Completions 互換エンドポイント用のマルチモーダル・マルチレイヤー DrawingPlan Adapter。"""
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 import json
@@ -61,7 +62,7 @@ class OpenAICompatibleSettings:
     base_url: str
     model: str
     api_key: str = ""
-    timeout_seconds: float = 45.0
+    timeout_seconds: float = 60.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.base_url, str) or not self.base_url.strip():
@@ -85,9 +86,9 @@ class OpenAICompatibleSettings:
 
 
 class OpenAICompatiblePlanner(PlannerPort):
-    """OpenAI 互換の ``POST /chat/completions`` を PlannerPort として利用する。"""
+    """OpenAI 互換の ``POST /chat/completions`` をマルチモーダル & 自律ビジョン Planner として利用する。"""
 
-    MAX_RESPONSE_BYTES = 5_000_000
+    MAX_RESPONSE_BYTES = 10_000_000
 
     def __init__(
         self,
@@ -97,28 +98,80 @@ class OpenAICompatiblePlanner(PlannerPort):
         self.settings = settings
         self._opener = opener or build_opener(_SameOriginRedirectHandler()).open
 
-    def plan(self, prompt: str, seed: int, count: int, width: float, height: float) -> DrawingPlan:
+    def test_connection(self) -> str:
+        """API 接続疎通確認を行う。"""
+        payload = {
+            "model": self.settings.model.strip(),
+            "messages": [{"role": "user", "content": "Ping"}],
+            "max_tokens": 5,
+        }
+        response = self._post(payload)
+        choices = response.get("choices", [])
+        if choices:
+            return "接続成功: モデルが正常に応答しました"
+        return "応答を受信しましたが choices が空でした"
+
+    def plan(
+        self,
+        prompt: str,
+        seed: int,
+        count: int,
+        width: float,
+        height: float,
+        image_data: bytes | None = None,
+        canvas_image: bytes | None = None,
+        iteration: int = 1,
+        max_iterations: int = 1,
+    ) -> DrawingPlan:
         valid_prompt, valid_seed, valid_count, valid_width, valid_height = validate_plan_request(
             prompt, seed, count, width, height
         )
+
+        user_content_parts: list[dict[str, Any]] = []
+
+        # 構造化テキスト指示
+        req_json = json.dumps(
+            {
+                "prompt": valid_prompt,
+                "seed": valid_seed,
+                "stroke_count": valid_count,
+                "canvas": {"width": valid_width, "height": valid_height},
+                "iteration": iteration,
+                "max_iterations": max_iterations,
+                "goal": "Generate professional-grade multi-layer illustration strokes.",
+            },
+            ensure_ascii=False,
+        )
+        user_content_parts.append({"type": "text", "text": req_json})
+
+        # 参照画像 (Base64) の添付
+        if image_data:
+            b64_ref = base64.b64encode(image_data).decode("ascii")
+            user_content_parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64_ref}", "detail": "high"},
+                }
+            )
+
+        # 現在のキャンバスキャプチャ (Base64) の添付 (自律改善ループ時)
+        if canvas_image:
+            b64_canvas = base64.b64encode(canvas_image).decode("ascii")
+            user_content_parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64_canvas}", "detail": "high"},
+                }
+            )
+
         payload = {
             "model": self.settings.model.strip(),
             "messages": [
-                {"role": "system", "content": _system_instruction()},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {
-                            "prompt": valid_prompt,
-                            "seed": valid_seed,
-                            "stroke_count": valid_count,
-                            "canvas": {"width": valid_width, "height": valid_height},
-                        },
-                        ensure_ascii=False,
-                    ),
-                },
+                {"role": "system", "content": _system_instruction(iteration, max_iterations)},
+                {"role": "user", "content": user_content_parts if len(user_content_parts) > 1 else req_json},
             ],
         }
+
         response = self._post(payload)
         plan = _plan_from_response(response)
         _validate_plan_contract(plan, valid_prompt, valid_seed, valid_count, valid_width, valid_height)
@@ -157,16 +210,26 @@ class OpenAICompatiblePlanner(PlannerPort):
         return decoded
 
 
-def _system_instruction() -> str:
+def _system_instruction(iteration: int = 1, max_iterations: int = 1) -> str:
+    phase_guide = (
+        "Phase 1: Rough draft and anatomical gesture/composition lines."
+        if iteration == 1 and max_iterations > 1
+        else "Phase: Refined clean lineart, flat colors, shading hatchings, and specular highlights."
+    )
     return (
-        "You are a drawing-plan generator. Return exactly one JSON object and no Markdown. "
-        "The object must follow this schema: "
-        '{"schema_version":1,"prompt":string,"seed":integer,"strokes":[stroke,...]}. '
-        "Each stroke has a unique string id, an array of 2 to 120 points, brush_preset, "
-        "color (#RRGGBB), and positive size_px. Each point has finite x, y, pressure "
-        "(0.0 to 1.0), and nondecreasing integer time_ms. Use exactly the requested "
-        "stroke_count. Copy prompt and seed exactly. Keep every x within [0,width) and "
-        "every y within [0,height)."
+        "You are an expert master artist and drawing-plan director. Return exactly one valid JSON object. "
+        f"{phase_guide} "
+        "The schema must strictly be: "
+        '{"schema_version":1,"prompt":string,"seed":integer,"title":string,"iteration":integer,"layers":[string,...],'
+        '"strokes":[{"id":string,"brush_preset":string,"color":string,"size_px":number,"layer_name":string,'
+        '"opacity":number,"points":[{"x":number,"y":number,"pressure":number,"time_ms":integer},...]}]}. '
+        "Requirements:\n"
+        "1. Layer names must be logical: 'Draft', 'Lineart', 'Flats', 'Shading', 'Highlights', or 'FX'.\n"
+        "2. Colors must be hex #RRGGBB or #RGB.\n"
+        "3. Size_px should vary with significance (e.g. 5-8px for main outlines, 2-3px for hatching/eyes, 8-15px for broad fills).\n"
+        "4. Pressure must be smooth and dynamic (0.05 to 1.0) simulating pen pressure dynamics.\n"
+        "5. Keep all x within [0, width) and all y within [0, height).\n"
+        "6. Return strictly requested stroke_count or slightly below."
     )
 
 
@@ -190,15 +253,12 @@ def _plan_from_response(response: Mapping[str, Any]) -> DrawingPlan:
 
 def _extract_json_object(content: str) -> Mapping[str, Any]:
     text = content.strip()
-    # Markdown code fence ```json ... ``` または ``` ... ``` があれば内部を優先抽出
     fence_match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
     candidate = fence_match.group(1).strip() if fence_match is not None else text
 
-    # まず candidate 全体のパースを試行
     try:
         value = json.loads(candidate)
     except json.JSONDecodeError:
-        # candidate 内の最初の '{' から raw_decode を試行
         start = candidate.find("{")
         if start >= 0:
             try:
@@ -208,7 +268,6 @@ def _extract_json_object(content: str) -> Mapping[str, Any]:
         else:
             value = None
 
-    # code fence 内で失敗した場合、元のテキスト全体から '{' を探す
     if value is None and candidate is not text:
         start = text.find("{")
         if start >= 0:
@@ -233,17 +292,17 @@ def _validate_plan_contract(
 ) -> None:
     if plan.prompt != prompt or plan.seed != seed:
         raise LLMPlannerError("LLM は要求した prompt と seed をそのまま返す必要があります")
-    if len(plan.strokes) != count:
-        raise LLMPlannerError(f"LLM は要求した本数 ({count}) のストロークを返す必要があります")
+    if len(plan.strokes) > max(count, 500):
+        raise LLMPlannerError(f"LLM のストローク数が上限を超えています: {len(plan.strokes)}")
     point_count = 0
     for stroke in plan.strokes:
-        if len(stroke.points) > 120:
-            raise LLMPlannerError("1 ストロークの点数は 120 以下にしてください")
+        if len(stroke.points) > 150:
+            raise LLMPlannerError("1 ストロークの点数は 150 以下にしてください")
         point_count += len(stroke.points)
         for point in stroke.points:
             if not 0.0 <= point.x < width or not 0.0 <= point.y < height:
                 raise LLMPlannerError("LLM の点座標がキャンバス範囲外です")
-    if point_count > 10_000:
+    if point_count > 30_000:
         raise LLMPlannerError("LLM の総点数が多すぎます")
 
 

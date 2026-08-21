@@ -1,4 +1,4 @@
-"""ユーザーのデータ領域へ DrawingPlan JSON を安全に保存・読込する。"""
+"""ユーザーのデータ領域へ DrawingPlan JSON および SVG を安全に保存・読込する。"""
 
 from __future__ import annotations
 
@@ -36,6 +36,26 @@ def save_plan(plan: DrawingPlan, directory: str | Path | None = None) -> Path:
         except FileExistsError:
             continue
     raise RuntimeError("計画 JSON の一意な保存先を確保できませんでした")
+
+
+def save_svg(plan: DrawingPlan, directory: str | Path | None = None) -> Path:
+    """計画を SVG ベクターファイルとして保存する。"""
+    if not isinstance(plan, DrawingPlan):
+        raise TypeError("plan は DrawingPlan である必要があります")
+    output = Path(directory) if directory is not None else app_data_dir()
+    output.mkdir(parents=True, exist_ok=True)
+    contents = plan.to_svg()
+    timestamp = time.time_ns()
+    for suffix in range(1000):
+        name = f"artwork_{timestamp}{'' if suffix == 0 else f'_{suffix}'}.svg"
+        path = output / name
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                handle.write(contents)
+            return path
+        except FileExistsError:
+            continue
+    raise RuntimeError("SVG の一意な保存先を確保できませんでした")
 
 
 def load_plan(path: str | Path) -> DrawingPlan:

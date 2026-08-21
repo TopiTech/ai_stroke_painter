@@ -1,93 +1,106 @@
-# AI Stroke Painter MVP
+# AI Stroke Painter Pro
 
-Krita 上で、筆圧付きストロークの描画計画を生成して編集可能なペイントレイヤーへ描く MVP です。オフラインのルールベース Planner に加え、OpenAI Chat Completions 互換 API を使う LLM Planner を選べます。
+Krita 上で、プロフェッショナルな本格イラスト・アニメ線画・風景・エフェクト・幾何学アートの描画計画を生成し、マルチレイヤーへ自動分割して筆圧付きストロークを描画する次世代 AI ペイントプラグインです。
 
-## できること
+オフラインの超高精細プロシージャル・アートエンジンに加え、画像読み込み（Image-to-Stroke）、キャンバスのスクリーンショットを自律取得して段階的に絵を洗練させる自律ビジョン改善ループ（Vision Critic / Autonomous Co-Painter）、OpenAI / Claude / Gemini / ローカルLLM互換 API をサポートしています。
 
-- 指示文、Seed、本数、キャンバス寸法から再現可能な `DrawingPlan` を生成
-- 「髪」または「S字」を含む指示では髪の毛風の S 字カーブ、それ以外ではカーブ線を生成
-- `AI Strokes (editable)` ペイントレイヤーへ `Node.paintLine` で筆圧 0.0–1.0 の線分として描画
-- 同名レイヤーを再利用。停止ボタンは線分の途中ではなく安全な描画境界で反映
-- 検証済みの schema version 付き JSON をユーザーデータ領域へ保存
-- OpenAI 互換の `POST /chat/completions` から JSON 計画を取得し、描画前に検証
+---
 
-現在のブラシプリセットと前景色で描画します。ブラシプリセットの自動切替、画像生成、VLM 評価、連続ネイティブストロークは対象外です。
+## 🌟 主な機能と特徴
+
+1. **本格プロシージャル・イラストエンジン (Offline High-Quality Generation)**
+   - **👤 キャラクター / ポートレート**: アニメ美少女・少年の顔、二重まぶた・瞳・ハイライト・まつ毛、繊細な毛流れ（前髪・サイド・天使の輪）、衣服やリボンのシワ
+   - **🌿 自然・風景**: 山岳・稜線テクスチャ、樹木（幹・枝・葉クラスタ）、葛飾北斎風の大波・水しぶき、積乱雲、バラ・桜の花
+   - **💥 マンガ・アニメ効果線**: 迫力の集中線（中心部抜け・強弱ランダム）、流線・スピード線、カケアミ（クロスハッチング陰影）、魔法陣・ルーンエフェクト
+   - **🌀 幾何学・都市**: 万華鏡マンダラ（極座標対称）、サイバーパンク都市スカイライン（パース、ビル群、窓グリッド）、装飾フレーム
+   - **🐱 動物・クリーチャー**: 猫（輪郭・耳・ヒゲ・瞳）、鳥（翼・羽毛）、ドラゴン
+   - **Catmull-Rom スプライン補間 & 筆圧ダイナミクス**: Gペン、丸ペン、毛筆、マーカーの筆圧シミュレーション
+
+2. **🖼️ 参照画像の読み込み (Image-to-Stroke & Image Vectorization)**
+   - ローカル画像（PNG, JPG, WebP）を読み込み、エッジ抽出・輪郭トレース・陰影ハッチング・カラーサンプリングにより、完全オフラインで自然な手描きストロークへ自動変換。
+   - Vision 対応 LLM と組み合わせることで、画像の内容を深く理解した高密度イラストストロークを生成。
+
+3. **🤖 自律ビジョン改善ループ (Autonomous Visual Refinement / Co-Painter)**
+   - Krita キャンバスの現在の描画状態を直接スクリーンショット（QImage）として自律取得。
+   - **多段階改善（1〜10回反復）**:
+     - *Pass 1*: ラフ・アタリ線 (Draft)
+     - *Pass 2*: 主線・ペン入れ (Clean Lineart)
+     - *Pass 3*: 下塗り・ベースカラー (Flats)
+     - *Pass 4*: 陰影・ハッチング (Shading)
+     - *Pass 5*: ハイライト・細部仕上げ・エフェクト (Highlights & FX)
+   - キャンバスの進行状況を評価しながら、不足しているストロークを自律的に追加・描き足していきます。
+
+4. **🎨 マルチレイヤー & フルカラー描画**
+   - ストロークの役割に応じて、`Draft`, `Flats`, `Shading`, `Lineart`, `Highlights`, `FX` レイヤーを自動生成・分割。
+   - 各ストロークの色（`#RRGGBB`）や不透明度・筆圧・サイズを Krita キャンバス上に正確に再現。
+
+5. **✨ 洗練された Docker UI / UX**
+   - **ワンクリック・クイックプリセット**（美少女アニメ顔、大波、集中線、魔法陣、マンダラ、サイバー都市、黒猫、バラ等）
+   - **リアルタイム・ベクタープレビュー**（ミニキャンバス）
+   - **SVG ベクターエクスポート**（Illustrator / Inkscape 互換の `.svg` 出力）
+   - **API 接続テスト機能**
+
+---
 
 ## 動作要件
 
-- Krita 6.0 以降（`Node.paintLine` が必要）
+- **Krita 6.0 以降**（`Node.paintLine` 対応）
 - Python プラグインを有効にした Krita
+
+---
 
 ## インストール
 
-配布物の `dist/ai_stroke_painter.zip` を、Krita の **ツール > スクリプト > Pythonプラグインをインポート** から選択します。Krita を再起動後、**設定 > Kritaの設定 > Pythonプラグインマネージャ** で有効化し、さらに再起動します。最後に **設定 > ドッキングパネル > AI Stroke Painter MVP** を表示します。
+1. プロジェクトディレクトリで配布用 ZIP をビルドします：
+   ```powershell
+   python build_plugin.py
+   ```
+2. 生成された `dist/ai_stroke_painter.zip` を、Krita の **ツール > スクリプト > Pythonプラグインをインポート** から選択します。
+3. Krita を再起動後、**設定 > Kritaの設定 > Pythonプラグインマネージャ** で **AI Stroke Painter Pro** を有効化し、再起動します。
+4. **設定 > ドッキングパネル > AI Stroke Painter Pro** を表示します。
 
-ソースから ZIP を作る場合は、プロジェクトディレクトリで次を実行します。
-
-```powershell
-python build_plugin.py
-```
-
-生成される ZIP は manifest とプラグインパッケージを含むため、そのまま Krita にインポートできます。
+---
 
 ## 使い方
 
-1. Krita でドキュメントを開き、希望するブラシと前景色を選びます。
-2. Docker に指示、Seed、本数を入力します。同じ入力とキャンバス寸法なら同じ計画になります。
-3. **AIストロークを描画** を押します。必要なら **停止** を押します。
-4. 既定では計画 JSON が保存され、Docker 下部に保存先が表示されます。
+### 1. プリセットから即座に描画
+1. Krita で新規ドキュメントを開きます。
+2. Docker 上部の **クイック・プリセット** から希望のモチーフ（例: 「👤 美少女アニメ顔」「🌊 浮世絵風の大波」など）を選び、**適用** を押します。
+3. **🎨 AIストロークを描画** をクリックすると、各レイヤーへ自動分割されて描画が開始されます。
 
-描画結果は通常のペイントレイヤー上のピクセルなので、Krita のレイヤー・消しゴム・Undo で編集できます。Krita のビルドによって Undo の粒度が細かくなる場合があります。
+### 2. 参照画像から描画 (Image-to-Stroke)
+1. **画像を選択...** ボタンからお好みのイラストや写真を読み込みます。
+2. **🎨 AIストロークを描画** をクリックすると、画像のエッジ・輪郭・陰影・カラーが解析され、手描き風ストロークとしてキャンバスに再現されます。
 
-### OpenAI 互換 LLM を使う
+### 3. 自律反復改善ループ (Auto-Refine)
+1. **自律反復改善 (Auto-Refine)** にチェックを入れ、反復回数（例: 3〜5回）を設定します。
+2. **🎨 AIストロークを描画** を押すと、下書き → 主線 → 陰影 → 仕上げ と段階的にスクリーンショットを取得しながら自律的に絵を描き進めます。
+3. 途中で止めたい場合は **⏹ 停止** ボタンをクリックします。
 
-1. Planner で **OpenAI 互換 LLM** を選びます。
-2. Base URL に API のバージョン付きルート（例: `https://api.openai.com/v1`、またはローカルサーバーの `http://127.0.0.1:PORT/v1`）を設定します。フルの `/chat/completions` URL も指定できます。
-3. Chat Completions 対応のモデル名を入力します。API Key は入力欄、または `OPENAI_API_KEY` 環境変数で渡します。
+### 4. OpenAI / Vision 互換 LLM を使う
+1. Planner エンジンで **OpenAI 互換 LLM / Vision** を選択します。
+2. Base URL（例: `https://api.openai.com/v1` またはローカル Ollama/vLLM `http://127.0.0.1:11434/v1`）とモデル名（例: `gpt-4o` / `claude-3-5-sonnet`）を入力します。
+3. **API 接続テスト** ボタンで疎通を確認後、描画を実行します。
 
-キーは設定ファイルや JSON 計画へ保存されません。互換性を優先して、リクエストは `model` と `messages` を用いる標準的な Chat Completions 形式です。LLM 出力は、schema・本数・座標範囲・筆圧などを検証し、満たさない場合は描画せずエラーにします。LLM モードの Seed はモデルへの指示の一部であり、出力の完全な再現性はプロバイダー側の機能に依存します。
+---
 
-## 設計
+## 設計とアーキテクチャ
 
-- `domain.py`: 検証・JSON 変換を備えた Krita 非依存の `Stroke` / `DrawingPlan`
-- `planner.py`: 交換可能なルールベース Planner
-- `llm_planner.py`: OpenAI 互換 Chat Completions Adapter と応答検証
-- `ports.py`: Planner / Canvas / 将来の Native Bridge 境界
-- `krita_adapter.py`: Krita 描画と対象レイヤー管理
-- `docker.py`: Docker UI とユースケース制御
-- `storage.py`: JSON の衝突しない保存と検証付き読込
+- `domain.py`: `Stroke`, `StrokePoint`, `DrawingPlan`, `VisionCritique`, SVGエクスポート
+- `procedural/`: 人物、風景、効果線、幾何学、動物の専門プロシージャル描画エンジン
+- `image_converter.py`: 参照画像解析 & オフライン Image-to-Stroke エンジン
+- `llm_planner.py`: マルチモーダル (画像添付・キャプチャ) & 階層的プロンプティング Adapter
+- `krita_adapter.py`: キャンバスキャプチャ、マルチレイヤー自動管理、カラー・筆圧描画
+- `docker.py`: プレビュー、プリセット、自律ループワーカー、最新 UI
+- `storage.py`: 衝突のない JSON / SVG 保存・読込
+- `ports.py`: 拡張境界ポート定義
 
-将来は `PlannerPort` を LLM Adapter、`CanvasPort` を C++ 拡張または Krita フォーク側 IPC に差し替えられます。ドメイン JSON の `schema_version` はその契約です。
+---
 
-## 検証・コード品質チェック
+## 検証・品質チェック
 
-Krita を起動せずに、決定性、キャンバス境界、圧力値域、JSON 往復、保存名衝突、レイヤー再利用、停止、ローカル HTTP サーバー経由の OpenAI 互換呼び出しを確認できます。
-
-### 一括検証（Lint / Format / 型チェック / 回帰テスト）
-
-プロジェクトディレクトリで次を実行すると、すべての検証をワンコマンドで実行できます。
+以下のワンコマンドですべての静的解析（Ruff / Mypy）と回帰テストを実行できます：
 
 ```powershell
 python check.py
 ```
-
-### 個別の静的解析 & テスト
-
-```powershell
-# Ruff による Lint チェック
-ruff check .
-
-# Ruff によるコードフォーマット確認
-ruff format --check .
-
-# Mypy による静的型チェック
-mypy .
-
-# 回帰セルフテスト
-Set-Location ..
-python -m unittest ai_stroke_painter.self_test -v
-```
-
-## 安全性と制約
-
-オフライン Planner は外部通信を行いません。OpenAI 互換 LLM モードでは、設定した Base URL に描画指示とキャンバス寸法を送信します。保存するユーザーデータは計画 JSON のみで、API キーは保存しません。連続したネイティブ 1 ストロークではなく、短い `paintLine` の列で近似しているため、ブラシや Krita ビルドにより見た目と Undo 粒度が変化する可能性があります。
