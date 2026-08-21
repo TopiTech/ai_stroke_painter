@@ -66,11 +66,11 @@ class KritaCanvasAdapter(CanvasPort):
 
 def _qpoint(x, y):
     try:
-        from PyQt5.QtCore import QPointF
+        from PyQt5.QtCore import QPoint
     except ImportError:
-        from PyQt6.QtCore import QPointF
-    # Krita の Python API は小数座標を受け取る QPointF を要求する。
-    return QPointF(float(x), float(y))
+        from PyQt6.QtCore import QPoint
+    # Krita の Node.paintLine は整数座標の QPoint を要求する。
+    return QPoint(int(round(x)), int(round(y)))
 
 
 def _process_events():
