@@ -7,7 +7,7 @@ import random
 import uuid
 
 from ..domain import Stroke
-from .base import catmull_rom_spline, create_stroke
+from .base import catmull_rom_spline, create_stroke, sample_strokes_by_priority
 
 
 def generate_geometry_strokes(
@@ -154,8 +154,4 @@ def generate_geometry_strokes(
                 )
             )
 
-    if len(strokes) > count:
-        step = len(strokes) / count
-        chosen = [strokes[int(i * step)] for i in range(count)]
-        return chosen
-    return strokes
+    return sample_strokes_by_priority(strokes, count)

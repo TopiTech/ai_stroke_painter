@@ -7,7 +7,7 @@ import random
 import uuid
 
 from ..domain import Stroke
-from .base import catmull_rom_spline, color_palette, create_stroke
+from .base import catmull_rom_spline, color_palette, create_stroke, sample_strokes_by_priority
 
 
 def generate_character_strokes(
@@ -753,9 +753,5 @@ def generate_character_strokes(
         )
     )
 
-    # ユーザー指定の本数に合わせて均等に間引きまたは選択
-    if len(strokes) > count:
-        step = len(strokes) / count
-        chosen = [strokes[int(i * step)] for i in range(count)]
-        return chosen
-    return strokes
+    # ユーザー指定の本数に合わせてレイヤー優先度付きサンプリング
+    return sample_strokes_by_priority(strokes, count)

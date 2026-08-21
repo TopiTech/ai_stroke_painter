@@ -2,37 +2,21 @@
 
 from __future__ import annotations
 
-import importlib
 import math
 import random
 from typing import Any
 import uuid
 
 from .domain import DrawingPlan, Stroke
-from .procedural.base import catmull_rom_spline, create_stroke
-
-
-def _resolve_qt_gui() -> tuple[Any, Any]:
-    for module_base in ("PyQt5", "PyQt6"):
-        try:
-            gui = importlib.import_module(f"{module_base}.QtGui")
-            qimage = getattr(gui, "QImage", None)
-            qcolor = getattr(gui, "QColor", None)
-            if qimage is not None:
-                return qimage, qcolor
-        except (ImportError, AttributeError):
-            continue
-    return None, None
-
-
-_QIMAGE_CLS, _QCOLOR_CLS = _resolve_qt_gui()
+from .procedural.base import catmull_rom_spline, create_stroke, sample_strokes_by_priority
+from .qt_compat import QImage
 
 
 class ImageStrokeConverter:
     """参照画像を解析して、輪郭線・陰影・色を抽出した Stroke 群を生成する。"""
 
     def __init__(self) -> None:
-        self.qimage_cls = _QIMAGE_CLS
+        self.qimage_cls = QImage
 
     def convert_image_to_plan(
         self,
@@ -197,8 +181,4 @@ class ImageStrokeConverter:
                     )
                 )
 
-        if len(strokes) > count:
-            step = len(strokes) / count
-            chosen = [strokes[int(i * step)] for i in range(count)]
-            return chosen
-        return strokes
+        return sample_strokes_by_priority(strokes, count)

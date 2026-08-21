@@ -4,13 +4,31 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import contextlib
-import importlib
 from typing import TYPE_CHECKING, Any
 
 from .ports import CanvasPort
+from .qt_compat import (
+    QApplication,
+    QBuffer,
+    QByteArray,
+    QColor,
+    QIODevice,
+    QPoint,
+)
 
 if TYPE_CHECKING:
     from .domain import DrawingPlan
+
+
+# 標準的なレイヤー階層順序（インデックスが大きいほど上層/前面に配置）
+LAYER_STACK_ORDER: dict[str, int] = {
+    "Draft": 10,
+    "Flats": 20,
+    "Shading": 30,
+    "Lineart": 40,
+    "Highlights": 50,
+    "FX": 60,
+}
 
 
 class KritaCanvasAdapter(CanvasPort):
@@ -31,12 +49,13 @@ class KritaCanvasAdapter(CanvasPort):
         blend_mode: str = "normal",
         opacity: float = 1.0,
     ) -> Any:
-        """指定されたレイヤー名を取得または自動作成する。"""
+        """指定されたレイヤー名を取得または階層順を考慮して自動作成する。"""
         active = document.activeNode()
         if self._is_layer_match(active, layer_name):
             return active
 
-        existing = self._find_layer(document.rootNode(), layer_name)
+        root = document.rootNode()
+        existing = self._find_layer(root, layer_name)
         if existing is not None:
             document.setActiveNode(existing)
             return existing
@@ -50,22 +69,36 @@ class KritaCanvasAdapter(CanvasPort):
             with contextlib.suppress(Exception):
                 node.setOpacity(int(opacity * 255))
 
-        document.rootNode().addChildNode(node, None)
+        # イラスト標準順序に基づいた適切な挿入位置の決定
+        target_rank = LAYER_STACK_ORDER.get(layer_name, 35)
+        before_node = None
+        for child in root.childNodes():
+            child_name = getattr(child, "name", lambda: "")()
+            child_rank = LAYER_STACK_ORDER.get(child_name, 35)
+            # 自分より上位（前面）のレイヤーが見つかったら、その手前（下）に挿入
+            if child_rank > target_rank:
+                before_node = child
+                break
+
+        root.addChildNode(node, before_node)
         document.setActiveNode(node)
         return node
 
     def capture_canvas(self, document: Any, width: int = 512, height: int = 512) -> bytes:
-        """現在のキャンバス状態を PNG 画像バイト列としてキャプチャする。"""
+        """現在のキャンバス状態を PNG 画像バイト列としてキャプチャする（メインスレッド呼出推奨）。"""
         if hasattr(document, "thumbnail"):
             try:
                 qimage = document.thumbnail(width, height)
                 if qimage is not None and hasattr(qimage, "save"):
-                    buffer, qbuffer_cls, io_device_cls = _resolve_qbuffer()
-                    if buffer is not None and qbuffer_cls is not None:
-                        qbuf = qbuffer_cls(buffer)
-                        qbuf.open(io_device_cls.WriteOnly if io_device_cls else 2)
+                    ba = QByteArray() if callable(QByteArray) else None
+                    if ba is not None and callable(QBuffer):
+                        qbuf = QBuffer(ba)
+                        mode = getattr(QIODevice, "WriteOnly", 2) if QIODevice is not None else 2
+                        qbuf.open(mode)
                         qimage.save(qbuf, "PNG")
-                        return bytes(buffer.data())
+                        data = ba.data() if hasattr(ba, "data") else b""
+                        if data:
+                            return bytes(data)
             except Exception:
                 pass
 
@@ -94,6 +127,11 @@ class KritaCanvasAdapter(CanvasPort):
 
         rendered = 0
         segment_count = 0
+
+        # Krita の描画ロック（利用可能な場合）
+        if hasattr(document, "lock"):
+            with contextlib.suppress(Exception):
+                document.lock()
 
         try:
             for stroke in plan.strokes:
@@ -127,6 +165,9 @@ class KritaCanvasAdapter(CanvasPort):
                         _process_events()
                 rendered += 1
         finally:
+            if hasattr(document, "unlock"):
+                with contextlib.suppress(Exception):
+                    document.unlock()
             document.refreshProjection()
         return rendered
 
@@ -143,46 +184,15 @@ class KritaCanvasAdapter(CanvasPort):
         return None
 
 
-def _resolve_qt() -> tuple[Any, Any]:
-    for module_base in ("PyQt5", "PyQt6"):
-        try:
-            core = importlib.import_module(f"{module_base}.QtCore")
-            widgets = importlib.import_module(f"{module_base}.QtWidgets")
-            qpoint = getattr(core, "QPoint", None)
-            qapp = getattr(widgets, "QApplication", None)
-            if qpoint is not None:
-                return qpoint, qapp
-        except (ImportError, AttributeError):
-            continue
-    return None, None
-
-
-def _resolve_qbuffer() -> tuple[Any, Any, Any]:
-    for module_base in ("PyQt5", "PyQt6"):
-        try:
-            core = importlib.import_module(f"{module_base}.QtCore")
-            qbytearray = getattr(core, "QByteArray", None)
-            qbuffer = getattr(core, "QBuffer", None)
-            qiodevice = getattr(core, "QIODevice", None)
-            if qbytearray is not None and qbuffer is not None:
-                return qbytearray(), qbuffer, qiodevice
-        except (ImportError, AttributeError):
-            continue
-    return None, None, None
-
-
-_QPOINT_CLS, _QAPP_CLS = _resolve_qt()
-
-
 def _qpoint(x: float, y: float) -> Any:
-    if _QPOINT_CLS is not None:
-        return _QPOINT_CLS(int(round(x)), int(round(y)))
+    if QPoint is not None and callable(QPoint):
+        return QPoint(int(round(x)), int(round(y)))
     return (int(round(x)), int(round(y)))
 
 
 def _process_events() -> None:
-    if _QAPP_CLS is not None and hasattr(_QAPP_CLS, "processEvents"):
-        _QAPP_CLS.processEvents()
+    if QApplication is not None and hasattr(QApplication, "processEvents"):
+        QApplication.processEvents()
 
 
 def _parse_hex_rgb(hex_str: str) -> tuple[float, float, float] | None:
@@ -191,18 +201,6 @@ def _parse_hex_rgb(hex_str: str) -> tuple[float, float, float] | None:
         return int(h[0] * 2, 16) / 255.0, int(h[1] * 2, 16) / 255.0, int(h[2] * 2, 16) / 255.0
     if len(h) in (6, 8):
         return int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0
-    return None
-
-
-def _resolve_qcolor_class() -> Any | None:
-    for module_base in ("PyQt5", "PyQt6"):
-        try:
-            gui = importlib.import_module(f"{module_base}.QtGui")
-            qcolor = getattr(gui, "QColor", None)
-            if qcolor is not None:
-                return qcolor
-        except (ImportError, AttributeError):
-            continue
     return None
 
 
@@ -218,14 +216,13 @@ def _apply_color_to_krita(hex_color: str) -> None:
         rgb = _parse_hex_rgb(hex_color)
         if rgb is None:
             return
-        qcolor_cls = _resolve_qcolor_class()
-        if qcolor_cls is None:
+        if QColor is None or not hasattr(QColor, "fromRgbF"):
             return
         window = getattr(Krita.instance(), "activeWindow", lambda: None)()
         view = getattr(window, "activeView", lambda: None)() if window is not None else None
         if view is None:
             return
-        view.setForeGroundColor(ManagedColor.fromQColor(qcolor_cls.fromRgbF(*rgb)))
+        view.setForeGroundColor(ManagedColor.fromQColor(QColor.fromRgbF(*rgb)))
     except Exception:
         pass
 

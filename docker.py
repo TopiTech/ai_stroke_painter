@@ -1,295 +1,44 @@
+"""AI Stroke Painter Pro Krita Docker UI および非同期制御ワーカー。"""
+
 from __future__ import annotations
 
 import contextlib
 import datetime
-import importlib
 import os
 from pathlib import Path
 import threading
 import traceback
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from .domain import DrawingPlan
 from .krita_adapter import KritaCanvasAdapter
 from .llm_planner import OpenAICompatiblePlanner, OpenAICompatibleSettings
 from .planner import RuleBasedPlanner
 from .ports import PlannerPort
+from .qt_compat import (
+    QApplication,
+    QCheckBox,
+    QColor,
+    QComboBox,
+    QFileDialog,
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPainter,
+    QPen,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QSettings,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+    pyqtSignal,
+)
 from .storage import save_plan, save_svg
-
-if TYPE_CHECKING:
-    from PyQt5.QtCore import QObject, pyqtSignal
-    from PyQt5.QtWidgets import (
-        QApplication,
-        QCheckBox,
-        QComboBox,
-        QFileDialog,
-        QFormLayout,
-        QGroupBox,
-        QHBoxLayout,
-        QLabel,
-        QLineEdit,
-        QMessageBox,
-        QPlainTextEdit,
-        QProgressBar,
-        QPushButton,
-        QSpinBox,
-        QVBoxLayout,
-        QWidget,
-    )
-else:
-    try:
-        from PyQt5.QtCore import QObject, pyqtSignal
-        from PyQt5.QtWidgets import (
-            QApplication,
-            QCheckBox,
-            QComboBox,
-            QFileDialog,
-            QFormLayout,
-            QGroupBox,
-            QHBoxLayout,
-            QLabel,
-            QLineEdit,
-            QMessageBox,
-            QPlainTextEdit,
-            QProgressBar,
-            QPushButton,
-            QSpinBox,
-            QVBoxLayout,
-            QWidget,
-        )
-    except ImportError:
-        try:
-            from PyQt6.QtCore import QObject, pyqtSignal
-            from PyQt6.QtWidgets import (
-                QApplication,
-                QCheckBox,
-                QComboBox,
-                QFileDialog,
-                QFormLayout,
-                QGroupBox,
-                QHBoxLayout,
-                QLabel,
-                QLineEdit,
-                QMessageBox,
-                QPlainTextEdit,
-                QProgressBar,
-                QPushButton,
-                QSpinBox,
-                QVBoxLayout,
-                QWidget,
-            )
-        except ImportError:
-            # PyQt がない環境（CI/テスト等）用のフォールバックスタブ
-            class QObject:  # type: ignore[no-redef]
-                def __init__(self, *args: Any, **kwargs: Any) -> None: ...
-
-            class _FakeSignal:
-                def __init__(self) -> None:
-                    self._slots: list[Any] = []
-
-                def connect(self, slot: Any) -> None:
-                    self._slots.append(slot)
-
-                def emit(self, *args: Any) -> None:
-                    for slot in list(self._slots):
-                        slot(*args)
-
-            def pyqtSignal(*_args: Any) -> Any:  # type: ignore[no-redef]
-                return _FakeSignal()
-
-            class QWidget(QObject):  # type: ignore[no-redef]
-                def __init__(self, *args: Any, **kwargs: Any) -> None:
-                    super().__init__()
-                    self._visible = True
-
-                def setLayout(self, *args: Any) -> None: ...
-                def update(self) -> None: ...
-                def setFixedSize(self, *args: Any) -> None: ...
-                def setMinimumHeight(self, *args: Any) -> None: ...
-                def setMaximumHeight(self, *args: Any) -> None: ...
-                def setEnabled(self, *args: Any) -> None: ...
-                def setVisible(self, visible: bool) -> None:
-                    self._visible = visible
-
-                def isVisible(self) -> bool:
-                    return self._visible
-
-            class QLabel(QWidget):  # type: ignore[no-redef]
-                def __init__(self, text: str = "", *args: Any, **kwargs: Any) -> None:
-                    super().__init__()
-                    self._text = text
-
-                def setText(self, text: str) -> None:
-                    self._text = text
-
-                def text(self) -> str:
-                    return self._text
-
-                def setWordWrap(self, *args: Any) -> None: ...
-
-            class QPushButton(QWidget):  # type: ignore[no-redef]
-                def __init__(self, text: str = "", *args: Any, **kwargs: Any) -> None:
-                    super().__init__()
-                    self.clicked = _FakeSignal()
-
-            class QLineEdit(QWidget):  # type: ignore[no-redef]
-                Password = 1
-
-                def __init__(self, text: str = "", *args: Any, **kwargs: Any) -> None:
-                    super().__init__()
-                    self._text = text
-
-                def text(self) -> str:
-                    return self._text
-
-                def setText(self, text: str) -> None:
-                    self._text = text
-
-                def setPlaceholderText(self, *args: Any) -> None: ...
-                def setEchoMode(self, *args: Any) -> None: ...
-
-            class QPlainTextEdit(QWidget):  # type: ignore[no-redef]
-                def __init__(self, text: str = "", *args: Any, **kwargs: Any) -> None:
-                    super().__init__()
-                    self._text = text
-
-                def toPlainText(self) -> str:
-                    return self._text
-
-                def setPlainText(self, text: str) -> None:
-                    self._text = text
-
-                def appendPlainText(self, text: str) -> None:
-                    self._text += ("\n" if self._text else "") + text
-
-                def clear(self) -> None:
-                    self._text = ""
-
-                def setReadOnly(self, *args: Any) -> None: ...
-                def setMaximumHeight(self, *args: Any) -> None: ...
-
-            class QSpinBox(QWidget):  # type: ignore[no-redef]
-                def __init__(self, *args: Any, **kwargs: Any) -> None:
-                    super().__init__()
-                    self._val = 0
-
-                def value(self) -> int:
-                    return self._val
-
-                def setValue(self, v: int) -> None:
-                    self._val = v
-
-                def setRange(self, *args: Any) -> None: ...
-                def setSuffix(self, *args: Any) -> None: ...
-
-            class QCheckBox(QWidget):  # type: ignore[no-redef]
-                def __init__(self, text: str = "", *args: Any, **kwargs: Any) -> None:
-                    super().__init__()
-                    self._checked = False
-                    self.toggled = _FakeSignal()
-
-                def isChecked(self) -> bool:
-                    return self._checked
-
-                def setChecked(self, c: bool) -> None:
-                    self._checked = c
-                    self.toggled.emit(c)
-
-            class QComboBox(QWidget):  # type: ignore[no-redef]
-                def __init__(self, *args: Any, **kwargs: Any) -> None:
-                    super().__init__()
-                    self.currentIndexChanged = _FakeSignal()
-                    self._items: list[tuple[str, Any]] = []
-                    self._idx = 0
-
-                def addItem(self, text: str, data: Any = None) -> None:
-                    self._items.append((text, data))
-
-                def itemData(self, index: int) -> Any:
-                    if 0 <= index < len(self._items):
-                        return self._items[index][1]
-                    return None
-
-                def count(self) -> int:
-                    return len(self._items)
-
-                def currentData(self) -> Any:
-                    if self._items and 0 <= self._idx < len(self._items):
-                        return self._items[self._idx][1]
-                    return None
-
-                def currentText(self) -> str:
-                    if self._items and 0 <= self._idx < len(self._items):
-                        return self._items[self._idx][0]
-                    return ""
-
-                def currentIndex(self) -> int:
-                    return self._idx
-
-                def setCurrentIndex(self, i: int) -> None:
-                    self._idx = i
-
-            class QProgressBar(QWidget):  # type: ignore[no-redef]
-                def __init__(self, *args: Any, **kwargs: Any) -> None:
-                    super().__init__()
-
-                def setValue(self, *args: Any) -> None: ...
-                def setRange(self, *args: Any) -> None: ...
-
-            class QGroupBox(QWidget):  # type: ignore[no-redef]
-                def __init__(self, title: str = "", *args: Any, **kwargs: Any) -> None:
-                    super().__init__()
-
-            class QVBoxLayout:  # type: ignore[no-redef]
-                def __init__(self, *args: Any, **kwargs: Any) -> None: ...
-                def addWidget(self, *args: Any) -> None: ...
-                def addLayout(self, *args: Any) -> None: ...
-                def addStretch(self, *args: Any) -> None: ...
-
-            class QHBoxLayout:  # type: ignore[no-redef]
-                def __init__(self, *args: Any, **kwargs: Any) -> None: ...
-                def addWidget(self, *args: Any) -> None: ...
-                def addLayout(self, *args: Any) -> None: ...
-                def addStretch(self, *args: Any) -> None: ...
-
-            class QFormLayout:  # type: ignore[no-redef]
-                def __init__(self, *args: Any, **kwargs: Any) -> None: ...
-                def addRow(self, *args: Any) -> None: ...
-
-            class QMessageBox:  # type: ignore[no-redef]
-                @staticmethod
-                def information(*args: Any) -> None: ...
-                @staticmethod
-                def warning(*args: Any) -> None: ...
-                @staticmethod
-                def critical(*args: Any) -> None: ...
-
-            class QFileDialog:  # type: ignore[no-redef]
-                @staticmethod
-                def getOpenFileName(*args: Any) -> tuple[str, str]:
-                    return "", ""
-
-                @staticmethod
-                def getSaveFileName(*args: Any) -> tuple[str, str]:
-                    return "", ""
-
-            class _FakeClipboard:
-                def __init__(self) -> None:
-                    self._text = ""
-
-                def setText(self, text: str) -> None:
-                    self._text = text
-
-                def text(self) -> str:
-                    return self._text
-
-            class QApplication:  # type: ignore[no-redef]
-                _clip = _FakeClipboard()
-
-                @classmethod
-                def clipboard(cls) -> Any:
-                    return cls._clip
-
 
 try:
     from krita import DockWidget, Krita
@@ -304,29 +53,16 @@ except ImportError:
             with contextlib.suppress(Exception):
                 super().setWindowTitle(title)
 
-        def setWidget(self, widget: Any) -> None: ...
-        def canvasChanged(self, canvas: Any) -> None: ...
+        def setWidget(self, widget: Any) -> None:
+            pass
+
+        def canvasChanged(self, canvas: Any) -> None:
+            pass
 
     class Krita:  # type: ignore[no-redef]
         @staticmethod
-        def instance() -> Any: ...
-
-
-def _resolve_gui_paint() -> tuple[Any, Any, Any]:
-    for module_base in ("PyQt5", "PyQt6"):
-        try:
-            gui = importlib.import_module(f"{module_base}.QtGui")
-            qpainter = getattr(gui, "QPainter", None)
-            qcolor = getattr(gui, "QColor", None)
-            qpen = getattr(gui, "QPen", None)
-            if qpainter is not None and qcolor is not None and qpen is not None:
-                return qpainter, qcolor, qpen
-        except (ImportError, AttributeError):
-            continue
-    return None, None, None
-
-
-_QPAINTER_CLS, _QCOLOR_CLS, _QPEN_CLS = _resolve_gui_paint()
+        def instance() -> Any:
+            return None
 
 
 class PreviewWidget(QWidget):
@@ -343,18 +79,18 @@ class PreviewWidget(QWidget):
         self.update()
 
     def paintEvent(self, event: Any) -> None:  # noqa: N802
-        if _QPAINTER_CLS is None or _QCOLOR_CLS is None or _QPEN_CLS is None:
+        if QPainter is None or QColor is None or QPen is None or not callable(QPainter):
             return
 
-        painter = _QPAINTER_CLS(self)
+        painter = QPainter(self)
         try:
             w = float(self.width()) if hasattr(self, "width") else 200.0
             h = float(self.height()) if hasattr(self, "height") else 160.0
 
-            painter.fillRect(0, 0, int(w), int(h), _QCOLOR_CLS("#1e1e24"))
+            painter.fillRect(0, 0, int(w), int(h), QColor("#1e1e24"))
 
             if self._plan is None or not self._plan.strokes:
-                painter.setPen(_QCOLOR_CLS("#777788"))
+                painter.setPen(QColor("#777788"))
                 painter.drawText(int(w * 0.2), int(h * 0.5), "ストローク プレビュー")
                 return
 
@@ -365,10 +101,10 @@ class PreviewWidget(QWidget):
             oy = (h - max_y * scale) * 0.5
 
             for stroke in self._plan.strokes:
-                col = _QCOLOR_CLS(stroke.color)
+                col = QColor(stroke.color)
                 if stroke.opacity < 1.0 and hasattr(col, "setAlphaF"):
                     col.setAlphaF(stroke.opacity)
-                pen = _QPEN_CLS(col, max(1.0, stroke.size_px * scale * 0.6))
+                pen = QPen(col, max(1.0, stroke.size_px * scale * 0.6))
                 painter.setPen(pen)
                 pts = stroke.points
                 for p0, p1 in zip(pts, pts[1:]):
@@ -382,8 +118,8 @@ class PreviewWidget(QWidget):
             painter.end()
 
 
-class PlanWorker(QObject):
-    """自律ビジョン改善ループおよびバックグラウンド計画生成ワーカー。"""
+class PlanWorker(QWidget):
+    """スレッドセーフな自律ビジョン改善ループおよびバックグラウンド計画生成ワーカー。"""
 
     plan_ready = pyqtSignal(object)
     iteration_progress = pyqtSignal(int, int, str)
@@ -394,8 +130,6 @@ class PlanWorker(QObject):
     def __init__(
         self,
         planner: PlannerPort,
-        canvas_port: KritaCanvasAdapter,
-        document: Any,
         prompt: str,
         seed: int,
         count: int,
@@ -405,11 +139,11 @@ class PlanWorker(QObject):
         max_iterations: int = 1,
         palette_name: str = "anime",
         parent: Any | None = None,
+        canvas_port: Any | None = None,  # 下位互換用（ワーカー内では不使用）
+        document: Any | None = None,  # 下位互換用（ワーカー内では不使用）
     ) -> None:
-        super().__init__()
+        super().__init__(parent)
         self.planner = planner
-        self.canvas_port = canvas_port
-        self.document = document
         self.prompt = prompt
         self.seed = seed
         self.count = count
@@ -420,6 +154,7 @@ class PlanWorker(QObject):
         self.palette_name = palette_name
         self._is_cancelled = False
         self._render_done_event = threading.Event()
+        self._next_canvas_image: bytes | None = None
         self._thread: threading.Thread | None = None
         self._is_running = False
 
@@ -429,6 +164,11 @@ class PlanWorker(QObject):
 
     def _emit_debug_log(self, message: str) -> None:
         self.debug_log.emit(message)
+
+    def provide_canvas_capture(self, capture_bytes: bytes | None) -> None:
+        """メインスレッドから取得された安全なキャンバスキャプチャを受け取り、次イテレーションを再開する。"""
+        self._next_canvas_image = capture_bytes
+        self._render_done_event.set()
 
     def notify_render_done(self) -> None:
         """メインスレッドでの描画完了を受け取り、次イテレーションの進行を再開する。"""
@@ -472,11 +212,7 @@ class PlanWorker(QObject):
                 self.iteration_progress.emit(iter_idx, self.max_iterations, msg)
                 self.debug_log.emit(f"[イテレーション {iter_idx}/{self.max_iterations}] 計画生成処理を開始")
 
-                canvas_img: bytes | None = None
-                if iter_idx > 1 and self.document is not None:
-                    self.debug_log.emit("[自律改善] キャンバスキャプチャを取得中...")
-                    canvas_img = self.canvas_port.capture_canvas(self.document, 512, 512)
-                    self.debug_log.emit(f"[自律改善] キャプチャ完了 ({len(canvas_img) if canvas_img else 0} bytes)")
+                canvas_img: bytes | None = self._next_canvas_image if iter_idx > 1 else None
 
                 current_plan = self.planner.plan(
                     prompt=self.prompt,
@@ -498,10 +234,13 @@ class PlanWorker(QObject):
                 self.debug_log.emit(
                     f"[イテレーション {iter_idx}] 計画生成完了。メインスレッドへ描画を要求します (ストローク数: {len(current_plan.strokes)})"
                 )
+
                 if iter_idx < self.max_iterations:
                     self._render_done_event.clear()
+                    self._next_canvas_image = None
                     self.plan_ready.emit(current_plan)
-                    # 次のイテレーションでキャンバスキャプチャを行う前に、メインスレッドの描画完了を待機
+
+                    # メインスレッドでの描画 & キャプチャ完了を待機
                     while not self._render_done_event.wait(timeout=0.05):
                         if self.is_cancelled():
                             self.debug_log.emit("[ワーカー] 描画待機中にキャンセルを確認しました")
@@ -717,6 +456,9 @@ class AIStrokePainterDocker(DockWidget):
         root_layout.addStretch(1)
         self.setWidget(container)
 
+        # 設定の復元
+        self._load_settings()
+
         # イベント接続
         self.run_btn.clicked.connect(self.run)
         self.stop_btn.clicked.connect(self.cancel)
@@ -726,6 +468,55 @@ class AIStrokePainterDocker(DockWidget):
     def canvasChanged(self, canvas: Any) -> None:  # noqa: N802
         """Kritaからキャンバス切り替えイベント通知を受け取る (DockWidgetの必須抽象メソッド)。"""
         self._canvas = canvas
+
+    def _load_settings(self) -> None:
+        """QSettings から前回の UI 設定値を自動復元する。"""
+        if QSettings is None or not callable(QSettings):
+            return
+        with contextlib.suppress(Exception):
+            settings = QSettings("AIStrokePainter", "DockerSettings")
+            if settings.value("base_url"):
+                self.base_url.setText(str(settings.value("base_url")))
+            if settings.value("model"):
+                self.model.setText(str(settings.value("model")))
+            if settings.value("timeout_sec"):
+                self.timeout_sec.setValue(int(settings.value("timeout_sec")))
+            if settings.value("prompt"):
+                self.prompt.setPlainText(str(settings.value("prompt")))
+            if settings.value("seed") is not None:
+                self.seed.setValue(int(settings.value("seed")))
+            if settings.value("count") is not None:
+                self.count.setValue(int(settings.value("count")))
+            if settings.value("iterations") is not None:
+                self.iterations.setValue(int(settings.value("iterations")))
+            if settings.value("auto_refine") is not None:
+                self.auto_refine.setChecked(str(settings.value("auto_refine")).lower() in ("true", "1"))
+            if settings.value("save_json") is not None:
+                self.save_json.setChecked(str(settings.value("save_json")).lower() in ("true", "1"))
+            if settings.value("save_svg") is not None:
+                self.save_svg_chk.setChecked(str(settings.value("save_svg")).lower() in ("true", "1"))
+            if settings.value("debug_mode") is not None:
+                self.debug_mode_chk.setChecked(str(settings.value("debug_mode")).lower() in ("true", "1"))
+
+    def _save_settings(self) -> None:
+        """現在の UI 設定値を QSettings に保存する。"""
+        if QSettings is None or not callable(QSettings):
+            return
+        with contextlib.suppress(Exception):
+            settings = QSettings("AIStrokePainter", "DockerSettings")
+            settings.setValue("base_url", self.base_url.text())
+            settings.setValue("model", self.model.text())
+            settings.setValue("timeout_sec", self.timeout_sec.value())
+            settings.setValue("prompt", self.prompt.toPlainText())
+            settings.setValue("seed", self.seed.value())
+            settings.setValue("count", self.count.value())
+            settings.setValue("iterations", self.iterations.value())
+            settings.setValue("auto_refine", self.auto_refine.isChecked())
+            settings.setValue("save_json", self.save_json.isChecked())
+            settings.setValue("save_svg", self.save_svg_chk.isChecked())
+            settings.setValue("debug_mode", self.debug_mode_chk.isChecked())
+            if hasattr(settings, "sync"):
+                settings.sync()
 
     def _toggle_debug_panel(self, checked: bool) -> None:
         self.debug_box.setVisible(checked)
@@ -858,6 +649,7 @@ class AIStrokePainterDocker(DockWidget):
             )
             return
 
+        self._save_settings()
         self._active_doc = document
         self._cancel = False
         self.run_btn.setEnabled(False)
@@ -876,8 +668,6 @@ class AIStrokePainterDocker(DockWidget):
             planner = self._planner()
             worker = PlanWorker(
                 planner=planner,
-                canvas_port=self.canvas_port,
-                document=document,
                 prompt=self.prompt.toPlainText().strip(),
                 seed=self.seed.value(),
                 count=self.count.value(),
@@ -935,8 +725,15 @@ class AIStrokePainterDocker(DockWidget):
             self._log_debug(f"[描画レンダリング例外] {exc}\n{traceback.format_exc()}")
             self.status.setText(f"描画エラー: {exc}")
         finally:
-            if self._worker is not None and hasattr(self._worker, "notify_render_done"):
-                self._worker.notify_render_done()
+            # 次イテレーション用のキャンバスキャプチャをメインスレッドで安全に取得してワーカーへ渡す
+            if self._worker is not None and hasattr(self._worker, "provide_canvas_capture"):
+                if not self.is_cancelled() and self._worker.max_iterations > plan.iteration:
+                    self._log_debug("[自律改善] メインスレッドでキャンバスキャプチャを取得中...")
+                    cap_img = self.canvas_port.capture_canvas(document, 512, 512)
+                    self._log_debug(f"[自律改善] キャプチャ完了 ({len(cap_img)} bytes)")
+                    self._worker.provide_canvas_capture(cap_img)
+                else:
+                    self._worker.notify_render_done()
             if self._worker is None or not self._worker.isRunning():
                 self._reset_run_state()
 

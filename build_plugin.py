@@ -17,6 +17,7 @@ PACKAGE_FILES = (
     "llm_planner.py",
     "planner.py",
     "ports.py",
+    "qt_compat.py",
     "storage.py",
     "procedural/__init__.py",
     "procedural/base.py",

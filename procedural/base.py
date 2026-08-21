@@ -206,3 +206,102 @@ def color_palette(name: str) -> dict[str, str]:
         },
     }
     return palettes.get(name.lower(), palettes["anime"])
+
+
+def sample_strokes_by_priority(strokes: list[Stroke], target_count: int) -> list[Stroke]:
+    """指定本数に収まるよう、重要レイヤー（主線・顔等）を優先保護しながらバランスよくサンプリングする。"""
+    if len(strokes) <= target_count:
+        return list(strokes)
+    if target_count <= 0:
+        return []
+
+    # レイヤーごとの目標配分比率 (合計 1.0)
+    layer_weights: dict[str, float] = {
+        "Lineart": 0.45,
+        "Flats": 0.25,
+        "Shading": 0.15,
+        "Highlights": 0.08,
+        "Draft": 0.04,
+        "FX": 0.03,
+    }
+
+    # レイヤーごとにストロークを分類
+    by_layer: dict[str, list[Stroke]] = {}
+    for s in strokes:
+        by_layer.setdefault(s.layer_name, []).append(s)
+
+    # 各レイヤーのサンプリング数を決定
+    allocated_counts: dict[str, int] = {}
+
+    # 1. 重み付けによる初期クォータ割り当て（最低1本確保を試みる）
+    for layer, l_strokes in by_layer.items():
+        weight = layer_weights.get(layer, 0.1)
+        quota = max(1, min(len(l_strokes), int(round(target_count * weight))))
+        allocated_counts[layer] = quota
+
+    # 割り当て合計の調整
+    total_allocated = sum(allocated_counts.values())
+    if total_allocated > target_count:
+        # 超過分を優先度の低いレイヤーから削減
+        reduce_order = ["Draft", "FX", "Highlights", "Shading", "Flats", "Lineart"]
+        diff = total_allocated - target_count
+        for lyr in reduce_order:
+            if lyr in allocated_counts and allocated_counts[lyr] > 1:
+                sub = min(diff, allocated_counts[lyr] - 1)
+                allocated_counts[lyr] -= sub
+                diff -= sub
+                if diff <= 0:
+                    break
+        # それでも超過している場合は均等にクリップ
+        if sum(allocated_counts.values()) > target_count:
+            excess = sum(allocated_counts.values()) - target_count
+            for lyr in reduce_order:
+                if lyr in allocated_counts and allocated_counts[lyr] > 0:
+                    sub = min(excess, allocated_counts[lyr])
+                    allocated_counts[lyr] -= sub
+                    excess -= sub
+                    if excess <= 0:
+                        break
+    elif total_allocated < target_count:
+        # 不足分を優先度の高いレイヤーへ追加
+        increase_order = ["Lineart", "Flats", "Shading", "Highlights", "Draft", "FX"]
+        diff = target_count - total_allocated
+        for lyr in increase_order:
+            if lyr in allocated_counts and allocated_counts[lyr] < len(by_layer[lyr]):
+                add = min(diff, len(by_layer[lyr]) - allocated_counts[lyr])
+                allocated_counts[lyr] += add
+                diff -= add
+                if diff <= 0:
+                    break
+
+    # 2. 各レイヤーからストロークを均等サンプリング
+    selected_set: set[str] = set()
+    selected_strokes: list[Stroke] = []
+
+    for layer, count in allocated_counts.items():
+        l_strokes = by_layer[layer]
+        if count >= len(l_strokes):
+            for s in l_strokes:
+                selected_set.add(s.id)
+                selected_strokes.append(s)
+        elif count > 0:
+            step = len(l_strokes) / count
+            for i in range(count):
+                s = l_strokes[int(i * step)]
+                if s.id not in selected_set:
+                    selected_set.add(s.id)
+                    selected_strokes.append(s)
+
+    # 万が一 target_count に満たない場合は未選択のストロークで補完
+    if len(selected_strokes) < target_count:
+        for s in strokes:
+            if s.id not in selected_set:
+                selected_set.add(s.id)
+                selected_strokes.append(s)
+                if len(selected_strokes) >= target_count:
+                    break
+
+    # 元のストローク順序を維持してソート
+    orig_index = {s.id: idx for idx, s in enumerate(strokes)}
+    selected_strokes.sort(key=lambda s: orig_index.get(s.id, 0))
+    return selected_strokes[:target_count]
