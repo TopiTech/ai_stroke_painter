@@ -12,7 +12,7 @@ import unittest
 from zipfile import ZipFile
 
 from .build_plugin import PACKAGE_NAME, build
-from .docker import PlanWorker
+from .docker import AIStrokePainterDocker, PlanWorker
 from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint, VisionCritique
 from .image_converter import ImageStrokeConverter
 from .krita_adapter import KritaCanvasAdapter
@@ -551,6 +551,19 @@ class WorkerAndDockerTests(unittest.TestCase):
         )
         worker.run()
         self.assertEqual(received, ["cyberpunk"])
+
+    def test_docker_implements_canvas_changed(self) -> None:
+        self.assertTrue(hasattr(AIStrokePainterDocker, "canvasChanged"))
+        self.assertTrue(callable(AIStrokePainterDocker.canvasChanged))
+
+        # ヘッドレス環境でも安全に canvasChanged のシグネチャと挙動を検証
+        docker = AIStrokePainterDocker.__new__(AIStrokePainterDocker)
+        docker._canvas = None
+        fake_canvas = object()
+        AIStrokePainterDocker.canvasChanged(docker, fake_canvas)
+        self.assertIs(docker._canvas, fake_canvas)
+        AIStrokePainterDocker.canvasChanged(docker, None)
+        self.assertIsNone(docker._canvas)
 
 
 def run() -> bool:

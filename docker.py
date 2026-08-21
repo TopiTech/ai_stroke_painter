@@ -262,10 +262,17 @@ try:
     from krita import DockWidget, Krita
 except ImportError:
 
-    class DockWidget:  # type: ignore[no-redef]
-        def __init__(self) -> None: ...
-        def setWindowTitle(self, title: str) -> None: ...
+    class DockWidget(QWidget):  # type: ignore[no-redef]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            with contextlib.suppress(Exception):
+                super().__init__(*args, **kwargs)
+
+        def setWindowTitle(self, title: str | None) -> None:
+            with contextlib.suppress(Exception):
+                super().setWindowTitle(title)
+
         def setWidget(self, widget: Any) -> None: ...
+        def canvasChanged(self, canvas: Any) -> None: ...
 
     class Krita:  # type: ignore[no-redef]
         @staticmethod
@@ -448,6 +455,7 @@ class AIStrokePainterDocker(DockWidget):
         self._cancel: bool = False
         self._worker: PlanWorker | None = None
         self._active_doc: Any | None = None
+        self._canvas: Any | None = None
         self._image_bytes: bytes | None = None
         self._last_plan: DrawingPlan | None = None
 
@@ -588,6 +596,10 @@ class AIStrokePainterDocker(DockWidget):
         self.stop_btn.clicked.connect(self.cancel)
         self.planner_mode.currentIndexChanged.connect(self._update_planner_settings_state)
         self._update_planner_settings_state()
+
+    def canvasChanged(self, canvas: Any) -> None:  # noqa: N802
+        """Kritaからキャンバス切り替えイベント通知を受け取る (DockWidgetの必須抽象メソッド)。"""
+        self._canvas = canvas
 
     def _apply_preset(self) -> None:
         data = self.preset_combo.currentData()
