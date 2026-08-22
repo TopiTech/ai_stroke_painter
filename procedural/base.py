@@ -236,7 +236,7 @@ def sample_strokes_by_priority(strokes: list[Stroke], target_count: int) -> list
     # 1. 重み付けによる初期クォータ割り当て（最低1本確保を試みる）
     for layer, l_strokes in by_layer.items():
         weight = layer_weights.get(layer, 0.1)
-        quota = max(1, min(len(l_strokes), int(round(target_count * weight))))
+        quota = max(1, min(len(l_strokes), round(target_count * weight)))
         allocated_counts[layer] = quota
 
     # 割り当て合計の調整

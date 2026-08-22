@@ -141,7 +141,7 @@ class VisionCritique:
     iteration: int
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "completion_score", max(0.0, min(1.0, float(self.completion_score))))
+        object.__setattr__(self, "completion_score", max(0.0, min(1.0, self.completion_score)))
         object.__setattr__(self, "iteration", _non_negative_int(self.iteration, "iteration"))
 
     def as_dict(self) -> dict[str, Any]:
@@ -182,12 +182,12 @@ class DrawingPlan:
         if len({stroke.id for stroke in strokes}) != len(strokes):
             raise PlanValidationError("stroke id は計画内で一意である必要があります")
         object.__setattr__(self, "strokes", strokes)
-        object.__setattr__(self, "title", str(self.title))
+        object.__setattr__(self, "title", self.title)
         object.__setattr__(self, "iteration", _non_negative_int(self.iteration, "iteration"))
 
         # レイヤー一覧を自動推定または指定値で初期化
         if self.layers:
-            object.__setattr__(self, "layers", tuple(str(x) for x in self.layers))
+            object.__setattr__(self, "layers", tuple(self.layers))
         else:
             inferred_layers: list[str] = []
             for stroke in strokes:
@@ -242,8 +242,8 @@ class DrawingPlan:
             w = max(100.0, max_x + 20.0)
             h = max(100.0, max_y + 20.0)
         else:
-            w = float(width)
-            h = float(height)
+            w = width
+            h = height
 
         # XML コメント内で "--" は禁止されているため置換する
         safe_prompt = html.escape(self.prompt).replace("--", "﹣﹣")

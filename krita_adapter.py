@@ -99,7 +99,7 @@ class KritaCanvasAdapter(CanvasPort):
                 if qimage is not None and hasattr(qimage, "save"):
                     ba = QByteArray() if callable(QByteArray) else None
                     if ba is not None and callable(QBuffer):
-                        qbuf = QBuffer(ba)
+                        qbuf: Any = QBuffer(ba)
                         mode = getattr(QIODevice, "WriteOnly", 2) if QIODevice is not None else 2
                         qbuf.open(mode)
                         qimage.save(qbuf, "PNG")
@@ -195,9 +195,9 @@ class KritaCanvasAdapter(CanvasPort):
         return rendered
 
     def _is_layer_match(self, node: Any, layer_name: str) -> bool:
-        return node is not None and node.name() == layer_name and node.type() == "paintlayer"
+        return bool(node is not None and node.name() == layer_name and node.type() == "paintlayer")
 
-    def _find_layer(self, root: Any, layer_name: str) -> Any | None:
+    def _find_layer(self, root: Any, layer_name: str) -> Any:
         pending = [root]
         while pending:
             node = pending.pop()
@@ -210,8 +210,8 @@ class KritaCanvasAdapter(CanvasPort):
 def _qpoint(x: float, y: float) -> Any:
     """Krita の Node.paintLine は QPoint (整数ピクセル座標) を要求するため QPoint を生成する。"""
     if QPoint is not None and callable(QPoint):
-        return QPoint(int(round(x)), int(round(y)))
-    return (int(round(x)), int(round(y)))
+        return QPoint(round(x), round(y))
+    return (round(x), round(y))
 
 
 # 後方互換エイリアス

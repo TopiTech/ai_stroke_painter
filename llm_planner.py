@@ -504,7 +504,7 @@ class OpenAICompatiblePlanner(PlannerPort):
 
         start_time = time.perf_counter()
         try:
-            with self._opener(request, timeout=float(self.settings.timeout_seconds)) as response:
+            with self._opener(request, timeout=self.settings.timeout_seconds) as response:
                 status_code = getattr(response, "status", getattr(response, "code", 200))
                 raw = response.read(self.MAX_RESPONSE_BYTES + 1)
         except _CrossOriginRedirectError as exc:

@@ -362,13 +362,13 @@ if not HAS_QT:
 
     class QPoint:  # type: ignore[no-redef]
         def __init__(self, x: int, y: int) -> None:
-            self.x = int(x)
-            self.y = int(y)
+            self.x = x
+            self.y = y
 
     class QPointF:  # type: ignore[no-redef]
         def __init__(self, x: float, y: float) -> None:
-            self.x = float(x)
-            self.y = float(y)
+            self.x = x
+            self.y = y
 
     class QColor:  # type: ignore[no-redef]
         def __init__(self, *args: Any) -> None:
@@ -377,9 +377,9 @@ if not HAS_QT:
         def setAlphaF(self, *args: Any) -> None:
             pass
 
-        @staticmethod
-        def fromRgbF(r: float, g: float, b: float, a: float = 1.0) -> Any:
-            return QColor()
+        @classmethod
+        def fromRgbF(cls, r: float, g: float, b: float, a: float = 1.0) -> Any:
+            return cls(r, g, b, a)
 
     class QPen:  # type: ignore[no-redef]
         def __init__(self, *args: Any) -> None:

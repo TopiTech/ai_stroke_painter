@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 import threading
 import traceback
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .domain import DrawingPlan
 from .krita_adapter import KritaCanvasAdapter
@@ -41,29 +41,41 @@ from .qt_compat import (
 )
 from .storage import save_plan, save_svg
 
-try:
-    from krita import DockWidget, Krita
-except ImportError:
+if TYPE_CHECKING:
 
-    class DockWidget(QWidget):  # type: ignore[no-redef]
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            with contextlib.suppress(Exception):
-                super().__init__(*args, **kwargs)
+    class DockWidget(QWidget):
+        def setWindowTitle(self, title: str | None) -> None: ...
+        def setWidget(self, widget: Any) -> None: ...
+        def canvasChanged(self, canvas: Any) -> None: ...
 
-        def setWindowTitle(self, title: str | None) -> None:
-            with contextlib.suppress(Exception):
-                super().setWindowTitle(title)
-
-        def setWidget(self, widget: Any) -> None:
-            pass
-
-        def canvasChanged(self, canvas: Any) -> None:
-            pass
-
-    class Krita:  # type: ignore[no-redef]
+    class Krita:
         @staticmethod
-        def instance() -> Any:
-            return None
+        def instance() -> Any: ...
+
+else:
+    try:
+        from krita import DockWidget, Krita
+    except ImportError:
+
+        class DockWidget(QWidget):  # type: ignore[no-redef]
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                with contextlib.suppress(Exception):
+                    super().__init__(*args, **kwargs)
+
+            def setWindowTitle(self, title: str | None) -> None:
+                with contextlib.suppress(Exception):
+                    super().setWindowTitle(title)
+
+            def setWidget(self, widget: Any) -> None:
+                pass
+
+            def canvasChanged(self, canvas: Any) -> None:
+                pass
+
+        class Krita:  # type: ignore[no-redef]
+            @staticmethod
+            def instance() -> Any:
+                return None
 
 
 class PreviewWidget(QWidget):
@@ -83,7 +95,7 @@ class PreviewWidget(QWidget):
         if QPainter is None or QColor is None or QPen is None or not callable(QPainter):
             return
 
-        painter = QPainter(self)
+        painter: Any = QPainter(self)
         try:
             w = float(self.width()) if hasattr(self, "width") else 200.0
             h = float(self.height()) if hasattr(self, "height") else 160.0
@@ -161,7 +173,7 @@ class PlanWorker(QObject):
 
         # プランナーがログコールバックをサポートしている場合はワーカーシグナルに接続
         if hasattr(self.planner, "log_callback"):
-            self.planner.log_callback = self._emit_debug_log
+            cast(Any, self.planner).log_callback = self._emit_debug_log
 
     def _emit_debug_log(self, message: str) -> None:
         self.debug_log.emit(message)
@@ -494,7 +506,7 @@ class AIStrokePainterDocker(DockWidget):
         if QSettings is None or not callable(QSettings):
             return
         with contextlib.suppress(Exception):
-            settings = QSettings("AIStrokePainter", "DockerSettings")
+            settings: Any = QSettings("AIStrokePainter", "DockerSettings")
             if settings.value("base_url"):
                 self.base_url.setText(str(settings.value("base_url")))
             if settings.value("model"):
@@ -531,7 +543,7 @@ class AIStrokePainterDocker(DockWidget):
         if QSettings is None or not callable(QSettings):
             return
         with contextlib.suppress(Exception):
-            settings = QSettings("AIStrokePainter", "DockerSettings")
+            settings: Any = QSettings("AIStrokePainter", "DockerSettings")
             settings.setValue("base_url", self.base_url.text())
             settings.setValue("model", self.model.text())
             settings.setValue("timeout_sec", self.timeout_sec.value())
