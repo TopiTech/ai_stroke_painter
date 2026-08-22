@@ -470,8 +470,30 @@ class OpenAICompatiblePlanner(PlannerPort):
                         new_messages = []
                         for m in messages[1:]:
                             if m.get("role") == "user":
-                                combined_content = f"{sys_content}\n\n[USER REQUEST]\n{m.get('content')}"
-                                new_messages.append({"role": "user", "content": combined_content})
+                                u_content = m.get("content")
+                                if isinstance(u_content, list):
+                                    new_parts: list[dict[str, Any]] = []
+                                    text_merged = False
+                                    for part in u_content:
+                                        if isinstance(part, Mapping) and part.get("type") == "text":
+                                            orig_text = part.get("text", "")
+                                            new_parts.append(
+                                                {
+                                                    "type": "text",
+                                                    "text": f"{sys_content}\n\n[USER REQUEST]\n{orig_text}",
+                                                }
+                                            )
+                                            text_merged = True
+                                        elif isinstance(part, Mapping):
+                                            new_parts.append(dict(part))
+                                        else:
+                                            new_parts.append(part)
+                                    if not text_merged:
+                                        new_parts.insert(0, {"type": "text", "text": str(sys_content)})
+                                    new_messages.append({"role": "user", "content": new_parts})
+                                else:
+                                    combined_content = f"{sys_content}\n\n[USER REQUEST]\n{u_content}"
+                                    new_messages.append({"role": "user", "content": combined_content})
                             else:
                                 new_messages.append(m)
                         current_payload["messages"] = new_messages

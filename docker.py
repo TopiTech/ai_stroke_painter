@@ -248,18 +248,15 @@ class PlanWorker(QObject):
                     f"[イテレーション {iter_idx}] 計画生成完了。メインスレッドへ描画を要求します (ストローク数: {len(current_plan.strokes)})"
                 )
 
-                if iter_idx < self.max_iterations:
-                    self._render_done_event.clear()
-                    self._next_canvas_image = None
-                    self.plan_ready.emit(current_plan)
+                self._render_done_event.clear()
+                self._next_canvas_image = None
+                self.plan_ready.emit(current_plan)
 
-                    # メインスレッドでの描画 & キャプチャ完了を待機
-                    while not self._render_done_event.wait(timeout=0.05):
-                        if self.is_cancelled():
-                            self.debug_log.emit("[ワーカー] 描画待機中にキャンセルを確認しました")
-                            return
-                else:
-                    self.plan_ready.emit(current_plan)
+                # メインスレッドでの描画 & キャプチャ完了を待機
+                while not self._render_done_event.wait(timeout=0.05):
+                    if self.is_cancelled():
+                        self.debug_log.emit("[ワーカー] 描画待機中にキャンセルを確認しました")
+                        return
 
             if not self.is_cancelled():
                 self.iteration_progress.emit(self.max_iterations, self.max_iterations, "全イテレーションが完了しました")
@@ -632,7 +629,7 @@ class AIStrokePainterDocker(DockWidget):
                 OpenAICompatibleSettings(
                     base_url=self.base_url.text(),
                     model=self.model.text(),
-                    api_key=self.api_key.text() or os.environ.get("OPENAI_API_KEY", ""),
+                    api_key=self.api_key.text().strip() or os.environ.get("OPENAI_API_KEY", ""),
                     timeout_seconds=min(15.0, float(self.timeout_sec.value())),
                     max_tokens=self.max_tokens.value(),
                     reasoning_effort=self.reasoning_effort.currentData() or "low",
@@ -670,7 +667,7 @@ class AIStrokePainterDocker(DockWidget):
             OpenAICompatibleSettings(
                 base_url=self.base_url.text(),
                 model=self.model.text(),
-                api_key=self.api_key.text() or os.environ.get("OPENAI_API_KEY", ""),
+                api_key=self.api_key.text().strip() or os.environ.get("OPENAI_API_KEY", ""),
                 timeout_seconds=float(self.timeout_sec.value()),
                 max_tokens=self.max_tokens.value(),
                 reasoning_effort=effort_val,
@@ -729,7 +726,7 @@ class AIStrokePainterDocker(DockWidget):
             worker.plan_ready.connect(self._on_plan_ready)
             worker.iteration_progress.connect(self._on_iteration_progress)
             worker.plan_failed.connect(self._on_plan_failed)
-            worker.finished.connect(self._reset_run_state)
+            worker.finished.connect(self._on_worker_finished)
             worker.start()
         except Exception as exc:
             self._log_debug(f"[タスク起動例外] {exc}\n{traceback.format_exc()}")
@@ -750,6 +747,9 @@ class AIStrokePainterDocker(DockWidget):
             if document is None:
                 self.status.setText("ドキュメントが閉じられたため描画を中断しました")
                 self._log_debug("[描画中断] アクティブなドキュメントがありません")
+                self._cancel = True
+                if self._worker is not None and hasattr(self._worker, "cancel"):
+                    self._worker.cancel()
                 return
 
             if self.is_cancelled():
@@ -805,6 +805,10 @@ class AIStrokePainterDocker(DockWidget):
                 self.status.setText(f"エラー: {error_msg}")
             QMessageBox.critical(self, "AI Stroke Painter エラー", error_msg)
         self._reset_run_state()
+
+    def _on_worker_finished(self) -> None:
+        if self._worker is None or not self._worker.isRunning():
+            self._reset_run_state()
 
     def _reset_run_state(self) -> None:
         self.progress.setRange(0, 1)

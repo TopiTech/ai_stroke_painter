@@ -83,7 +83,22 @@ class KritaCanvasAdapter(CanvasPort):
             if child_rank <= target_rank:
                 above_node = child
 
-        root.addChildNode(node, above_node)
+        if above_node is not None:
+            root.addChildNode(node, above_node)
+        else:
+            higher_children = [
+                c
+                for c in root.childNodes()
+                if LAYER_STACK_ORDER.get(getattr(c, "name", lambda: "")(), 35) > target_rank
+            ]
+            root.addChildNode(node, None)
+            if higher_children and hasattr(root, "removeChildNode"):
+                prev = node
+                for hc in higher_children:
+                    with contextlib.suppress(Exception):
+                        root.removeChildNode(hc)
+                        root.addChildNode(hc, prev)
+                        prev = hc
         document.setActiveNode(node)
         return node
 

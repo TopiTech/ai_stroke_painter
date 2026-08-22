@@ -65,6 +65,10 @@ class _FakeNode:
     def childNodes(self) -> list[Any]:
         return list(self._children)
 
+    def removeChildNode(self, child: Any) -> None:
+        if child in self._children:
+            self._children.remove(child)
+
     def addChildNode(self, child: Any, above_this: Any = None) -> None:
         if above_this is not None and above_this in self._children:
             idx = self._children.index(above_this)
@@ -861,6 +865,79 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertNotIn("temperature", attempts[1])
         self.assertEqual(plan.prompt, "fallback test")
 
+    def test_multimodal_request_preserves_image_parts_on_system_role_error(self) -> None:
+        import io
+        from urllib.error import HTTPError
+
+        captured_bodies: list[dict[str, Any]] = []
+        valid_plan = {
+            "schema_version": 1,
+            "prompt": "multimodal test",
+            "strokes": [
+                {
+                    "id": "s1",
+                    "points": [
+                        {"x": 10, "y": 10, "pressure": 0.5, "time_ms": 0},
+                        {"x": 20, "y": 20, "pressure": 0.5, "time_ms": 10},
+                    ],
+                }
+            ],
+        }
+
+        class FakeOpener:
+            def __init__(self) -> None:
+                self.count = 0
+
+            def __call__(self, request: Any, timeout: float = 10.0) -> Any:
+                self.count += 1
+                body = json.loads(request.data.decode("utf-8"))
+                captured_bodies.append(body)
+
+                if self.count == 1:
+                    err_json = json.dumps(
+                        {"error": {"message": "Unsupported role: 'system'", "type": "invalid_request_error"}}
+                    ).encode("utf-8")
+                    raise HTTPError(
+                        url="https://example.test/v1/chat/completions",
+                        code=400,
+                        msg="Bad Request",
+                        hdrs=cast(Any, {}),
+                        fp=io.BytesIO(err_json),
+                    )
+
+                class MockResponse:
+                    def read(self, _size: int) -> bytes:
+                        return json.dumps({"choices": [{"message": {"content": json.dumps(valid_plan)}}]}).encode(
+                            "utf-8"
+                        )
+
+                    def __enter__(self) -> Any:
+                        return self
+
+                    def __exit__(self, *_args: Any) -> None:
+                        pass
+
+                return MockResponse()
+
+        opener = FakeOpener()
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "o1-mini"),
+            opener=opener,
+        )
+        fake_png = b"\x89PNG\r\n\x1a\n\x00\x00"
+        plan = planner.plan("multimodal test", 1, 1, 100, 100, image_data=fake_png)
+        self.assertEqual(opener.count, 2)
+        self.assertEqual(plan.prompt, "multimodal test")
+
+        retried_user_msg = captured_bodies[1]["messages"][0]
+        self.assertEqual(retried_user_msg["role"], "user")
+        self.assertIsInstance(retried_user_msg["content"], list)
+        self.assertEqual(len(retried_user_msg["content"]), 2)
+        self.assertEqual(retried_user_msg["content"][0]["type"], "text")
+        self.assertIn("[USER REQUEST]", retried_user_msg["content"][0]["text"])
+        self.assertEqual(retried_user_msg["content"][1]["type"], "image_url")
+        self.assertTrue(retried_user_msg["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"))
+
     def test_thinking_tokens_various_tags(self) -> None:
         # 1. <reasoning>...</reasoning>
         raw1 = (
@@ -1239,6 +1316,19 @@ class CanvasAdapterTests(unittest.TestCase):
         children_names = [c.name() for c in root.childNodes()]
         self.assertEqual(children_names, ["Draft", "Flats", "Lineart", "FX"])
 
+    def test_layer_stack_order_placement_when_higher_layer_exists_first(self) -> None:
+        root = _FakeNode("root", "grouplayer")
+        document = _FakeDocument(root=root)
+        adapter = KritaCanvasAdapter()
+
+        adapter.ensure_layer(document, "Lineart")
+        adapter.ensure_layer(document, "Flats")
+        adapter.ensure_layer(document, "Draft")
+        adapter.ensure_layer(document, "Highlights")
+
+        children_names = [c.name() for c in root.childNodes()]
+        self.assertEqual(children_names, ["Draft", "Flats", "Lineart", "Highlights"])
+
     def test_cancel_before_drawing_does_not_paint(self) -> None:
         document = _FakeDocument()
         plan = RuleBasedPlanner().plan("curve", 3, 1, 100, 100)
@@ -1374,6 +1464,7 @@ class WorkerAndDockerTests(unittest.TestCase):
         received_plans: list[Any] = []
         received_errors: list[str] = []
         worker.plan_ready.connect(lambda p: received_plans.append(p))
+        worker.plan_ready.connect(lambda _p: worker.notify_render_done())
         worker.plan_failed.connect(lambda e: received_errors.append(e))
 
         worker.run()
@@ -1438,7 +1529,6 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertIsNone(captured_in_planner[0])
 
         worker.provide_canvas_capture(b"fake-main-thread-screenshot")
-        thread.join(timeout=2.0)
 
         for _ in range(50):
             _process_events()
@@ -1448,6 +1538,8 @@ class WorkerAndDockerTests(unittest.TestCase):
 
         self.assertEqual(len(plans), 2)
         self.assertEqual(captured_in_planner[1], b"fake-main-thread-screenshot")
+        worker.notify_render_done()
+        thread.join(timeout=2.0)
 
     def test_plan_worker_forwards_palette_name_to_planner(self) -> None:
         received: list[str] = []
@@ -1467,6 +1559,7 @@ class WorkerAndDockerTests(unittest.TestCase):
             palette_name="cyberpunk",
             max_iterations=1,
         )
+        worker.plan_ready.connect(lambda _p: worker.notify_render_done())
         worker.run()
         self.assertEqual(received, ["cyberpunk"])
 
@@ -1495,6 +1588,7 @@ class WorkerAndDockerTests(unittest.TestCase):
         )
         logs: list[str] = []
         worker.debug_log.connect(lambda msg: logs.append(msg))
+        worker.plan_ready.connect(lambda _p: worker.notify_render_done())
         worker.run()
         self.assertTrue(len(logs) > 0)
         self.assertTrue(any("ワーカー開始" in log for log in logs))
@@ -1712,6 +1806,98 @@ class WorkerAndDockerTests(unittest.TestCase):
 
         self.assertEqual(len(notified), 1)
         self.assertIn("ドキュメントが閉じられたため", docker.status._text)
+
+    def test_plan_worker_waits_for_render_done_on_final_iteration(self) -> None:
+        import time
+
+        from ai_stroke_painter.krita_adapter import _process_events
+
+        worker = PlanWorker(
+            planner=RuleBasedPlanner(),
+            prompt="cat",
+            seed=1,
+            count=2,
+            width=200,
+            height=200,
+            max_iterations=1,
+        )
+
+        plans: list[DrawingPlan] = []
+        is_finished: list[bool] = []
+        worker.plan_ready.connect(lambda p: plans.append(p))
+        worker.finished.connect(lambda: is_finished.append(True))
+
+        worker.start()
+
+        for _ in range(50):
+            _process_events()
+            if plans:
+                break
+            time.sleep(0.01)
+
+        self.assertEqual(len(plans), 1)
+        self.assertEqual(len(is_finished), 0)
+
+        worker.notify_render_done()
+
+        for _ in range(50):
+            _process_events()
+            if is_finished:
+                break
+            time.sleep(0.01)
+
+        self.assertEqual(len(is_finished), 1)
+        if worker._thread is not None:
+            worker._thread.join(timeout=2.0)
+
+    def test_docker_api_key_whitespace_fallback_to_environ(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        class FakeTextWidget:
+            def __init__(self, val: str = "") -> None:
+                self._v = val
+
+            def text(self) -> str:
+                return self._v
+
+            def appendPlainText(self, *args: Any) -> None:  # noqa: N802
+                pass
+
+        class FakeIntWidget:
+            def __init__(self, val: int = 0) -> None:
+                self._v = val
+
+            def value(self) -> int:
+                return self._v
+
+        class FakeComboWidget:
+            def __init__(self, default_data: str = "low") -> None:
+                self._d = default_data
+
+            def currentData(self) -> str:  # noqa: N802
+                return self._d
+
+            def currentText(self) -> str:  # noqa: N802
+                return "OpenAI"
+
+            def currentIndex(self) -> int:  # noqa: N802
+                return 1
+
+        docker = AIStrokePainterDocker.__new__(AIStrokePainterDocker)
+        docker.base_url = FakeTextWidget("https://api.openai.com/v1")
+        docker.model = FakeTextWidget("gpt-4o")
+        docker.api_key = FakeTextWidget("   ")
+        docker.timeout_sec = FakeIntWidget(30)
+        docker.max_tokens = FakeIntWidget(2048)
+        docker.reasoning_effort = FakeComboWidget("low")
+        docker.planner_mode = FakeComboWidget("openai_compatible")
+        docker.planner = RuleBasedPlanner()
+        docker.debug_log_edit = FakeTextWidget()
+
+        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-env-fallback-key"}):
+            planner = cast(Any, docker._planner())
+            self.assertEqual(planner.settings.api_key, "sk-env-fallback-key")
 
 
 def run() -> bool:
