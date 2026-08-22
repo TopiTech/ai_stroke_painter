@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import tempfile
 from threading import Thread
-from typing import Any
+from typing import Any, cast
 import unittest
 from zipfile import ZipFile
 
@@ -22,8 +22,10 @@ from .llm_planner import (
     OpenAICompatiblePlanner,
     OpenAICompatibleSettings,
     _attempt_json_repair,
+    _detect_image_mime_type,
     _extract_content_from_response,
     _extract_json_object,
+    _is_reasoning_model,
     _plan_from_response,
 )
 from .planner import RuleBasedPlanner
@@ -63,10 +65,10 @@ class _FakeNode:
     def childNodes(self) -> list[Any]:
         return list(self._children)
 
-    def addChildNode(self, child: Any, before: Any = None) -> None:
-        if before is not None and before in self._children:
-            idx = self._children.index(before)
-            self._children.insert(idx, child)
+    def addChildNode(self, child: Any, above_this: Any = None) -> None:
+        if above_this is not None and above_this in self._children:
+            idx = self._children.index(above_this)
+            self._children.insert(idx + 1, child)
         else:
             self._children.append(child)
 
@@ -673,6 +675,323 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertEqual(plan.prompt, "retry test")
         self.assertEqual(len(plan.strokes), 1)
 
+    def test_is_reasoning_model_detection(self) -> None:
+        self.assertTrue(_is_reasoning_model("o1"))
+        self.assertTrue(_is_reasoning_model("o1-preview"))
+        self.assertTrue(_is_reasoning_model("o1-mini"))
+        self.assertTrue(_is_reasoning_model("o3-mini"))
+        self.assertTrue(_is_reasoning_model("deepseek-r1"))
+        self.assertTrue(_is_reasoning_model("deepseek-reasoner"))
+        self.assertTrue(_is_reasoning_model("qwq-32b-preview"))
+        self.assertTrue(_is_reasoning_model("gemini-2.0-flash-thinking-exp-01-21"))
+        self.assertFalse(_is_reasoning_model("gpt-4o"))
+        self.assertFalse(_is_reasoning_model("gpt-4o-mini"))
+        self.assertFalse(_is_reasoning_model("claude-3-5-sonnet"))
+
+    def test_reasoning_model_payload_settings(self) -> None:
+        attempts: list[dict[str, Any]] = []
+        valid_plan = {
+            "schema_version": 1,
+            "prompt": "reasoning test",
+            "strokes": [
+                {
+                    "id": "s1",
+                    "points": [
+                        {"x": 10, "y": 10, "pressure": 0.5, "time_ms": 0},
+                        {"x": 20, "y": 20, "pressure": 0.5, "time_ms": 10},
+                    ],
+                }
+            ],
+        }
+
+        class FakeOpener:
+            def __call__(self, request: Any, timeout: float = 10.0) -> Any:
+                body = json.loads(request.data.decode("utf-8"))
+                attempts.append(body)
+
+                class MockResponse:
+                    def read(self, _size: int) -> bytes:
+                        return json.dumps({"choices": [{"message": {"content": json.dumps(valid_plan)}}]}).encode(
+                            "utf-8"
+                        )
+
+                    def __enter__(self) -> Any:
+                        return self
+
+                    def __exit__(self, *_args: Any) -> None:
+                        pass
+
+                return MockResponse()
+
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "o3-mini", max_tokens=4096),
+            opener=FakeOpener(),
+        )
+        plan = planner.plan("reasoning test", 1, 1, 100, 100)
+        self.assertEqual(len(attempts), 1)
+        self.assertIn("max_completion_tokens", attempts[0])
+        self.assertEqual(attempts[0]["max_completion_tokens"], 4096)
+        self.assertNotIn("temperature", attempts[0])
+        self.assertEqual(plan.prompt, "reasoning test")
+
+    def test_parameter_fallback_on_400_temperature_error(self) -> None:
+        import io
+        from typing import cast
+        from urllib.error import HTTPError
+
+        attempts: list[dict[str, Any]] = []
+        valid_plan = {
+            "schema_version": 1,
+            "prompt": "fallback test",
+            "strokes": [
+                {
+                    "id": "s1",
+                    "points": [
+                        {"x": 10, "y": 10, "pressure": 0.5, "time_ms": 0},
+                        {"x": 20, "y": 20, "pressure": 0.5, "time_ms": 10},
+                    ],
+                }
+            ],
+        }
+
+        class FakeOpener:
+            def __init__(self) -> None:
+                self.count = 0
+
+            def __call__(self, request: Any, timeout: float = 10.0) -> Any:
+                self.count += 1
+                body = json.loads(request.data.decode("utf-8"))
+                attempts.append(body)
+
+                if self.count == 1:
+                    err_json = json.dumps(
+                        {"error": {"message": "Unsupported parameter: 'temperature'", "type": "invalid_request_error"}}
+                    ).encode("utf-8")
+                    raise HTTPError(
+                        url="https://example.test/v1/chat/completions",
+                        code=400,
+                        msg="Bad Request",
+                        hdrs=cast(Any, {}),
+                        fp=io.BytesIO(err_json),
+                    )
+
+                class MockResponse:
+                    def read(self, _size: int) -> bytes:
+                        return json.dumps({"choices": [{"message": {"content": json.dumps(valid_plan)}}]}).encode(
+                            "utf-8"
+                        )
+
+                    def __enter__(self) -> Any:
+                        return self
+
+                    def __exit__(self, *_args: Any) -> None:
+                        pass
+
+                return MockResponse()
+
+        opener = FakeOpener()
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "custom-standard-model"),
+            opener=opener,
+        )
+        plan = planner.plan("fallback test", 1, 1, 100, 100)
+        self.assertEqual(opener.count, 2)
+        self.assertIn("temperature", attempts[0])
+        self.assertNotIn("temperature", attempts[1])
+        self.assertEqual(plan.prompt, "fallback test")
+
+    def test_thinking_tokens_various_tags(self) -> None:
+        # 1. <reasoning>...</reasoning>
+        raw1 = (
+            "<reasoning>Thinking deeply about strokes...</reasoning>\n```json\n"
+            + json.dumps(
+                {
+                    "schema_version": 1,
+                    "prompt": "tag test 1",
+                    "strokes": [
+                        {
+                            "id": "s1",
+                            "points": [
+                                {"x": 0, "y": 0, "pressure": 0.5, "time_ms": 0},
+                                {"x": 10, "y": 10, "pressure": 0.5, "time_ms": 10},
+                            ],
+                        }
+                    ],
+                }
+            )
+            + "\n```"
+        )
+        plan1 = DrawingPlan.from_dict(_extract_json_object(raw1))
+        self.assertEqual(plan1.prompt, "tag test 1")
+
+        # 2. [THOUGHT]...[/THOUGHT]
+        raw2 = '[THOUGHT]Calculating anatomy curves...[/THOUGHT]{"schema_version": 1, "prompt": "tag test 2", "strokes": [{"id": "s1", "points": [{"x": 0, "y": 0, "pressure": 0.5, "time_ms": 0}, {"x": 10, "y": 10, "pressure": 0.5, "time_ms": 10}]}]}'
+        plan2 = DrawingPlan.from_dict(_extract_json_object(raw2))
+        self.assertEqual(plan2.prompt, "tag test 2")
+
+        # 3. |begin_of_thought|...|end_of_thought|
+        raw3 = '|begin_of_thought|Refining strokes...|end_of_thought|```json\n{"schema_version": 1, "prompt": "tag test 3", "strokes": [{"id": "s1", "points": [{"x": 0, "y": 0, "pressure": 0.5, "time_ms": 0}, {"x": 10, "y": 10, "pressure": 0.5, "time_ms": 10}]}]}\n```'
+        plan3 = DrawingPlan.from_dict(_extract_json_object(raw3))
+        self.assertEqual(plan3.prompt, "tag test 3")
+
+        # 4. 【思考】...【/思考】
+        raw4 = '【思考】レイヤー構成を考案中...【/思考】{"schema_version": 1, "prompt": "tag test 4", "strokes": [{"id": "s1", "points": [{"x": 0, "y": 0, "pressure": 0.5, "time_ms": 0}, {"x": 10, "y": 10, "pressure": 0.5, "time_ms": 10}]}]}'
+        plan4 = DrawingPlan.from_dict(_extract_json_object(raw4))
+        self.assertEqual(plan4.prompt, "tag test 4")
+
+    def test_gemini_thinking_parts_extraction(self) -> None:
+        valid_plan = {
+            "schema_version": 1,
+            "prompt": "gemini thinking test",
+            "strokes": [
+                {
+                    "id": "s1",
+                    "points": [
+                        {"x": 5, "y": 5, "pressure": 0.5, "time_ms": 0},
+                        {"x": 15, "y": 15, "pressure": 0.8, "time_ms": 10},
+                    ],
+                }
+            ],
+        }
+        resp = {
+            "candidates": [
+                {
+                    "content": {
+                        "parts": [
+                            {"thought": True, "text": "Let's first analyze the prompt and sketch lines."},
+                            {"text": "```json\n" + json.dumps(valid_plan) + "\n```"},
+                        ]
+                    }
+                }
+            ]
+        }
+        plan = _plan_from_response(resp)
+        self.assertEqual(plan.prompt, "gemini thinking test")
+        self.assertEqual(len(plan.strokes), 1)
+
+    def test_anthropic_extended_thinking_extraction(self) -> None:
+        valid_plan = {
+            "schema_version": 1,
+            "prompt": "claude thinking test",
+            "strokes": [
+                {
+                    "id": "s1",
+                    "points": [
+                        {"x": 5, "y": 5, "pressure": 0.5, "time_ms": 0},
+                        {"x": 15, "y": 15, "pressure": 0.8, "time_ms": 10},
+                    ],
+                }
+            ],
+        }
+        resp = {
+            "content": [
+                {"type": "thinking", "thinking": "Let me plan out the stroke coordinates and layer hierarchy..."},
+                {"type": "text", "text": "```json\n" + json.dumps(valid_plan) + "\n```"},
+            ]
+        }
+        plan = _plan_from_response(resp)
+        self.assertEqual(plan.prompt, "claude thinking test")
+        self.assertEqual(len(plan.strokes), 1)
+
+    def test_sanitize_json_comments_and_trailing_commas(self) -> None:
+        messy_json = """
+        // Master drawing plan
+        {
+            'schema_version': 1, /* Version info */
+            'prompt': 'messy json test',
+            'strokes': [
+                {
+                    'id': 'stroke_1',
+                    'points': [
+                        {'x': 10, 'y': 20, 'pressure': 0.5, 'time_ms': 0},
+                        {'x': 30, 'y': 40, 'pressure': 0.8, 'time_ms': 10}, // First line
+                    ],
+                },
+            ],
+        }
+        """
+        parsed = _extract_json_object(messy_json)
+        plan = DrawingPlan.from_dict(parsed)
+        self.assertEqual(plan.prompt, "messy json test")
+        self.assertEqual(len(plan.strokes), 1)
+        self.assertEqual(plan.strokes[0].id, "stroke_1")
+
+    def test_truncated_stroke_rescue_on_length_limit(self) -> None:
+        # トークン上限で2本目の途中で切れたレスポンス
+        truncated_resp = {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {
+                        "content": (
+                            '{"schema_version": 1, "prompt": "truncated test", "strokes": ['
+                            '{"id": "s1", "points": [{"x": 10, "y": 10, "pressure": 0.5, "time_ms": 0}, {"x": 20, "y": 20, "pressure": 0.8, "time_ms": 10}]}, '
+                            '{"id": "s2", "points": [{"x": 30, "y": 30, "pressure": 0.5, "time_ms": 0}, {"x": 40'
+                        )
+                    },
+                }
+            ]
+        }
+        plan = _plan_from_response(truncated_resp)
+        self.assertEqual(plan.prompt, "truncated test")
+        # 救出されたストロークが存在し、先頭ストロークが s1 であること
+        self.assertGreaterEqual(len(plan.strokes), 1)
+        self.assertEqual(plan.strokes[0].id, "s1")
+
+    def test_detect_image_mime_type_and_multimodal_request_mime(self) -> None:
+        self.assertEqual(_detect_image_mime_type(b"\x89PNG\r\n\x1a\n\x00\x00"), "image/png")
+        self.assertEqual(_detect_image_mime_type(b"\xff\xd8\xff\xe0\x00\x10JFIF"), "image/jpeg")
+        self.assertEqual(_detect_image_mime_type(b"RIFF\x00\x00\x00\x00WEBPVP8 "), "image/webp")
+        self.assertEqual(_detect_image_mime_type(b"GIF89a\x01\x00\x01\x00"), "image/gif")
+        self.assertEqual(_detect_image_mime_type(b"BM\x00\x00\x00\x00"), "image/bmp")
+        self.assertEqual(_detect_image_mime_type(b"unknown bytes"), "image/png")
+
+        captured_requests: list[dict[str, Any]] = []
+
+        class FakeOpener:
+            def __call__(self, request: Any, timeout: float = 10.0) -> Any:
+                captured_requests.append(json.loads(request.data.decode("utf-8")))
+
+                class MockResponse:
+                    def read(self, _size: int) -> bytes:
+                        valid_plan = {
+                            "schema_version": 1,
+                            "prompt": "jpeg test",
+                            "strokes": [
+                                {
+                                    "id": "s1",
+                                    "points": [
+                                        {"x": 10, "y": 10, "pressure": 0.5, "time_ms": 0},
+                                        {"x": 20, "y": 20, "pressure": 0.5, "time_ms": 10},
+                                    ],
+                                }
+                            ],
+                        }
+                        return json.dumps({"choices": [{"message": {"content": json.dumps(valid_plan)}}]}).encode(
+                            "utf-8"
+                        )
+
+                    def __enter__(self) -> Any:
+                        return self
+
+                    def __exit__(self, *_args: Any) -> None:
+                        pass
+
+                return MockResponse()
+
+        jpeg_dummy = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xff\xdb"
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "gpt-4o"),
+            opener=FakeOpener(),
+        )
+        plan = planner.plan("jpeg test", 1, 1, 100, 100, image_data=jpeg_dummy)
+        self.assertEqual(len(captured_requests), 1)
+        user_msg = captured_requests[0]["messages"][1]["content"]
+        self.assertIsInstance(user_msg, list)
+        img_part = next(p for p in user_msg if p.get("type") == "image_url")
+        self.assertTrue(img_part["image_url"]["url"].startswith("data:image/jpeg;base64,"))
+        self.assertEqual(plan.prompt, "jpeg test")
+
 
 class CanvasAdapterTests(unittest.TestCase):
     def test_existing_target_layer_is_reused_and_pressure_is_unit_range(self) -> None:
@@ -695,12 +1014,13 @@ class CanvasAdapterTests(unittest.TestCase):
         document = _FakeDocument(root=root)
         adapter = KritaCanvasAdapter()
 
-        adapter.ensure_layer(document, "Lineart")
         adapter.ensure_layer(document, "Draft")
+        adapter.ensure_layer(document, "Lineart")
+        adapter.ensure_layer(document, "Flats")
         adapter.ensure_layer(document, "FX")
 
         children_names = [c.name() for c in root.childNodes()]
-        self.assertEqual(children_names, ["Draft", "Lineart", "FX"])
+        self.assertEqual(children_names, ["Draft", "Flats", "Lineart", "FX"])
 
     def test_cancel_before_drawing_does_not_paint(self) -> None:
         document = _FakeDocument()
@@ -1087,6 +1407,63 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertTrue(docker2.auto_refine.isChecked())
         self.assertFalse(docker2.save_svg_chk.isChecked())
         self.assertTrue(docker2.debug_mode_chk.isChecked())
+
+    def test_docker_on_plan_ready_handles_none_document_without_stalling(self) -> None:
+        class _TestWidget:
+            def __init__(self) -> None:
+                self._text = ""
+
+            def setText(self, t: str) -> None:  # noqa: N802
+                self._text = t
+
+            def isChecked(self) -> bool:  # noqa: N802
+                return False
+
+            def setRange(self, *args: Any) -> None:  # noqa: N802
+                pass
+
+            def setValue(self, *args: Any) -> None:  # noqa: N802
+                pass
+
+            def setEnabled(self, *args: Any) -> None:  # noqa: N802
+                pass
+
+            def set_plan(self, *args: Any) -> None:
+                pass
+
+            def appendPlainText(self, *args: Any) -> None:  # noqa: N802
+                pass
+
+        docker = AIStrokePainterDocker.__new__(AIStrokePainterDocker)
+        docker.preview = cast(Any, _TestWidget())
+        docker.status = cast(Any, _TestWidget())
+        docker.save_json = cast(Any, _TestWidget())
+        docker.save_svg_chk = cast(Any, _TestWidget())
+        docker.progress = cast(Any, _TestWidget())
+        docker.run_btn = cast(Any, _TestWidget())
+        docker.stop_btn = cast(Any, _TestWidget())
+        docker.debug_log_edit = cast(Any, _TestWidget())
+        docker._active_doc = None
+        docker._cancel = False
+
+        notified: list[bool] = []
+
+        class FakeWorker:
+            def __init__(self) -> None:
+                self.max_iterations = 2
+
+            def notify_render_done(self) -> None:
+                notified.append(True)
+
+            def isRunning(self) -> bool:  # noqa: N802
+                return False
+
+        docker._worker = cast(Any, FakeWorker())
+        plan = RuleBasedPlanner().plan("test", 1, 1, 100, 100)
+        docker._on_plan_ready(plan)
+
+        self.assertEqual(len(notified), 1)
+        self.assertIn("ドキュメントが閉じられたため", docker.status._text)
 
 
 def run() -> bool:

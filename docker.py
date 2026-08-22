@@ -373,6 +373,7 @@ class AIStrokePainterDocker(DockWidget):
         self.base_url = QLineEdit("https://api.openai.com/v1")
         llm_form.addRow("Base URL", self.base_url)
         self.model = QLineEdit("gpt-4o")
+        self.model.setPlaceholderText("例: gpt-4o, o3-mini, deepseek-r1, qwq-32b")
         llm_form.addRow("Model", self.model)
         self.api_key = QLineEdit()
         with contextlib.suppress(AttributeError):
@@ -387,10 +388,13 @@ class AIStrokePainterDocker(DockWidget):
         llm_form.addRow("タイムアウト", self.timeout_sec)
 
         self.max_tokens = QSpinBox()
-        self.max_tokens.setRange(512, 65536)
+        self.max_tokens.setRange(512, 131072)
         self.max_tokens.setSingleStep(1024)
         self.max_tokens.setValue(8192)
         self.max_tokens.setSuffix(" tokens")
+        self.max_tokens.setToolTip(
+            "思考モデル (o1, o3, DeepSeek R1 等) では推論トークンを多く消費するため 8192〜16384 以上を推奨します"
+        )
         llm_form.addRow("Max Tokens", self.max_tokens)
 
         test_conn_btn = QPushButton("API 接続テスト")
@@ -710,11 +714,17 @@ class AIStrokePainterDocker(DockWidget):
         self._last_plan = plan
         self.preview.set_plan(plan)
 
-        document = self._active_doc or Krita.instance().activeDocument()
-        if document is None or self.is_cancelled():
-            return
+        document = self._active_doc or (Krita.instance().activeDocument() if Krita.instance() is not None else None)
 
         try:
+            if document is None:
+                self.status.setText("ドキュメントが閉じられたため描画を中断しました")
+                self._log_debug("[描画中断] アクティブなドキュメントがありません")
+                return
+
+            if self.is_cancelled():
+                return
+
             paths = []
             if self.save_json.isChecked():
                 saved_json_path = save_plan(plan)
@@ -739,13 +749,18 @@ class AIStrokePainterDocker(DockWidget):
             self.status.setText(f"描画エラー: {exc}")
         finally:
             # 次イテレーション用のキャンバスキャプチャをメインスレッドで安全に取得してワーカーへ渡す
-            if self._worker is not None and hasattr(self._worker, "provide_canvas_capture"):
-                if not self.is_cancelled() and self._worker.max_iterations > plan.iteration:
+            if self._worker is not None:
+                if (
+                    document is not None
+                    and not self.is_cancelled()
+                    and hasattr(self._worker, "provide_canvas_capture")
+                    and self._worker.max_iterations > plan.iteration
+                ):
                     self._log_debug("[自律改善] メインスレッドでキャンバスキャプチャを取得中...")
                     cap_img = self.canvas_port.capture_canvas(document, 512, 512)
                     self._log_debug(f"[自律改善] キャプチャ完了 ({len(cap_img)} bytes)")
                     self._worker.provide_canvas_capture(cap_img)
-                else:
+                elif hasattr(self._worker, "notify_render_done"):
                     self._worker.notify_render_done()
             if self._worker is None or not self._worker.isRunning():
                 self._reset_run_state()

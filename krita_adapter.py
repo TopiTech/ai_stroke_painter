@@ -73,17 +73,17 @@ class KritaCanvasAdapter(CanvasPort):
                 node.setOpacity(int(opacity * 255))
 
         # イラスト標準順序に基づいた適切な挿入位置の決定
+        # Krita の Node.addChildNode(child, aboveThisNode) は aboveThisNode の「上」に挿入する。
+        # そのため、target_rank 以下の最上位レイヤーを探し、その上に挿入する。
         target_rank = LAYER_STACK_ORDER.get(layer_name, 35)
-        before_node = None
+        above_node = None
         for child in root.childNodes():
             child_name = getattr(child, "name", lambda: "")()
             child_rank = LAYER_STACK_ORDER.get(child_name, 35)
-            # 自分より上位（前面）のレイヤーが見つかったら、その手前（下）に挿入
-            if child_rank > target_rank:
-                before_node = child
-                break
+            if child_rank <= target_rank:
+                above_node = child
 
-        root.addChildNode(node, before_node)
+        root.addChildNode(node, above_node)
         document.setActiveNode(node)
         return node
 
