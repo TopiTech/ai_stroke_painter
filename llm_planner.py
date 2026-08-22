@@ -78,6 +78,9 @@ def _is_reasoning_model(model_name: str) -> bool:
             "thinking",
             "reasoning",
             "reasoner",
+            "sonnet-3-7",
+            "claude-3-7",
+            "gemini-2.0-flash-thinking",
         )
     )
 
@@ -106,6 +109,7 @@ class OpenAICompatibleSettings:
     api_key: str = ""
     timeout_seconds: float = 120.0
     max_tokens: int = 8192
+    reasoning_effort: str = "low"
 
     def __post_init__(self) -> None:
         if not isinstance(self.base_url, str) or not self.base_url.strip():
@@ -124,6 +128,8 @@ class OpenAICompatibleSettings:
             raise ValueError("timeout_seconds は正の有限数値である必要があります")
         if isinstance(self.max_tokens, bool) or not isinstance(self.max_tokens, int) or self.max_tokens <= 0:
             raise ValueError("max_tokens は正の整数である必要があります")
+        if not isinstance(self.reasoning_effort, str):
+            raise ValueError("reasoning_effort は文字列である必要があります")
 
     @property
     def endpoint_url(self) -> str:
@@ -167,7 +173,7 @@ class OpenAICompatiblePlanner(PlannerPort):
         """API 接続疎通確認を行う。思考モデルのパラメータ特性にも適応。"""
         is_reasoning = _is_reasoning_model(self.settings.model)
         self._log(
-            f"API 接続テスト開始: {self.settings.endpoint_url} (Model: {self.settings.model}, 思考モデル判定: {is_reasoning})"
+            f"API 接続テスト開始: {self.settings.endpoint_url} (Model: {self.settings.model}, 思考モデル判定: {is_reasoning}, ReasoningEffort: {self.settings.reasoning_effort})"
         )
 
         payload: dict[str, Any] = {
@@ -176,6 +182,8 @@ class OpenAICompatiblePlanner(PlannerPort):
         }
         if is_reasoning:
             payload["max_completion_tokens"] = 100
+            if self.settings.reasoning_effort and self.settings.reasoning_effort.lower() not in ("none", ""):
+                payload["reasoning_effort"] = self.settings.reasoning_effort.lower()
         else:
             payload["max_tokens"] = 10
 
@@ -215,12 +223,12 @@ class OpenAICompatiblePlanner(PlannerPort):
         self._log(
             f"--- 描画計画生成開始 (Iteration {iteration}/{max_iterations}) ---\n"
             f"Prompt: {valid_prompt!r}, Seed: {valid_seed}, Count: {valid_count}, Canvas: {valid_width}x{valid_height}\n"
-            f"Endpoint: {self.settings.endpoint_url}, Model: {self.settings.model} (思考モデル最適化: {is_reasoning}), Timeout: {self.settings.timeout_seconds}s"
+            f"Endpoint: {self.settings.endpoint_url}, Model: {self.settings.model} (思考モデル最適化: {is_reasoning}, ReasoningEffort: {self.settings.reasoning_effort}), Timeout: {self.settings.timeout_seconds}s"
         )
 
         user_content_parts: list[dict[str, Any]] = []
 
-        # 構造化テキスト指示
+        # 構造化テキスト指示（思考抑制・即時JSON出力の明確なアンカーを含む）
         req_dict = {
             "prompt": valid_prompt,
             "seed": valid_seed,
@@ -229,7 +237,7 @@ class OpenAICompatiblePlanner(PlannerPort):
             "palette": palette_name,
             "iteration": iteration,
             "max_iterations": max_iterations,
-            "goal": "Generate professional-grade multi-layer illustration strokes in valid JSON format.",
+            "instruction": "Generate drawing strokes strictly in valid DrawingPlan JSON format. Do not include conversational thoughts or analysis. Output starts directly with JSON.",
         }
         req_json = json.dumps(req_dict, ensure_ascii=False)
         user_content_parts.append({"type": "text", "text": req_json})
@@ -276,6 +284,8 @@ class OpenAICompatiblePlanner(PlannerPort):
         if is_reasoning:
             # 思考モデル (o1/o3/r1 等) は max_completion_tokens を使用し、temperature は除外
             payload["max_completion_tokens"] = self.settings.max_tokens
+            if self.settings.reasoning_effort and self.settings.reasoning_effort.lower() not in ("none", ""):
+                payload["reasoning_effort"] = self.settings.reasoning_effort.lower()
         else:
             payload["max_tokens"] = self.settings.max_tokens
             payload["temperature"] = 0.7
@@ -293,13 +303,14 @@ class OpenAICompatiblePlanner(PlannerPort):
                 self._log("[自動リトライ 1/2] response_format を除外し、直接確定 JSON 出力指定で再試行します...")
                 current_payload = dict(payload)
                 current_payload.pop("response_format", None)
+                current_payload.pop("reasoning_effort", None)
                 if not is_reasoning:
-                    current_payload["temperature"] = 0.3
+                    current_payload["temperature"] = 0.2
                 current_payload["messages"] = [
                     {
                         "role": "system",
                         "content": _system_instruction(iteration, max_iterations, is_reasoning=True)
-                        + "\nIMPORTANT: Do NOT output thinking or commentary. Output ONLY the raw JSON matching DrawingPlan schema inside ```json ``` code block.",
+                        + "\nIMPORTANT: Output ONLY the raw JSON starting immediately with ```json. Do NOT write any reasoning text or preamble.",
                     },
                     {"role": "user", "content": user_content},
                 ]
@@ -307,12 +318,13 @@ class OpenAICompatiblePlanner(PlannerPort):
                 self._log("[自動リトライ 2/2] 思考抑制・最小構造モードで再試行します...")
                 current_payload = dict(payload)
                 current_payload.pop("response_format", None)
+                current_payload.pop("reasoning_effort", None)
                 if not is_reasoning:
-                    current_payload["temperature"] = 0.1
+                    current_payload["temperature"] = 0.0
                 current_payload["messages"] = [
                     {
                         "role": "system",
-                        "content": "Return ONLY valid JSON matching DrawingPlan schema. No thought process, no markdown wrapper, no extra text.",
+                        "content": 'You must output ONLY valid JSON matching DrawingPlan schema. Start output directly with {"schema_version": 1. No thoughts, no analysis.',
                     },
                     {"role": "user", "content": user_content},
                 ]
@@ -320,7 +332,14 @@ class OpenAICompatiblePlanner(PlannerPort):
             try:
                 response = self._post_with_parameter_fallback(current_payload)
                 self._log("LLM API 応答受信。思考タグ解析・JSON パース・ストローク救済を実行中...")
-                plan = _plan_from_response(response, log_func=self._log)
+                plan = _plan_from_response(
+                    response,
+                    prompt=valid_prompt,
+                    seed=valid_seed,
+                    width=valid_width,
+                    height=valid_height,
+                    log_func=self._log,
+                )
                 sanitized_plan = _validate_and_sanitize_plan(
                     plan=plan,
                     prompt=valid_prompt,
@@ -350,17 +369,36 @@ class OpenAICompatiblePlanner(PlannerPort):
                     self._log(f"警告: 試行 {attempt}/{max_attempts} でエラーが発生しました: {exc}")
                     time.sleep(0.5)
                 else:
-                    self._log(f"エラー: 全 {max_attempts} 回の試行が失敗しました。")
-                    raise last_error from exc
+                    self._log(f"エラー: 全 {max_attempts} 回の試行が失敗しました: {exc}")
 
-        if last_error is not None:
-            raise last_error
-        raise LLMPlannerError("LLM 描画計画の生成に失敗しました")
+        # 万が一 LLM からのストローク救出が全試行で失敗した場合の最終防衛線（フォールバック救済計画生成）
+        self._log(
+            "通知: LLM 思考トークン枯渇または抽出不能のため、プロシージャルエンジンによる緊急フォールバック描画計画を自動生成します。"
+        )
+        try:
+            from .procedural import generate_procedural_plan
+
+            fallback_plan = generate_procedural_plan(
+                prompt=valid_prompt,
+                seed=valid_seed,
+                count=valid_count,
+                width=valid_width,
+                height=valid_height,
+                palette_name=palette_name,
+            )
+            self._log(
+                f"緊急救済成功: プロシージャル描画計画を生成しました (ストローク数: {len(fallback_plan.strokes)})"
+            )
+            return fallback_plan
+        except Exception as fb_exc:
+            if last_error is not None:
+                raise last_error from fb_exc
+            raise LLMPlannerError(f"LLM 描画計画の生成に失敗しました: {last_error or fb_exc}") from fb_exc
 
     def _post_with_parameter_fallback(self, payload: dict[str, Any]) -> Mapping[str, Any]:
-        """400/422 のパラメータ非互換エラー（temperature, max_tokens, response_format 等）を自動検知・パージして再試行する。"""
+        """400/422 のパラメータ非互換エラー（temperature, max_tokens, response_format, reasoning_effort 等）を自動検知・パージして再試行する。"""
         current_payload = dict(payload)
-        max_param_retries = 3
+        max_param_retries = 4
 
         for p_attempt in range(max_param_retries):
             try:
@@ -369,7 +407,17 @@ class OpenAICompatiblePlanner(PlannerPort):
                 err_text = str(exc).lower()
                 modified = False
 
-                # 1. temperature 非対応エラーの自動パージ
+                # 1. reasoning_effort 非対応エラーの自動パージ
+                if (
+                    "reasoning_effort" in err_text
+                    and any(kw in err_text for kw in ("unsupported", "not support", "invalid", "extra_forbidden"))
+                    and "reasoning_effort" in current_payload
+                ):
+                    self._log("[パラメータ自動適応] モデルが reasoning_effort をサポートしていないため除外します")
+                    current_payload.pop("reasoning_effort", None)
+                    modified = True
+
+                # 2. temperature 非対応エラーの自動パージ
                 if (
                     "temperature" in err_text
                     and any(kw in err_text for kw in ("unsupported", "not support", "invalid", "extra_forbidden"))
@@ -379,7 +427,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                     current_payload.pop("temperature", None)
                     modified = True
 
-                # 2. max_tokens -> max_completion_tokens への自動変換
+                # 3. max_tokens -> max_completion_tokens への自動変換
                 if (
                     "max_tokens" in err_text
                     and any(kw in err_text for kw in ("max_completion_tokens", "unsupported", "not support"))
@@ -390,7 +438,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                     current_payload["max_completion_tokens"] = val
                     modified = True
 
-                # 3. max_completion_tokens -> max_tokens への逆変換 (旧型互換サーバー対応)
+                # 4. max_completion_tokens -> max_tokens への逆変換 (旧型互換サーバー対応)
                 if (
                     "max_completion_tokens" in err_text
                     and any(kw in err_text for kw in ("unsupported", "not support", "extra_forbidden"))
@@ -401,7 +449,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                     current_payload["max_tokens"] = val
                     modified = True
 
-                # 4. response_format 非対応エラーの自動パージ
+                # 5. response_format 非対応エラーの自動パージ
                 if (
                     "response_format" in err_text
                     and any(kw in err_text for kw in ("unsupported", "not support", "invalid", "schema", "json_object"))
@@ -411,7 +459,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                     current_payload.pop("response_format", None)
                     modified = True
 
-                # 5. system ロール非対応エラーの developer / user ロール統合
+                # 6. system ロール非対応エラーの developer / user ロール統合
                 if "system" in err_text and (
                     "role" in err_text or "developer" in err_text or "not support" in err_text
                 ):
@@ -490,6 +538,48 @@ class OpenAICompatiblePlanner(PlannerPort):
         if not isinstance(decoded, Mapping):
             raise LLMPlannerError("LLM API の応答は JSON オブジェクトである必要があります")
 
+        # デバッグモード用: レスポンス詳細メタデータおよびコンテンツのログ出力
+        resp_model = decoded.get("model", self.settings.model)
+        usage = decoded.get("usage")
+        if isinstance(usage, Mapping):
+            p_tok = usage.get("prompt_tokens", "?")
+            c_tok = usage.get("completion_tokens", "?")
+            t_tok = usage.get("total_tokens", "?")
+            details = usage.get("completion_tokens_details") or {}
+            reasoning_tok = details.get("reasoning_tokens") if isinstance(details, Mapping) else None
+            reasoning_info = f", 思考推論: {reasoning_tok}" if reasoning_tok is not None else ""
+            self._log(
+                f"[トークン消費] Prompt: {p_tok}, Completion: {c_tok}{reasoning_info}, Total: {t_tok} (Model: {resp_model})"
+            )
+
+        # choices 内部の詳細ログ
+        choices = decoded.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], Mapping):
+            c0 = choices[0]
+            f_reason = c0.get("finish_reason", "unknown")
+            self._log(f"[LLM 応答状態] finish_reason: {f_reason}")
+            msg = c0.get("message", {})
+            if isinstance(msg, Mapping):
+                # 思考プロセスのログ
+                reasoning = msg.get("reasoning_content") or msg.get("reasoning") or msg.get("thought")
+                if isinstance(reasoning, str) and reasoning.strip():
+                    r_preview = reasoning.strip()[:300].replace("\n", " ") + ("..." if len(reasoning) > 300 else "")
+                    self._log(f"[思考プロセス (reasoning)] {len(reasoning)} 文字: {r_preview}")
+
+                # 本文 content のプレビュー
+                content_val = msg.get("content")
+                if isinstance(content_val, str) and content_val.strip():
+                    c_lines = content_val.strip().splitlines()
+                    head_lines = "\n".join(c_lines[:6])
+                    tail_preview = (
+                        ("\n... [中略 " + str(len(c_lines) - 10) + " 行] ...\n" + "\n".join(c_lines[-4:]))
+                        if len(c_lines) > 10
+                        else ""
+                    )
+                    self._log(
+                        f"[LLM 応答本文プレビュー ({len(content_val)} 文字, {len(c_lines)} 行)]:\n{head_lines}{tail_preview}"
+                    )
+
         return decoded
 
 
@@ -500,12 +590,12 @@ def _system_instruction(iteration: int = 1, max_iterations: int = 1, is_reasonin
         else "Phase: Refined clean lineart, flat colors, shading hatchings, and specular highlights."
     )
     reasoning_guide = (
-        "Think briefly about stroke layout and palette, then output the final JSON immediately. Do not generate overly verbose thought text."
+        "Output ONLY the JSON object. Do not output any conversational thoughts, explanations, reasoning steps, or analysis."
         if is_reasoning
-        else ""
+        else "Do not output conversational commentary."
     )
     return (
-        "You are an expert master artist and drawing-plan director. Return exactly one valid JSON object (no extra commentary). "
+        "You are an expert digital artist and vector drawing-plan director. Return exactly one valid JSON object. "
         f"{phase_guide} {reasoning_guide} "
         "The schema must strictly be:\n"
         "{\n"
@@ -520,7 +610,7 @@ def _system_instruction(iteration: int = 1, max_iterations: int = 1, is_reasonin
         '      "id": string,\n'
         '      "brush_preset": "Basic-5 Size",\n'
         '      "color": "#RRGGBB",\n'
-        '      "size_px": number (e.g. 2.0 to 15.0),\n'
+        '      "size_px": number (2.0 to 15.0),\n'
         '      "layer_name": string,\n'
         '      "opacity": number (0.1 to 1.0),\n'
         '      "points": [\n'
@@ -530,12 +620,13 @@ def _system_instruction(iteration: int = 1, max_iterations: int = 1, is_reasonin
         "    }\n"
         "  ]\n"
         "}\n"
-        "Requirements:\n"
-        "1. Layer names must be logical: 'Draft', 'Lineart', 'Flats', 'Shading', 'Highlights', or 'FX'.\n"
-        "2. Colors must be hex #RRGGBB or #RGB.\n"
-        "3. Coordinates x, y must be within canvas dimensions.\n"
-        "4. Pressure must be dynamic (0.05 to 1.0) simulating natural pen pressure.\n"
-        "5. Each stroke must contain at least 2 points forming a smooth continuous curve."
+        "Rules:\n"
+        "1. Layer names: 'Draft', 'Lineart', 'Flats', 'Shading', 'Highlights', 'FX'.\n"
+        "2. Colors: Hex #RRGGBB.\n"
+        "3. Coordinates x, y: Canvas dimensions.\n"
+        "4. Pressure: 0.05 to 1.0.\n"
+        "5. Efficiency: Keep 2 to 8 key curve points per stroke. Engine interpolates smoothly.\n"
+        "6. First character of output must be '{' or '```json'."
     )
 
 
@@ -570,6 +661,71 @@ def _clean_thinking_tokens(text: str) -> str:
     return cleaned.strip()
 
 
+# タグなしプレーンテキスト思考の冒頭パターン（CoT: "The user wants...", "Let me plan...", "Thinking process:" 等）
+_PLAIN_THINKING_PATTERNS = [
+    re.compile(
+        r"^(?:The user wants|I need to|Let me plan|Let's create|Thinking Process|Plan:|Step 1:|To draw|In this drawing)[\s\S]*?(?=(?:```|\{\s*\"(?:schema_version|prompt|seed|title|iteration|layers|strokes)\"))",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^[\s\S]*?(?=(?:```json\s*\{|```\s*\{|\{\s*\"(?:schema_version|prompt|strokes)\"))",
+        re.IGNORECASE,
+    ),
+]
+
+
+def _strip_plain_text_thinking(text: str) -> str:
+    """タグのない自然言語の思考プロセス（Chain of Thought）を検知し、JSON 本文の手前をパージする。"""
+    s = text.strip()
+    if not s:
+        return ""
+
+    # すでに JSON またはコードブロックで始まっている場合はそのまま
+    if s.startswith("{") or s.startswith("```"):
+        return s
+
+    # 1. 明示的なコードブロックまたは主要 JSON キーの開始位置を探す
+    for pat in _PLAIN_THINKING_PATTERNS:
+        m = pat.search(s)
+        if m and m.end() < len(s):
+            trimmed = s[m.end() :].strip()
+            if trimmed.startswith("```") or trimmed.startswith("{"):
+                return trimmed
+
+    # 2. 最も妥当な JSON 開始アンカーの探索
+    best_idx = _find_best_json_start(s)
+    if best_idx >= 0:
+        return s[best_idx:].strip()
+
+    return s
+
+
+def _find_best_json_start(text: str) -> int:
+    """思考文のゴミに含まれる `{` を避け、DrawingPlan または Stroke JSON の最も確からしい開始位置を特定する。"""
+    if not text:
+        return -1
+
+    # 優先順位 1: コードブロック直後の `{`
+    fence_m = re.search(r"```(?:json)?\s*(\{)", text, flags=re.IGNORECASE)
+    if fence_m:
+        return fence_m.start(1)
+
+    # 優先順位 2: DrawingPlan 主要キーを含む `{`
+    plan_key_m = re.search(
+        r"\{\s*\"(?:schema_version|prompt|seed|title|iteration|layers|strokes)\"", text, flags=re.IGNORECASE
+    )
+    if plan_key_m:
+        return plan_key_m.start()
+
+    # 優先順位 3: ストローク要素のキーを含む `{`
+    stroke_key_m = re.search(r"\{\s*\"(?:id|points|brush_preset|layer_name)\"", text, flags=re.IGNORECASE)
+    if stroke_key_m:
+        return stroke_key_m.start()
+
+    # 優先順位 4: 単純な最初の `{`
+    return text.find("{")
+
+
 def _sanitize_json_text(text: str) -> str:
     """LLM 特有の構文乱れ（コメント、末尾カンマ、シングルクォート、Python 定数）をサニタイズする。"""
     if not text:
@@ -600,7 +756,6 @@ def _sanitize_json_text(text: str) -> str:
     s = re.sub(r"(?<!\\)'([^'\\]*(?:\\.[^'\\]*)*)'", _replace_sq, s)
 
     # 5. オブジェクト・配列末尾のカンマ（Trailing commas）の除去
-    # 例: {"a": 1,} -> {"a": 1}, [1, 2,] -> [1, 2]
     s = re.sub(r",\s*([}\]])", r"\1", s)
 
     return s.strip()
@@ -747,7 +902,6 @@ def _extract_content_from_response(
     # 3. 候補テキストの収集
     candidates = _collect_candidate_texts_from_response(response, log_func=log_func)
     if candidates:
-        # 最初に見つかった有力候補を返す
         return candidates[0][1]
 
     # 空の choices チェック
@@ -772,7 +926,14 @@ def _extract_best_content_or_plan(
     return _extract_content_from_response(response, log_func=log_func)
 
 
-def _plan_from_response(response: Mapping[str, Any], log_func: Callable[[str], None] | None = None) -> DrawingPlan:
+def _plan_from_response(
+    response: Mapping[str, Any],
+    prompt: str = "",
+    seed: int = 0,
+    width: float = 1000.0,
+    height: float = 1000.0,
+    log_func: Callable[[str], None] | None = None,
+) -> DrawingPlan:
     """思考モデルを含む多様なレスポンスから、最も妥当な DrawingPlan を多段探索・救出して生成する。"""
     # 1. API エラー確認
     if "error" in response:
@@ -783,7 +944,7 @@ def _plan_from_response(response: Mapping[str, Any], log_func: Callable[[str], N
         raise LLMPlannerError(f"LLM API エラー: {err}")
 
     # 2. 直接 DrawingPlan 辞書の場合
-    if "strokes" in response and isinstance(response["strokes"], list):
+    if "strokes" in response and isinstance(response["strokes"], list) and len(response["strokes"]) > 0:
         try:
             return DrawingPlan.from_dict(response)
         except Exception as exc:
@@ -793,7 +954,6 @@ def _plan_from_response(response: Mapping[str, Any], log_func: Callable[[str], N
     # 3. レスポンス内の全テキスト候補（content, reasoning_content, parts, thinking等）を順次精査
     candidates = _collect_candidate_texts_from_response(response, log_func=log_func)
     if not candidates:
-        # 空の choices チェック
         choices = response.get("choices")
         if choices is not None and isinstance(choices, list) and len(choices) == 0:
             raise LLMPlannerError("LLM API 応答の choices 配列が空です")
@@ -814,7 +974,22 @@ def _plan_from_response(response: Mapping[str, Any], log_func: Callable[[str], N
             last_error = exc
             continue
 
-    # どの候補からも完全な DrawingPlan が得られなかった場合、最初の候補からエラー発生
+    # 4. 断片ストローク・ハーベスターによる救出（全候補テキストからストロークを探索）
+    for source_name, text in candidates:
+        if not text.strip():
+            continue
+        harvested = _harvest_stroke_fragments(text, log_func=log_func)
+        if harvested is not None and "strokes" in harvested and len(harvested["strokes"]) > 0:
+            if log_func is not None:
+                log_func(
+                    f"通知: ソース [{source_name}] から {len(harvested['strokes'])} 本のストローク断片を直接救出・合成しました"
+                )
+            try:
+                return DrawingPlan.from_dict(harvested)
+            except Exception as exc:
+                last_error = exc
+
+    # どの候補からも完全な DrawingPlan が得られなかった場合
     first_text = candidates[0][1]
     if log_func is not None:
         log_preview = first_text[:200] + ("..." if len(first_text) > 200 else "")
@@ -828,16 +1003,27 @@ def _plan_from_response(response: Mapping[str, Any], log_func: Callable[[str], N
 
 
 def _extract_json_object(content: str, log_func: Callable[[str], None] | None = None) -> Mapping[str, Any]:
-    """思考タグ除去・JSONサニタイズ・コードブロック抽出・スタック解析修復を駆使して JSON を抽出する。"""
-    cleaned = _clean_thinking_tokens(content.strip())
-    sanitized_cleaned = _sanitize_json_text(cleaned)
-    sanitized_content = _sanitize_json_text(content)
+    """プレーンテキスト思考除去・タグ除去・未完コードブロック救出・構文修復・断片救出を駆使して JSON を抽出する。"""
+    # 1. 思考タグおよびプレーンテキスト思考の除去
+    cleaned_tags = _clean_thinking_tokens(content.strip())
+    stripped_thinking = _strip_plain_text_thinking(cleaned_tags)
+    sanitized_stripped = _sanitize_json_text(stripped_thinking)
+    sanitized_cleaned = _sanitize_json_text(cleaned_tags)
+    sanitized_raw = _sanitize_json_text(content)
 
-    # 1. コードブロック ```json ... ``` の抽出 (サニタイズ後およびサニタイズ前テキスト)
-    for text_source in (sanitized_cleaned, cleaned, sanitized_content, content):
+    text_sources = [
+        sanitized_stripped,
+        stripped_thinking,
+        sanitized_cleaned,
+        cleaned_tags,
+        sanitized_raw,
+        content,
+    ]
+
+    # 2. 完全なコードブロック ```json ... ``` の抽出
+    for text_source in text_sources:
         if not text_source.strip():
             continue
-        # 複数コードブロックが存在する場合、後ろから（最新の出力ブロック）または strokes を含むものを探す
         fence_matches = list(re.finditer(r"```(?:json)?\s*([\s\S]*?)\s*```", text_source, flags=re.IGNORECASE))
         for match in reversed(fence_matches):
             candidate = _sanitize_json_text(match.group(1).strip())
@@ -852,8 +1038,21 @@ def _extract_json_object(content: str, log_func: Callable[[str], None] | None = 
                         log_func("通知: コードブロック内の途切れた JSON を自動修復しました")
                     return repaired
 
-    # 2. raw_decode (思考タグ除去後)
-    for target in (sanitized_cleaned, cleaned):
+    # 3. 閉じられていない未完コードブロック (Unclosed Fences) の抽出
+    for text_source in text_sources:
+        if not text_source.strip():
+            continue
+        unclosed_m = re.search(r"```(?:json)?\s*(\{[\s\S]*)$", text_source, flags=re.IGNORECASE)
+        if unclosed_m:
+            candidate = _sanitize_json_text(unclosed_m.group(1).strip())
+            repaired = _attempt_json_repair(candidate)
+            if repaired is not None and isinstance(repaired, Mapping) and "strokes" in repaired:
+                if log_func is not None:
+                    log_func("通知: 閉じられていないコードブロックから途切れ JSON を自動修復しました")
+                return repaired
+
+    # 4. raw_decode (最適開始アンカーから)
+    for target in (sanitized_stripped, stripped_thinking, sanitized_cleaned, cleaned_tags):
         if not target.strip():
             continue
         try:
@@ -863,31 +1062,18 @@ def _extract_json_object(content: str, log_func: Callable[[str], None] | None = 
         except json.JSONDecodeError:
             pass
 
-        start = target.find("{")
-        if start >= 0:
+        start_idx = _find_best_json_start(target)
+        if start_idx >= 0:
             try:
-                value, _ = json.JSONDecoder().raw_decode(target[start:])
+                value, _ = json.JSONDecoder().raw_decode(target[start_idx:])
                 if isinstance(value, Mapping) and ("strokes" in value or "prompt" in value):
                     return value
             except json.JSONDecodeError:
                 pass
 
-    # 3. 思考タグ内を含めた全体テキストからのフォールバック探索 (思考内に JSON を出力するモデル対策)
-    for target in (sanitized_content, content):
-        start = target.find("{")
-        if start >= 0:
-            try:
-                value, _ = json.JSONDecoder().raw_decode(target[start:])
-                if isinstance(value, Mapping) and "strokes" in value:
-                    if log_func is not None:
-                        log_func("通知: 思考タグ内部から DrawingPlan JSON オブジェクトを直接救出しました")
-                    return value
-            except json.JSONDecodeError:
-                pass
-
-    # 4. 途中で途切れた JSON の高度な末尾修復 & 部分ストローク救出
-    for target in (sanitized_cleaned, cleaned, sanitized_content, content):
-        if not target:
+    # 5. 途中で途切れた JSON の高度な末尾修復 & スタック解析
+    for target in text_sources:
+        if not target.strip():
             continue
         repaired = _attempt_json_repair(target)
         if repaired is not None and isinstance(repaired, Mapping) and "strokes" in repaired:
@@ -895,7 +1081,68 @@ def _extract_json_object(content: str, log_func: Callable[[str], None] | None = 
                 log_func("警告: トークン上限等で途切れた JSON を自動修復して読み込みました")
             return repaired
 
+    # 6. 断片ストローク・ハーベスター（Stroke Fragment Harvester）による救出
+    for target in text_sources:
+        if not target.strip():
+            continue
+        harvested = _harvest_stroke_fragments(target, log_func=log_func)
+        if harvested is not None and "strokes" in harvested and len(harvested["strokes"]) > 0:
+            if log_func is not None:
+                log_func(f"通知: テキストから {len(harvested['strokes'])} 本のストローク断片を直接救出しました")
+            return harvested
+
     raise json.JSONDecodeError("DrawingPlan JSON オブジェクトを抽出できませんでした", content, 0)
+
+
+def _harvest_stroke_fragments(text: str, log_func: Callable[[str], None] | None = None) -> dict[str, Any] | None:
+    """崩壊した JSON や長文テキストから個々のストロークオブジェクトを正規表現・個別パースで救出して DrawingPlan 辞書を合成する。"""
+    if not text:
+        return None
+
+    # prompt の抽出試行
+    prompt_m = re.search(r'"prompt"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"', text)
+    found_prompt = prompt_m.group(1) if prompt_m else "ai illustration"
+
+    # seed の抽出試行
+    seed_m = re.search(r'"seed"\s*:\s*(\d+)', text)
+    found_seed = int(seed_m.group(1)) if seed_m else 42
+
+    strokes: list[dict[str, Any]] = []
+    decoder = json.JSONDecoder()
+
+    # points 配列を持つ JSON オブジェクトの開始位置を検索
+    pattern = re.compile(
+        r'\{\s*(?:"id"|"brush_preset"|"color"|"size_px"|"layer_name"|"opacity"|"points")', re.IGNORECASE
+    )
+    for m in pattern.finditer(text):
+        idx = m.start()
+        try:
+            obj, _ = decoder.raw_decode(text[idx:])
+            if (
+                isinstance(obj, Mapping)
+                and "points" in obj
+                and isinstance(obj["points"], list)
+                and len(obj["points"]) >= 2
+            ):
+                # 重複防止
+                st_id = obj.get("id") or f"stroke_{len(strokes) + 1}"
+                if not any(s.get("id") == st_id for s in strokes):
+                    strokes.append(dict(obj))
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+    if strokes:
+        return {
+            "schema_version": 1,
+            "prompt": found_prompt,
+            "seed": found_seed,
+            "title": f"Rescued AI Plan - {found_prompt[:20]}",
+            "iteration": 1,
+            "layers": ["Draft", "Lineart", "Flats", "Shading", "Highlights", "FX"],
+            "strokes": strokes,
+        }
+
+    return None
 
 
 def _sanitize_repaired_dict(val: Mapping[str, Any]) -> dict[str, Any] | None:
@@ -945,19 +1192,17 @@ def _sanitize_repaired_dict(val: Mapping[str, Any]) -> dict[str, Any] | None:
 
 
 def _attempt_json_repair(text: str) -> Mapping[str, Any] | None:
-    """トークン上限等で末尾が切れた JSON のスタック解析、未完ストローク切落し、構文修復を行う。"""
-    start = text.find("{")
+    """トークン上限等で末尾が切れた JSON の最適開始アンカー特定、未完ストローク切落し、構文修復を行う。"""
+    start = _find_best_json_start(text)
     if start < 0:
         return None
     s = _sanitize_json_text(text[start:].strip())
 
-    # 1. 未完のストロークを切り落として、完成しているストロークまでで配列を閉じる救済
-    # 例: ... {"id": "s1", "points": [...]}, {"id": "s2", "points": [{"x": 1
+    # 1. 未完のストロークを直前の完全なストローク `}` までロールバックして閉じる救済
     last_brace = s.rfind("}")
     if last_brace > 0:
         candidate_truncated = s[: last_brace + 1].strip()
-        # 末尾の不完全なカンマや配列括弧を補正
-        for suffix in ("]}", "]}]}", "}]}"):
+        for suffix in ("]}", "]}]}", "}]}", "]}", "}"):
             try:
                 val = json.loads(candidate_truncated + suffix)
                 if isinstance(val, Mapping) and "strokes" in val:

@@ -509,6 +509,67 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertEqual(len(logs), 1)
         self.assertIn("テストログメッセージ", logs[0])
 
+    def test_detailed_debug_logs_emission(self) -> None:
+        logs: list[str] = []
+        valid_plan = {
+            "schema_version": 1,
+            "prompt": "debug log test",
+            "strokes": [
+                {
+                    "id": "s1",
+                    "points": [
+                        {"x": 10, "y": 10, "pressure": 0.5, "time_ms": 0},
+                        {"x": 20, "y": 20, "pressure": 0.5, "time_ms": 10},
+                    ],
+                }
+            ],
+        }
+
+        mock_resp = {
+            "model": "deepseek-r1",
+            "usage": {
+                "prompt_tokens": 150,
+                "completion_tokens": 800,
+                "total_tokens": 950,
+                "completion_tokens_details": {"reasoning_tokens": 600},
+            },
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {
+                        "role": "assistant",
+                        "reasoning_content": "Deep thought about drawing curves...",
+                        "content": "```json\n" + json.dumps(valid_plan) + "\n```",
+                    },
+                }
+            ],
+        }
+
+        class MockResponse:
+            def read(self, _size: int) -> bytes:
+                return json.dumps(mock_resp).encode("utf-8")
+
+            def __enter__(self) -> Any:
+                return self
+
+            def __exit__(self, *_args: Any) -> None:
+                pass
+
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "deepseek-r1"),
+            opener=lambda *_args, **_kwargs: MockResponse(),
+            log_callback=lambda msg: logs.append(msg),
+        )
+        planner.plan("debug log test", 1, 1, 100, 100)
+
+        # 詳細ログが記録されていることを確認
+        self.assertTrue(any("[トークン消費]" in log for log in logs))
+        self.assertTrue(any("Prompt: 150" in log for log in logs))
+        self.assertTrue(any("思考推論: 600" in log for log in logs))
+        self.assertTrue(any("[LLM 応答状態] finish_reason: stop" in log for log in logs))
+        self.assertTrue(any("[思考プロセス (reasoning)]" in log for log in logs))
+        self.assertTrue(any("[LLM 応答本文プレビュー" in log for log in logs))
+
     def test_extract_content_various_api_formats(self) -> None:
         # 1. Standard OpenAI message.content
         resp_openai = {"choices": [{"message": {"role": "assistant", "content": "hello openai"}}]}
@@ -938,6 +999,162 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertGreaterEqual(len(plan.strokes), 1)
         self.assertEqual(plan.strokes[0].id, "s1")
 
+    def test_plain_text_thinking_with_unclosed_fence_rescue(self) -> None:
+        # ユーザーログと同一パターン: タグなし自然言語思考 + 未閉鎖 ```json コードブロック + finish_reason: length
+        user_log_scenario = {
+            "choices": [
+                {
+                    "finish_reason": "length",
+                    "message": {
+                        "content": (
+                            "The user wants me to generate a JSON object with drawing strokes for an anime girl portrait. "
+                            "The canvas is 2480x3508 pixels (A4 at 300 DPI roughly). I need to create 40 strokes across layers: Draft, Lineart, Flats, Shading. "
+                            "Let me plan the composition:\n"
+                            "- First, rough head contour and eye guides in Draft layer.\n"
+                            "- Second, delicate anime eye lines and flowing hair in Lineart layer.\n\n"
+                            "```json\n"
+                            "{\n"
+                            '  "schema_version": 1,\n'
+                            '  "prompt": "anime girl portrait",\n'
+                            '  "seed": 42,\n'
+                            '  "layers": ["Draft", "Lineart", "Flats", "Shading"],\n'
+                            '  "strokes": [\n'
+                            '    {"id": "s1", "brush_preset": "Basic-5 Size", "color": "#112233", "layer_name": "Lineart", "points": [{"x": 100, "y": 150, "pressure": 0.5, "time_ms": 0}, {"x": 120, "y": 180, "pressure": 0.8, "time_ms": 20}]},\n'
+                            '    {"id": "s2", "brush_preset": "Basic-5 Size", "color": "#112233", "layer_name": "Lineart", "points": [{"x": 200, "y": 250, "pressure": 0.6, "time_ms": 0}, {"x": 220, "y": 280, "pressure": 0.9, "time_ms": 20}]},\n'
+                            '    {"id": "s3", "brush_preset": "Basic-5 Size", "color": "#FF8899", "layer_name": "Flats", "points": [{"x": 300, "y": 350, "pressure": 0.5, "time_ms": 0}, {"x": 350'
+                        )
+                    },
+                }
+            ]
+        }
+        plan = _plan_from_response(user_log_scenario, prompt="anime girl portrait", seed=42)
+        self.assertEqual(plan.prompt, "anime girl portrait")
+        self.assertGreaterEqual(len(plan.strokes), 2)
+        self.assertEqual(plan.strokes[0].id, "s1")
+        self.assertEqual(plan.strokes[1].id, "s2")
+
+    def test_harvest_stroke_fragments_on_severely_broken_json(self) -> None:
+        # JSON全体の構文が完全に崩壊していても、テキスト中に出現するストロークがハーベスターで救出される
+        broken_text = (
+            "Thinking process: We need multiple strokes scattered across text.\n"
+            'Here is stroke 1: {"id": "harvest_1", "color": "#123456", "layer_name": "Lineart", "points": [{"x": 10, "y": 20, "pressure": 0.5, "time_ms": 0}, {"x": 30, "y": 40, "pressure": 0.8, "time_ms": 10}]}\n'
+            "Some conversational rambling here...\n"
+            'Here is stroke 2: {"id": "harvest_2", "color": "#654321", "layer_name": "Shading", "points": [{"x": 50, "y": 60, "pressure": 0.4, "time_ms": 0}, {"x": 70, "y": 80, "pressure": 0.7, "time_ms": 10}]}\n'
+            "Output cut off due to max tokens..."
+        )
+        resp = {"choices": [{"message": {"content": broken_text}}]}
+        plan = _plan_from_response(resp, prompt="broken json test")
+        self.assertGreaterEqual(len(plan.strokes), 2)
+        self.assertEqual(plan.strokes[0].id, "harvest_1")
+        self.assertEqual(plan.strokes[1].id, "harvest_2")
+
+    def test_emergency_fallback_to_procedural_when_llm_exhausted(self) -> None:
+        # LLM が思考文のみでトークン枯渇しストロークが一切出力されなかった場合の自動プロシージャル救済
+        class FakeExhaustedOpener:
+            def __call__(self, request: Any, timeout: float = 10.0) -> Any:
+                class MockResponse:
+                    def read(self, _size: int) -> bytes:
+                        # ストロークが一切含まれない思考文のみのレスポンス
+                        return json.dumps(
+                            {
+                                "choices": [
+                                    {
+                                        "finish_reason": "length",
+                                        "message": {
+                                            "content": "The user wants me to generate strokes. Let me think deeply... (no json generated)"
+                                        },
+                                    }
+                                ]
+                            }
+                        ).encode("utf-8")
+
+                    def __enter__(self) -> Any:
+                        return self
+
+                    def __exit__(self, *_args: Any) -> None:
+                        pass
+
+                return MockResponse()
+
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "thinking-model"),
+            opener=FakeExhaustedOpener(),
+        )
+        plan = planner.plan("anime girl portrait", 42, 20, 1000, 1000)
+        self.assertEqual(plan.prompt, "anime girl portrait")
+        self.assertGreaterEqual(len(plan.strokes), 1)
+
+    def test_parameter_fallback_on_400_reasoning_effort_error(self) -> None:
+        import io
+        from typing import cast
+        from urllib.error import HTTPError
+
+        attempts: list[dict[str, Any]] = []
+        valid_plan = {
+            "schema_version": 1,
+            "prompt": "reasoning_effort test",
+            "strokes": [
+                {
+                    "id": "s1",
+                    "points": [
+                        {"x": 10, "y": 10, "pressure": 0.5, "time_ms": 0},
+                        {"x": 20, "y": 20, "pressure": 0.5, "time_ms": 10},
+                    ],
+                }
+            ],
+        }
+
+        class FakeOpener:
+            def __init__(self) -> None:
+                self.count = 0
+
+            def __call__(self, request: Any, timeout: float = 10.0) -> Any:
+                self.count += 1
+                body = json.loads(request.data.decode("utf-8"))
+                attempts.append(body)
+
+                if self.count == 1:
+                    err_json = json.dumps(
+                        {
+                            "error": {
+                                "message": "Unsupported parameter: 'reasoning_effort'",
+                                "type": "invalid_request_error",
+                            }
+                        }
+                    ).encode("utf-8")
+                    raise HTTPError(
+                        url="https://example.test/v1/chat/completions",
+                        code=400,
+                        msg="Bad Request",
+                        hdrs=cast(Any, {}),
+                        fp=io.BytesIO(err_json),
+                    )
+
+                class MockResponse:
+                    def read(self, _size: int) -> bytes:
+                        return json.dumps({"choices": [{"message": {"content": json.dumps(valid_plan)}}]}).encode(
+                            "utf-8"
+                        )
+
+                    def __enter__(self) -> Any:
+                        return self
+
+                    def __exit__(self, *_args: Any) -> None:
+                        pass
+
+                return MockResponse()
+
+        opener = FakeOpener()
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "o3-mini"),
+            opener=opener,
+        )
+        plan = planner.plan("reasoning_effort test", 1, 1, 100, 100)
+        self.assertEqual(opener.count, 2)
+        self.assertIn("reasoning_effort", attempts[0])
+        self.assertNotIn("reasoning_effort", attempts[1])
+        self.assertEqual(plan.prompt, "reasoning_effort test")
+
     def test_detect_image_mime_type_and_multimodal_request_mime(self) -> None:
         self.assertEqual(_detect_image_mime_type(b"\x89PNG\r\n\x1a\n\x00\x00"), "image/png")
         self.assertEqual(_detect_image_mime_type(b"\xff\xd8\xff\xe0\x00\x10JFIF"), "image/jpeg")
@@ -1364,11 +1581,40 @@ class WorkerAndDockerTests(unittest.TestCase):
             def setChecked(self, v: bool) -> None:  # noqa: N802
                 self._v = v
 
+        class FakeComboWidget:
+            def __init__(self, items: list[tuple[str, str]], default_data: str = "low") -> None:
+                self._items = items  # (text, data)
+                self._idx = 0
+                for i, (_, data) in enumerate(items):
+                    if data == default_data:
+                        self._idx = i
+                        break
+
+            def count(self) -> int:
+                return len(self._items)
+
+            def itemData(self, index: int) -> str:  # noqa: N802
+                return self._items[index][1] if 0 <= index < len(self._items) else ""
+
+            def currentData(self) -> str:  # noqa: N802
+                return self._items[self._idx][1] if 0 <= self._idx < len(self._items) else ""
+
+            def setCurrentIndex(self, index: int) -> None:  # noqa: N802
+                self._idx = index
+
+        combo_items = [
+            ("低", "low"),
+            ("中", "medium"),
+            ("高", "high"),
+            ("オフ", "none"),
+        ]
+
         docker = AIStrokePainterDocker.__new__(AIStrokePainterDocker)
         docker.base_url = FakeTextWidget("https://custom.api/v1")
         docker.model = FakeTextWidget("custom-model-pro")
         docker.timeout_sec = FakeIntWidget(99)
         docker.max_tokens = FakeIntWidget(16384)
+        docker.reasoning_effort = FakeComboWidget(combo_items, default_data="high")
         docker.prompt = FakeTextWidget("test persistent prompt")
         docker.seed = FakeIntWidget(777)
         docker.count = FakeIntWidget(55)
@@ -1385,6 +1631,7 @@ class WorkerAndDockerTests(unittest.TestCase):
         docker2.model = FakeTextWidget()
         docker2.timeout_sec = FakeIntWidget()
         docker2.max_tokens = FakeIntWidget()
+        docker2.reasoning_effort = FakeComboWidget(combo_items, default_data="low")
         docker2.prompt = FakeTextWidget()
         docker2.seed = FakeIntWidget()
         docker2.count = FakeIntWidget()
@@ -1400,6 +1647,7 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertEqual(docker2.model.text(), "custom-model-pro")
         self.assertEqual(docker2.timeout_sec.value(), 99)
         self.assertEqual(docker2.max_tokens.value(), 16384)
+        self.assertEqual(docker2.reasoning_effort.currentData(), "high")
         self.assertEqual(docker2.prompt.toPlainText(), "test persistent prompt")
         self.assertEqual(docker2.seed.value(), 777)
         self.assertEqual(docker2.count.value(), 55)

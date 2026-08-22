@@ -397,6 +397,14 @@ class AIStrokePainterDocker(DockWidget):
         )
         llm_form.addRow("Max Tokens", self.max_tokens)
 
+        self.reasoning_effort = QComboBox()
+        self.reasoning_effort.addItem("低 (Low: 高速・思考トークン節約)", "low")
+        self.reasoning_effort.addItem("中 (Medium: バランス)", "medium")
+        self.reasoning_effort.addItem("高 (High: 熟考・複雑な構図)", "high")
+        self.reasoning_effort.addItem("オフ / 指定なし (None)", "none")
+        self.reasoning_effort.setToolTip("思考モデル（o1/o3/o4/R1等）の思考強度 (reasoning_effort) を設定します")
+        llm_form.addRow("Reasoning Effort", self.reasoning_effort)
+
         test_conn_btn = QPushButton("API 接続テスト")
         test_conn_btn.clicked.connect(self._test_api_connection)
         llm_form.addRow("", test_conn_btn)
@@ -495,6 +503,12 @@ class AIStrokePainterDocker(DockWidget):
                 self.timeout_sec.setValue(int(settings.value("timeout_sec")))
             if settings.value("max_tokens"):
                 self.max_tokens.setValue(int(settings.value("max_tokens")))
+            if settings.value("reasoning_effort"):
+                effort_val = str(settings.value("reasoning_effort"))
+                for i in range(self.reasoning_effort.count()):
+                    if self.reasoning_effort.itemData(i) == effort_val:
+                        self.reasoning_effort.setCurrentIndex(i)
+                        break
             if settings.value("prompt"):
                 self.prompt.setPlainText(str(settings.value("prompt")))
             if settings.value("seed") is not None:
@@ -522,6 +536,7 @@ class AIStrokePainterDocker(DockWidget):
             settings.setValue("model", self.model.text())
             settings.setValue("timeout_sec", self.timeout_sec.value())
             settings.setValue("max_tokens", self.max_tokens.value())
+            settings.setValue("reasoning_effort", self.reasoning_effort.currentData() or "low")
             settings.setValue("prompt", self.prompt.toPlainText())
             settings.setValue("seed", self.seed.value())
             settings.setValue("count", self.count.value())
@@ -608,6 +623,7 @@ class AIStrokePainterDocker(DockWidget):
                     api_key=self.api_key.text() or os.environ.get("OPENAI_API_KEY", ""),
                     timeout_seconds=min(15.0, float(self.timeout_sec.value())),
                     max_tokens=self.max_tokens.value(),
+                    reasoning_effort=self.reasoning_effort.currentData() or "low",
                 ),
                 log_callback=self._log_debug,
             )
@@ -634,8 +650,9 @@ class AIStrokePainterDocker(DockWidget):
             self._log_debug("[エンジン選択] プロシージャル (オフライン)")
             return self.planner
 
+        effort_val = self.reasoning_effort.currentData() or "low"
         self._log_debug(
-            f"[エンジン選択] OpenAI 互換 API (Base URL: {self.base_url.text()}, Model: {self.model.text()}, MaxTokens: {self.max_tokens.value()})"
+            f"[エンジン選択] OpenAI 互換 API (Base URL: {self.base_url.text()}, Model: {self.model.text()}, MaxTokens: {self.max_tokens.value()}, ReasoningEffort: {effort_val})"
         )
         return OpenAICompatiblePlanner(
             OpenAICompatibleSettings(
@@ -644,6 +661,7 @@ class AIStrokePainterDocker(DockWidget):
                 api_key=self.api_key.text() or os.environ.get("OPENAI_API_KEY", ""),
                 timeout_seconds=float(self.timeout_sec.value()),
                 max_tokens=self.max_tokens.value(),
+                reasoning_effort=effort_val,
             ),
             log_callback=self._log_debug,
         )
