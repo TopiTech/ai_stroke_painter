@@ -807,8 +807,7 @@ class AIStrokePainterDocker(DockWidget):
         self._reset_run_state()
 
     def _on_worker_finished(self) -> None:
-        if self._worker is None or not self._worker.isRunning():
-            self._reset_run_state()
+        self._reset_run_state()
 
     def _reset_run_state(self) -> None:
         self.progress.setRange(0, 1)

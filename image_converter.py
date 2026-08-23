@@ -67,6 +67,8 @@ class ImageStrokeConverter:
         if grid_w <= 0 or grid_h <= 0:
             return []
         scaled = qimg.scaled(grid_w, grid_h)
+        if hasattr(scaled, "convertToFormat") and hasattr(self.qimage_cls, "Format_ARGB32"):
+            scaled = scaled.convertToFormat(self.qimage_cls.Format_ARGB32)
 
         # 輝度マップとカラーマップの構築
         luminance_map: list[list[float]] = []

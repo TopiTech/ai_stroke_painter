@@ -496,6 +496,8 @@ class OpenAICompatiblePlanner(PlannerPort):
                                     new_messages.append({"role": "user", "content": combined_content})
                             else:
                                 new_messages.append(m)
+                        if not new_messages:
+                            new_messages.append({"role": "user", "content": str(sys_content)})
                         current_payload["messages"] = new_messages
                         modified = True
 
@@ -1354,7 +1356,7 @@ def _validate_and_sanitize_plan(
             px = min(max(0.0, pt.x * scale_x), max(1.0, width - 0.5))
             py = min(max(0.0, pt.y * scale_y), max(1.0, height - 0.5))
             pressure = min(max(0.05, pt.pressure), 1.0)
-            time_ms = max(last_time, pt.time_ms) if pt.time_ms > 0 else p_idx * 15
+            time_ms = max(last_time, pt.time_ms) if pt.time_ms > 0 else (0 if p_idx == 0 else last_time + 15)
             last_time = time_ms
             sanitized_pts.append(StrokePoint(x=px, y=py, pressure=pressure, time_ms=time_ms))
 

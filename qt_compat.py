@@ -110,6 +110,7 @@ if not HAS_QT:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__()
             self._visible = True
+            self._enabled = True
             self._width = 200
             self._height = 160
 
@@ -128,8 +129,11 @@ if not HAS_QT:
         def setMaximumHeight(self, h: int) -> None:
             self._height = h
 
-        def setEnabled(self, *args: Any) -> None:
-            pass
+        def setEnabled(self, enabled: bool) -> None:
+            self._enabled = bool(enabled)
+
+        def isEnabled(self) -> bool:
+            return self._enabled
 
         def setVisible(self, visible: bool) -> None:
             self._visible = visible

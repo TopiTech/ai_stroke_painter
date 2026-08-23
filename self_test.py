@@ -268,6 +268,54 @@ class PlannerAndStorageTests(unittest.TestCase):
         strokes = converter._process_qimage(FakeZeroDimImage(), 42, 10, 800, 600, random.Random(42))
         self.assertEqual(strokes, [])
 
+    def test_image_converter_converts_format_to_argb32(self) -> None:
+        converted_formats: list[Any] = []
+
+        class FakeScaledImage:
+            def width(self) -> int:
+                return 10
+
+            def height(self) -> int:
+                return 10
+
+            def convertToFormat(self, fmt: Any) -> Any:  # noqa: N802
+                converted_formats.append(fmt)
+                return self
+
+            def pixelColor(self, x: int, y: int) -> Any:  # noqa: N802
+                class FakeColor:
+                    def red(self) -> int:
+                        return 100
+
+                    def green(self) -> int:
+                        return 100
+
+                    def blue(self) -> int:
+                        return 100
+
+                return FakeColor()
+
+        class FakeImage:
+            Format_ARGB32 = 5
+
+            def width(self) -> int:
+                return 20
+
+            def height(self) -> int:
+                return 20
+
+            def loadFromData(self, data: bytes) -> bool:  # noqa: N802
+                return True
+
+            def scaled(self, w: int, h: int) -> Any:
+                return FakeScaledImage()
+
+        converter = ImageStrokeConverter()
+        converter.qimage_cls = FakeImage
+        plan = converter.convert_image_to_plan(b"fake-image-bytes", "test", 42, 5, 200, 200)
+        self.assertIn(5, converted_formats)
+        self.assertTrue(len(plan.strokes) > 0)
+
 
 class PluginBuildTests(unittest.TestCase):
     @staticmethod
@@ -1286,6 +1334,96 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertTrue(img_part["image_url"]["url"].startswith("data:image/jpeg;base64,"))
         self.assertEqual(plan.prompt, "jpeg test")
 
+    def test_sanitizes_non_monotonic_time_ms_in_llm_plan(self) -> None:
+        from .llm_planner import _validate_and_sanitize_plan
+
+        class MockPoint:
+            def __init__(self, x: float, y: float, pressure: float, time_ms: int) -> None:
+                self.x = x
+                self.y = y
+                self.pressure = pressure
+                self.time_ms = time_ms
+
+        class MockStrokeObj:
+            def __init__(self) -> None:
+                self.id = "s1"
+                self.brush_preset = "Basic-5 Size"
+                self.color = "#232323"
+                self.size_px = 5.0
+                self.layer_name = "Lineart"
+                self.opacity = 1.0
+                self.points = [
+                    MockPoint(10.0, 10.0, 0.5, 100),
+                    MockPoint(20.0, 20.0, 0.6, 0),
+                    MockPoint(30.0, 30.0, 0.7, 50),
+                ]
+
+        class MockPlanObj:
+            def __init__(self) -> None:
+                self.prompt = "test drawing"
+                self.seed = 42
+                self.title = "Test"
+                self.iteration = 1
+                self.layers = ["Lineart"]
+                self.metadata: dict[str, Any] = {}
+                self.strokes = [MockStrokeObj()]
+
+        plan = cast(DrawingPlan, MockPlanObj())
+        sanitized = _validate_and_sanitize_plan(plan, "test drawing", 42, 10, 800, 600)
+        self.assertEqual(len(sanitized.strokes), 1)
+        times = [p.time_ms for p in sanitized.strokes[0].points]
+        self.assertTrue(all(b >= a for a, b in zip(times, times[1:])))
+        self.assertEqual(times[0], 100)
+        self.assertGreaterEqual(times[1], 100)
+        self.assertGreaterEqual(times[2], times[1])
+
+    def test_system_role_error_fallback_without_user_message(self) -> None:
+        payloads_received: list[dict[str, Any]] = []
+
+        class MockOpener:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def __call__(self, req: Any, timeout: float = 30.0) -> Any:
+                from io import BytesIO
+                import urllib.error
+
+                self.calls += 1
+                data = json.loads(req.data.decode("utf-8"))
+                payloads_received.append(data)
+                if self.calls == 1:
+                    err_fp = BytesIO(b'{"error": {"message": "system role is not supported"}}')
+                    raise urllib.error.HTTPError(
+                        req.full_url, 400, "Bad Request", cast(Any, {"Content-Type": "application/json"}), err_fp
+                    )
+
+                body = json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": '{"schema_version": 1, "prompt": "p", "seed": 1, "strokes": [{"id": "s1", "points": [{"x": 0, "y": 0, "pressure": 0.5, "time_ms": 0}, {"x": 10, "y": 10, "pressure": 0.5, "time_ms": 10}]}]}'
+                                }
+                            }
+                        ]
+                    }
+                ).encode("utf-8")
+
+                class MockResponse(BytesIO):
+                    status = 200
+
+                return MockResponse(body)
+
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings(base_url="https://api.openai.com/v1", model="test-model"),
+            opener=MockOpener(),
+        )
+        res = planner._post_with_parameter_fallback({"messages": [{"role": "system", "content": "You are artist"}]})
+        self.assertIn("choices", res)
+        self.assertEqual(len(payloads_received), 2)
+        self.assertEqual(payloads_received[1]["messages"][0]["role"], "user")
+        self.assertIn("You are artist", payloads_received[1]["messages"][0]["content"])
+
 
 class CanvasAdapterTests(unittest.TestCase):
     def test_existing_target_layer_is_reused_and_pressure_is_unit_range(self) -> None:
@@ -1898,6 +2036,25 @@ class WorkerAndDockerTests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-env-fallback-key"}):
             planner = cast(Any, docker._planner())
             self.assertEqual(planner.settings.api_key, "sk-env-fallback-key")
+
+    def test_docker_on_worker_finished_always_resets_ui_state(self) -> None:
+        docker = AIStrokePainterDocker()
+
+        class FakeRunningWorker:
+            def isRunning(self) -> bool:
+                return True
+
+        docker._worker = cast(Any, FakeRunningWorker())
+        docker._active_doc = "dummy_doc"
+        docker.run_btn.setEnabled(False)
+        docker.stop_btn.setEnabled(True)
+
+        docker._on_worker_finished()
+
+        self.assertIsNone(docker._worker)
+        self.assertIsNone(docker._active_doc)
+        self.assertTrue(docker.run_btn.isEnabled())
+        self.assertFalse(docker.stop_btn.isEnabled())
 
 
 def run() -> bool:
