@@ -399,10 +399,10 @@ class AIStrokePainterDocker(DockWidget):
         self.max_tokens = QSpinBox()
         self.max_tokens.setRange(512, 131072)
         self.max_tokens.setSingleStep(1024)
-        self.max_tokens.setValue(8192)
+        self.max_tokens.setValue(16384)
         self.max_tokens.setSuffix(" tokens")
         self.max_tokens.setToolTip(
-            "思考モデル (o1, o3, DeepSeek R1 等) では推論トークンを多く消費するため 8192〜16384 以上を推奨します"
+            "思考モデル (o1, o3, DeepSeek R1, Gemini Thinking 等) では思考推論トークンと出力 JSON の両方を消費するため 16384〜32768 以上を推奨します"
         )
         llm_form.addRow("Max Tokens", self.max_tokens)
 

@@ -74,6 +74,7 @@ def _is_reasoning_model(model_name: str) -> bool:
             "o4",
             "deepseek-r1",
             "deepseek-reasoner",
+            "r1",
             "qwq",
             "thinking",
             "reasoning",
@@ -81,6 +82,7 @@ def _is_reasoning_model(model_name: str) -> bool:
             "sonnet-3-7",
             "claude-3-7",
             "gemini-2.0-flash-thinking",
+            "gemini-2.5",
         )
     )
 
@@ -176,23 +178,24 @@ class OpenAICompatiblePlanner(PlannerPort):
             f"API 接続テスト開始: {self.settings.endpoint_url} (Model: {self.settings.model}, 思考モデル判定: {is_reasoning}, ReasoningEffort: {self.settings.reasoning_effort})"
         )
 
+        test_max_tokens = max(self.settings.max_tokens, 2048)
         payload: dict[str, Any] = {
             "model": self.settings.model.strip(),
-            "messages": [{"role": "user", "content": "Ping"}],
+            "messages": [{"role": "user", "content": "Respond with 'OK'."}],
         }
         if is_reasoning:
-            payload["max_completion_tokens"] = 100
+            payload["max_completion_tokens"] = test_max_tokens
             if self.settings.reasoning_effort and self.settings.reasoning_effort.lower() not in ("none", ""):
                 payload["reasoning_effort"] = self.settings.reasoning_effort.lower()
         else:
-            payload["max_tokens"] = 10
+            payload["max_tokens"] = test_max_tokens
 
         start = time.perf_counter()
         response = self._post_with_parameter_fallback(payload)
         elapsed = time.perf_counter() - start
 
         try:
-            plan_or_content = _extract_best_content_or_plan(response, log_func=self._log)
+            plan_or_content = _extract_best_content_or_plan(response, log_func=self._log, is_drawing_plan=False)
             preview = str(plan_or_content)[:60].replace("\n", " ")
             msg = f"接続成功: モデルが正常に応答しました ({elapsed:.2f}s, 応答: {preview!r})"
             self._log(msg)
@@ -647,9 +650,9 @@ def _system_instruction(iteration: int = 1, max_iterations: int = 1, is_reasonin
         "Rules:\n"
         "1. Layer names: 'Draft', 'Lineart', 'Flats', 'Shading', 'Highlights', 'FX'.\n"
         "2. Colors: Hex #RRGGBB.\n"
-        "3. Coordinates x, y: Canvas dimensions.\n"
+        "3. Coordinates x, y: Canvas dimensions (use integers or 1-2 decimal places to conserve tokens).\n"
         "4. Pressure: 0.05 to 1.0.\n"
-        "5. Efficiency: Keep 2 to 8 key curve points per stroke. Engine interpolates smoothly.\n"
+        "5. Efficiency: Keep 2 to 6 key curve points per stroke. Engine interpolates smoothly.\n"
         "6. First character of output must be '{' or '```json'."
     )
 
@@ -786,7 +789,9 @@ def _sanitize_json_text(text: str) -> str:
 
 
 def _collect_candidate_texts_from_response(
-    response: Mapping[str, Any], log_func: Callable[[str], None] | None = None
+    response: Mapping[str, Any],
+    log_func: Callable[[str], None] | None = None,
+    is_drawing_plan: bool = False,
 ) -> list[tuple[str, str]]:
     """API レスポンスから抽出可能な全テキスト候補を (ソース名, テキスト) の優先順序付きリストとして収集する。"""
     candidates: list[tuple[str, str]] = []
@@ -796,10 +801,14 @@ def _collect_candidate_texts_from_response(
     if choices and isinstance(choices, list) and isinstance(choices[0], Mapping):
         first_choice = choices[0]
         finish_reason = first_choice.get("finish_reason")
-        if finish_reason == "length" and log_func is not None:
-            log_func(
-                "警告: LLM の最大トークン数上限に達しました (finish_reason: length)。途切れ JSON の救済を試みます。"
-            )
+        if finish_reason in ("length", "max_tokens", "MAX_TOKENS") and log_func is not None:
+            if is_drawing_plan:
+                log_func(
+                    f"警告: LLM の最大トークン数上限に達しました (finish_reason: {finish_reason})。"
+                    "設定の Max Tokens を増やすかストローク数を調整してください。途切れ JSON の救済を試みます。"
+                )
+            else:
+                log_func(f"[LLM 応答状態] finish_reason: {finish_reason}")
 
         message = first_choice.get("message")
         if isinstance(message, Mapping):
@@ -837,6 +846,16 @@ def _collect_candidate_texts_from_response(
     if isinstance(gemini_candidates, list) and gemini_candidates:
         first_cand = gemini_candidates[0]
         if isinstance(first_cand, Mapping):
+            g_finish = first_cand.get("finishReason") or first_cand.get("finish_reason")
+            if g_finish in ("MAX_TOKENS", "max_tokens", "LENGTH", "length") and log_func is not None:
+                if is_drawing_plan:
+                    log_func(
+                        f"警告: Gemini API の最大トークン数上限に達しました (finishReason: {g_finish})。"
+                        "設定の Max Tokens を増やしてください。途切れ JSON の救済を試みます。"
+                    )
+                else:
+                    log_func(f"[Gemini 応答状態] finishReason: {g_finish}")
+
             parts = first_cand.get("content", {}).get("parts", [])
             if isinstance(parts, list):
                 # 通常テキストパート
@@ -857,6 +876,16 @@ def _collect_candidate_texts_from_response(
                     candidates.append(("gemini.parts.all", all_text))
 
     # 3. Anthropic Native 形式 (content)
+    anth_stop = response.get("stop_reason")
+    if anth_stop in ("max_tokens", "length") and log_func is not None:
+        if is_drawing_plan:
+            log_func(
+                f"警告: Anthropic API の最大トークン数上限に達しました (stop_reason: {anth_stop})。"
+                "設定の Max Tokens を増やしてください。途切れ JSON の救済を試みます。"
+            )
+        else:
+            log_func(f"[Anthropic 応答状態] stop_reason: {anth_stop}")
+
     anth_content = response.get("content")
     if isinstance(anth_content, list) and anth_content:
         # text パート
@@ -900,6 +929,7 @@ def _collect_candidate_texts_from_response(
 def _extract_content_from_response(
     response: Mapping[str, Any],
     log_func: Callable[[str], None] | None = None,
+    is_drawing_plan: bool = False,
 ) -> str | Mapping[str, Any]:
     """互換性維持のためのコンテンツ抽出関数。トップレベルエラー検知および直接 JSON を検出する。"""
     # 1. API エラーオブジェクトの明示的検出
@@ -924,7 +954,7 @@ def _extract_content_from_response(
         return response
 
     # 3. 候補テキストの収集
-    candidates = _collect_candidate_texts_from_response(response, log_func=log_func)
+    candidates = _collect_candidate_texts_from_response(response, log_func=log_func, is_drawing_plan=is_drawing_plan)
     if candidates:
         return candidates[0][1]
 
@@ -945,9 +975,10 @@ def _extract_content_from_response(
 def _extract_best_content_or_plan(
     response: Mapping[str, Any],
     log_func: Callable[[str], None] | None = None,
+    is_drawing_plan: bool = False,
 ) -> str | Mapping[str, Any]:
     """接続テストおよび汎用抽出用ヘルパー。"""
-    return _extract_content_from_response(response, log_func=log_func)
+    return _extract_content_from_response(response, log_func=log_func, is_drawing_plan=is_drawing_plan)
 
 
 def _plan_from_response(
@@ -976,7 +1007,7 @@ def _plan_from_response(
                 log_func(f"通知: トップレベル辞書からの復元を試行中に警告: {exc}")
 
     # 3. レスポンス内の全テキスト候補（content, reasoning_content, parts, thinking等）を順次精査
-    candidates = _collect_candidate_texts_from_response(response, log_func=log_func)
+    candidates = _collect_candidate_texts_from_response(response, log_func=log_func, is_drawing_plan=True)
     if not candidates:
         choices = response.get("choices")
         if choices is not None and isinstance(choices, list) and len(choices) == 0:

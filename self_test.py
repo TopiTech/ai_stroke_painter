@@ -793,13 +793,131 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertTrue(_is_reasoning_model("o1-preview"))
         self.assertTrue(_is_reasoning_model("o1-mini"))
         self.assertTrue(_is_reasoning_model("o3-mini"))
+        self.assertTrue(_is_reasoning_model("o4-preview"))
         self.assertTrue(_is_reasoning_model("deepseek-r1"))
+        self.assertTrue(_is_reasoning_model("deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"))
         self.assertTrue(_is_reasoning_model("deepseek-reasoner"))
         self.assertTrue(_is_reasoning_model("qwq-32b-preview"))
         self.assertTrue(_is_reasoning_model("gemini-2.0-flash-thinking-exp-01-21"))
+        self.assertTrue(_is_reasoning_model("gemini-2.5-flash"))
+        self.assertTrue(_is_reasoning_model("claude-3-7-sonnet"))
         self.assertFalse(_is_reasoning_model("gpt-4o"))
         self.assertFalse(_is_reasoning_model("gpt-4o-mini"))
         self.assertFalse(_is_reasoning_model("claude-3-5-sonnet"))
+
+    def test_test_connection_uses_adequate_tokens_and_no_rescue_warning(self) -> None:
+        attempts: list[dict[str, Any]] = []
+        logs: list[str] = []
+
+        class FakeOpener:
+            def __call__(self, request: Any, timeout: float = 10.0) -> Any:
+                body = json.loads(request.data.decode("utf-8"))
+                attempts.append(body)
+
+                class MockResponse:
+                    def read(self, _size: int) -> bytes:
+                        return json.dumps(
+                            {"choices": [{"finish_reason": "stop", "message": {"content": "OK"}}]}
+                        ).encode("utf-8")
+
+                    def __enter__(self) -> Any:
+                        return self
+
+                    def __exit__(self, *_args: Any) -> None:
+                        pass
+
+                return MockResponse()
+
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "o3-mini", max_tokens=16384),
+            opener=FakeOpener(),
+            log_callback=lambda msg: logs.append(msg),
+        )
+        msg = planner.test_connection()
+        self.assertIn("接続成功", msg)
+        self.assertEqual(len(attempts), 1)
+        # max_tokens が 10 等に制限されず 16384 (十分なトークン数) で送信されていること
+        self.assertEqual(attempts[0]["max_completion_tokens"], 16384)
+        self.assertEqual(attempts[0]["messages"], [{"role": "user", "content": "Respond with 'OK'."}])
+        # 接続テスト時に DrawingPlan JSON 救済の警告が出ないこと
+        self.assertFalse(any("途切れ JSON の救済を試みます" in log for log in logs))
+
+    def test_finish_reason_length_warning_in_plan_vs_connection_test(self) -> None:
+        # 1. 接続テストで finish_reason: length が発生した場合でも JSON 救済警告が出ないこと
+        conn_logs: list[str] = []
+
+        class FakeConnOpener:
+            def __call__(self, request: Any, timeout: float = 10.0) -> Any:
+                class MockResponse:
+                    def read(self, _size: int) -> bytes:
+                        return json.dumps(
+                            {"choices": [{"finish_reason": "length", "message": {"content": "OK partially"}}]}
+                        ).encode("utf-8")
+
+                    def __enter__(self) -> Any:
+                        return self
+
+                    def __exit__(self, *_args: Any) -> None:
+                        pass
+
+                return MockResponse()
+
+        planner_conn = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "gpt-4o", max_tokens=2048),
+            opener=FakeConnOpener(),
+            log_callback=lambda msg: conn_logs.append(msg),
+        )
+        planner_conn.test_connection()
+        self.assertFalse(any("途切れ JSON の救済を試みます" in log for log in conn_logs))
+        self.assertTrue(any("finish_reason: length" in log for log in conn_logs))
+
+        # 2. plan() 実行時に finish_reason: length が発生した場合は Max Tokens 引き上げ推奨の救済警告が出ること
+        plan_logs: list[str] = []
+        truncated_plan = {
+            "schema_version": 1,
+            "prompt": "test",
+            "strokes": [
+                {
+                    "id": "s1",
+                    "points": [
+                        {"x": 1, "y": 2, "pressure": 0.5, "time_ms": 0},
+                        {"x": 3, "y": 4, "pressure": 0.5, "time_ms": 10},
+                    ],
+                }
+            ],
+        }
+
+        class FakePlanOpener:
+            def __call__(self, request: Any, timeout: float = 10.0) -> Any:
+                class MockResponse:
+                    def read(self, _size: int) -> bytes:
+                        return json.dumps(
+                            {
+                                "choices": [
+                                    {
+                                        "finish_reason": "length",
+                                        "message": {"content": json.dumps(truncated_plan)},
+                                    }
+                                ]
+                            }
+                        ).encode("utf-8")
+
+                    def __enter__(self) -> Any:
+                        return self
+
+                    def __exit__(self, *_args: Any) -> None:
+                        pass
+
+                return MockResponse()
+
+        planner_plan = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "gpt-4o", max_tokens=2048),
+            opener=FakePlanOpener(),
+            log_callback=lambda msg: plan_logs.append(msg),
+        )
+        planner_plan.plan("test", 1, 1, 100, 100)
+        self.assertTrue(any("途切れ JSON の救済を試みます" in log for log in plan_logs))
+        self.assertTrue(any("Max Tokens を増やす" in log for log in plan_logs))
 
     def test_reasoning_model_payload_settings(self) -> None:
         attempts: list[dict[str, Any]] = []
