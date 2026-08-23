@@ -52,6 +52,12 @@ class RuleBasedPlanner(PlannerPort):
         iteration: int = 1,
         max_iterations: int = 1,
         palette_name: str = "anime",
+        brush_profile: str = "auto",
+        edge_threshold: float = 0.18,
+        shading_density: str = "medium",
+        enable_flats: bool = True,
+        color_mode: str = "original",
+        **kwargs: Any,
     ) -> DrawingPlan:
         valid_prompt, valid_seed, valid_count, valid_width, valid_height = validate_plan_request(
             prompt, seed, count, width, height
@@ -66,6 +72,12 @@ class RuleBasedPlanner(PlannerPort):
                 count=valid_count,
                 target_width=valid_width,
                 target_height=valid_height,
+                edge_threshold=edge_threshold,
+                shading_density=shading_density,
+                enable_flats=enable_flats,
+                color_mode=color_mode,
+                palette_name=palette_name,
+                brush_profile=brush_profile,
             )
 
         # 自律反復改善（イテレーション）時のプロシージャル描画計画
@@ -76,6 +88,7 @@ class RuleBasedPlanner(PlannerPort):
             width=valid_width,
             height=valid_height,
             palette_name=palette_name,
+            brush_profile=brush_profile,
         )
 
         # イテレーション番号をセット
@@ -90,5 +103,6 @@ class RuleBasedPlanner(PlannerPort):
                 "iteration": iteration,
                 "max_iterations": max_iterations,
                 "palette": palette_name,
+                "brush_profile": brush_profile,
             },
         )

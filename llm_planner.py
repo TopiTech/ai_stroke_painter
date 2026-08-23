@@ -112,6 +112,11 @@ class OpenAICompatibleSettings:
     timeout_seconds: float = 120.0
     max_tokens: int = 8192
     reasoning_effort: str = "low"
+    temperature: float = 0.7
+    top_p: float = 1.0
+    custom_system_prompt: str = ""
+    vision_resolution: int = 512
+    max_retries: int = 3
 
     def __post_init__(self) -> None:
         if not isinstance(self.base_url, str) or not self.base_url.strip():
@@ -132,6 +137,30 @@ class OpenAICompatibleSettings:
             raise ValueError("max_tokens は正の整数である必要があります")
         if not isinstance(self.reasoning_effort, str):
             raise ValueError("reasoning_effort は文字列である必要があります")
+        if (
+            isinstance(self.temperature, bool)
+            or not isinstance(self.temperature, (int, float))
+            or not (0.0 <= self.temperature <= 2.0)
+            or not math.isfinite(self.temperature)
+        ):
+            raise ValueError("temperature は 0.0 から 2.0 の範囲である必要があります")
+        if (
+            isinstance(self.top_p, bool)
+            or not isinstance(self.top_p, (int, float))
+            or not (0.0 < self.top_p <= 1.0)
+            or not math.isfinite(self.top_p)
+        ):
+            raise ValueError("top_p は 0.0 より大きく 1.0 以下の範囲である必要があります")
+        if not isinstance(self.custom_system_prompt, str):
+            raise ValueError("custom_system_prompt は文字列である必要があります")
+        if (
+            isinstance(self.vision_resolution, bool)
+            or not isinstance(self.vision_resolution, int)
+            or self.vision_resolution < 64
+        ):
+            raise ValueError("vision_resolution は 64 以上の整数である必要があります")
+        if isinstance(self.max_retries, bool) or not isinstance(self.max_retries, int) or self.max_retries < 1:
+            raise ValueError("max_retries は 1 以上の整数である必要があります")
 
     @property
     def endpoint_url(self) -> str:
@@ -218,6 +247,7 @@ class OpenAICompatiblePlanner(PlannerPort):
         iteration: int = 1,
         max_iterations: int = 1,
         palette_name: str = "anime",
+        **kwargs: Any,
     ) -> DrawingPlan:
         valid_prompt, valid_seed, valid_count, valid_width, valid_height = validate_plan_request(
             prompt, seed, count, width, height
@@ -321,6 +351,9 @@ class OpenAICompatiblePlanner(PlannerPort):
             prompt=valid_prompt,
             palette_name=palette_name,
         )
+        if self.settings.custom_system_prompt.strip():
+            system_content += f"\n\n[USER CUSTOM INSTRUCTIONS]\n{self.settings.custom_system_prompt.strip()}"
+
         base_messages: list[dict[str, Any]] = [{"role": "system", "content": system_content}]
         if self._conversation_history and iteration > 1:
             base_messages.extend(self._conversation_history)
@@ -339,12 +372,14 @@ class OpenAICompatiblePlanner(PlannerPort):
                 payload["reasoning_effort"] = self.settings.reasoning_effort.lower()
         else:
             payload["max_tokens"] = self.settings.max_tokens
-            payload["temperature"] = 0.7
+            payload["temperature"] = float(self.settings.temperature)
+            if self.settings.top_p < 1.0:
+                payload["top_p"] = float(self.settings.top_p)
 
         self._log(f"LLM API へリクエスト送信中 ({self.settings.endpoint_url})...")
 
-        # 自動リカバリー付き計画生成ループ (最大 3 試行)
-        max_attempts = 3
+        # 自動リカバリー付き計画生成ループ (設定回数)
+        max_attempts = max(1, self.settings.max_retries)
         last_error: Exception | None = None
 
         for attempt in range(1, max_attempts + 1):

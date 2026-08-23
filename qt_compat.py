@@ -17,6 +17,11 @@ QPushButton: Any = None
 QLineEdit: Any = None
 QPlainTextEdit: Any = None
 QSpinBox: Any = None
+QDoubleSpinBox: Any = None
+QSlider: Any = None
+QScrollArea: Any = None
+QTabWidget: Any = None
+QInputDialog: Any = None
 QCheckBox: Any = None
 QComboBox: Any = None
 QProgressBar: Any = None
@@ -81,6 +86,11 @@ for binding in ("PyQt5", "PyQt6"):
         QLineEdit = getattr(_widgets, "QLineEdit", None)
         QPlainTextEdit = getattr(_widgets, "QPlainTextEdit", None)
         QSpinBox = getattr(_widgets, "QSpinBox", None)
+        QDoubleSpinBox = getattr(_widgets, "QDoubleSpinBox", None)
+        QSlider = getattr(_widgets, "QSlider", None)
+        QScrollArea = getattr(_widgets, "QScrollArea", None)
+        QTabWidget = getattr(_widgets, "QTabWidget", None)
+        QInputDialog = getattr(_widgets, "QInputDialog", None)
         QCheckBox = getattr(_widgets, "QCheckBox", None)
         QComboBox = getattr(_widgets, "QComboBox", None)
         QProgressBar = getattr(_widgets, "QProgressBar", None)
@@ -240,7 +250,84 @@ if not HAS_QT:
         def setRange(self, *args: Any) -> None:
             pass
 
+        def setSingleStep(self, *args: Any) -> None:
+            pass
+
+        def setToolTip(self, *args: Any) -> None:
+            pass
+
+    class QDoubleSpinBox(QWidget):  # type: ignore[no-redef]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__()
+            self._val = 0.0
+            self.valueChanged = _FakeSignal()
+
+        def value(self) -> float:
+            return self._val
+
+        def setValue(self, v: float) -> None:
+            self._val = float(v)
+            self.valueChanged.emit(self._val)
+
+        def setRange(self, *args: Any) -> None:
+            pass
+
+        def setSingleStep(self, *args: Any) -> None:
+            pass
+
+        def setDecimals(self, *args: Any) -> None:
+            pass
+
         def setSuffix(self, *args: Any) -> None:
+            pass
+
+        def setPrefix(self, *args: Any) -> None:
+            pass
+
+        def setToolTip(self, *args: Any) -> None:
+            pass
+
+    class QSlider(QWidget):  # type: ignore[no-redef]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__()
+            self._val = 0
+            self.valueChanged = _FakeSignal()
+
+        def value(self) -> int:
+            return self._val
+
+        def setValue(self, v: int) -> None:
+            self._val = int(v)
+            self.valueChanged.emit(self._val)
+
+        def setRange(self, *args: Any) -> None:
+            pass
+
+        def setOrientation(self, *args: Any) -> None:
+            pass
+
+        def setToolTip(self, *args: Any) -> None:
+            pass
+
+    class QScrollArea(QWidget):  # type: ignore[no-redef]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__()
+
+        def setWidget(self, *args: Any) -> None:
+            pass
+
+        def setWidgetResizable(self, *args: Any) -> None:
+            pass
+
+    class QTabWidget(QWidget):  # type: ignore[no-redef]
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__()
+            self.currentChanged = _FakeSignal()
+
+        def addTab(self, *args: Any) -> None:
+            pass
+
+        def setCurrentIndex(self, *args: Any) -> None:
             pass
 
     class QCheckBox(QWidget):  # type: ignore[no-redef]
@@ -359,6 +446,11 @@ if not HAS_QT:
         @staticmethod
         def getSaveFileName(*args: Any) -> tuple[str, str]:
             return "", ""
+
+    class QInputDialog:  # type: ignore[no-redef]
+        @staticmethod
+        def getText(*args: Any, **kwargs: Any) -> tuple[str, bool]:
+            return "", False
 
     class _FakeClipboard:
         def __init__(self) -> None:

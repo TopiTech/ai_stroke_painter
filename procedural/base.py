@@ -111,8 +111,10 @@ def create_stroke(
     width: float = 1000.0,
     height: float = 1000.0,
     stroke_id: str | None = None,
+    preferred_profile: str | None = None,
 ) -> Stroke:
     """2D座標点列から筆圧付き Stroke を構築する。"""
+    actual_profile = preferred_profile if (preferred_profile and preferred_profile != "auto") else profile_type
     if len(points_2d) < 2:
         if len(points_2d) == 1:
             p_single = points_2d[0]
@@ -124,7 +126,7 @@ def create_stroke(
     n = len(points_2d) - 1
     for i, (px, py) in enumerate(points_2d):
         t = i / max(1, n)
-        press = pressure_profile(t, profile_type, base_pressure, rng)
+        press = pressure_profile(t, actual_profile, base_pressure, rng)
         bounded_x = max(0.0, min(width - 1.0, px))
         bounded_y = max(0.0, min(height - 1.0, py))
         pts.append(StrokePoint(bounded_x, bounded_y, press, i * 10))
@@ -204,8 +206,84 @@ def color_palette(name: str) -> dict[str, str]:
             "cloth_shadow": "#8c4a16",
             "fx": "#e76f51",
         },
+        "pastel": {
+            "draft": "#b3cde0",
+            "lineart": "#4a4e69",
+            "skin_base": "#fff0f3",
+            "skin_shadow": "#ffccd5",
+            "hair_main": "#c8b6ff",
+            "hair_shadow": "#9d8df1",
+            "hair_highlight": "#ffffff",
+            "eye_dark": "#3d348b",
+            "eye_light": "#72efdd",
+            "highlight": "#ffffff",
+            "cloth_main": "#b8f2e6",
+            "cloth_shadow": "#90e0ef",
+            "fx": "#ffd166",
+        },
+        "watercolor": {
+            "draft": "#90a4ae",
+            "lineart": "#2c3e50",
+            "skin_base": "#fdf2e9",
+            "skin_shadow": "#f5cba7",
+            "hair_main": "#5dade2",
+            "hair_shadow": "#2e86c1",
+            "hair_highlight": "#ebf5fb",
+            "eye_dark": "#1b4f72",
+            "eye_light": "#48c9b0",
+            "highlight": "#ffffff",
+            "cloth_main": "#a569bd",
+            "cloth_shadow": "#7d3c98",
+            "fx": "#f7dc6f",
+        },
+        "retro_pop": {
+            "draft": "#00d2ff",
+            "lineart": "#1a0826",
+            "skin_base": "#ffeaa7",
+            "skin_shadow": "#fab1a0",
+            "hair_main": "#ff7675",
+            "hair_shadow": "#d63031",
+            "hair_highlight": "#fff275",
+            "eye_dark": "#2d3436",
+            "eye_light": "#00cec9",
+            "highlight": "#ffffff",
+            "cloth_main": "#6c5ce7",
+            "cloth_shadow": "#4834d4",
+            "fx": "#fdcb6e",
+        },
+        "dark_fantasy": {
+            "draft": "#535c68",
+            "lineart": "#130f40",
+            "skin_base": "#f5f6fa",
+            "skin_shadow": "#dcdde1",
+            "hair_main": "#30336b",
+            "hair_shadow": "#130f40",
+            "hair_highlight": "#7ed6df",
+            "eye_dark": "#191919",
+            "eye_light": "#eb4d4b",
+            "highlight": "#e056fd",
+            "cloth_main": "#2c2c54",
+            "cloth_shadow": "#1e1e38",
+            "fx": "#f0932b",
+        },
+        "sepia": {
+            "draft": "#bcaaa4",
+            "lineart": "#3e2723",
+            "skin_base": "#efebe9",
+            "skin_shadow": "#d7ccc8",
+            "hair_main": "#5d4037",
+            "hair_shadow": "#3e2723",
+            "hair_highlight": "#f5f5f5",
+            "eye_dark": "#271610",
+            "eye_light": "#8d6e63",
+            "highlight": "#ffffff",
+            "cloth_main": "#6d4c41",
+            "cloth_shadow": "#4e342e",
+            "fx": "#a1887f",
+        },
     }
-    return palettes.get(name.lower(), palettes["anime"])
+    key = name.lower().strip()
+    return palettes.get(key, palettes["anime"])
 
 
 def sample_strokes_by_priority(strokes: list[Stroke], target_count: int) -> list[Stroke]:

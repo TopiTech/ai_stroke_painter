@@ -22,6 +22,7 @@ class PlannerPort(ABC):
         iteration: int = 1,
         max_iterations: int = 1,
         palette_name: str = "anime",
+        **kwargs: Any,
     ) -> DrawingPlan: ...
 
 
@@ -30,7 +31,13 @@ class CanvasPort(ABC):
     def ensure_target(self, document: Any) -> Any: ...
 
     @abstractmethod
-    def render(self, document: Any, plan: DrawingPlan, cancelled: Callable[[], bool] = lambda: False) -> int: ...
+    def render(
+        self,
+        document: Any,
+        plan: DrawingPlan,
+        cancelled: Callable[[], bool] = lambda: False,
+        **kwargs: Any,
+    ) -> int: ...
 
     @abstractmethod
     def capture_canvas(self, document: Any, width: int = 512, height: int = 512) -> bytes: ...

@@ -39,8 +39,20 @@ class KritaCanvasAdapter(CanvasPort):
     DEFAULT_LAYER_NAME = "AI Strokes (editable)"
     EVENT_INTERVAL = 30
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        brush_size_multiplier: float = 1.0,
+        opacity_multiplier: float = 1.0,
+        layer_mode: str = "multi_layer",
+        layer_prefix: str = "AI Artwork",
+        event_interval: int = 30,
+    ) -> None:
         self._layer_cache: dict[str, Any] = {}
+        self.brush_size_multiplier = float(brush_size_multiplier)
+        self.opacity_multiplier = float(opacity_multiplier)
+        self.layer_mode = layer_mode
+        self.layer_prefix = layer_prefix
+        self.event_interval = max(1, int(event_interval))
 
     def ensure_target(self, document: Any) -> Any:
         return self.ensure_layer(document, self.DEFAULT_LAYER_NAME)
@@ -132,13 +144,33 @@ class KritaCanvasAdapter(CanvasPort):
         document: Any,
         plan: DrawingPlan,
         cancelled: Callable[[], bool] = lambda: False,
+        brush_size_multiplier: float | None = None,
+        opacity_multiplier: float | None = None,
+        layer_mode: str | None = None,
+        layer_prefix: str | None = None,
+        event_interval: int | None = None,
+        **kwargs: Any,
     ) -> int:
         global _last_applied_color
         _last_applied_color = None
 
-        first_layer = plan.strokes[0].layer_name if plan.strokes else self.DEFAULT_LAYER_NAME
-        current_node = self.ensure_layer(document, first_layer)
-        current_layer_name = first_layer
+        size_mult = float(brush_size_multiplier if brush_size_multiplier is not None else self.brush_size_multiplier)
+        op_mult = float(opacity_multiplier if opacity_multiplier is not None else self.opacity_multiplier)
+        mode = str(layer_mode if layer_mode is not None else self.layer_mode)
+        prefix = str(layer_prefix if layer_prefix is not None else self.layer_prefix)
+        evt_interval = max(1, int(event_interval if event_interval is not None else self.event_interval))
+
+        if mode == "active_layer":
+            current_node = document.activeNode() or self.ensure_layer(document, self.DEFAULT_LAYER_NAME)
+            current_layer_name = getattr(current_node, "name", lambda: self.DEFAULT_LAYER_NAME)()
+        elif mode == "single_layer":
+            single_name = f"{prefix} (Combined)" if prefix else self.DEFAULT_LAYER_NAME
+            current_node = self.ensure_layer(document, single_name)
+            current_layer_name = single_name
+        else:
+            first_layer = plan.strokes[0].layer_name if plan.strokes else self.DEFAULT_LAYER_NAME
+            current_node = self.ensure_layer(document, first_layer)
+            current_layer_name = first_layer
 
         if cancelled():
             if hasattr(document, "refreshProjection"):
@@ -161,14 +193,15 @@ class KritaCanvasAdapter(CanvasPort):
                 if cancelled():
                     break
 
-                target_layer_name = stroke.layer_name or self.DEFAULT_LAYER_NAME
-                if target_layer_name != current_layer_name or current_node is None:
-                    current_node = self.ensure_layer(document, target_layer_name)
-                    current_layer_name = target_layer_name
+                if mode == "multi_layer":
+                    target_layer_name = stroke.layer_name or self.DEFAULT_LAYER_NAME
+                    if target_layer_name != current_layer_name or current_node is None:
+                        current_node = self.ensure_layer(document, target_layer_name)
+                        current_layer_name = target_layer_name
 
                 if not hasattr(current_node, "paintLine"):
                     raise RuntimeError("このKritaには Node.paintLine がありません。Krita 6.0以降を使用してください。")
-                _apply_stroke_style(stroke)
+                _apply_stroke_style(stroke, size_multiplier=size_mult, opacity_multiplier=op_mult)
                 paint_ability = current_node.paintAbility()
                 if paint_ability != "PAINT":
                     raise RuntimeError(f"対象レイヤーに描画できません（paintAbility: {paint_ability}）")
@@ -187,7 +220,7 @@ class KritaCanvasAdapter(CanvasPort):
 
                 rendered += 1
                 segment_count += max(1, len(stroke.points) - 1)
-                if segment_count >= self.EVENT_INTERVAL:
+                if segment_count >= evt_interval:
                     segment_count = 0
                     _process_events()
         finally:
@@ -270,7 +303,11 @@ def _apply_color_to_krita(hex_color: str, force: bool = False) -> None:
         pass
 
 
-def _apply_stroke_style(stroke: Any) -> None:
+def _apply_stroke_style(
+    stroke: Any,
+    size_multiplier: float = 1.0,
+    opacity_multiplier: float = 1.0,
+) -> None:
     """Apply the DrawingPlan brush contract to Krita's active view."""
     try:
         from krita import Krita
@@ -296,10 +333,13 @@ def _apply_stroke_style(stroke: Any) -> None:
         if preset is not None and hasattr(view, "setCurrentBrushPreset"):
             view.setCurrentBrushPreset(preset)
 
+        effective_size = max(0.5, float(stroke.size_px) * size_multiplier)
+        effective_opacity = max(0.01, min(1.0, float(stroke.opacity) * opacity_multiplier))
+
         if hasattr(view, "setBrushSize"):
-            view.setBrushSize(float(stroke.size_px))
+            view.setBrushSize(effective_size)
         if hasattr(view, "setPaintingOpacity"):
-            view.setPaintingOpacity(float(stroke.opacity))
+            view.setPaintingOpacity(effective_opacity)
     except Exception:
         pass
 

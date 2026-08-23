@@ -2622,6 +2622,213 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertEqual(worker2.provided_captures[0], b"real-canvas-capture-bytes")
 
 
+class ExtendedCustomizationTests(unittest.TestCase):
+    """拡張設定項目・パレット・ブラシプロファイル・レイヤーモード・画像変換・カスタムプリセットの検証。"""
+
+    def test_all_expanded_color_palettes(self) -> None:
+        from .procedural.base import color_palette
+
+        palettes = [
+            "anime",
+            "monochrome",
+            "cyberpunk",
+            "nature",
+            "pastel",
+            "watercolor",
+            "retro_pop",
+            "dark_fantasy",
+            "sepia",
+        ]
+        for pal in palettes:
+            colors_dict = color_palette(pal)
+            self.assertGreaterEqual(len(colors_dict), 4, f"Palette '{pal}' should have at least 4 colors")
+            for key, c in colors_dict.items():
+                self.assertTrue(
+                    c.startswith("#") and len(c) == 7, f"Invalid hex color '{c}' for key '{key}' in palette '{pal}'"
+                )
+
+        # 未知のパレットはデフォルト(anime)にフォールバック
+        fallback_colors = color_palette("unknown_palette_name")
+        self.assertEqual(fallback_colors, color_palette("anime"))
+
+    def test_procedural_brush_profiles_applied(self) -> None:
+        from .procedural import generate_procedural_plan
+
+        profile_map = {
+            "gpen": "Ink-2 Fineliner",
+            "marupen": "Ink-1 Precision",
+            "brush": "Wet-1 Water",
+            "marker": "Marker-1 Broad",
+        }
+        for prof, expected_preset in profile_map.items():
+            plan = generate_procedural_plan(
+                prompt="anime girl portrait with flowers",
+                seed=100,
+                count=20,
+                width=512,
+                height=512,
+                brush_profile=prof,
+            )
+            self.assertGreater(len(plan.strokes), 0)
+            for stroke in plan.strokes:
+                self.assertEqual(stroke.brush_preset, expected_preset)
+
+    def test_image_converter_extended_options(self) -> None:
+        from .image_converter import ImageStrokeConverter
+
+        converter = ImageStrokeConverter()
+
+        # ダミー画像バイト列での変換テスト (プロシージャルフォールバック)
+        plan = converter.convert_image_to_plan(
+            image_bytes=b"invalid-image-bytes-triggers-procedural-fallback",
+            prompt="landscape",
+            seed=42,
+            count=25,
+            target_width=800,
+            target_height=600,
+            edge_threshold=0.08,
+            shading_density="high",
+            enable_flats=False,
+            color_mode="palette",
+            palette_name="sepia",
+            brush_profile="brush",
+        )
+        self.assertIsInstance(plan, DrawingPlan)
+        self.assertGreater(len(plan.strokes), 0)
+
+    def test_krita_adapter_layer_modes_and_multipliers(self) -> None:
+        adapter = KritaCanvasAdapter()
+        plan = DrawingPlan(
+            prompt="portrait",
+            seed=1,
+            strokes=[
+                Stroke(
+                    id="s1",
+                    points=[StrokePoint(10, 10, 0.5, 0), StrokePoint(50, 50, 0.8, 10)],
+                    size_px=8.0,
+                    opacity=0.8,
+                    layer_name="Draft",
+                ),
+                Stroke(
+                    id="s2",
+                    points=[StrokePoint(20, 20, 0.5, 0), StrokePoint(60, 60, 0.8, 10)],
+                    size_px=4.0,
+                    opacity=1.0,
+                    layer_name="Lineart",
+                ),
+            ],
+        )
+
+        # 1. Multi-layer mode
+        doc1 = _FakeDocument()
+        rendered1 = adapter.render(
+            doc1,
+            plan,
+            brush_size_multiplier=1.5,
+            opacity_multiplier=0.8,
+            layer_mode="multi_layer",
+            layer_prefix="TestArtwork",
+            event_interval=10,
+        )
+        self.assertEqual(rendered1, 2)
+
+        # 2. Active-layer mode
+        doc2 = _FakeDocument()
+        rendered2 = adapter.render(
+            doc2,
+            plan,
+            brush_size_multiplier=2.0,
+            opacity_multiplier=0.9,
+            layer_mode="active_layer",
+        )
+        self.assertEqual(rendered2, 2)
+
+        # 3. Single-layer mode
+        doc3 = _FakeDocument()
+        rendered3 = adapter.render(
+            doc3,
+            plan,
+            brush_size_multiplier=0.5,
+            opacity_multiplier=0.5,
+            layer_mode="single_layer",
+            layer_prefix="MergedLayer",
+        )
+        self.assertEqual(rendered3, 2)
+
+    def test_openai_settings_validation_and_payload(self) -> None:
+        # Valid settings
+        s = OpenAICompatibleSettings(
+            base_url="https://api.openai.com/v1",
+            model="gpt-4o",
+            temperature=0.85,
+            top_p=0.90,
+            custom_system_prompt="Draw with delicate fine lines",
+            vision_resolution=768,
+            max_retries=4,
+        )
+        self.assertAlmostEqual(s.temperature, 0.85)
+        self.assertAlmostEqual(s.top_p, 0.90)
+        self.assertEqual(s.custom_system_prompt, "Draw with delicate fine lines")
+        self.assertEqual(s.vision_resolution, 768)
+        self.assertEqual(s.max_retries, 4)
+
+        # Invalid temperature raises ValueError
+        with self.assertRaises(ValueError):
+            OpenAICompatibleSettings(
+                base_url="https://api.openai.com/v1",
+                model="gpt-4o",
+                temperature=99.0,
+            )
+
+        # Invalid top_p raises ValueError
+        with self.assertRaises(ValueError):
+            OpenAICompatibleSettings(
+                base_url="https://api.openai.com/v1",
+                model="gpt-4o",
+                top_p=0.0,
+            )
+
+        # Invalid vision_resolution (<64) raises ValueError
+        with self.assertRaises(ValueError):
+            OpenAICompatibleSettings(
+                base_url="https://api.openai.com/v1",
+                model="gpt-4o",
+                vision_resolution=32,
+            )
+
+        # Invalid max_retries (<1) raises ValueError
+        with self.assertRaises(ValueError):
+            OpenAICompatibleSettings(
+                base_url="https://api.openai.com/v1",
+                model="gpt-4o",
+                max_retries=0,
+            )
+
+    def test_preview_widget_multipliers(self) -> None:
+        from .docker import PreviewWidget
+
+        prev = PreviewWidget.__new__(PreviewWidget)
+        prev._plan = None
+        prev._size_multiplier = 1.0
+        prev._opacity_multiplier = 1.0
+        prev.update = lambda: None
+
+        plan = DrawingPlan(
+            prompt="test",
+            seed=1,
+            strokes=[
+                Stroke("s1", [StrokePoint(0, 0, 0.5, 0), StrokePoint(100, 100, 0.8, 10)], size_px=10.0, opacity=1.0)
+            ],
+        )
+        prev.set_plan(plan, size_multiplier=2.0, opacity_multiplier=0.5)
+        self.assertEqual(prev._size_multiplier, 2.0)
+        self.assertEqual(prev._opacity_multiplier, 0.5)
+
+        prev.update_multipliers(size_multiplier=1.5, opacity_multiplier=0.9)
+        self.assertEqual(prev._size_multiplier, 1.5)
+        self.assertEqual(prev._opacity_multiplier, 0.9)
+
+
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))
     result = unittest.TextTestRunner(verbosity=2).run(suite)

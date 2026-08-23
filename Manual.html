@@ -4,38 +4,81 @@
     <meta charset="utf-8">
     <title>AI Stroke Painter Pro Manual</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #2d3748; padding: 24px; max-width: 840px; margin: auto; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; line-height: 1.6; color: #2d3748; padding: 24px; max-width: 880px; margin: auto; }
         h1 { color: #1a202c; border-bottom: 2px solid #3182ce; padding-bottom: 8px; }
-        h2 { color: #2b6cb0; margin-top: 28px; }
-        h3 { color: #2d3748; }
+        h2 { color: #2b6cb0; margin-top: 28px; border-left: 4px solid #3182ce; padding-left: 8px; }
+        h3 { color: #2d3748; margin-top: 18px; }
         code { background: #edf2f7; padding: 2px 6px; border-radius: 4px; font-family: Consolas, monospace; font-size: 0.9em; }
         pre { background: #2d3748; color: #f7fafc; padding: 12px; border-radius: 6px; overflow-x: auto; }
         ul { padding-left: 20px; }
         li { margin-bottom: 6px; }
         .badge { display: inline-block; background: #3182ce; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; font-weight: bold; }
+        .feature-card { background: #f7fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 14px; margin-bottom: 14px; }
+        .tag { background: #e2e8f0; color: #4a5568; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; margin-right: 4px; }
     </style>
 </head>
 <body>
-    <h1>AI Stroke Painter Pro <span class="badge">v1.0.0 Pro</span></h1>
+    <h1>AI Stroke Painter Pro <span class="badge">v1.1.0 Customization Expanded</span></h1>
     <p>Krita 上で、プロフェッショナルな本格イラスト・アニメ線画・風景・エフェクト・幾何学アートの描画計画を生成し、マルチレイヤーへ自動分割して筆圧付きストロークを描画する AI ペイントプラグインです。</p>
 
-    <h2>🌟 主な機能</h2>
-    <ul>
-        <li><strong>本格プロシージャル・イラストエンジン:</strong> アニメ顔（瞳・髪・表情・衣服）、風景（山・樹木・波・雲・花）、集中線・カケアミ・魔法陣、マンダラ、動物（猫・鳥・ドラゴン）を完全オフラインで生成。</li>
-        <li><strong>画像読み込み (Image-to-Stroke):</strong> 参照画像のエッジ・輪郭・陰影・カラーを解析し、手描き風ベクターストロークへ自動変換。</li>
-        <li><strong>自律ビジョン改善ループ (Auto-Refine):</strong> キャンバスのスクリーンショットを自律取得し、下書き→主線→陰影→仕上げと段階的に描き進める Co-Painter 機能。</li>
-        <li><strong>マルチレイヤー & フルカラー描画:</strong> <code>Draft</code>, <code>Flats</code>, <code>Shading</code>, <code>Lineart</code>, <code>Highlights</code>, <code>FX</code> レイヤーへの自動分割とカラー適用。</li>
-        <li><strong>リアルタイム・ベクタープレビュー & SVG エクスポート:</strong> ミニキャンバスプレビューとベクター SVG 出力。</li>
-    </ul>
+    <h2>🌟 主な機能とカスタマイズ性</h2>
+    
+    <div class="feature-card">
+        <h3>1. 本格プロシージャル・イラストエンジン (Offline)</h3>
+        <p>アニメ美少女・少年の顔、風景（山・樹木・北斎風大波・水墨画・花）、集中線・カケアミ・魔法陣、マンダラ、動物（猫・鳥・ドラゴン）を完全オフラインで生成。</p>
+        <p>
+            <span class="tag">9種カラーパレット</span> (アニメ、モノクロ、サイバーパンク、自然、パステル、水彩、レトロポップ、ダークファンタジー、セピア)<br>
+            <span class="tag">5種ブラシプロファイル</span> (自動、Gペン、丸ペン、毛筆・水彩、マーカー)
+        </p>
+    </div>
+
+    <div class="feature-card">
+        <h3>2. 参照画像の読み込み & 画像解析 (Image-to-Stroke)</h3>
+        <p>画像のエッジ・輪郭・陰影・カラーを解析し、手描き風ベクターストロークへ自動変換。</p>
+        <ul>
+            <li><strong>エッジ感度:</strong> 0.02〜0.50（微細な質感〜大胆な主線）</li>
+            <li><strong>陰影ハッチング:</strong> 標準、高密度、低密度、オフ</li>
+            <li><strong>下塗り描画:</strong> ON / OFF</li>
+            <li><strong>カラーモード:</strong> 元画像カラー / パレット近似マッピング</li>
+        </ul>
+    </div>
+
+    <div class="feature-card">
+        <h3>3. 🖌️ ブラシ・描画 & レイヤー設定</h3>
+        <ul>
+            <li><strong>太さ倍率:</strong> 0.1x 〜 5.0x / <strong>不透明度:</strong> 10% 〜 100%</li>
+            <li><strong>レイヤー出力:</strong> マルチレイヤー分割 / アクティブレイヤー直接描画 / 単一新規レイヤー</li>
+            <li><strong>レイヤー名 / プレフィックス:</strong> 自由設定</li>
+            <li><strong>再描画間隔:</strong> 5 〜 100ms</li>
+        </ul>
+    </div>
+
+    <div class="feature-card">
+        <h3>4. 🤖 OpenAI 互換 LLM / Vision & 自律反復改善 (Auto-Refine)</h3>
+        <p>GPT-4o, Claude, Gemini, Ollama 等と連携。キャンバスのスクリーンショットを自律取得しながら下書き→主線→陰影→仕上げと段階的に描き進めます。</p>
+        <ul>
+            <li><strong>Temperature (0.0〜2.0) & Top-P (0.1〜1.0)</strong></li>
+            <li><strong>Reasoning Effort:</strong> 思考モデル（o1/o3/DeepSeek R1等）の思考強度制御</li>
+            <li><strong>Vision 解像度:</strong> 256, 512, 768, 1024 px</li>
+            <li><strong>追加カスタム指示:</strong> ユーザー独自の描画指示をシステムプロンプトへ追加</li>
+        </ul>
+    </div>
+
+    <div class="feature-card">
+        <h3>5. 💾 プリセット管理 & デバッグ</h3>
+        <ul>
+            <li><strong>12種のビルトインプリセット</strong></li>
+            <li><strong>カスタムプリセット保存 (💾) & 削除 (🗑️):</strong> 現在の設定を QSettings へ永続保存</li>
+            <li><strong>初期設定リセット (🔄)</strong></li>
+            <li><strong>🐞 デバッグモード:</strong> 通信ログのリアルタイム表示、コピー、保存</li>
+        </ul>
+    </div>
 
     <h2>🚀 クイックスタート</h2>
     <ol>
         <li>Krita で新規キャンバスを開きます。</li>
-        <li>Docker 上部の<strong>クイック・プリセット</strong>からモチーフを選択（例: 「美少女アニメ顔」）。</li>
+        <li>Docker 上部の<strong>クイック・プリセット</strong>からモチーフを選択（例: 「👤 美少女アニメ顔」「🌸 透明水彩の野花」）。</li>
         <li><strong>🎨 AIストロークを描画</strong> をクリックします。</li>
     </ol>
-
-    <h2>⚙️ 設定とカスタマイズ</h2>
-    <p>自律反復（Auto-Refine）や OpenAI 互換 LLM / Vision API（GPT-4o, Claude 3.5 Sonnet, Gemini, Ollama 等）との連携も可能です。</p>
 </body>
 </html>

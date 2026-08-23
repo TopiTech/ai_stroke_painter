@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from ..domain import DrawingPlan
+from ..domain import DrawingPlan, Stroke, StrokePoint
+from .base import pressure_profile
 from .character import generate_character_strokes
 from .creature import generate_creature_strokes
 from .geometry import generate_geometry_strokes
@@ -26,6 +27,7 @@ def generate_procedural_plan(
     width: float,
     height: float,
     palette_name: str = "anime",
+    brush_profile: str = "auto",
 ) -> DrawingPlan:
     """自然言語プロンプトの意図を自動解析し、最適なプロシージャルイラスト計画を生成する。"""
     prompt_l = prompt.lower()
@@ -66,6 +68,36 @@ def generate_procedural_plan(
     else:
         strokes = generate_character_strokes(prompt, seed, count, width, height, palette_name)
         title = "Character Portrait"
+
+    # 指定されたブラシプロファイルの一括適用
+    if brush_profile and brush_profile != "auto":
+        profile_preset_map = {
+            "gpen": "Ink-2 Fineliner",
+            "marupen": "Ink-1 Precision",
+            "brush": "Wet-1 Water",
+            "marker": "Marker-1 Broad",
+        }
+        target_preset = profile_preset_map.get(brush_profile)
+        profile_strokes: list[Stroke] = []
+        for s in strokes:
+            new_pts: list[StrokePoint] = []
+            n = len(s.points) - 1
+            for idx, pt in enumerate(s.points):
+                t = idx / max(1, n)
+                p = pressure_profile(t, brush_profile, base=pt.pressure)
+                new_pts.append(StrokePoint(pt.x, pt.y, p, pt.time_ms))
+            profile_strokes.append(
+                Stroke(
+                    id=s.id,
+                    points=new_pts,
+                    brush_preset=target_preset or s.brush_preset,
+                    color=s.color,
+                    size_px=s.size_px,
+                    layer_name=s.layer_name,
+                    opacity=s.opacity,
+                )
+            )
+        strokes = profile_strokes
 
     # レイヤー順序の抽出
     layer_order = ["Draft", "Flats", "Shading", "Lineart", "Highlights", "FX"]
