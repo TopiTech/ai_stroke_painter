@@ -146,12 +146,6 @@ class KritaCanvasAdapter(CanvasPort):
                     document.refreshProjection()
             return 0
 
-        if not hasattr(current_node, "paintLine"):
-            raise RuntimeError("このKritaには Node.paintLine がありません。Krita 6.0以降を使用してください。")
-        paint_ability = current_node.paintAbility()
-        if paint_ability != "PAINT":
-            raise RuntimeError(f"対象レイヤーに描画できません（paintAbility: {paint_ability}）")
-
         rendered = 0
         segment_count = 0
         old_batchmode: bool | None = None
@@ -169,11 +163,12 @@ class KritaCanvasAdapter(CanvasPort):
 
                 target_layer_name = stroke.layer_name or self.DEFAULT_LAYER_NAME
                 if target_layer_name != current_layer_name or current_node is None:
-                    current_node = self.ensure_layer(document, target_layer_name, opacity=stroke.opacity)
+                    current_node = self.ensure_layer(document, target_layer_name)
                     current_layer_name = target_layer_name
 
                 if not hasattr(current_node, "paintLine"):
                     raise RuntimeError("このKritaには Node.paintLine がありません。Krita 6.0以降を使用してください。")
+                _apply_stroke_style(stroke)
                 paint_ability = current_node.paintAbility()
                 if paint_ability != "PAINT":
                     raise RuntimeError(f"対象レイヤーに描画できません（paintAbility: {paint_ability}）")
@@ -271,6 +266,40 @@ def _apply_color_to_krita(hex_color: str, force: bool = False) -> None:
             return
         view.setForeGroundColor(ManagedColor.fromQColor(QColor.fromRgbF(*rgb)))
         _last_applied_color = hex_color
+    except Exception:
+        pass
+
+
+def _apply_stroke_style(stroke: Any) -> None:
+    """Apply the DrawingPlan brush contract to Krita's active view."""
+    try:
+        from krita import Krita
+
+        app = Krita.instance()
+        window = getattr(app, "activeWindow", lambda: None)()
+        view = getattr(window, "activeView", lambda: None)() if window is not None else None
+        if view is None:
+            return
+
+        preset_name = str(stroke.brush_preset).strip()
+        presets: Any = getattr(app, "resources", lambda _kind: {})("preset")
+        preset: Any = presets.get(preset_name) if hasattr(presets, "get") else None
+        if preset is None and hasattr(presets, "values"):
+            preset = next(
+                (
+                    candidate
+                    for candidate in presets.values()
+                    if getattr(candidate, "name", lambda: "")() == preset_name
+                ),
+                None,
+            )
+        if preset is not None and hasattr(view, "setCurrentBrushPreset"):
+            view.setCurrentBrushPreset(preset)
+
+        if hasattr(view, "setBrushSize"):
+            view.setBrushSize(float(stroke.size_px))
+        if hasattr(view, "setPaintingOpacity"):
+            view.setPaintingOpacity(float(stroke.opacity))
     except Exception:
         pass
 

@@ -44,6 +44,7 @@ from .qt_compat import (
     QPoint,
     QSettings,
     QWidget,
+    password_echo_mode,
 )
 from .storage import load_plan, save_plan, save_svg
 
@@ -1495,6 +1496,22 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertGreaterEqual(times[1], 100)
         self.assertGreaterEqual(times[2], times[1])
 
+    def test_sanitization_caps_strokes_at_requested_count(self) -> None:
+        from .llm_planner import _validate_and_sanitize_plan
+
+        strokes = [
+            Stroke(
+                id=f"s{idx}",
+                points=(StrokePoint(10.0 * idx, 10.0, 0.5, 0), StrokePoint(10.0 * idx + 5.0, 20.0, 0.7, 10)),
+            )
+            for idx in range(1, 4)
+        ]
+        plan = DrawingPlan(prompt="count cap", seed=1, strokes=strokes)
+
+        sanitized = _validate_and_sanitize_plan(plan, "count cap", 1, 1, 100, 100)
+
+        self.assertEqual([stroke.id for stroke in sanitized.strokes], ["s1"])
+
     def test_system_role_error_fallback_without_user_message(self) -> None:
         payloads_received: list[dict[str, Any]] = []
 
@@ -1639,6 +1656,68 @@ class CanvasAdapterTests(unittest.TestCase):
 
         self.assertGreaterEqual(fake_view.setForeGroundColor.call_count, 0)
 
+    def test_render_applies_preset_size_and_opacity_for_each_stroke(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        class FakeView:
+            def __init__(self) -> None:
+                self.presets: list[Any] = []
+                self.sizes: list[float] = []
+                self.opacities: list[float] = []
+
+            def setCurrentBrushPreset(self, preset: Any) -> None:  # noqa: N802
+                self.presets.append(preset)
+
+            def setBrushSize(self, size: float) -> None:  # noqa: N802
+                self.sizes.append(size)
+
+            def setPaintingOpacity(self, opacity: float) -> None:  # noqa: N802
+                self.opacities.append(opacity)
+
+        fine_preset = object()
+        broad_preset = object()
+        view = FakeView()
+        app = SimpleNamespace(
+            activeWindow=lambda: SimpleNamespace(activeView=lambda: view),
+            resources=lambda resource_type: (
+                {"Fine": fine_preset, "Broad": broad_preset} if resource_type == "preset" else {}
+            ),
+        )
+        fake_krita = SimpleNamespace(Krita=SimpleNamespace(instance=lambda: app))
+        target = _FakeNode("Lineart")
+        document = _FakeDocument(active=target)
+        plan = DrawingPlan(
+            prompt="style contract",
+            seed=1,
+            strokes=(
+                Stroke(
+                    id="fine",
+                    points=(StrokePoint(10.0, 10.0, 0.5, 0), StrokePoint(20.0, 20.0, 0.7, 10)),
+                    brush_preset="Fine",
+                    size_px=3.0,
+                    layer_name="Lineart",
+                    opacity=0.4,
+                ),
+                Stroke(
+                    id="broad",
+                    points=(StrokePoint(30.0, 30.0, 0.5, 0), StrokePoint(40.0, 40.0, 0.7, 10)),
+                    brush_preset="Broad",
+                    size_px=9.0,
+                    layer_name="Lineart",
+                    opacity=0.8,
+                ),
+            ),
+        )
+
+        with patch.dict("sys.modules", {"krita": fake_krita}):
+            rendered = KritaCanvasAdapter().render(document, plan)
+
+        self.assertEqual(rendered, 2)
+        self.assertEqual(view.presets, [fine_preset, broad_preset])
+        self.assertEqual(view.sizes, [3.0, 9.0])
+        self.assertEqual(view.opacities, [0.4, 0.8])
+
     def test_qpoint_and_paintline_type_compatibility(self) -> None:
         from ai_stroke_painter.krita_adapter import _qpoint, _qpointf
 
@@ -1689,6 +1768,36 @@ class WorkerAndDockerTests(unittest.TestCase):
             if cls._app is None:
                 with contextlib.suppress(Exception):
                     cls._app = QApplication(["test", "-platform", "offscreen"])
+
+    def test_password_echo_mode_supports_qt5_and_qt6_enum_shapes(self) -> None:
+        qt5_password = object()
+        qt6_password = object()
+
+        class Qt5LineEdit:
+            Password = qt5_password
+
+        class Qt6LineEdit:
+            class EchoMode:
+                Password = qt6_password
+
+        self.assertIs(password_echo_mode(Qt5LineEdit), qt5_password)
+        self.assertIs(password_echo_mode(Qt6LineEdit), qt6_password)
+
+    def test_offline_mode_disables_auto_refine(self) -> None:
+        docker = AIStrokePainterDocker()
+        docker.auto_refine.setChecked(True)
+        docker.planner_mode.setCurrentIndex(0)
+        docker._update_planner_settings_state()
+
+        self.assertFalse(docker.auto_refine.isEnabled())
+        self.assertFalse(docker.auto_refine.isChecked())
+        self.assertFalse(docker.iterations.isEnabled())
+
+        docker.planner_mode.setCurrentIndex(1)
+        docker._update_planner_settings_state()
+
+        self.assertTrue(docker.auto_refine.isEnabled())
+        self.assertTrue(docker.iterations.isEnabled())
 
     def test_qt_compat_stubs_are_functional(self) -> None:
         w = QWidget()

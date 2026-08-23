@@ -37,6 +37,7 @@ from .qt_compat import (
     QSpinBox,
     QVBoxLayout,
     QWidget,
+    password_echo_mode,
     pyqtSignal,
 )
 from .storage import save_plan, save_svg
@@ -385,8 +386,7 @@ class AIStrokePainterDocker(DockWidget):
         self.model.setPlaceholderText("例: gpt-4o, o3-mini, deepseek-r1, qwq-32b")
         llm_form.addRow("Model", self.model)
         self.api_key = QLineEdit()
-        with contextlib.suppress(AttributeError):
-            self.api_key.setEchoMode(QLineEdit.Password)
+        self.api_key.setEchoMode(password_echo_mode())
         self.api_key.setPlaceholderText("空欄なら OPENAI_API_KEY")
         llm_form.addRow("API Key", self.api_key)
 
@@ -643,17 +643,21 @@ class AIStrokePainterDocker(DockWidget):
             QMessageBox.critical(self, "接続テスト失敗", str(exc))
 
     def _update_planner_settings_state(self, *_args: Any) -> None:
+        is_openai = self._is_openai_compatible_mode()
+        self.llm_settings.setEnabled(is_openai)
+        self.auto_refine.setEnabled(is_openai)
+        self.iterations.setEnabled(is_openai)
+        if not is_openai:
+            self.auto_refine.setChecked(False)
+
+    def _is_openai_compatible_mode(self) -> bool:
         mode_data = self.planner_mode.currentData()
         mode_text = self.planner_mode.currentText()
         idx = self.planner_mode.currentIndex()
-        is_openai = mode_data == "openai_compatible" or "OpenAI" in mode_text or idx == 1
-        self.llm_settings.setEnabled(is_openai)
+        return mode_data == "openai_compatible" or "OpenAI" in mode_text or idx == 1
 
     def _planner(self) -> PlannerPort:
-        mode_data = self.planner_mode.currentData()
-        mode_text = self.planner_mode.currentText()
-        idx = self.planner_mode.currentIndex()
-        is_openai = mode_data == "openai_compatible" or "OpenAI" in mode_text or idx == 1
+        is_openai = self._is_openai_compatible_mode()
 
         if not is_openai:
             self._log_debug("[エンジン選択] プロシージャル (オフライン)")
@@ -700,7 +704,7 @@ class AIStrokePainterDocker(DockWidget):
         self.stop_btn.setEnabled(True)
         self.progress.setRange(0, 0)
 
-        max_iters = self.iterations.value() if self.auto_refine.isChecked() else 1
+        max_iters = self.iterations.value() if self._is_openai_compatible_mode() and self.auto_refine.isChecked() else 1
         palette = self.palette_combo.currentData() or "anime"
 
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")

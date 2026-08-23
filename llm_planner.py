@@ -1375,7 +1375,7 @@ def _validate_and_sanitize_plan(
     sanitized_strokes: list[Stroke] = []
     stroke_id_set: set[str] = set()
 
-    for idx, stroke in enumerate(plan.strokes[: max(count, 500)], start=1):
+    for idx, stroke in enumerate(plan.strokes[:count], start=1):
         # ストローク ID の一意性確保
         st_id = stroke.id if stroke.id and stroke.id not in stroke_id_set else f"stroke_{idx}"
         stroke_id_set.add(st_id)

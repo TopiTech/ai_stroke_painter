@@ -38,6 +38,27 @@ QBuffer: Any = None
 QIODevice: Any = None
 QSettings: Any = None
 
+
+def password_echo_mode(line_edit_cls: Any | None = None) -> Any:
+    """Return QLineEdit's password mode for either supported Qt binding.
+
+    PyQt5 exposes ``QLineEdit.Password`` while PyQt6 scopes the value under
+    ``QLineEdit.EchoMode.Password``. Failing to resolve either must not leave
+    a credential widget in the default visible-text mode.
+    """
+    cls = QLineEdit if line_edit_cls is None else line_edit_cls
+    scoped_mode = getattr(cls, "EchoMode", None)
+    scoped_password = getattr(scoped_mode, "Password", None)
+    if scoped_password is not None:
+        return scoped_password
+
+    legacy_password = getattr(cls, "Password", None)
+    if legacy_password is not None:
+        return legacy_password
+
+    raise RuntimeError("QLineEdit のパスワード表示モードを取得できません")
+
+
 # PyQt5 または PyQt6 のインポートを試行
 for binding in ("PyQt5", "PyQt6"):
     try:
