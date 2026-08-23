@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import random
+import re
 import uuid
 
 from ..domain import Stroke
@@ -21,6 +22,10 @@ def generate_character_strokes(
     """指示文、Seed、本数、寸法からアニメキャラクターの本格イラストストローク群を生成する。"""
     rng = random.Random(seed)
     colors = color_palette(palette_name)
+    normalized_prompt = prompt.casefold()
+    masculine_subject = bool(re.search(r"\b(?:boy|male|man|men|gentleman)\b", normalized_prompt)) or any(
+        keyword in normalized_prompt for keyword in ("少年", "男の子", "男性", "男子", "青年")
+    )
 
     cx = width * 0.5
     cy = height * 0.48
@@ -752,6 +757,73 @@ def generate_character_strokes(
             stroke_id=uid("ribbon_r"),
         )
     )
+
+    if masculine_subject:
+        # 長いサイドロック、頬のチーク、胸元のリボンを短髪の輪郭とシャツの襟へ置き換える。
+        # 同じ seed でも "girl" と "boy" が同一の絵にならないよう、形状自体を変える。
+        removed_ids = {
+            uid("ribbon_l"),
+            uid("ribbon_r"),
+            uid("ahoge"),
+            *(uid("back_hair", index) for index in range(7)),
+            *(uid(f"side_lock_{side}", index) for side in ("l", "r") for index in range(3)),
+            *(uid(f"blush_{side}_{index}") for side in ("l", "r") for index in range(3)),
+        }
+        strokes = [stroke for stroke in strokes if stroke.id not in removed_ids]
+
+        short_hair_shapes = [
+            [(-0.24, -0.19), (-0.31, -0.27), (-0.20, -0.30)],
+            [(-0.20, -0.28), (-0.15, -0.38), (-0.08, -0.29)],
+            [(-0.10, -0.30), (-0.03, -0.41), (0.02, -0.30)],
+            [(0.00, -0.30), (0.08, -0.40), (0.10, -0.28)],
+            [(0.08, -0.29), (0.18, -0.36), (0.17, -0.25)],
+            [(0.16, -0.26), (0.29, -0.29), (0.23, -0.18)],
+            [(-0.25, -0.20), (-0.29, -0.02), (-0.23, 0.08)],
+            [(0.25, -0.20), (0.29, -0.02), (0.23, 0.08)],
+        ]
+        for index, shape in enumerate(short_hair_shapes):
+            hair_points = catmull_rom_spline(
+                [(cx + dx * scale, cy + dy * scale) for dx, dy in shape],
+                samples_per_segment=7,
+            )
+            strokes.append(
+                create_stroke(
+                    hair_points,
+                    profile_type="gpen",
+                    base_pressure=0.9,
+                    color=colors["hair_main"],
+                    size_px=6.0,
+                    layer_name="Lineart",
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid("short_hair", index),
+                )
+            )
+
+        for side, label in ((-1.0, "l"), (1.0, "r")):
+            shirt_line = catmull_rom_spline(
+                [
+                    (cx + side * scale * 0.04, cy + scale * 0.41),
+                    (cx + side * scale * 0.12, cy + scale * 0.47),
+                    (cx + side * scale * 0.03, cy + scale * 0.51),
+                ],
+                samples_per_segment=7,
+            )
+            strokes.append(
+                create_stroke(
+                    shirt_line,
+                    profile_type="gpen",
+                    base_pressure=0.85,
+                    color=colors["cloth_main"],
+                    size_px=5.0,
+                    layer_name="Lineart",
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid(f"shirt_collar_{label}"),
+                )
+            )
 
     # ユーザー指定の本数に合わせてレイヤー優先度付きサンプリング
     return sample_strokes_by_priority(strokes, count)

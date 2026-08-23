@@ -1,9 +1,9 @@
 [project]
 name = "ai_stroke_painter"
-version = "0.1.0"
-description = "Krita MVP plugin for AI stroke painting"
+version = "1.1.0"
+description = "Editable AI-assisted stroke painting plugin for Krita"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
@@ -18,7 +18,7 @@ no-any-return = "error"
 redundant-cast = "warn"
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 120
 
 [tool.ruff.lint]

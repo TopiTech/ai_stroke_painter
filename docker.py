@@ -8,10 +8,13 @@ import json
 import os
 from pathlib import Path
 import threading
+import time
 import traceback
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlsplit
 
-from .domain import DrawingPlan
+from .domain import DrawingPlan, split_color_alpha
+from .image_converter import MAX_ENCODED_IMAGE_BYTES
 from .krita_adapter import KritaCanvasAdapter
 from .llm_planner import OpenAICompatiblePlanner, OpenAICompatibleSettings
 from .planner import RuleBasedPlanner
@@ -36,6 +39,7 @@ from .qt_compat import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSettings,
     QSpinBox,
     QVBoxLayout,
@@ -44,6 +48,9 @@ from .qt_compat import (
     pyqtSignal,
 )
 from .storage import save_plan, save_svg
+
+MAX_REFERENCE_IMAGE_BYTES = MAX_ENCODED_IMAGE_BYTES
+RENDER_WAIT_TIMEOUT_SECONDS = 15 * 60
 
 if TYPE_CHECKING:
 
@@ -92,6 +99,38 @@ def _get_attr(obj: Any, name: str, default: Any = None) -> Any:
         return default
 
 
+def _message_box_button(name: str) -> Any:
+    """Qt5/Qt6 の QMessageBox 標準ボタンを同じ方法で取得する。"""
+    scoped = getattr(QMessageBox, "StandardButton", None)
+    scoped_value = getattr(scoped, name, None)
+    if scoped_value is not None:
+        return scoped_value
+    return getattr(QMessageBox, name, None)
+
+
+def _confirm(parent: Any, title: str, message: str) -> bool:
+    """明示的に Yes が選択された場合だけ破壊的操作を許可する。"""
+    yes = _message_box_button("Yes")
+    no = _message_box_button("No")
+    if yes is None or no is None:
+        return False
+    answer = QMessageBox.question(parent, title, message, yes | no, no)
+    return bool(answer == yes)
+
+
+def _safe_endpoint_label(url: str) -> str:
+    """資格情報を表示せず、デバッグ用の接続先だけを返す。"""
+    try:
+        parsed = urlsplit(url.strip())
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return "[invalid URL]"
+        host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        return f"{parsed.scheme}://{host}{port}{parsed.path.rstrip('/')}"
+    except (TypeError, ValueError):
+        return "[invalid URL]"
+
+
 class PreviewWidget(QWidget):
     """描画計画のストロークをリアルタイムでベクタープレビューするミニキャンバス。"""
 
@@ -137,20 +176,23 @@ class PreviewWidget(QWidget):
 
             max_x = max((p.x for s in self._plan.strokes for p in s.points), default=w)
             max_y = max((p.y for s in self._plan.strokes for p in s.points), default=h)
-            scale = min(w / max(1.0, max_x), h / max(1.0, max_y)) * 0.92
-            ox = (w - max_x * scale) * 0.5
-            oy = (h - max_y * scale) * 0.5
+            canvas_w = self._plan.canvas_width or max_x
+            canvas_h = self._plan.canvas_height or max_y
+            scale = min(w / max(1.0, canvas_w), h / max(1.0, canvas_h)) * 0.92
+            ox = (w - canvas_w * scale) * 0.5
+            oy = (h - canvas_h * scale) * 0.5
 
             for stroke in self._plan.strokes:
-                col = QColor(stroke.color)
-                eff_op = max(0.01, min(1.0, stroke.opacity * self._opacity_multiplier))
+                rgb_color, color_alpha = split_color_alpha(stroke.color)
+                col = QColor(rgb_color)
+                eff_op = max(0.0, min(1.0, stroke.opacity * self._opacity_multiplier * color_alpha))
                 if eff_op < 1.0 and hasattr(col, "setAlphaF"):
                     col.setAlphaF(eff_op)
                 pen_w = max(1.0, stroke.size_px * self._size_multiplier * scale * 0.6)
                 pen = QPen(col, pen_w)
                 painter.setPen(pen)
                 pts = stroke.points
-                for p0, p1 in zip(pts, pts[1:]):
+                for p0, p1 in zip(pts, pts[1:], strict=False):
                     painter.drawLine(
                         int(ox + p0.x * scale),
                         int(oy + p0.y * scale),
@@ -191,6 +233,8 @@ class PlanWorker(QObject):
         document: Any | None = None,
     ) -> None:
         super().__init__(parent)
+        if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or not 1 <= max_iterations <= 10:
+            raise ValueError("max_iterations は 1 から 10 の整数である必要があります")
         self.planner = planner
         self.prompt = prompt
         self.seed = seed
@@ -208,8 +252,10 @@ class PlanWorker(QObject):
         self._is_cancelled = False
         self._render_done_event = threading.Event()
         self._next_canvas_image: bytes | None = None
+        self._render_error: str | None = None
         self._thread: threading.Thread | None = None
         self._is_running = False
+        self.completed_successfully = False
 
         if hasattr(self.planner, "log_callback"):
             cast(Any, self.planner).log_callback = self._emit_debug_log
@@ -226,6 +272,11 @@ class PlanWorker(QObject):
         """メインスレッドでの描画完了を受け取り、次イテレーションの進行を再開する。"""
         self._render_done_event.set()
 
+    def notify_render_failed(self, message: str) -> None:
+        """メインスレッドの描画失敗をワーカーへ伝え、反復を失敗終了させる。"""
+        self._render_error = message.strip() or "描画処理に失敗しました"
+        self._render_done_event.set()
+
     def cancel(self) -> None:
         self._is_cancelled = True
         self._render_done_event.set()
@@ -238,6 +289,9 @@ class PlanWorker(QObject):
         return self._is_running or (self._thread is not None and self._thread.is_alive())
 
     def start(self) -> None:
+        if self.isRunning():
+            return
+        self.completed_successfully = False
         self._is_running = True
         self._thread = threading.Thread(target=self._run_wrapper, daemon=True)
         self._thread.start()
@@ -282,6 +336,7 @@ class PlanWorker(QObject):
                     shading_density=self.shading_density,
                     enable_flats=self.enable_flats,
                     color_mode=self.color_mode,
+                    cancelled=self.is_cancelled,
                 )
 
                 if self.is_cancelled():
@@ -294,15 +349,23 @@ class PlanWorker(QObject):
 
                 self._render_done_event.clear()
                 self._next_canvas_image = None
+                self._render_error = None
                 self.plan_ready.emit(current_plan)
 
                 # メインスレッドでの描画 & キャプチャ完了を待機
+                render_wait_started = time.monotonic()
                 while not self._render_done_event.wait(timeout=0.05):
                     if self.is_cancelled():
                         self.debug_log.emit("[ワーカー] 描画待機中にキャンセルを確認しました")
                         return
+                    if time.monotonic() - render_wait_started > RENDER_WAIT_TIMEOUT_SECONDS:
+                        raise TimeoutError("Krita の描画完了通知がタイムアウトしました")
+
+                if self._render_error is not None:
+                    raise RuntimeError(self._render_error)
 
             if not self.is_cancelled():
+                self.completed_successfully = True
                 self.iteration_progress.emit(self.max_iterations, self.max_iterations, "全ステップの描画が完了しました")
                 self.debug_log.emit("[ワーカー完了] 全ての処理が正常に完了しました")
 
@@ -311,6 +374,41 @@ class PlanWorker(QObject):
             self.debug_log.emit(f"[例外発生] {exc}\nスタックトレース:\n{tb}")
             if not self._is_cancelled:
                 self.plan_failed.emit(str(exc))
+
+
+class ApiConnectionWorker(QObject):
+    """API 接続テストをUIスレッド外で実行する軽量ワーカー。"""
+
+    succeeded = pyqtSignal(str)
+    failed = pyqtSignal(str)
+    debug_log = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, planner: OpenAICompatiblePlanner, parent: Any | None = None) -> None:
+        super().__init__(parent)
+        self.planner = planner
+        self._thread: threading.Thread | None = None
+        self._is_running = False
+        self.planner.log_callback = self.debug_log.emit
+
+    def start(self) -> None:
+        if self._is_running:
+            return
+        self._is_running = True
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def isRunning(self) -> bool:  # noqa: N802
+        return self._is_running or (self._thread is not None and self._thread.is_alive())
+
+    def _run(self) -> None:
+        try:
+            self.succeeded.emit(self.planner.test_connection())
+        except Exception as exc:
+            self.failed.emit(str(exc) or exc.__class__.__name__)
+        finally:
+            self._is_running = False
+            self.finished.emit()
 
 
 class AIStrokePainterDocker(DockWidget):
@@ -354,12 +452,16 @@ class AIStrokePainterDocker(DockWidget):
         self.canvas_port = KritaCanvasAdapter()
         self._cancel: bool = False
         self._worker: PlanWorker | None = None
+        self._connection_worker: ApiConnectionWorker | None = None
         self._active_doc: Any | None = None
+        self._active_view: Any | None = None
+        self._canvas_session_open = False
+        self._run_render_options: dict[str, Any] | None = None
         self._canvas: Any | None = None
         self._image_bytes: bytes | None = None
         self._last_plan: DrawingPlan | None = None
 
-        container = QWidget(self)
+        container = QWidget()
         root_layout = QVBoxLayout(container)
 
         # 1. プリセットクイック選択 & カスタムプリセット管理
@@ -485,7 +587,7 @@ class AIStrokePainterDocker(DockWidget):
         refine_layout = QHBoxLayout()
         self.auto_refine = QCheckBox("段階的ステップ描画 (Auto-Refine)")
         self.auto_refine.setToolTip(
-            "下塗り→陰影→線画→ハイライトを段階的に描き進めます。AI要求時のみキャンバス画像を送信します。"
+            "下塗り→陰影→線画→ハイライトを段階的に描き、各中間ステップのキャンバス画像をAPIへ送信します。"
         )
         self.auto_refine.setChecked(False)
         refine_layout.addWidget(self.auto_refine)
@@ -541,8 +643,10 @@ class AIStrokePainterDocker(DockWidget):
         self.event_interval = QSpinBox()
         self.event_interval.setRange(5, 100)
         self.event_interval.setValue(30)
-        self.event_interval.setToolTip("描画中の画面再描画頻度 (値が小さいほどリアルタイム、大きいほど高速)")
-        config_row.addWidget(QLabel("描画更新間隔:"))
+        self.event_interval.setToolTip(
+            "何線分ごとに画面イベントを処理するか (値が小さいほどリアルタイム、大きいほど高速)"
+        )
+        config_row.addWidget(QLabel("画面更新間隔（線分）:"))
         config_row.addWidget(self.event_interval)
         brush_form.addRow("キャンバス設定", config_row)
 
@@ -623,9 +727,14 @@ class AIStrokePainterDocker(DockWidget):
         self.custom_instructions.setToolTip("システムプロンプトに追加されるユーザー独自の描画指示")
         llm_form.addRow("追加カスタム指示", self.custom_instructions)
 
-        test_conn_btn = QPushButton("API 接続テスト")
-        test_conn_btn.clicked.connect(self._test_api_connection)
-        llm_form.addRow("", test_conn_btn)
+        self.fallback_to_procedural = QCheckBox("API失敗時にオフライン生成へフォールバック")
+        self.fallback_to_procedural.setChecked(False)
+        self.fallback_to_procedural.setToolTip("有効時のみ、LLM生成に失敗した場合にプロシージャル描画へ切り替えます")
+        llm_form.addRow("障害時の動作", self.fallback_to_procedural)
+
+        self.test_conn_btn = QPushButton("API 接続テスト")
+        self.test_conn_btn.clicked.connect(self._test_api_connection)
+        llm_form.addRow("", self.test_conn_btn)
         root_layout.addWidget(self.llm_settings)
 
         # 7. ベクタープレビュー
@@ -658,6 +767,10 @@ class AIStrokePainterDocker(DockWidget):
         self.debug_log_edit = QPlainTextEdit()
         self.debug_log_edit.setReadOnly(True)
         self.debug_log_edit.setMaximumHeight(140)
+        if hasattr(self.debug_log_edit, "document"):
+            log_document = self.debug_log_edit.document()
+            if log_document is not None and hasattr(log_document, "setMaximumBlockCount"):
+                log_document.setMaximumBlockCount(5_000)
         debug_box_layout.addWidget(self.debug_log_edit)
 
         debug_btn_layout = QHBoxLayout()
@@ -696,7 +809,10 @@ class AIStrokePainterDocker(DockWidget):
         root_layout.addWidget(self.status)
 
         root_layout.addStretch(1)
-        self.setWidget(container)
+        scroll_area = QScrollArea(self)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(container)
+        self.setWidget(scroll_area)
 
         # 設定の復元
         self._load_settings()
@@ -758,6 +874,9 @@ class AIStrokePainterDocker(DockWidget):
             return
 
         name = preset_name.strip()
+        if len(name) > 100 or any(ord(char) < 32 for char in name):
+            QMessageBox.warning(self, "プリセット保存", "プリセット名は制御文字を含まない100文字以下にしてください。")
+            return
         prompt_w = _get_attr(self, "prompt")
         pal_w = _get_attr(self, "palette_combo")
         count_w = _get_attr(self, "count")
@@ -776,14 +895,28 @@ class AIStrokePainterDocker(DockWidget):
         }
 
         if callable(QSettings):
-            with contextlib.suppress(Exception):
+            try:
                 settings = QSettings("AIStrokePainter", "CustomPresets")
                 raw_json = settings.value("presets_json")
-                custom_map: dict[str, Any] = json.loads(str(raw_json)) if raw_json else {}
+                loaded = json.loads(str(raw_json)) if raw_json else {}
+                if not isinstance(loaded, dict):
+                    raise ValueError("保存済みプリセットの形式が不正です")
+                custom_map: dict[str, Any] = loaded
+                if name in custom_map and not _confirm(
+                    self, "プリセット上書き確認", f"カスタムプリセット '{name}' を上書きしますか？"
+                ):
+                    return
                 custom_map[name] = data
                 settings.setValue("presets_json", json.dumps(custom_map, ensure_ascii=False))
                 if hasattr(settings, "sync"):
                     settings.sync()
+            except Exception as exc:
+                self._log_debug(f"[プリセット保存失敗] {exc}")
+                QMessageBox.critical(self, "プリセット保存", f"カスタムプリセットを保存できませんでした: {exc}")
+                return
+        else:
+            QMessageBox.critical(self, "プリセット保存", "この環境では設定ストレージを利用できません。")
+            return
 
         self._populate_presets(selected_title=f"⭐ [カスタム] {name}")
         self._log_debug(f"[プリセット保存] カスタムプリセット '{name}' を保存しました")
@@ -800,32 +933,36 @@ class AIStrokePainterDocker(DockWidget):
             return
 
         name = current_text.replace("⭐ [カスタム] ", "").strip()
-        QMessageBox.question(
-            self,
-            "プリセット削除確認",
-            f"カスタムプリセット '{name}' を削除しますか？",
-        )
+        if not _confirm(self, "プリセット削除確認", f"カスタムプリセット '{name}' を削除しますか？"):
+            return
         if callable(QSettings):
-            with contextlib.suppress(Exception):
+            try:
                 settings = QSettings("AIStrokePainter", "CustomPresets")
                 raw_json = settings.value("presets_json")
                 if raw_json:
-                    custom_map: dict[str, Any] = json.loads(str(raw_json))
+                    loaded = json.loads(str(raw_json))
+                    if not isinstance(loaded, dict):
+                        raise ValueError("保存済みプリセットの形式が不正です")
+                    custom_map: dict[str, Any] = loaded
                     custom_map.pop(name, None)
                     settings.setValue("presets_json", json.dumps(custom_map, ensure_ascii=False))
                     if hasattr(settings, "sync"):
                         settings.sync()
+            except Exception as exc:
+                self._log_debug(f"[プリセット削除失敗] {exc}")
+                QMessageBox.critical(self, "プリセット削除", f"カスタムプリセットを削除できませんでした: {exc}")
+                return
+        else:
+            QMessageBox.critical(self, "プリセット削除", "この環境では設定ストレージを利用できません。")
+            return
 
         self._populate_presets()
         self._log_debug(f"[プリセット削除] カスタムプリセット '{name}' を削除しました")
 
     def _reset_to_defaults(self) -> None:
         """全設定値を標準デフォルト値にリセットする。"""
-        QMessageBox.question(
-            self,
-            "設定リセット",
-            "すべての設定を初期値に戻しますか？",
-        )
+        if not _confirm(self, "設定リセット", "すべての設定を初期値に戻しますか？"):
+            return
         w = _get_attr(self, "prompt")
         if w is not None and hasattr(w, "setPlainText"):
             w.setPlainText("anime girl portrait, delicate eyes, flowing hair")
@@ -901,6 +1038,9 @@ class AIStrokePainterDocker(DockWidget):
         w = _get_attr(self, "custom_instructions")
         if w is not None and hasattr(w, "setText"):
             w.setText("")
+        w = _get_attr(self, "fallback_to_procedural")
+        if w is not None and hasattr(w, "setChecked"):
+            w.setChecked(False)
         w = _get_attr(self, "save_json")
         if w is not None and hasattr(w, "setChecked"):
             w.setChecked(True)
@@ -956,6 +1096,9 @@ class AIStrokePainterDocker(DockWidget):
             w = _get_attr(self, "custom_instructions")
             if w is not None and settings.value("custom_instructions") is not None:
                 w.setText(str(settings.value("custom_instructions")))
+            w = _get_attr(self, "fallback_to_procedural")
+            if w is not None and settings.value("fallback_to_procedural") is not None:
+                w.setChecked(str(settings.value("fallback_to_procedural")).lower() in ("true", "1"))
             w = _get_attr(self, "prompt")
             if w is not None and settings.value("prompt") is not None:
                 if hasattr(w, "setPlainText"):
@@ -1075,6 +1218,9 @@ class AIStrokePainterDocker(DockWidget):
             w = _get_attr(self, "custom_instructions")
             if w is not None and hasattr(w, "text"):
                 settings.setValue("custom_instructions", w.text())
+            w = _get_attr(self, "fallback_to_procedural")
+            if w is not None and hasattr(w, "isChecked"):
+                settings.setValue("fallback_to_procedural", w.isChecked())
             w = _get_attr(self, "prompt")
             if w is not None and hasattr(w, "toPlainText"):
                 settings.setValue("prompt", w.toPlainText())
@@ -1255,7 +1401,12 @@ class AIStrokePainterDocker(DockWidget):
         )
         if file_path and Path(file_path).is_file():
             try:
-                self._image_bytes = Path(file_path).read_bytes()
+                image_path = Path(file_path)
+                with image_path.open("rb") as image_handle:
+                    image_data = image_handle.read(MAX_REFERENCE_IMAGE_BYTES + 1)
+                if len(image_data) > MAX_REFERENCE_IMAGE_BYTES:
+                    raise ValueError(f"参照画像は {MAX_REFERENCE_IMAGE_BYTES // (1024 * 1024)}MB 以下にしてください")
+                self._image_bytes = image_data
                 lbl = _get_attr(self, "image_status_label")
                 if lbl is not None and hasattr(lbl, "setText"):
                     lbl.setText(Path(file_path).name)
@@ -1277,6 +1428,9 @@ class AIStrokePainterDocker(DockWidget):
         self._log_debug("[参照画像クリア]")
 
     def _test_api_connection(self) -> None:
+        existing_worker = _get_attr(self, "_connection_worker")
+        if existing_worker is not None and existing_worker.isRunning():
+            return
         self._log_debug("[API 接続テスト開始]")
         try:
             b_w = _get_attr(self, "base_url")
@@ -1316,13 +1470,33 @@ class AIStrokePainterDocker(DockWidget):
                     custom_system_prompt=custom_val,
                     vision_resolution=vres_val,
                 ),
-                log_callback=self._log_debug,
             )
-            msg = planner.test_connection()
-            QMessageBox.information(self, "API 接続テスト", msg)
+            worker = ApiConnectionWorker(planner)
+            self._connection_worker = worker
+            worker.debug_log.connect(self._log_debug)
+            worker.succeeded.connect(self._on_connection_test_succeeded)
+            worker.failed.connect(self._on_connection_test_failed)
+            worker.finished.connect(self._on_connection_test_finished)
+            btn = _get_attr(self, "test_conn_btn")
+            if btn is not None and hasattr(btn, "setEnabled"):
+                btn.setEnabled(False)
+            worker.start()
         except Exception as exc:
             self._log_debug(f"[API 接続テスト失敗] {exc}")
             QMessageBox.critical(self, "接続テスト失敗", str(exc))
+
+    def _on_connection_test_succeeded(self, message: str) -> None:
+        QMessageBox.information(self, "API 接続テスト", message)
+
+    def _on_connection_test_failed(self, message: str) -> None:
+        self._log_debug(f"[API 接続テスト失敗] {message}")
+        QMessageBox.critical(self, "接続テスト失敗", message)
+
+    def _on_connection_test_finished(self) -> None:
+        btn = _get_attr(self, "test_conn_btn")
+        if btn is not None and hasattr(btn, "setEnabled"):
+            btn.setEnabled(True)
+        self._connection_worker = None
 
     def _update_planner_settings_state(self, *_args: Any) -> None:
         is_openai = self._is_openai_compatible_mode()
@@ -1365,6 +1539,7 @@ class AIStrokePainterDocker(DockWidget):
         top_w = _get_attr(self, "top_p")
         cust_w = _get_attr(self, "custom_instructions")
         vres_w = _get_attr(self, "vision_res")
+        fallback_w = _get_attr(self, "fallback_to_procedural")
 
         base_url_val = b_w.text() if b_w is not None and hasattr(b_w, "text") else "https://api.openai.com/v1"
         model_val = m_w.text() if m_w is not None and hasattr(m_w, "text") else "gpt-4o"
@@ -1378,7 +1553,7 @@ class AIStrokePainterDocker(DockWidget):
         vres = int(vres_w.currentData() or 512) if vres_w is not None and hasattr(vres_w, "currentData") else 512
 
         self._log_debug(
-            f"[エンジン選択] OpenAI 互換 API (Base URL: {base_url_val}, Model: {model_val}, MaxTokens: {max_tokens_val}, ReasoningEffort: {effort_val}, Temp: {temp_val:.2f}, TopP: {top_p_val:.2f}, VisionRes: {vres})"
+            f"[エンジン選択] OpenAI 互換 API (Base URL: {_safe_endpoint_label(base_url_val)}, Model: {model_val}, MaxTokens: {max_tokens_val}, ReasoningEffort: {effort_val}, Temp: {temp_val:.2f}, TopP: {top_p_val:.2f}, VisionRes: {vres})"
         )
         return OpenAICompatiblePlanner(
             OpenAICompatibleSettings(
@@ -1392,6 +1567,9 @@ class AIStrokePainterDocker(DockWidget):
                 top_p=top_p_val,
                 custom_system_prompt=custom_val,
                 vision_resolution=vres,
+                fallback_to_procedural=(
+                    fallback_w.isChecked() if fallback_w is not None and hasattr(fallback_w, "isChecked") else False
+                ),
             ),
             log_callback=self._log_debug,
         )
@@ -1410,15 +1588,27 @@ class AIStrokePainterDocker(DockWidget):
         self._log_debug("[UI] 停止ボタンが押下されました")
 
     def run(self) -> None:
-        document: Any | None = Krita.instance().activeDocument() if Krita.instance() is not None else None
+        app = Krita.instance()
+        document: Any | None = app.activeDocument() if app is not None else None
         if document is None:
             QMessageBox.warning(
                 self, "AI Stroke Painter", "先にドキュメントを開いてください。描画先キャンバスがありません。"
             )
             return
 
+        window = getattr(app, "activeWindow", lambda: None)() if app is not None else None
+        active_view = getattr(window, "activeView", lambda: None)() if window is not None else None
+        if active_view is None:
+            QMessageBox.warning(self, "AI Stroke Painter", "描画対象のアクティブビューを取得できませんでした。")
+            return
+        view_document = getattr(active_view, "document", lambda: document)()
+        if view_document is not None and view_document != document:
+            QMessageBox.warning(self, "AI Stroke Painter", "アクティブビューと描画対象ドキュメントが一致しません。")
+            return
+
         self._save_settings()
         self._active_doc = document
+        self._active_view = active_view
         self._cancel = False
         run_b = _get_attr(self, "run_btn")
         if run_b is not None and hasattr(run_b, "setEnabled"):
@@ -1436,6 +1626,11 @@ class AIStrokePainterDocker(DockWidget):
         prof_w = _get_attr(self, "brush_profile")
         bs_w = _get_attr(self, "brush_size_multiplier")
         op_w = _get_attr(self, "opacity_multiplier")
+        lm_w = _get_attr(self, "layer_mode")
+        lp_w = _get_attr(self, "layer_prefix")
+        ei_w = _get_attr(self, "event_interval")
+        sj_w = _get_attr(self, "save_json")
+        ss_w = _get_attr(self, "save_svg_chk")
 
         max_iters = (
             iter_w.value()
@@ -1446,6 +1641,21 @@ class AIStrokePainterDocker(DockWidget):
         profile = (prof_w.currentData() or "auto") if prof_w is not None and hasattr(prof_w, "currentData") else "auto"
         size_val = bs_w.value() if bs_w is not None and hasattr(bs_w, "value") else 1.0
         op_val = op_w.value() if op_w is not None and hasattr(op_w, "value") else 100
+        self._run_render_options = {
+            "size_multiplier": float(size_val),
+            "opacity_multiplier": float(op_val) / 100.0,
+            "layer_mode": (
+                str(lm_w.currentData() or "multi_layer")
+                if lm_w is not None and hasattr(lm_w, "currentData")
+                else "multi_layer"
+            ),
+            "layer_prefix": (
+                str(lp_w.text().strip() or "AI Artwork") if lp_w is not None and hasattr(lp_w, "text") else "AI Artwork"
+            ),
+            "event_interval": int(ei_w.value()) if ei_w is not None and hasattr(ei_w, "value") else 30,
+            "save_json": bool(sj_w.isChecked()) if sj_w is not None and hasattr(sj_w, "isChecked") else False,
+            "save_svg": bool(ss_w.isChecked()) if ss_w is not None and hasattr(ss_w, "isChecked") else False,
+        }
 
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         self._log_debug(f"\n========== 描画タスク開始 [{now_str}] ==========")
@@ -1459,6 +1669,10 @@ class AIStrokePainterDocker(DockWidget):
             st.setText("描画計画を生成中… 停止できます。")
 
         try:
+            canvas_port = _get_attr(self, "canvas_port")
+            if canvas_port is not None and hasattr(canvas_port, "begin_render_session"):
+                canvas_port.begin_render_session(document)
+                self._canvas_session_open = True
             planner = self._planner()
             prompt_w = _get_attr(self, "prompt")
             seed_w = _get_attr(self, "seed")
@@ -1538,16 +1752,25 @@ class AIStrokePainterDocker(DockWidget):
 
         size_mult = float(bs_w.value()) if bs_w is not None and hasattr(bs_w, "value") else 1.0
         op_mult = (float(op_w.value()) / 100.0) if op_w is not None and hasattr(op_w, "value") else 1.0
+        render_options = _get_attr(self, "_run_render_options") or {}
+        size_mult = float(render_options.get("size_multiplier", size_mult))
+        op_mult = float(render_options.get("opacity_multiplier", op_mult))
 
         if prev_w is not None and hasattr(prev_w, "set_plan"):
             try:
                 prev_w.set_plan(plan, size_multiplier=size_mult, opacity_multiplier=op_mult)
             except TypeError:
-                prev_w.set_plan(plan)
+                try:
+                    prev_w.set_plan(plan)
+                except Exception as exc:
+                    self._log_debug(f"[プレビュー更新失敗] {exc}")
+            except Exception as exc:
+                self._log_debug(f"[プレビュー更新失敗] {exc}")
 
         active_doc = _get_attr(self, "_active_doc")
         document = active_doc or (Krita.instance().activeDocument() if Krita.instance() is not None else None)
 
+        render_error: str | None = None
         try:
             if document is None:
                 st_w = _get_attr(self, "status")
@@ -1564,24 +1787,35 @@ class AIStrokePainterDocker(DockWidget):
                 return
 
             paths = []
-            if sj_w is not None and hasattr(sj_w, "isChecked") and sj_w.isChecked():
-                saved_json_path = save_plan(plan)
-                paths.append(str(saved_json_path))
-                self._log_debug(f"[JSON保存] {saved_json_path}")
-            if ss_w is not None and hasattr(ss_w, "isChecked") and ss_w.isChecked():
-                saved_svg_path = save_svg(plan)
-                paths.append(str(saved_svg_path))
-                self._log_debug(f"[SVG保存] {saved_svg_path}")
-
+            save_json_enabled = bool(
+                render_options.get("save_json", sj_w is not None and hasattr(sj_w, "isChecked") and sj_w.isChecked())
+            )
+            save_svg_enabled = bool(
+                render_options.get("save_svg", ss_w is not None and hasattr(ss_w, "isChecked") and ss_w.isChecked())
+            )
             l_mode = (
-                str(lm_w.currentData() or "multi_layer")
-                if lm_w is not None and hasattr(lm_w, "currentData")
-                else "multi_layer"
+                str(render_options["layer_mode"])
+                if "layer_mode" in render_options
+                else (
+                    str(lm_w.currentData() or "multi_layer")
+                    if lm_w is not None and hasattr(lm_w, "currentData")
+                    else "multi_layer"
+                )
             )
             l_prefix = (
-                str(lp_w.text().strip() or "AI Artwork") if lp_w is not None and hasattr(lp_w, "text") else "AI Artwork"
+                str(render_options["layer_prefix"])
+                if "layer_prefix" in render_options
+                else (
+                    str(lp_w.text().strip() or "AI Artwork")
+                    if lp_w is not None and hasattr(lp_w, "text")
+                    else "AI Artwork"
+                )
             )
-            e_interval = int(ei_w.value()) if ei_w is not None and hasattr(ei_w, "value") else 30
+            e_interval = int(
+                render_options.get(
+                    "event_interval", int(ei_w.value()) if ei_w is not None and hasattr(ei_w, "value") else 30
+                )
+            )
 
             self._log_debug(
                 f"[描画レンダリング開始] ストローク本数={len(plan.strokes)}, レイヤーモード={l_mode}, プレフィックス={l_prefix}, 太さ={size_mult}x, 不透明度={op_mult * 100:.0f}%"
@@ -1595,7 +1829,19 @@ class AIStrokePainterDocker(DockWidget):
                 layer_mode=l_mode,
                 layer_prefix=l_prefix,
                 event_interval=e_interval,
+                view=_get_attr(self, "_active_view"),
             )
+            render_worker = _get_attr(self, "_worker")
+            is_final_iteration = plan.iteration >= int(getattr(render_worker, "max_iterations", plan.iteration))
+            if not self.is_cancelled() and is_final_iteration:
+                if save_json_enabled:
+                    saved_json_path = save_plan(plan)
+                    paths.append(str(saved_json_path))
+                    self._log_debug(f"[JSON保存] {saved_json_path}")
+                if save_svg_enabled:
+                    saved_svg_path = save_svg(plan)
+                    paths.append(str(saved_svg_path))
+                    self._log_debug(f"[SVG保存] {saved_svg_path}")
             suffix = f" ({', '.join(paths)})" if paths else ""
             st_w = _get_attr(self, "status")
             if self.is_cancelled():
@@ -1607,6 +1853,7 @@ class AIStrokePainterDocker(DockWidget):
                     st_w.setText(f"描画完了: {rendered}本を生成しました{suffix}")
                 self._log_debug(f"[描画完了] 合計 {rendered} 本をキャンバスに描画しました")
         except Exception as exc:
+            render_error = str(exc) or exc.__class__.__name__
             self._log_debug(f"[描画レンダリング例外] {exc}\n{traceback.format_exc()}")
             st_w = _get_attr(self, "status")
             if st_w is not None and hasattr(st_w, "setText"):
@@ -1614,32 +1861,35 @@ class AIStrokePainterDocker(DockWidget):
         finally:
             worker = _get_attr(self, "_worker")
             if worker is not None:
-                if (
+                if render_error is not None and hasattr(worker, "notify_render_failed"):
+                    worker.notify_render_failed(render_error)
+                elif (
                     document is not None
                     and not self.is_cancelled()
                     and hasattr(worker, "provide_canvas_capture")
                     and getattr(worker, "max_iterations", 1) > plan.iteration
                 ):
-                    if plan.request_canvas_image:
-                        vres_w = _get_attr(self, "vision_res")
-                        vres = (
-                            int(vres_w.currentData() or 512)
-                            if vres_w is not None and hasattr(vres_w, "currentData")
-                            else 512
-                        )
-                        self._log_debug(
-                            f"[AI画像要求] AIが視覚確認を要求したため、現在のキャンバスキャプチャを取得します (解像度: {vres}x{vres})..."
-                        )
+                    vres_w = _get_attr(self, "vision_res")
+                    vres = (
+                        int(vres_w.currentData() or 512)
+                        if vres_w is not None and hasattr(vres_w, "currentData")
+                        else 512
+                    )
+                    self._log_debug(
+                        f"[自動改善] 現在のキャンバスを視覚評価するためキャプチャします (解像度: {vres}x{vres})..."
+                    )
+                    try:
                         cap_img = cp.capture_canvas(document, vres, vres)
-                        self._log_debug(
-                            f"[AI画像要求] キャプチャ完了 ({len(cap_img)} bytes)。次ステップへ画像を送信します"
-                        )
-                        worker.provide_canvas_capture(cap_img)
+                    except Exception as exc:
+                        cap_img = b""
+                        self._log_debug(f"[自動改善] キャンバス取得エラー: {exc}")
+                    if cap_img:
+                        self._log_debug(f"[自動改善] キャプチャ完了 ({len(cap_img)} bytes)。次ステップへ送信します")
                     else:
                         self._log_debug(
-                            "[高速進行] AIからの画像要求がないため、画像送信をスキップして次ステップへ高速進行します"
+                            "[自動改善] キャンバス取得に失敗したため、次ステップはテキスト情報のみで続行します"
                         )
-                        worker.provide_canvas_capture(None)
+                    worker.provide_canvas_capture(cap_img)
                 elif hasattr(worker, "notify_render_done"):
                     worker.notify_render_done()
             if worker is None or not (hasattr(worker, "isRunning") and worker.isRunning()):
@@ -1660,9 +1910,29 @@ class AIStrokePainterDocker(DockWidget):
         self._reset_run_state()
 
     def _on_worker_finished(self) -> None:
-        self._reset_run_state()
+        worker = _get_attr(self, "_worker")
+        succeeded = bool(worker is not None and getattr(worker, "completed_successfully", False))
+        self._reset_run_state(commit_session=succeeded)
 
-    def _reset_run_state(self) -> None:
+    def _finish_canvas_session(self, commit: bool) -> None:
+        if not bool(_get_attr(self, "_canvas_session_open", False)):
+            return
+        canvas_port = _get_attr(self, "canvas_port")
+        try:
+            if canvas_port is not None and hasattr(canvas_port, "end_render_session"):
+                canvas_port.end_render_session(commit=commit)
+            self._log_debug(
+                "[描画セッション] 生成結果を確定しました"
+                if commit
+                else "[描画セッション] 生成結果をロールバックしました"
+            )
+        except Exception as exc:
+            self._log_debug(f"[描画セッション終了失敗] {exc}")
+        finally:
+            self._canvas_session_open = False
+
+    def _reset_run_state(self, commit_session: bool = False) -> None:
+        self._finish_canvas_session(commit_session)
         prog = _get_attr(self, "progress")
         if prog is not None and hasattr(prog, "setRange"):
             prog.setRange(0, 1)
@@ -1674,4 +1944,6 @@ class AIStrokePainterDocker(DockWidget):
         if s_btn is not None and hasattr(s_btn, "setEnabled"):
             s_btn.setEnabled(False)
         self._active_doc = None
+        self._active_view = None
+        self._run_render_options = None
         self._worker = None

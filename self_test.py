@@ -10,23 +10,28 @@ import tempfile
 from threading import Thread
 from typing import Any, cast
 import unittest
+from unittest.mock import patch
 from zipfile import ZipFile
 
 from .build_plugin import PACKAGE_NAME, build
-from .docker import AIStrokePainterDocker, PlanWorker
+from .docker import AIStrokePainterDocker, ApiConnectionWorker, PlanWorker, _confirm, _safe_endpoint_label
 from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint, VisionCritique
-from .image_converter import ImageStrokeConverter
+from .image_converter import ImageStrokeConverter, _image_dimensions_from_header, _trace_edge_paths
 from .krita_adapter import KritaCanvasAdapter
 from .llm_planner import (
     LLMPlannerError,
     OpenAICompatiblePlanner,
     OpenAICompatibleSettings,
     _attempt_json_repair,
+    _CrossOriginRedirectError,
     _detect_image_mime_type,
+    _endpoint_origin_label,
     _extract_content_from_response,
     _extract_json_object,
     _is_reasoning_model,
     _plan_from_response,
+    _redact_sensitive_text,
+    _SameOriginRedirectHandler,
 )
 from .planner import RuleBasedPlanner
 from .procedural import (
@@ -44,7 +49,9 @@ from .qt_compat import (
     QPoint,
     QSettings,
     QWidget,
+    argb32_image_format,
     password_echo_mode,
+    write_only_open_mode,
 )
 from .storage import load_plan, save_plan, save_svg
 
@@ -159,6 +166,9 @@ class PlannerAndStorageTests(unittest.TestCase):
                 self.assertGreaterEqual(point.pressure, 0.0)
                 self.assertLessEqual(point.pressure, 1.0)
 
+        with self.assertRaises(ValueError):
+            planner.plan("invalid iteration", 1, 1, 100, 100, iteration=2, max_iterations=1)
+
     def test_procedural_all_domains_generate_valid_strokes(self) -> None:
         # Character
         char_strokes = generate_character_strokes("girl", 42, 20, 800, 600)
@@ -185,6 +195,18 @@ class PlannerAndStorageTests(unittest.TestCase):
         self.assertTrue(len(city_strokes) > 0)
         cat_strokes = generate_creature_strokes("cute cat", 42, 20, 800, 600)
         self.assertTrue(len(cat_strokes) > 0)
+
+        # 同一 seed でも対象種・人物属性に応じて形状とストローク集合が変わること
+        creature_fingerprints = {
+            tuple(stroke.id for stroke in generate_creature_strokes(subject, 42, 40, 800, 600))
+            for subject in ("cute cat", "friendly dog", "flying bird", "fire dragon")
+        }
+        self.assertEqual(len(creature_fingerprints), 4)
+        girl_ids = tuple(stroke.id for stroke in generate_character_strokes("anime girl", 42, 80, 800, 600))
+        boy_ids = tuple(stroke.id for stroke in generate_character_strokes("anime boy", 42, 80, 800, 600))
+        female_ids = tuple(stroke.id for stroke in generate_character_strokes("female portrait", 42, 80, 800, 600))
+        self.assertNotEqual(girl_ids, boy_ids)
+        self.assertEqual(girl_ids, female_ids)
 
         # Dispatcher Plan
         plan = generate_procedural_plan("cute cat", 42, 20, 800, 600)
@@ -230,6 +252,37 @@ class PlannerAndStorageTests(unittest.TestCase):
         svg_content = plan.to_svg(100, 100)
         ET.fromstring(svg_content)
 
+    def test_plan_canvas_dimensions_round_trip_and_drive_svg(self) -> None:
+        plan = RuleBasedPlanner().plan("canvas dimensions", 7, 3, 640, 360)
+        loaded = DrawingPlan.from_dict(plan.as_dict())
+        self.assertEqual((loaded.canvas_width, loaded.canvas_height), (640.0, 360.0))
+        self.assertIn('viewBox="0 0 640.0 360.0"', loaded.to_svg())
+
+        alpha_plan = DrawingPlan(
+            "alpha",
+            1,
+            [
+                Stroke(
+                    "alpha-stroke",
+                    [StrokePoint(0, 0, 1.0, 0), StrokePoint(10, 10, 1.0, 10)],
+                    color="#ff000080",
+                )
+            ],
+            canvas_width=20,
+            canvas_height=20,
+        )
+        alpha_svg = alpha_plan.to_svg()
+        self.assertIn('stroke="#ff0000"', alpha_svg)
+        self.assertIn('stroke-opacity="0.50"', alpha_svg)
+
+    def test_domain_rejects_oversized_direct_models(self) -> None:
+        point = StrokePoint(1, 1, 0.5, 0)
+        with self.assertRaises(PlanValidationError):
+            Stroke("too-many-points", [point] * 1001)
+        valid_stroke = Stroke("valid", [point, StrokePoint(2, 2, 0.5, 10)])
+        with self.assertRaises(PlanValidationError):
+            DrawingPlan("too-many-strokes", 1, [valid_stroke] * 2001)
+
     def test_invalid_domain_data_is_rejected(self) -> None:
         with self.assertRaises(PlanValidationError):
             StrokePoint(0, 0, 1.1, 0)
@@ -237,6 +290,18 @@ class PlannerAndStorageTests(unittest.TestCase):
             Stroke("one-point", [StrokePoint(0, 0, 0.5, 0)])
         with self.assertRaises(PlanValidationError):
             DrawingPlan.from_dict({"schema_version": 99, "prompt": "", "seed": 0, "strokes": []})
+        with self.assertRaises(PlanValidationError):
+            DrawingPlan.from_dict({"prompt": 123, "seed": 0, "strokes": []})
+        with self.assertRaises(PlanValidationError):
+            Stroke.from_dict({"id": 123, "points": [[0, 0], [1, 1]]})
+        with self.assertRaises(PlanValidationError):
+            StrokePoint.from_dict([0, 0, 0.5, "10"])
+        with self.assertRaises(PlanValidationError):
+            Stroke("bad-layer", [StrokePoint(0, 0, 0.5, 0), StrokePoint(1, 1, 0.5, 10)], layer_name="")
+        with self.assertRaises(PlanValidationError):
+            DrawingPlan("bad-iteration", 0, (), iteration=0)
+        with self.assertRaises(PlanValidationError):
+            VisionCritique.from_dict({"evaluation": [], "suggested_action": "next", "iteration": 1})
 
     def test_compact_points_domain_parsing(self) -> None:
         p2 = StrokePoint.from_dict([100.5, 200.5])
@@ -273,11 +338,10 @@ class PlannerAndStorageTests(unittest.TestCase):
         loaded = VisionCritique.from_dict(d)
         self.assertEqual(loaded.suggested_action, "Add clean lineart")
 
-    def test_image_converter_fallback_on_dummy_data(self) -> None:
+    def test_image_converter_rejects_invalid_data_without_silent_fallback(self) -> None:
         converter = ImageStrokeConverter()
-        plan = converter.convert_image_to_plan(b"not-a-valid-image", "cat", 42, 10, 800, 600)
-        self.assertIsInstance(plan, DrawingPlan)
-        self.assertTrue(len(plan.strokes) > 0)
+        with self.assertRaises(ValueError):
+            converter.convert_image_to_plan(b"not-a-valid-image", "cat", 42, 10, 800, 600)
 
     def test_image_converter_zero_dimension_fallback(self) -> None:
         class FakeZeroDimImage:
@@ -344,6 +408,67 @@ class PlannerAndStorageTests(unittest.TestCase):
         self.assertIn(5, converted_formats)
         self.assertTrue(len(plan.strokes) > 0)
 
+    def test_image_converter_preserves_aspect_and_traces_connected_edges(self) -> None:
+        scaled_sizes: list[tuple[int, int]] = []
+
+        class FakeColor:
+            def red(self) -> int:
+                return 255
+
+            def green(self) -> int:
+                return 255
+
+            def blue(self) -> int:
+                return 255
+
+            def alpha(self) -> int:
+                return 0
+
+        class FakeImage:
+            Format_ARGB32 = 5
+
+            def width(self) -> int:
+                return 400
+
+            def height(self) -> int:
+                return 100
+
+            def scaled(self, width: int, height: int) -> Any:
+                scaled_sizes.append((width, height))
+                return self
+
+            def convertToFormat(self, _fmt: Any) -> Any:  # noqa: N802
+                return self
+
+            def pixelColor(self, _x: int, _y: int) -> FakeColor:  # noqa: N802
+                return FakeColor()
+
+        import random
+
+        converter = ImageStrokeConverter()
+        converter.qimage_cls = FakeImage
+        strokes = converter._process_qimage(FakeImage(), 1, 20, 200, 200, random.Random(1))
+        self.assertEqual(scaled_sizes, [(160, 40)])
+        self.assertEqual(strokes, [])
+
+        mask = [[False] * 5 for _ in range(5)]
+        for coordinate in ((1, 1), (2, 2), (3, 3)):
+            mask[coordinate[1]][coordinate[0]] = True
+        self.assertEqual(_trace_edge_paths(mask, 10), [[(1, 1), (2, 2), (3, 3)]])
+
+    def test_image_header_dimensions_prevent_oversized_decode(self) -> None:
+        oversized_png = b"\x89PNG\r\n\x1a\n" + (b"\x00" * 8) + (10_000).to_bytes(4, "big") * 2
+        self.assertEqual(_image_dimensions_from_header(oversized_png), (10_000, 10_000))
+
+        class MustNotDecode:
+            def __init__(self) -> None:
+                raise AssertionError("oversized image was allocated")
+
+        converter = ImageStrokeConverter()
+        converter.qimage_cls = MustNotDecode
+        with self.assertRaises(ValueError):
+            converter.convert_image_to_plan(oversized_png, "oversized", 1, 1, 100, 100)
+
 
 class PluginBuildTests(unittest.TestCase):
     @staticmethod
@@ -370,8 +495,31 @@ class PluginBuildTests(unittest.TestCase):
         self.assertIn(f"{PACKAGE_NAME}/image_converter.py", names)
         self.assertNotIn(f"{PACKAGE_NAME}/{PACKAGE_NAME}.desktop", names)
 
+    def test_build_fails_when_a_required_file_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / f"{PACKAGE_NAME}.zip"
+            with (
+                patch("ai_stroke_painter.build_plugin.PACKAGE_FILES", ("missing-required-file.py",)),
+                self.assertRaises(FileNotFoundError),
+            ):
+                build(output)
+            self.assertFalse(output.exists())
+
 
 class OpenAICompatiblePlannerTests(unittest.TestCase):
+    def test_cross_origin_redirect_is_rejected_before_credentials_can_follow(self) -> None:
+        from urllib.request import Request
+
+        request = Request(
+            "https://api.example.test/v1/chat/completions",
+            data=b"{}",
+            headers={"Authorization": "Bearer secret"},
+            method="POST",
+        )
+        handler = _SameOriginRedirectHandler()
+        with self.assertRaises(_CrossOriginRedirectError):
+            handler.redirect_request(request, None, 302, "redirect", {}, "https://attacker.test/collect")
+
     def test_calls_chat_completions_and_validates_plan(self) -> None:
         expected_plan = {
             "schema_version": 1,
@@ -454,6 +602,9 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
 
         s4 = OpenAICompatibleSettings("https://custom.api/v1/chat/completions", "gpt-4o")
         self.assertEqual(s4.endpoint_url, "https://custom.api/v1/chat/completions")
+
+        s5 = OpenAICompatibleSettings("https://example.test/path/api.openai.com", "model")
+        self.assertEqual(s5.endpoint_url, "https://example.test/path/api.openai.com/chat/completions")
 
     def test_sanitizes_out_of_bounds_and_normalizes_coords_llm_plan(self) -> None:
         response_clamped = {
@@ -643,7 +794,7 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         step1 = _system_instruction(iteration=1, max_iterations=3, prompt="sakura tree")
         self.assertIn("Step 1/3", step1)
         self.assertIn("MULTI-STEP PROGRESSIVE DRAWING MODE", step1)
-        self.assertIn("ON-DEMAND VISUAL INSPECTION", step1)
+        self.assertIn("AUTOMATIC VISUAL FEEDBACK", step1)
         self.assertIn("Flats", step1)
 
         step2 = _system_instruction(iteration=2, max_iterations=3, prompt="sakura tree")
@@ -654,7 +805,7 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertIn("Step 3/3", step3)
         self.assertIn("FINAL", step3)
 
-    def test_multi_stage_conversation_history_and_on_demand_capture(self) -> None:
+    def test_multi_stage_conversation_history_and_visual_feedback(self) -> None:
         received_payloads: list[dict[str, Any]] = []
 
         step1_response = {
@@ -739,23 +890,37 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertEqual(len(plan1.strokes), 1)
         self.assertFalse(plan1.request_canvas_image)
 
-        # Step 2: 実行 (AI要求なしのため canvas_image=None で呼び出し)
-        plan2 = planner.plan("mountain landscape", 42, 1, 800, 600, canvas_image=None, iteration=2, max_iterations=2)
+        # Step 2: 前回描画のキャンバスを添付し、視覚評価を次の計画へ反映する。
+        plan2 = planner.plan(
+            "mountain landscape",
+            42,
+            1,
+            800,
+            600,
+            canvas_image=b"fake-canvas-png",
+            iteration=2,
+            max_iterations=2,
+        )
         self.assertEqual(len(plan2.strokes), 1)
         self.assertTrue(plan2.request_canvas_image)
+        self.assertEqual(plan2.iteration, 2)
 
-        # Step 2 のペイロード検証: 前ステップの会話履歴（assistant 要約）が含まれており、canvas_image なしのため text のみ
+        # Step 2 のペイロード検証: 前ステップの会話履歴とキャンバス画像が含まれる。
         self.assertEqual(len(received_payloads), 2)
         step2_messages = received_payloads[1]["messages"]
         # system (0), user_step1 (1), assistant_step1 (2), user_step2 (3)
         self.assertEqual(len(step2_messages), 4)
         self.assertEqual(step2_messages[0]["role"], "system")
         self.assertEqual(step2_messages[1]["role"], "user")
+        self.assertIsInstance(step2_messages[1]["content"], str)
+        self.assertNotIn("image_url", step2_messages[1]["content"])
         self.assertEqual(step2_messages[2]["role"], "assistant")
         self.assertEqual(step2_messages[3]["role"], "user")
-        # Step 2 user_content は画像なし
-        self.assertIsInstance(step2_messages[3]["content"], str)
-        self.assertNotIn("image_url", step2_messages[3]["content"])
+        step2_content = step2_messages[3]["content"]
+        self.assertIsInstance(step2_content, list)
+        self.assertTrue(any(part.get("type") == "image_url" for part in step2_content))
+        text_part = next(part["text"] for part in step2_content if part.get("type") == "text")
+        self.assertIn("Visually inspect", text_part)
 
     def test_extracts_json_with_surrounding_markdown_and_commentary(self) -> None:
         raw_text = (
@@ -1090,8 +1255,8 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         msg = planner.test_connection()
         self.assertIn("接続成功", msg)
         self.assertEqual(len(attempts), 1)
-        # max_tokens が 10 等に制限されず 16384 (十分なトークン数) で送信されていること
-        self.assertEqual(attempts[0]["max_completion_tokens"], 16384)
+        # 接続確認に過大な生成枠を使わず、十分な上限 2048 へ制限すること
+        self.assertEqual(attempts[0]["max_completion_tokens"], 2048)
         self.assertEqual(attempts[0]["messages"], [{"role": "user", "content": "Respond with 'OK'."}])
         # 接続テスト時に DrawingPlan JSON 救済の警告が出ないこと
         self.assertFalse(any("途切れ JSON の救済を試みます" in log for log in logs))
@@ -1546,7 +1711,7 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertEqual(plan.strokes[1].id, "harvest_2")
 
     def test_emergency_fallback_to_procedural_when_llm_exhausted(self) -> None:
-        # LLM が思考文のみでトークン枯渇しストロークが一切出力されなかった場合の自動プロシージャル救済
+        # LLM が思考文のみで枯渇した場合、明示設定時だけプロシージャル救済する。
         class FakeExhaustedOpener:
             def __call__(self, request: Any, timeout: float = 10.0) -> Any:
                 class MockResponse:
@@ -1574,12 +1739,42 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
                 return MockResponse()
 
         planner = OpenAICompatiblePlanner(
-            OpenAICompatibleSettings("https://example.test/v1", "thinking-model"),
+            OpenAICompatibleSettings(
+                "https://example.test/v1",
+                "thinking-model",
+                max_retries=1,
+                fallback_to_procedural=True,
+            ),
             opener=FakeExhaustedOpener(),
         )
         plan = planner.plan("anime girl portrait", 42, 20, 1000, 1000)
         self.assertEqual(plan.prompt, "anime girl portrait")
         self.assertGreaterEqual(len(plan.strokes), 1)
+        self.assertEqual(plan.metadata["planner_fallback"], "procedural")
+        self.assertEqual((plan.canvas_width, plan.canvas_height), (1000.0, 1000.0))
+
+        strict_planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "thinking-model", max_retries=1),
+            opener=FakeExhaustedOpener(),
+        )
+        with self.assertRaises(LLMPlannerError):
+            strict_planner.plan("anime girl portrait", 42, 20, 1000, 1000)
+
+    def test_sensitive_error_text_is_redacted(self) -> None:
+        message = (
+            'Authorization: "Bearer abcdef123456" api_key="sk-supersecret123456" '
+            "api-key=custom-secret https://alice:password@example.test/v1"
+        )
+        redacted = _redact_sensitive_text(message)
+        self.assertNotIn("abcdef123456", redacted)
+        self.assertNotIn("supersecret123456", redacted)
+        self.assertNotIn("custom-secret", redacted)
+        self.assertNotIn("password", redacted)
+        self.assertIn("REDACTED", redacted)
+        self.assertEqual(
+            _endpoint_origin_label("https://example.test/secret-token/v1/chat/completions"),
+            "https://example.test",
+        )
 
     def test_parameter_fallback_on_400_reasoning_effort_error(self) -> None:
         import io
@@ -1744,7 +1939,7 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         sanitized = _validate_and_sanitize_plan(plan, "test drawing", 42, 10, 800, 600)
         self.assertEqual(len(sanitized.strokes), 1)
         times = [p.time_ms for p in sanitized.strokes[0].points]
-        self.assertTrue(all(b >= a for a, b in zip(times, times[1:])))
+        self.assertTrue(all(b >= a for a, b in zip(times, times[1:], strict=False)))
         self.assertEqual(times[0], 100)
         self.assertGreaterEqual(times[1], 100)
         self.assertGreaterEqual(times[2], times[1])
@@ -1814,6 +2009,87 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
 
 
 class CanvasAdapterTests(unittest.TestCase):
+    def test_render_session_reuses_output_and_rolls_back_all_iterations(self) -> None:
+        committed_root = _FakeNode("root", "grouplayer")
+        committed_document = _FakeDocument(root=committed_root)
+        plan = RuleBasedPlanner().plan("curve", 3, 2, 100, 100)
+        adapter = KritaCanvasAdapter()
+
+        adapter.begin_render_session(committed_document)
+        adapter.render(committed_document, plan, layer_prefix="Session")
+        adapter.render(committed_document, plan, layer_prefix="Session")
+        self.assertEqual([node.name() for node in committed_root.childNodes()], ["Session"])
+        adapter.end_render_session(commit=True)
+        self.assertEqual([node.name() for node in committed_root.childNodes()], ["Session"])
+
+        rollback_root = _FakeNode("root", "grouplayer")
+        rollback_document = _FakeDocument(root=rollback_root)
+        adapter.begin_render_session(rollback_document)
+        adapter.render(rollback_document, plan, layer_prefix="Rollback")
+        self.assertEqual([node.name() for node in rollback_root.childNodes()], ["Rollback"])
+        self.assertEqual(adapter.render(rollback_document, plan, cancelled=lambda: True), 0)
+        self.assertEqual(rollback_root.childNodes(), [])
+        adapter.end_render_session(commit=False)
+
+    def test_multi_layer_output_is_scoped_to_unique_group(self) -> None:
+        root = _FakeNode("root", "grouplayer")
+        existing_group = _FakeNode("My Art", "grouplayer")
+        existing_layer = _FakeNode("Lineart")
+        existing_group.addChildNode(existing_layer)
+        root.addChildNode(existing_group)
+        document = _FakeDocument(active=existing_layer, root=root)
+
+        plan = RuleBasedPlanner().plan("curve", 3, 2, 100, 100)
+        rendered = KritaCanvasAdapter().render(document, plan, layer_prefix="My Art")
+
+        self.assertEqual(rendered, 2)
+        self.assertEqual([node.name() for node in root.childNodes()], ["My Art", "My Art (2)"])
+        generated_group = root.childNodes()[1]
+        self.assertTrue(generated_group.childNodes())
+        self.assertEqual(existing_layer.lines, [])
+        self.assertIs(document.activeNode(), existing_layer)
+
+    def test_cancelled_or_empty_generated_output_leaves_no_artifacts(self) -> None:
+        root = _FakeNode("root", "grouplayer")
+        document = _FakeDocument(root=root)
+        plan = RuleBasedPlanner().plan("curve", 3, 1, 100, 100)
+        adapter = KritaCanvasAdapter()
+
+        self.assertEqual(adapter.render(document, plan, cancelled=lambda: True, layer_prefix="Cancelled"), 0)
+        self.assertEqual(root.childNodes(), [])
+        self.assertIs(document.activeNode(), root)
+
+        empty_plan = DrawingPlan("empty", 1, ())
+        self.assertEqual(adapter.render(document, empty_plan, layer_prefix="Empty"), 0)
+        self.assertEqual(root.childNodes(), [])
+
+    def test_layer_setup_failure_rolls_back_created_group(self) -> None:
+        root = _FakeNode("root", "grouplayer")
+
+        class FailingDocument(_FakeDocument):
+            def createNode(self, name: str, node_type: str) -> _FakeNode:  # noqa: N802
+                if node_type == "paintlayer":
+                    raise RuntimeError("cannot create paint layer")
+                return super().createNode(name, node_type)
+
+        document = FailingDocument(root=root)
+        plan = RuleBasedPlanner().plan("curve", 3, 1, 100, 100)
+        with self.assertRaises(RuntimeError):
+            KritaCanvasAdapter().render(document, plan, layer_prefix="Failed")
+        self.assertEqual(root.childNodes(), [])
+        self.assertIs(document.activeNode(), root)
+
+    def test_render_rejects_invalid_options(self) -> None:
+        document = _FakeDocument()
+        plan = RuleBasedPlanner().plan("curve", 3, 1, 100, 100)
+        adapter = KritaCanvasAdapter()
+        with self.assertRaises(ValueError):
+            adapter.render(document, plan, brush_size_multiplier=float("nan"))
+        with self.assertRaises(ValueError):
+            adapter.render(document, plan, opacity_multiplier=2.0)
+        with self.assertRaises(ValueError):
+            adapter.render(document, plan, layer_mode="unknown")
+
     def test_existing_target_layer_is_reused_and_pressure_is_unit_range(self) -> None:
         target = _FakeNode(KritaCanvasAdapter.DEFAULT_LAYER_NAME)
         document = _FakeDocument(active=_FakeNode("other"), root=_FakeNode("root", "grouplayer"))
@@ -1867,22 +2143,7 @@ class CanvasAdapterTests(unittest.TestCase):
         adapter = KritaCanvasAdapter()
         cap_bytes = adapter.capture_canvas(document, 256, 256)
         self.assertIsInstance(cap_bytes, bytes)
-        self.assertTrue(len(cap_bytes) > 0)
-
-    def test_fallback_png_is_decodable(self) -> None:
-        import struct
-        import zlib
-
-        from ai_stroke_painter.krita_adapter import _MINIMAL_PNG_BYTES
-
-        self.assertEqual(_MINIMAL_PNG_BYTES[:8], b"\x89PNG\r\n\x1a\n")
-        pos = 8
-        while pos + 12 <= len(_MINIMAL_PNG_BYTES):
-            length = struct.unpack(">I", _MINIMAL_PNG_BYTES[pos : pos + 4])[0]
-            chunk = _MINIMAL_PNG_BYTES[pos + 4 : pos + 12 + length]
-            crc_stored = struct.unpack(">I", chunk[-4:])[0]
-            self.assertEqual(zlib.crc32(chunk[:-4]) & 0xFFFFFFFF, crc_stored)
-            pos += 12 + length
+        self.assertEqual(cap_bytes, b"")
 
     def test_apply_color_to_krita_parses_short_and_full_hex(self) -> None:
         from unittest.mock import MagicMock, patch
@@ -1956,6 +2217,7 @@ class CanvasAdapterTests(unittest.TestCase):
                     id="broad",
                     points=(StrokePoint(30.0, 30.0, 0.5, 0), StrokePoint(40.0, 40.0, 0.7, 10)),
                     brush_preset="Broad",
+                    color="#11223380",
                     size_px=9.0,
                     layer_name="Lineart",
                     opacity=0.8,
@@ -1969,7 +2231,8 @@ class CanvasAdapterTests(unittest.TestCase):
         self.assertEqual(rendered, 2)
         self.assertEqual(view.presets, [fine_preset, broad_preset])
         self.assertEqual(view.sizes, [3.0, 9.0])
-        self.assertEqual(view.opacities, [0.4, 0.8])
+        self.assertEqual(view.opacities[0], 0.4)
+        self.assertAlmostEqual(view.opacities[1], 0.8 * (128 / 255))
 
     def test_qpoint_and_paintline_type_compatibility(self) -> None:
         from ai_stroke_painter.krita_adapter import _qpoint, _qpointf
@@ -1985,6 +2248,17 @@ class CanvasAdapterTests(unittest.TestCase):
         adapter = KritaCanvasAdapter()
         rendered = adapter.render(document, plan)
         self.assertGreaterEqual(rendered, 1)
+
+        class FloatPointNode(_FakeNode):
+            def paintLine(self, start: Any, end: Any, start_pressure: float, end_pressure: float) -> None:  # noqa: N802
+                if type(start).__name__ != "QPointF" or type(end).__name__ != "QPointF":
+                    raise TypeError("QPointF required")
+                self.lines.append((start, end, start_pressure, end_pressure))
+
+        float_node = FloatPointNode(KritaCanvasAdapter.DEFAULT_LAYER_NAME)
+        float_document = _FakeDocument(active=float_node)
+        self.assertGreaterEqual(adapter.render(float_document, plan, layer_mode="active_layer"), 1)
+        self.assertTrue(float_node.lines)
 
     def test_render_resets_color_cache_across_sessions(self) -> None:
         from unittest.mock import MagicMock, patch
@@ -2036,6 +2310,48 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertIs(password_echo_mode(Qt5LineEdit), qt5_password)
         self.assertIs(password_echo_mode(Qt6LineEdit), qt6_password)
 
+    def test_qt5_and_qt6_scoped_io_and_image_enums(self) -> None:
+        qt5_write = object()
+        qt6_write = object()
+        qt5_argb = object()
+        qt6_argb = object()
+
+        class Qt5IODevice:
+            WriteOnly = qt5_write
+
+        class Qt6IODevice:
+            class OpenModeFlag:
+                WriteOnly = qt6_write
+
+        class Qt5Image:
+            Format_ARGB32 = qt5_argb
+
+        class Qt6Image:
+            class Format:
+                Format_ARGB32 = qt6_argb
+
+        self.assertIs(write_only_open_mode(Qt5IODevice), qt5_write)
+        self.assertIs(write_only_open_mode(Qt6IODevice), qt6_write)
+        self.assertIs(argb32_image_format(Qt5Image), qt5_argb)
+        self.assertIs(argb32_image_format(Qt6Image), qt6_argb)
+
+    def test_destructive_confirmation_requires_explicit_yes(self) -> None:
+        from .docker import QMessageBox
+
+        buttons = getattr(QMessageBox, "StandardButton", QMessageBox)
+        yes = buttons.Yes
+        no = buttons.No
+        with patch("ai_stroke_painter.docker.QMessageBox.question", return_value=no):
+            self.assertFalse(_confirm(None, "Confirm", "Proceed?"))
+        with patch("ai_stroke_painter.docker.QMessageBox.question", return_value=yes):
+            self.assertTrue(_confirm(None, "Confirm", "Proceed?"))
+
+    def test_debug_endpoint_label_never_exposes_url_credentials(self) -> None:
+        label = _safe_endpoint_label("https://alice:secret@example.test:8443/v1/")
+        self.assertEqual(label, "https://example.test:8443/v1")
+        self.assertNotIn("alice", label)
+        self.assertNotIn("secret", label)
+
     def test_offline_mode_disables_auto_refine(self) -> None:
         docker = AIStrokePainterDocker()
         docker.auto_refine.setChecked(True)
@@ -2051,6 +2367,30 @@ class WorkerAndDockerTests(unittest.TestCase):
 
         self.assertTrue(docker.auto_refine.isEnabled())
         self.assertTrue(docker.iterations.isEnabled())
+
+    def test_api_connection_worker_runs_without_blocking_caller(self) -> None:
+        class FakePlanner:
+            log_callback: Any = None
+
+            def test_connection(self) -> str:
+                return "connected"
+
+        worker = ApiConnectionWorker(cast(Any, FakePlanner()))
+        messages: list[str] = []
+        finished: list[bool] = []
+        worker.succeeded.connect(messages.append)
+        worker.finished.connect(lambda: finished.append(True))
+        worker.start()
+        if worker._thread is not None:
+            worker._thread.join(timeout=2.0)
+        for _ in range(10):
+            QApplication.processEvents()
+            if finished:
+                break
+
+        self.assertEqual(messages, ["connected"])
+        self.assertEqual(finished, [True])
+        self.assertFalse(worker.isRunning())
 
     def test_qt_compat_stubs_are_functional(self) -> None:
         w = QWidget()
@@ -2108,6 +2448,24 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertTrue(worker.is_cancelled())
         worker.run()
         self.assertEqual(len(received_plans), 0)
+
+    def test_plan_worker_stops_after_render_failure(self) -> None:
+        planner_calls: list[int] = []
+
+        class SpyPlanner(RuleBasedPlanner):
+            def plan(self, *args: Any, **kwargs: Any) -> DrawingPlan:
+                planner_calls.append(int(kwargs.get("iteration", 0)))
+                return super().plan(*args, **kwargs)
+
+        worker = PlanWorker(SpyPlanner(), "cat", 1, 2, 200, 200, max_iterations=3)
+        errors: list[str] = []
+        worker.plan_ready.connect(lambda _plan: worker.notify_render_failed("paint failed"))
+        worker.plan_failed.connect(errors.append)
+
+        worker.run()
+
+        self.assertEqual(planner_calls, [1])
+        self.assertEqual(errors, ["paint failed"])
 
     def test_plan_worker_thread_safe_canvas_capture_passing(self) -> None:
         import time
@@ -2332,6 +2690,7 @@ class WorkerAndDockerTests(unittest.TestCase):
         docker.count = FakeIntWidget(55)
         docker.iterations = FakeIntWidget(4)
         docker.auto_refine = FakeBoolWidget(True)
+        docker.fallback_to_procedural = FakeBoolWidget(True)
         docker.save_json = FakeBoolWidget(True)
         docker.save_svg_chk = FakeBoolWidget(False)
         docker.debug_mode_chk = FakeBoolWidget(True)
@@ -2349,6 +2708,7 @@ class WorkerAndDockerTests(unittest.TestCase):
         docker2.count = FakeIntWidget()
         docker2.iterations = FakeIntWidget()
         docker2.auto_refine = FakeBoolWidget()
+        docker2.fallback_to_procedural = FakeBoolWidget()
         docker2.save_json = FakeBoolWidget()
         docker2.save_svg_chk = FakeBoolWidget()
         docker2.debug_mode_chk = FakeBoolWidget()
@@ -2365,6 +2725,7 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertEqual(docker2.count.value(), 55)
         self.assertEqual(docker2.iterations.value(), 4)
         self.assertTrue(docker2.auto_refine.isChecked())
+        self.assertTrue(docker2.fallback_to_procedural.isChecked())
         self.assertFalse(docker2.save_svg_chk.isChecked())
         self.assertTrue(docker2.debug_mode_chk.isChecked())
 
@@ -2536,7 +2897,30 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertTrue(docker.run_btn.isEnabled())
         self.assertFalse(docker.stop_btn.isEnabled())
 
-    def test_docker_on_plan_ready_on_demand_canvas_capture(self) -> None:
+    def test_docker_commits_only_successful_canvas_sessions(self) -> None:
+        class SessionCanvasPort:
+            def __init__(self) -> None:
+                self.commits: list[bool] = []
+
+            def end_render_session(self, *, commit: bool) -> None:
+                self.commits.append(commit)
+
+        class CompletedWorker:
+            completed_successfully = True
+
+        docker = AIStrokePainterDocker()
+        session_port = SessionCanvasPort()
+        docker.canvas_port = cast(Any, session_port)
+        docker._canvas_session_open = True
+        docker._worker = cast(Any, CompletedWorker())
+        docker._on_worker_finished()
+        self.assertEqual(session_port.commits, [True])
+
+        docker._canvas_session_open = True
+        docker._reset_run_state()
+        self.assertEqual(session_port.commits, [True, False])
+
+    def test_docker_on_plan_ready_captures_each_auto_refine_iteration(self) -> None:
         class _TestWidget:
             def __init__(self) -> None:
                 self._text = ""
@@ -2593,7 +2977,7 @@ class WorkerAndDockerTests(unittest.TestCase):
         docker._cancel = False
         docker.canvas_port = cast(Any, FakeCanvasPort())
 
-        # Case 1: AI は画像要求なし (request_canvas_image=False)
+        # Auto-Refine ではモデル側フラグに依存せず、各中間反復後に視覚フィードバックを渡す。
         worker1 = FakeWorker()
         docker._worker = cast(Any, worker1)
         plan_no_req = DrawingPlan(
@@ -2605,7 +2989,7 @@ class WorkerAndDockerTests(unittest.TestCase):
         )
         docker._on_plan_ready(plan_no_req)
         self.assertEqual(len(worker1.provided_captures), 1)
-        self.assertIsNone(worker1.provided_captures[0])  # 高速進行: 画像なし
+        self.assertEqual(worker1.provided_captures[0], b"real-canvas-capture-bytes")
 
         # Case 2: AI が画像要求 (request_canvas_image=True)
         worker2 = FakeWorker()
@@ -2620,6 +3004,27 @@ class WorkerAndDockerTests(unittest.TestCase):
         docker._on_plan_ready(plan_with_req)
         self.assertEqual(len(worker2.provided_captures), 1)
         self.assertEqual(worker2.provided_captures[0], b"real-canvas-capture-bytes")
+
+        worker3 = FakeWorker()
+        docker._worker = cast(Any, worker3)
+        final_plan = DrawingPlan(
+            prompt="test",
+            seed=1,
+            strokes=[Stroke("s1", [StrokePoint(0, 0, 0.5, 0), StrokePoint(10, 10, 0.8, 10)])],
+            iteration=3,
+        )
+        docker._on_plan_ready(final_plan)
+        self.assertEqual(worker3.provided_captures, [])
+
+        class FailingCapturePort(FakeCanvasPort):
+            def capture_canvas(self, doc: Any, w: int, h: int) -> bytes:
+                raise RuntimeError("capture failed")
+
+        worker4 = FakeWorker()
+        docker._worker = cast(Any, worker4)
+        docker.canvas_port = cast(Any, FailingCapturePort())
+        docker._on_plan_ready(plan_no_req)
+        self.assertEqual(worker4.provided_captures, [b""])
 
 
 class ExtendedCustomizationTests(unittest.TestCase):
@@ -2676,11 +3081,48 @@ class ExtendedCustomizationTests(unittest.TestCase):
     def test_image_converter_extended_options(self) -> None:
         from .image_converter import ImageStrokeConverter
 
-        converter = ImageStrokeConverter()
+        class FakeColor:
+            def __init__(self, value: int) -> None:
+                self.value = value
 
-        # ダミー画像バイト列での変換テスト (プロシージャルフォールバック)
+            def red(self) -> int:
+                return self.value
+
+            def green(self) -> int:
+                return self.value
+
+            def blue(self) -> int:
+                return self.value
+
+            def alpha(self) -> int:
+                return 255
+
+        class FakeImage:
+            Format_ARGB32 = 5
+
+            def loadFromData(self, _data: bytes) -> bool:  # noqa: N802
+                return True
+
+            def width(self) -> int:
+                return 20
+
+            def height(self) -> int:
+                return 10
+
+            def scaled(self, _width: int, _height: int) -> Any:
+                return self
+
+            def convertToFormat(self, _format: Any) -> Any:  # noqa: N802
+                return self
+
+            def pixelColor(self, x: int, _y: int) -> FakeColor:  # noqa: N802
+                return FakeColor(20 if x < 10 else 240)
+
+        converter = ImageStrokeConverter()
+        converter.qimage_cls = FakeImage
+
         plan = converter.convert_image_to_plan(
-            image_bytes=b"invalid-image-bytes-triggers-procedural-fallback",
+            image_bytes=b"fake-valid-image",
             prompt="landscape",
             seed=42,
             count=25,
@@ -2803,6 +3245,46 @@ class ExtendedCustomizationTests(unittest.TestCase):
                 model="gpt-4o",
                 max_retries=0,
             )
+        with self.assertRaises(ValueError):
+            OpenAICompatibleSettings(
+                base_url="https://api.openai.com/v1",
+                model="gpt-4o",
+                vision_resolution=100_000,
+            )
+        with self.assertRaises(ValueError):
+            OpenAICompatibleSettings(
+                base_url="https://api.openai.com/v1",
+                model="gpt-4o",
+                max_retries=100,
+            )
+
+        with self.assertRaises(ValueError):
+            OpenAICompatibleSettings(
+                base_url="http://example.test/v1",
+                model="gpt-4o",
+                api_key="secret",
+            )
+        with self.assertRaises(ValueError):
+            OpenAICompatibleSettings(base_url="http://example.test/v1", model="gpt-4o")
+        with self.assertRaises(ValueError):
+            OpenAICompatibleSettings(
+                base_url="https://user:password@example.test/v1",
+                model="gpt-4o",
+            )
+        with self.assertRaises(ValueError):
+            OpenAICompatibleSettings(base_url="https://example.test:99999/v1", model="gpt-4o")
+        with self.assertRaises(ValueError):
+            OpenAICompatibleSettings(
+                base_url="https://example.test/v1",
+                model="gpt-4o",
+                api_key="secret\r\nInjected: yes",
+            )
+        local = OpenAICompatibleSettings(
+            base_url="http://127.0.0.1:11434/v1",
+            model="local-model",
+            api_key="local-token",
+        )
+        self.assertEqual(local.endpoint_url, "http://127.0.0.1:11434/v1/chat/completions")
 
     def test_preview_widget_multipliers(self) -> None:
         from .docker import PreviewWidget

@@ -11,10 +11,10 @@ from collections.abc import Callable, Mapping, Sequence
 import contextlib
 from dataclasses import dataclass
 import datetime
+import ipaddress
 import json
 import math
 import re
-import socket
 import time
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -22,7 +22,8 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .domain import DrawingPlan, Stroke, StrokePoint
-from .planner import validate_plan_request
+from .image_converter import MAX_ENCODED_IMAGE_BYTES
+from .planner import validate_iterations, validate_plan_request
 from .ports import PlannerPort
 
 
@@ -102,6 +103,32 @@ def _detect_image_mime_type(data: bytes) -> str:
     return "image/png"
 
 
+def _is_loopback_host(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+    host = hostname.strip().lower().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _endpoint_origin_label(url: str) -> str:
+    """ログへ URL パス上のトークンを出さず、接続先オリジンだけを返す。"""
+    parsed = urlsplit(url)
+    host = parsed.hostname or "invalid-host"
+    display_host = f"[{host}]" if ":" in host else host
+    try:
+        port = parsed.port
+    except ValueError:
+        port = None
+    default_port = 443 if parsed.scheme.lower() == "https" else 80
+    port_suffix = f":{port}" if port is not None and port != default_port else ""
+    return f"{parsed.scheme.lower()}://{display_host}{port_suffix}"
+
+
 @dataclass(frozen=True)
 class OpenAICompatibleSettings:
     """キーを永続化しない、1 回の API 呼び出しに必要な接続設定。"""
@@ -117,24 +144,57 @@ class OpenAICompatibleSettings:
     custom_system_prompt: str = ""
     vision_resolution: int = 512
     max_retries: int = 3
+    fallback_to_procedural: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.base_url, str) or not self.base_url.strip():
             raise ValueError("Base URL を入力してください")
+        if len(self.base_url) > 2_048:
+            raise ValueError("Base URL が長すぎます")
+        if any(ord(char) < 32 for char in self.base_url):
+            raise ValueError("Base URL に制御文字を含めないでください")
+        if not isinstance(self.api_key, str):
+            raise ValueError("API Key は文字列である必要があります")
+        if len(self.api_key) > 4_096:
+            raise ValueError("API Key が長すぎます")
+        if "\r" in self.api_key or "\n" in self.api_key:
+            raise ValueError("API Key に改行を含めないでください")
         parsed = urlsplit(self.base_url.strip())
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.query or parsed.fragment:
+        try:
+            parsed_port = parsed.port
+        except ValueError as exc:
+            raise ValueError("Base URL のポート番号が不正です") from exc
+        del parsed_port
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or not parsed.hostname
+            or parsed.query
+            or parsed.fragment
+        ):
             raise ValueError("Base URL はクエリを含まない http(s) URL にしてください")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("Base URL にユーザー名やパスワードを含めないでください")
+        if parsed.scheme == "http" and not _is_loopback_host(parsed.hostname):
+            raise ValueError("非ローカル接続には https:// の Base URL が必要です")
         if not isinstance(self.model, str) or not self.model.strip():
             raise ValueError("Model を入力してください")
+        if len(self.model) > 256:
+            raise ValueError("Model 名が長すぎます")
         if (
             isinstance(self.timeout_seconds, bool)
             or not isinstance(self.timeout_seconds, (int, float))
             or self.timeout_seconds <= 0
+            or self.timeout_seconds > 3_600
             or not math.isfinite(self.timeout_seconds)
         ):
-            raise ValueError("timeout_seconds は正の有限数値である必要があります")
-        if isinstance(self.max_tokens, bool) or not isinstance(self.max_tokens, int) or self.max_tokens <= 0:
-            raise ValueError("max_tokens は正の整数である必要があります")
+            raise ValueError("timeout_seconds は 3,600 秒以下の正の有限数値である必要があります")
+        if (
+            isinstance(self.max_tokens, bool)
+            or not isinstance(self.max_tokens, int)
+            or not 1 <= self.max_tokens <= 1_000_000
+        ):
+            raise ValueError("max_tokens は 1 から 1,000,000 の整数である必要があります")
         if not isinstance(self.reasoning_effort, str):
             raise ValueError("reasoning_effort は文字列である必要があります")
         if (
@@ -153,14 +213,22 @@ class OpenAICompatibleSettings:
             raise ValueError("top_p は 0.0 より大きく 1.0 以下の範囲である必要があります")
         if not isinstance(self.custom_system_prompt, str):
             raise ValueError("custom_system_prompt は文字列である必要があります")
+        if len(self.custom_system_prompt) > 20_000:
+            raise ValueError("custom_system_prompt は 20,000 文字以下である必要があります")
         if (
             isinstance(self.vision_resolution, bool)
             or not isinstance(self.vision_resolution, int)
-            or self.vision_resolution < 64
+            or not 64 <= self.vision_resolution <= 4_096
         ):
-            raise ValueError("vision_resolution は 64 以上の整数である必要があります")
-        if isinstance(self.max_retries, bool) or not isinstance(self.max_retries, int) or self.max_retries < 1:
-            raise ValueError("max_retries は 1 以上の整数である必要があります")
+            raise ValueError("vision_resolution は 64 から 4,096 の整数である必要があります")
+        if (
+            isinstance(self.max_retries, bool)
+            or not isinstance(self.max_retries, int)
+            or not 1 <= self.max_retries <= 10
+        ):
+            raise ValueError("max_retries は 1 から 10 の整数である必要があります")
+        if not isinstance(self.fallback_to_procedural, bool):
+            raise ValueError("fallback_to_procedural は真偽値である必要があります")
 
     @property
     def endpoint_url(self) -> str:
@@ -171,11 +239,9 @@ class OpenAICompatibleSettings:
         if base.endswith("/v1"):
             return f"{base}/chat/completions"
         # Ollama, LM Studio, OpenAI などの主要ホストで /v1 が省略されている場合は自動補完
-        lower = base.lower()
-        if "/v1" not in lower and any(
-            h in lower
-            for h in ("api.openai.com", "localhost", "127.0.0.1", "groq.com", "openrouter.ai", "deepseek.com")
-        ):
+        host = (urlsplit(base).hostname or "").lower().rstrip(".")
+        known_hosts = ("api.openai.com", "groq.com", "openrouter.ai", "deepseek.com")
+        if _is_loopback_host(host) or any(host == known or host.endswith(f".{known}") for known in known_hosts):
             return f"{base}/v1/chat/completions"
         return f"{base}/chat/completions"
 
@@ -205,10 +271,10 @@ class OpenAICompatiblePlanner(PlannerPort):
         """API 接続疎通確認を行う。思考モデルのパラメータ特性にも適応。"""
         is_reasoning = _is_reasoning_model(self.settings.model)
         self._log(
-            f"API 接続テスト開始: {self.settings.endpoint_url} (Model: {self.settings.model}, 思考モデル判定: {is_reasoning}, ReasoningEffort: {self.settings.reasoning_effort})"
+            f"API 接続テスト開始: {_endpoint_origin_label(self.settings.endpoint_url)} (Model: {self.settings.model}, 思考モデル判定: {is_reasoning}, ReasoningEffort: {self.settings.reasoning_effort})"
         )
 
-        test_max_tokens = max(self.settings.max_tokens, 2048)
+        test_max_tokens = min(max(self.settings.max_tokens, 16), 2048)
         payload: dict[str, Any] = {
             "model": self.settings.model.strip(),
             "messages": [{"role": "user", "content": "Respond with 'OK'."}],
@@ -252,6 +318,17 @@ class OpenAICompatiblePlanner(PlannerPort):
         valid_prompt, valid_seed, valid_count, valid_width, valid_height = validate_plan_request(
             prompt, seed, count, width, height
         )
+        iteration, max_iterations = validate_iterations(iteration, max_iterations)
+        for image_name, image_value in (("image_data", image_data), ("canvas_image", canvas_image)):
+            if image_value is not None and not isinstance(image_value, bytes):
+                raise ValueError(f"{image_name} は bytes または None である必要があります")
+            if image_value is not None and len(image_value) > MAX_ENCODED_IMAGE_BYTES:
+                raise ValueError(f"{image_name} のサイズが上限を超えています")
+        cancelled = kwargs.get("cancelled")
+
+        def raise_if_cancelled() -> None:
+            if callable(cancelled) and cancelled():
+                raise LLMPlannerError("LLM 描画計画の生成をキャンセルしました")
 
         if iteration == 1:
             self._conversation_history = []
@@ -260,7 +337,7 @@ class OpenAICompatiblePlanner(PlannerPort):
         self._log(
             f"--- 描画計画生成開始 (Step {iteration}/{max_iterations}) ---\n"
             f"Prompt: {valid_prompt!r}, Seed: {valid_seed}, Count: {valid_count}, Canvas: {valid_width}x{valid_height}\n"
-            f"Endpoint: {self.settings.endpoint_url}, Model: {self.settings.model} (思考モデル最適化: {is_reasoning}, ReasoningEffort: {self.settings.reasoning_effort}), Timeout: {self.settings.timeout_seconds}s"
+            f"Endpoint: {_endpoint_origin_label(self.settings.endpoint_url)}, Model: {self.settings.model} (思考モデル最適化: {is_reasoning}, ReasoningEffort: {self.settings.reasoning_effort}), Timeout: {self.settings.timeout_seconds}s"
         )
 
         # 段階的ステップ描画時のフェーズ目標の導出
@@ -304,8 +381,13 @@ class OpenAICompatiblePlanner(PlannerPort):
             "max_iterations": max_iterations,
             "phase_goal": phase_goal or "Complete full professional illustration.",
             "instruction": (
-                f"Generate drawing strokes for {phase_goal or 'the artwork'} strictly in valid DrawingPlan JSON format. "
-                "Set request_canvas_image to true ONLY if you need to visually inspect the rendered canvas before the next step."
+                (
+                    "Visually inspect the attached current canvas, identify the most important incompleteness, and correct it. "
+                    if canvas_image
+                    else ""
+                )
+                + f"Generate drawing strokes for {phase_goal or 'the artwork'} strictly in valid DrawingPlan JSON format. "
+                "Keep request_canvas_image false; multi-step runs receive automatic canvas feedback."
             ),
         }
         req_json = json.dumps(req_dict, ensure_ascii=False)
@@ -323,12 +405,10 @@ class OpenAICompatiblePlanner(PlannerPort):
                 }
             )
 
-        # AIが要求した場合のみキャンバスキャプチャ (Base64) を添付
+        # Auto-Refine の前ステップで取得したキャンバスキャプチャ (Base64) を添付
         if canvas_image:
             canvas_mime = _detect_image_mime_type(canvas_image)
-            self._log(
-                f"AIの要求に基づき現在のキャンバス状態を添付します ({len(canvas_image)} bytes, MIME: {canvas_mime})"
-            )
+            self._log(f"現在のキャンバス状態を視覚評価用に添付します ({len(canvas_image)} bytes, MIME: {canvas_mime})")
             b64_canvas = base64.b64encode(canvas_image).decode("ascii")
             user_content_parts.append(
                 {
@@ -337,7 +417,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                 }
             )
         elif max_iterations > 1 and iteration > 1:
-            self._log("キャンバス画像送信スキップ (AI要求なし / 高速テキスト進行)")
+            self._log("警告: Auto-Refine のキャンバス画像が取得できなかったため、テキスト情報のみで続行します")
 
         user_content: Any = user_content_parts if len(user_content_parts) > 1 else req_json
 
@@ -376,13 +456,14 @@ class OpenAICompatiblePlanner(PlannerPort):
             if self.settings.top_p < 1.0:
                 payload["top_p"] = float(self.settings.top_p)
 
-        self._log(f"LLM API へリクエスト送信中 ({self.settings.endpoint_url})...")
+        self._log(f"LLM API へリクエスト送信中 ({_endpoint_origin_label(self.settings.endpoint_url)})...")
 
         # 自動リカバリー付き計画生成ループ (設定回数)
         max_attempts = max(1, self.settings.max_retries)
         last_error: Exception | None = None
 
         for attempt in range(1, max_attempts + 1):
+            raise_if_cancelled()
             if attempt == 1:
                 current_payload = dict(payload)
             elif attempt == 2:
@@ -420,7 +501,7 @@ class OpenAICompatiblePlanner(PlannerPort):
 
                 min_sys = (
                     'You must output ONLY valid JSON matching DrawingPlan schema. Start output directly with {"schema_version": 1. '
-                    "Include request_canvas_image: false/true. No thoughts, no analysis."
+                    "Include request_canvas_image: false. No thoughts, no analysis."
                 )
                 r_messages_min: list[dict[str, Any]] = [{"role": "system", "content": min_sys}]
                 if self._conversation_history and iteration > 1:
@@ -429,7 +510,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                 current_payload["messages"] = r_messages_min
 
             try:
-                response = self._post_with_parameter_fallback(current_payload)
+                response = self._post_with_parameter_fallback(current_payload, cancelled=cancelled)
                 self._log("LLM API 応答受信。思考タグ解析・JSON パース・ストローク救済を実行中...")
                 plan = _plan_from_response(
                     response,
@@ -446,13 +527,14 @@ class OpenAICompatiblePlanner(PlannerPort):
                     count=valid_count,
                     width=valid_width,
                     height=valid_height,
+                    iteration=iteration,
                     log_func=self._log,
                 )
                 total_pts = sum(len(s.points) for s in sanitized_plan.strokes)
                 layers_str = ", ".join(sanitized_plan.layers)
                 self._log(
                     f"描画計画生成成功: ストローク数={len(sanitized_plan.strokes)}, 総点数={total_pts}, レイヤー=[{layers_str}], "
-                    f"AI画像要求(request_canvas_image)={sanitized_plan.request_canvas_image}"
+                    f"互換フィールド(request_canvas_image)={sanitized_plan.request_canvas_image}"
                 )
 
                 # 会話履歴に記録（次ステップへの文脈継承）
@@ -475,7 +557,9 @@ class OpenAICompatiblePlanner(PlannerPort):
                             for s in sanitized_plan.strokes[:15]
                         ],
                     }
-                    self._conversation_history.append({"role": "user", "content": user_content})
+                    # 画像を履歴へ複製すると、反復ごとに Base64 ペイロードが累積する。
+                    # 次のキャンバス画像は常に最新リクエストへ個別添付し、履歴はテキスト要約だけ保持する。
+                    self._conversation_history.append({"role": "user", "content": req_json})
                     self._conversation_history.append(
                         {"role": "assistant", "content": json.dumps(summary_dict, ensure_ascii=False)}
                     )
@@ -495,11 +579,18 @@ class OpenAICompatiblePlanner(PlannerPort):
                     raise
                 if attempt < max_attempts:
                     self._log(f"警告: 試行 {attempt}/{max_attempts} でエラーが発生しました: {exc}")
-                    time.sleep(0.5)
+                    for _ in range(5):
+                        raise_if_cancelled()
+                        time.sleep(0.1)
                 else:
                     self._log(f"エラー: 全 {max_attempts} 回の試行が失敗しました: {exc}")
 
-        # 万が一 LLM からのストローク救出が全試行で失敗した場合の最終防衛線（フォールバック救済計画生成）
+        if not self.settings.fallback_to_procedural:
+            if last_error is not None:
+                raise last_error
+            raise LLMPlannerError("LLM 描画計画の生成に失敗しました")
+
+        # 利用者が明示的に許可した場合だけ、プロシージャル生成へフォールバックする。
         self._log(
             "通知: LLM 思考トークン枯渇または抽出不能のため、プロシージャルエンジンによる緊急フォールバック描画計画を自動生成します。"
         )
@@ -517,18 +608,38 @@ class OpenAICompatiblePlanner(PlannerPort):
             self._log(
                 f"緊急救済成功: プロシージャル描画計画を生成しました (ストローク数: {len(fallback_plan.strokes)})"
             )
-            return fallback_plan
+            return DrawingPlan(
+                prompt=fallback_plan.prompt,
+                seed=fallback_plan.seed,
+                strokes=fallback_plan.strokes,
+                title=fallback_plan.title,
+                iteration=iteration,
+                layers=fallback_plan.layers,
+                metadata={
+                    **dict(fallback_plan.metadata),
+                    "planner_fallback": "procedural",
+                    "fallback_reason": str(last_error or "LLM response could not be parsed")[:500],
+                },
+                canvas_width=valid_width,
+                canvas_height=valid_height,
+            )
         except Exception as fb_exc:
             if last_error is not None:
                 raise last_error from fb_exc
             raise LLMPlannerError(f"LLM 描画計画の生成に失敗しました: {last_error or fb_exc}") from fb_exc
 
-    def _post_with_parameter_fallback(self, payload: dict[str, Any]) -> Mapping[str, Any]:
+    def _post_with_parameter_fallback(
+        self,
+        payload: dict[str, Any],
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Mapping[str, Any]:
         """400/422 のパラメータ非互換エラー（temperature, max_tokens, response_format, reasoning_effort 等）を自動検知・パージして再試行する。"""
         current_payload = dict(payload)
         max_param_retries = 4
 
         for p_attempt in range(max_param_retries):
+            if cancelled is not None and cancelled():
+                raise LLMPlannerError("LLM API リクエストをキャンセルしました")
             try:
                 return self._post(current_payload)
             except LLMPlannerError as exc:
@@ -641,7 +752,7 @@ class OpenAICompatiblePlanner(PlannerPort):
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "AIStrokePainter/1.0",
+            "User-Agent": "AIStrokePainter/1.1.0",
         }
         if self.settings.api_key.strip():
             headers["Authorization"] = f"Bearer {self.settings.api_key.strip()}"
@@ -668,7 +779,7 @@ class OpenAICompatiblePlanner(PlannerPort):
             err_msg = f"LLM API が HTTP {exc.code} を返しました ({elapsed:.2f}s): {detail}"
             self._log(f"エラー: {err_msg}")
             raise LLMPlannerError(err_msg) from exc
-        except (URLError, socket.timeout, TimeoutError, OSError) as exc:
+        except (URLError, TimeoutError, OSError) as exc:
             elapsed = time.perf_counter() - start_time
             err_msg = f"LLM API に接続できませんでした ({elapsed:.2f}s): {_safe_error_message(exc)}"
             self._log(f"エラー: {err_msg}")
@@ -684,7 +795,8 @@ class OpenAICompatiblePlanner(PlannerPort):
             decoded_text = raw.decode("utf-8", errors="replace")
             decoded = json.loads(decoded_text)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            self._log(f"JSON デコードエラー: {exc}\n応答先頭 500 文字: {raw[:500]!r}")
+            preview = _redact_sensitive_text(raw[:500].decode("utf-8", errors="replace"))
+            self._log(f"JSON デコードエラー: {exc}\n応答先頭 500 文字: {preview!r}")
             raise LLMPlannerError("LLM API が JSON 応答を返しませんでした") from exc
 
         if not isinstance(decoded, Mapping):
@@ -715,16 +827,23 @@ class OpenAICompatiblePlanner(PlannerPort):
                 # 思考プロセスのログ
                 reasoning = msg.get("reasoning_content") or msg.get("reasoning") or msg.get("thought")
                 if isinstance(reasoning, str) and reasoning.strip():
-                    r_preview = reasoning.strip()[:300].replace("\n", " ") + ("..." if len(reasoning) > 300 else "")
+                    r_preview = _redact_sensitive_text(reasoning.strip()[:300].replace("\n", " ")) + (
+                        "..." if len(reasoning) > 300 else ""
+                    )
                     self._log(f"[思考プロセス (reasoning)] {len(reasoning)} 文字: {r_preview}")
 
                 # 本文 content のプレビュー
                 content_val = msg.get("content")
                 if isinstance(content_val, str) and content_val.strip():
                     c_lines = content_val.strip().splitlines()
-                    head_lines = "\n".join(c_lines[:6])
+                    head_lines = _redact_sensitive_text("\n".join(c_lines[:6]))
                     tail_preview = (
-                        ("\n... [中略 " + str(len(c_lines) - 10) + " 行] ...\n" + "\n".join(c_lines[-4:]))
+                        (
+                            "\n... [中略 "
+                            + str(len(c_lines) - 10)
+                            + " 行] ...\n"
+                            + _redact_sensitive_text("\n".join(c_lines[-4:]))
+                        )
                         if len(c_lines) > 10
                         else ""
                     )
@@ -917,9 +1036,9 @@ def _system_instruction(
         )
 
     visual_feedback_section = (
-        "\n=== ON-DEMAND VISUAL INSPECTION (CANVAS FEEDBACK) ===\n"
-        'If and only if you need to visually inspect the actual rendered canvas before the next drawing step (e.g. to verify spatial alignment, colors, or composition), set `"request_canvas_image": true` in your JSON output.\n'
-        'Otherwise, set `"request_canvas_image": false` to continue rapidly without sending heavy image data.\n'
+        "\n=== AUTOMATIC VISUAL FEEDBACK ===\n"
+        "In multi-step mode, the current rendered canvas is captured automatically after each intermediate step and attached to the next request. "
+        "Inspect that image before adding corrections. Keep `request_canvas_image` false; the field remains only for schema compatibility.\n"
     )
 
     reasoning_guide = (
@@ -1823,6 +1942,7 @@ def _validate_and_sanitize_plan(
     count: int,
     width: float,
     height: float,
+    iteration: int | None = None,
     log_func: Callable[[str], None] | None = None,
 ) -> DrawingPlan:
     """LLM の応答を堅牢にサニタイズし、Catmull-Rom スプライン平滑化・筆圧テーパリング・解像度適応を実行する。"""
@@ -1911,11 +2031,31 @@ def _validate_and_sanitize_plan(
         seed=safe_seed,
         strokes=sanitized_strokes,
         title=plan.title or f"AI Artwork - {safe_prompt[:20]}",
-        iteration=plan.iteration,
+        iteration=plan.iteration if iteration is None else iteration,
         layers=plan.layers,
         request_canvas_image=getattr(plan, "request_canvas_image", False),
         metadata=plan.metadata,
+        canvas_width=width,
+        canvas_height=height,
     )
+
+
+def _redact_sensitive_text(text: str) -> str:
+    """通信エラーやデバッグプレビューに混入した資格情報を伏せる。"""
+    redacted = re.sub(r"(?i)\b(https?://)[^/@\s]+@", r"\1[REDACTED]@", text)
+    redacted = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [REDACTED]", redacted)
+    redacted = re.sub(r"\bsk-[A-Za-z0-9_-]{8,}\b", "sk-[REDACTED]", redacted)
+    redacted = re.sub(
+        r"(?i)(\b(?:api[_ -]?key|authorization)\b\s*[:=]\s*)([\"'])(.*?)(\2)",
+        r"\1\2[REDACTED]\2",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)(\b(?:api[_ -]?key|authorization)\b\s*[:=]\s*)(?![\"'])[^\s,;}\]]+",
+        r"\1[REDACTED]",
+        redacted,
+    )
+    return redacted
 
 
 def _read_http_error(error: HTTPError) -> str:
@@ -1926,8 +2066,8 @@ def _read_http_error(error: HTTPError) -> str:
     finally:
         with contextlib.suppress(Exception):
             error.close()
-    return " ".join(body.split())[:2000]
+    return _redact_sensitive_text(" ".join(body.split()))[:2000]
 
 
 def _safe_error_message(error: BaseException) -> str:
-    return " ".join(str(error).split())[:500] or error.__class__.__name__
+    return _redact_sensitive_text(" ".join(str(error).split()))[:500] or error.__class__.__name__

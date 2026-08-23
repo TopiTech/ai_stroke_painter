@@ -1,7 +1,8 @@
-"""動物・クリーチャー（猫、鳥、ドラゴン）のプロシージャル生成エンジン。"""
+"""動物・クリーチャー（猫、犬、鳥、ドラゴン）のプロシージャル生成エンジン。"""
 
 from __future__ import annotations
 
+import math
 import random
 import uuid
 
@@ -16,7 +17,15 @@ def generate_creature_strokes(
     width: float,
     height: float,
 ) -> list[Stroke]:
-    """動物（猫、鳥、ドラゴン等）の本格イラストストロークを生成する。"""
+    """動物（猫、犬、鳥、ドラゴン等）の本格イラストストロークを生成する。"""
+    prompt_l = prompt.lower()
+    if any(key in prompt_l for key in ("dragon", "ドラゴン", "竜", "龍")):
+        return _generate_dragon_strokes(seed, count, width, height)
+    if any(key in prompt_l for key in ("bird", "鳥", "小鳥", "eagle", "鷲")):
+        return _generate_bird_strokes(seed, count, width, height)
+    if any(key in prompt_l for key in ("dog", "犬", "puppy", "子犬")):
+        return _generate_dog_strokes(seed, count, width, height)
+
     rng = random.Random(seed)
     strokes: list[Stroke] = []
 
@@ -249,4 +258,215 @@ def generate_creature_strokes(
                 )
             )
 
+    return sample_strokes_by_priority(strokes, count)
+
+
+def _generate_dog_strokes(seed: int, count: int, width: float, height: float) -> list[Stroke]:
+    rng = random.Random(seed)
+    strokes: list[Stroke] = []
+    cx, cy = width * 0.5, height * 0.52
+    scale = min(width, height) * 0.78
+
+    def add(name: str, points: list[tuple[float, float]], size: float = 4.0, layer: str = "Lineart") -> None:
+        strokes.append(
+            create_stroke(
+                catmull_rom_spline(points, 6),
+                profile_type="gpen",
+                base_pressure=0.78,
+                color="#4b3428" if layer == "Lineart" else "#b9835a",
+                size_px=size,
+                layer_name=layer,
+                opacity=0.9,
+                rng=rng,
+                width=width,
+                height=height,
+                stroke_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/dog/{seed}/{name}")),
+            )
+        )
+
+    add(
+        "head",
+        [
+            (cx - scale * 0.24, cy - scale * 0.18),
+            (cx - scale * 0.30, cy + scale * 0.02),
+            (cx, cy + scale * 0.27),
+            (cx + scale * 0.30, cy + scale * 0.02),
+            (cx + scale * 0.24, cy - scale * 0.18),
+        ],
+        6.0,
+    )
+    for side, label in ((-1.0, "l"), (1.0, "r")):
+        add(
+            f"ear_{label}",
+            [
+                (cx + side * scale * 0.18, cy - scale * 0.17),
+                (cx + side * scale * 0.36, cy - scale * 0.08),
+                (cx + side * scale * 0.34, cy + scale * 0.13),
+                (cx + side * scale * 0.22, cy + scale * 0.06),
+            ],
+            7.0,
+        )
+        eye_x = cx + side * scale * 0.105
+        add(
+            f"eye_{label}",
+            [(eye_x - scale * 0.025, cy - scale * 0.03), (eye_x + scale * 0.025, cy - scale * 0.03)],
+            5.0,
+        )
+        for fur_idx in range(4):
+            y = cy + scale * (0.02 + fur_idx * 0.035)
+            add(
+                f"cheek_fur_{label}_{fur_idx}",
+                [(cx + side * scale * 0.17, y), (cx + side * scale * (0.25 + fur_idx * 0.01), y + scale * 0.018)],
+                2.5,
+            )
+    add("muzzle_l", [(cx, cy + scale * 0.05), (cx - scale * 0.12, cy + scale * 0.13), (cx, cy + scale * 0.19)], 3.5)
+    add("muzzle_r", [(cx, cy + scale * 0.05), (cx + scale * 0.12, cy + scale * 0.13), (cx, cy + scale * 0.19)], 3.5)
+    add(
+        "nose",
+        [(cx - scale * 0.04, cy + scale * 0.08), (cx, cy + scale * 0.11), (cx + scale * 0.04, cy + scale * 0.08)],
+        7.0,
+    )
+    add(
+        "tongue",
+        [(cx - scale * 0.035, cy + scale * 0.19), (cx, cy + scale * 0.27), (cx + scale * 0.035, cy + scale * 0.19)],
+        4.0,
+        "Highlights",
+    )
+    return sample_strokes_by_priority(strokes, count)
+
+
+def _generate_bird_strokes(seed: int, count: int, width: float, height: float) -> list[Stroke]:
+    rng = random.Random(seed)
+    strokes: list[Stroke] = []
+    cx, cy = width * 0.5, height * 0.54
+    scale = min(width, height) * 0.75
+
+    def add(name: str, points: list[tuple[float, float]], size: float = 3.5, layer: str = "Lineart") -> None:
+        strokes.append(
+            create_stroke(
+                catmull_rom_spline(points, 5),
+                profile_type="marupen",
+                base_pressure=0.75,
+                color="#25364a" if layer == "Lineart" else "#72a6c9",
+                size_px=size,
+                layer_name=layer,
+                opacity=0.92,
+                rng=rng,
+                width=width,
+                height=height,
+                stroke_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/bird/{seed}/{name}")),
+            )
+        )
+
+    body = [
+        (cx, cy - scale * 0.26),
+        (cx - scale * 0.18, cy - scale * 0.08),
+        (cx - scale * 0.12, cy + scale * 0.25),
+        (cx + scale * 0.12, cy + scale * 0.25),
+        (cx + scale * 0.18, cy - scale * 0.08),
+        (cx, cy - scale * 0.26),
+    ]
+    add("body", body, 5.0)
+    add("beak_top", [(cx, cy - scale * 0.16), (cx + scale * 0.20, cy - scale * 0.10), (cx, cy - scale * 0.07)], 3.0)
+    add("beak_bottom", [(cx, cy - scale * 0.07), (cx + scale * 0.15, cy - scale * 0.06)], 2.5)
+    add("eye", [(cx + scale * 0.045, cy - scale * 0.18), (cx + scale * 0.065, cy - scale * 0.18)], 5.0, "Highlights")
+    for side, label in ((-1.0, "l"), (1.0, "r")):
+        add(
+            f"wing_{label}",
+            [
+                (cx + side * scale * 0.05, cy - scale * 0.05),
+                (cx + side * scale * 0.35, cy + scale * 0.02),
+                (cx + side * scale * 0.12, cy + scale * 0.20),
+            ],
+            5.0,
+        )
+        for feather in range(6):
+            y = cy + scale * (0.01 + feather * 0.025)
+            add(
+                f"feather_{label}_{feather}",
+                [(cx + side * scale * 0.08, y), (cx + side * scale * (0.19 + feather * 0.018), y + scale * 0.055)],
+                2.2,
+                "Shading",
+            )
+    for tail in range(5):
+        x_off = (tail - 2) * scale * 0.035
+        add("tail_" + str(tail), [(cx + x_off, cy + scale * 0.21), (cx + x_off * 1.8, cy + scale * 0.39)], 3.0)
+    add("perch", [(cx - scale * 0.30, cy + scale * 0.31), (cx + scale * 0.32, cy + scale * 0.31)], 5.0, "Draft")
+    return sample_strokes_by_priority(strokes, count)
+
+
+def _generate_dragon_strokes(seed: int, count: int, width: float, height: float) -> list[Stroke]:
+    rng = random.Random(seed)
+    strokes: list[Stroke] = []
+    cx, cy = width * 0.5, height * 0.53
+    scale = min(width, height) * 0.78
+
+    def add(name: str, points: list[tuple[float, float]], size: float = 4.0, layer: str = "Lineart") -> None:
+        strokes.append(
+            create_stroke(
+                catmull_rom_spline(points, 5),
+                profile_type="gpen",
+                base_pressure=0.82,
+                color="#39294f" if layer == "Lineart" else "#7c4fa3",
+                size_px=size,
+                layer_name=layer,
+                opacity=0.9,
+                rng=rng,
+                width=width,
+                height=height,
+                stroke_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/dragon/{seed}/{name}")),
+            )
+        )
+
+    spine = [
+        (cx - scale * 0.30, cy - scale * 0.05),
+        (cx - scale * 0.10, cy - scale * 0.18),
+        (cx + scale * 0.12, cy - scale * 0.05),
+        (cx + scale * 0.20, cy + scale * 0.18),
+        (cx + scale * 0.38, cy + scale * 0.26),
+    ]
+    add("spine", spine, 7.0)
+    add(
+        "belly",
+        [(cx - scale * 0.25, cy + scale * 0.03), (cx, cy + scale * 0.13), (cx + scale * 0.30, cy + scale * 0.28)],
+        5.0,
+    )
+    add(
+        "snout",
+        [(cx - scale * 0.32, cy - scale * 0.06), (cx - scale * 0.43, cy), (cx - scale * 0.28, cy + scale * 0.05)],
+        5.0,
+    )
+    add("horn_top", [(cx - scale * 0.20, cy - scale * 0.15), (cx - scale * 0.24, cy - scale * 0.34)], 4.0)
+    add("horn_back", [(cx - scale * 0.12, cy - scale * 0.18), (cx - scale * 0.09, cy - scale * 0.36)], 4.0)
+    add("eye", [(cx - scale * 0.28, cy - scale * 0.06), (cx - scale * 0.23, cy - scale * 0.07)], 5.0, "Highlights")
+    for side, label in ((-1.0, "l"), (1.0, "r")):
+        wing_y = cy - scale * (0.02 if side < 0 else 0.08)
+        add(
+            f"wing_{label}",
+            [
+                (cx, wing_y),
+                (cx + side * scale * 0.16, cy - scale * 0.36),
+                (cx + side * scale * 0.38, cy - scale * 0.22),
+                (cx + side * scale * 0.16, cy + scale * 0.02),
+            ],
+            6.0,
+        )
+        for rib in range(4):
+            angle = -0.9 + rib * 0.28
+            add(
+                f"wing_rib_{label}_{rib}",
+                [(cx, wing_y), (cx + side * math.cos(angle) * scale * 0.30, cy + math.sin(angle) * scale * 0.30)],
+                2.5,
+                "Shading",
+            )
+    for plate in range(9):
+        t = plate / 8
+        px = cx - scale * 0.10 + t * scale * 0.42
+        py = cy - scale * 0.04 + math.sin(t * math.pi) * scale * 0.13
+        add(
+            f"scale_{plate}",
+            [(px - scale * 0.025, py), (px, py + scale * 0.035), (px + scale * 0.025, py)],
+            2.2,
+            "Shading",
+        )
     return sample_strokes_by_priority(strokes, count)

@@ -9,6 +9,8 @@ import time
 
 from .domain import DrawingPlan
 
+MAX_PLAN_FILE_BYTES = 50 * 1024 * 1024
+
 
 def app_data_dir() -> Path:
     base = os.environ.get("APPDATA") or os.environ.get("XDG_DATA_HOME")
@@ -61,6 +63,8 @@ def save_svg(plan: DrawingPlan, directory: str | Path | None = None) -> Path:
 def load_plan(path: str | Path) -> DrawingPlan:
     """保存済み JSON を検証して DrawingPlan として返す。"""
     source = Path(path)
+    if source.stat().st_size > MAX_PLAN_FILE_BYTES:
+        raise ValueError(f"計画 JSON は {MAX_PLAN_FILE_BYTES // (1024 * 1024)}MB 以下である必要があります")
     try:
         contents = json.loads(source.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:

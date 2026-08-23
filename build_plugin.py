@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
+import tempfile
 from zipfile import ZIP_DEFLATED, ZipFile
 
 PACKAGE_NAME = "ai_stroke_painter"
@@ -34,14 +36,25 @@ def build(output: Path) -> Path:
     manifest = source / f"{PACKAGE_NAME}.desktop"
     if not manifest.is_file():
         raise FileNotFoundError(f"Krita manifest が見つかりません: {manifest}")
+    missing = [relative_path for relative_path in PACKAGE_FILES if not (source / relative_path).is_file()]
+    if missing:
+        missing_list = ", ".join(missing)
+        raise FileNotFoundError(f"配布パッケージの必須ファイルが見つかりません: {missing_list}")
     output.parent.mkdir(parents=True, exist_ok=True)
-    with ZipFile(output, "w", ZIP_DEFLATED) as archive:
-        archive.write(manifest, manifest.name)
-        archive.writestr(f"{PACKAGE_NAME}/", "")
-        for relative_path in PACKAGE_FILES:
-            path = source / relative_path
-            if path.is_file():
+    with tempfile.NamedTemporaryFile(
+        prefix=f".{output.name}.", suffix=".tmp", dir=output.parent, delete=False
+    ) as temp_handle:
+        temp_path = Path(temp_handle.name)
+    try:
+        with ZipFile(temp_path, "w", ZIP_DEFLATED) as archive:
+            archive.write(manifest, manifest.name)
+            archive.writestr(f"{PACKAGE_NAME}/", "")
+            for relative_path in PACKAGE_FILES:
+                path = source / relative_path
                 archive.write(path, f"{PACKAGE_NAME}/{Path(relative_path).as_posix()}")
+        os.replace(temp_path, output)
+    finally:
+        temp_path.unlink(missing_ok=True)
     return output
 
 

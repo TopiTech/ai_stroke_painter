@@ -10,11 +10,22 @@ import re
 from typing import Any
 
 SCHEMA_VERSION = 1
+MAX_PLAN_STROKES = 2_000
+MAX_STROKE_POINTS = 1_000
 _COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 
 
 class PlanValidationError(ValueError):
     """外部入力または保存済み計画が描画契約を満たさない場合の例外。"""
+
+
+def split_color_alpha(color: str) -> tuple[str, float]:
+    """Validated CSS-style hex colorを RGB 部分と独立した alpha に分ける。"""
+    if len(color) == 5:
+        return color[:4], int(color[4] * 2, 16) / 255.0
+    if len(color) == 9:
+        return color[:7], int(color[7:9], 16) / 255.0
+    return color, 1.0
 
 
 def _finite_number(value: Any, field_name: str) -> float:
@@ -26,6 +37,12 @@ def _finite_number(value: Any, field_name: str) -> float:
 def _non_negative_int(value: Any, field_name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise PlanValidationError(f"{field_name} は 0 以上の整数である必要があります")
+    return value
+
+
+def _positive_int(value: Any, field_name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise PlanValidationError(f"{field_name} は 1 以上の整数である必要があります")
     return value
 
 
@@ -56,7 +73,7 @@ class StrokePoint:
             x = value[0]
             y = value[1]
             pressure = value[2] if len(value) >= 3 else 0.8
-            time_ms = int(value[3]) if len(value) >= 4 else 0
+            time_ms = value[3] if len(value) >= 4 else 0
             return cls(x=x, y=y, pressure=pressure, time_ms=time_ms)
 
         if not isinstance(value, Mapping):
@@ -84,12 +101,17 @@ class Stroke:
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip():
             raise PlanValidationError("stroke id は空でない文字列である必要があります")
-        points = tuple(self.points)
+        raw_points: Any = self.points
+        if isinstance(raw_points, (str, bytes)) or not isinstance(raw_points, Sequence):
+            raise PlanValidationError("stroke points は StrokePoint の配列である必要があります")
+        points = tuple(raw_points)
         if len(points) < 2:
             raise PlanValidationError("stroke には少なくとも 2 点必要です")
+        if len(points) > MAX_STROKE_POINTS:
+            raise PlanValidationError(f"stroke points は {MAX_STROKE_POINTS} 点以下である必要があります")
         if any(not isinstance(point, StrokePoint) for point in points):
             raise PlanValidationError("stroke points は StrokePoint である必要があります")
-        if any(b.time_ms < a.time_ms for a, b in zip(points, points[1:])):
+        if any(b.time_ms < a.time_ms for a, b in zip(points, points[1:], strict=False)):
             raise PlanValidationError("stroke points の time_ms は昇順である必要があります")
         object.__setattr__(self, "points", points)
         if not isinstance(self.brush_preset, str) or not self.brush_preset.strip():
@@ -102,7 +124,7 @@ class Stroke:
         object.__setattr__(self, "size_px", size_px)
 
         if not isinstance(self.layer_name, str) or not self.layer_name.strip():
-            object.__setattr__(self, "layer_name", "Lineart")
+            raise PlanValidationError("layer_name は空でない文字列である必要があります")
         opacity = _finite_number(self.opacity, "opacity")
         if not 0.0 <= opacity <= 1.0:
             raise PlanValidationError("opacity は 0.0 から 1.0 の範囲である必要があります")
@@ -131,6 +153,8 @@ class Stroke:
             raw_points = value["points"]
             if not isinstance(raw_points, Sequence) or isinstance(raw_points, (str, bytes)):
                 raise PlanValidationError("stroke points は配列である必要があります")
+            if len(raw_points) > MAX_STROKE_POINTS:
+                raise PlanValidationError(f"stroke points は {MAX_STROKE_POINTS} 点以下である必要があります")
             points_list: list[StrokePoint] = []
             curr_time = 0
             for idx, point in enumerate(raw_points):
@@ -141,7 +165,7 @@ class Stroke:
                 curr_time = t
                 points_list.append(StrokePoint(x=sp.x, y=sp.y, pressure=sp.pressure, time_ms=curr_time))
             return cls(
-                id=str(value["id"]),
+                id=value["id"],
                 points=tuple(points_list),
                 brush_preset=value.get("brush_preset", "Basic-5 Size"),
                 color=value.get("color", "#232323"),
@@ -151,8 +175,10 @@ class Stroke:
             )
         except KeyError as exc:
             raise PlanValidationError(f"stroke に必須項目 {exc.args[0]} がありません") from exc
-        except TypeError as exc:
-            raise PlanValidationError("stroke points は配列である必要があります") from exc
+        except PlanValidationError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise PlanValidationError(f"stroke の値が不正です: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -165,8 +191,11 @@ class VisionCritique:
     iteration: int
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "completion_score", max(0.0, min(1.0, self.completion_score)))
-        object.__setattr__(self, "iteration", _non_negative_int(self.iteration, "iteration"))
+        if not isinstance(self.evaluation, str) or not isinstance(self.suggested_action, str):
+            raise PlanValidationError("VisionCritique の評価と提案は文字列である必要があります")
+        score = _finite_number(self.completion_score, "completion_score")
+        object.__setattr__(self, "completion_score", max(0.0, min(1.0, score)))
+        object.__setattr__(self, "iteration", _positive_int(self.iteration, "iteration"))
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -178,12 +207,17 @@ class VisionCritique:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> VisionCritique:
-        return cls(
-            evaluation=str(value.get("evaluation", "")),
-            completion_score=float(value.get("completion_score", 0.0)),
-            suggested_action=str(value.get("suggested_action", "")),
-            iteration=int(value.get("iteration", 1)),
-        )
+        if not isinstance(value, Mapping):
+            raise PlanValidationError("VisionCritique はオブジェクトである必要があります")
+        try:
+            return cls(
+                evaluation=value.get("evaluation", ""),
+                completion_score=value.get("completion_score", 0.0),
+                suggested_action=value.get("suggested_action", ""),
+                iteration=value.get("iteration", 1),
+            )
+        except (TypeError, ValueError) as exc:
+            raise PlanValidationError(f"VisionCritique の値が不正です: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -196,24 +230,49 @@ class DrawingPlan:
     layers: Sequence[str] = field(default_factory=tuple)
     request_canvas_image: bool = False
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    canvas_width: float | None = None
+    canvas_height: float | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.prompt, str):
             raise PlanValidationError("prompt は文字列である必要があります")
         object.__setattr__(self, "seed", _non_negative_int(self.seed, "seed"))
-        strokes = tuple(self.strokes)
+        raw_strokes: Any = self.strokes
+        if isinstance(raw_strokes, (str, bytes)) or not isinstance(raw_strokes, Sequence):
+            raise PlanValidationError("strokes は Stroke の配列である必要があります")
+        strokes = tuple(raw_strokes)
+        if len(strokes) > MAX_PLAN_STROKES:
+            raise PlanValidationError(f"strokes は {MAX_PLAN_STROKES} 本以下である必要があります")
         if any(not isinstance(stroke, Stroke) for stroke in strokes):
             raise PlanValidationError("strokes は Stroke である必要があります")
         if len({stroke.id for stroke in strokes}) != len(strokes):
             raise PlanValidationError("stroke id は計画内で一意である必要があります")
         object.__setattr__(self, "strokes", strokes)
-        object.__setattr__(self, "title", self.title)
-        object.__setattr__(self, "iteration", _non_negative_int(self.iteration, "iteration"))
-        object.__setattr__(self, "request_canvas_image", bool(self.request_canvas_image))
+        if not isinstance(self.title, str):
+            raise PlanValidationError("title は文字列である必要があります")
+        object.__setattr__(self, "iteration", _positive_int(self.iteration, "iteration"))
+        if not isinstance(self.request_canvas_image, bool):
+            raise PlanValidationError("request_canvas_image は真偽値である必要があります")
+        for field_name in ("canvas_width", "canvas_height"):
+            value = getattr(self, field_name)
+            if value is None:
+                continue
+            dimension = _finite_number(value, field_name)
+            if dimension <= 0:
+                raise PlanValidationError(f"{field_name} は正の有限数値である必要があります")
+            object.__setattr__(self, field_name, dimension)
 
         # レイヤー一覧を自動推定または指定値で初期化
         if self.layers:
-            object.__setattr__(self, "layers", tuple(self.layers))
+            if isinstance(self.layers, (str, bytes)) or not isinstance(self.layers, Sequence):
+                raise PlanValidationError("layers は文字列の配列である必要があります")
+            normalized_layers: list[str] = []
+            for layer in self.layers:
+                if not isinstance(layer, str) or not layer.strip():
+                    raise PlanValidationError("layers の各要素は空でない文字列である必要があります")
+                if layer not in normalized_layers:
+                    normalized_layers.append(layer)
+            object.__setattr__(self, "layers", tuple(normalized_layers))
         else:
             inferred_layers: list[str] = []
             for stroke in strokes:
@@ -221,6 +280,8 @@ class DrawingPlan:
                     inferred_layers.append(stroke.layer_name)
             object.__setattr__(self, "layers", tuple(inferred_layers) if inferred_layers else ("Lineart",))
 
+        if not isinstance(self.metadata, Mapping):
+            raise PlanValidationError("metadata はオブジェクトである必要があります")
         object.__setattr__(self, "metadata", dict(self.metadata))
 
     def as_dict(self) -> dict[str, Any]:
@@ -234,6 +295,10 @@ class DrawingPlan:
             "layers": list(self.layers),
             "request_canvas_image": self.request_canvas_image,
         }
+        if self.canvas_width is not None:
+            result["canvas_width"] = self.canvas_width
+        if self.canvas_height is not None:
+            result["canvas_height"] = self.canvas_height
         if self.metadata:
             result["metadata"] = dict(self.metadata)
         return result
@@ -246,32 +311,41 @@ class DrawingPlan:
         if version != SCHEMA_VERSION:
             raise PlanValidationError(f"未対応の plan schema_version: {version!r}")
         try:
-            strokes = tuple(Stroke.from_dict(stroke) for stroke in value["strokes"])
+            raw_strokes = value["strokes"]
+            if not isinstance(raw_strokes, Sequence) or isinstance(raw_strokes, (str, bytes)):
+                raise PlanValidationError("strokes は配列である必要があります")
+            if len(raw_strokes) > MAX_PLAN_STROKES:
+                raise PlanValidationError(f"strokes は {MAX_PLAN_STROKES} 本以下である必要があります")
+            strokes = tuple(Stroke.from_dict(stroke) for stroke in raw_strokes)
             return cls(
-                prompt=str(value.get("prompt", "")),
-                seed=int(value.get("seed", 0)),
+                prompt=value.get("prompt", ""),
+                seed=value.get("seed", 0),
                 strokes=strokes,
-                title=str(value.get("title", "")),
-                iteration=int(value.get("iteration", 1)),
+                title=value.get("title", ""),
+                iteration=value.get("iteration", 1),
                 layers=value.get("layers", ()),
-                request_canvas_image=bool(value.get("request_canvas_image", False)),
+                request_canvas_image=value.get("request_canvas_image", False),
                 metadata=value.get("metadata", {}),
+                canvas_width=value.get("canvas_width"),
+                canvas_height=value.get("canvas_height"),
             )
         except KeyError as exc:
             raise PlanValidationError(f"drawing plan に必須項目 {exc.args[0]} がありません") from exc
-        except TypeError as exc:
-            raise PlanValidationError("strokes は配列である必要があります") from exc
+        except PlanValidationError:
+            raise
+        except (TypeError, ValueError) as exc:
+            raise PlanValidationError(f"drawing plan の値が不正です: {exc}") from exc
 
     def to_svg(self, width: float | None = None, height: float | None = None) -> str:
         """高品質な SVG ベクター形式として出力する。"""
-        if width is None or height is None:
-            max_x = max((p.x for s in self.strokes for p in s.points), default=800.0)
-            max_y = max((p.y for s in self.strokes for p in s.points), default=800.0)
-            w = max(100.0, max_x + 20.0)
-            h = max(100.0, max_y + 20.0)
-        else:
-            w = width
-            h = height
+        max_x = max((p.x for s in self.strokes for p in s.points), default=800.0)
+        max_y = max((p.y for s in self.strokes for p in s.points), default=800.0)
+        w = width if width is not None else self.canvas_width
+        h = height if height is not None else self.canvas_height
+        w = max(100.0, max_x + 20.0) if w is None else _finite_number(w, "SVG width")
+        h = max(100.0, max_y + 20.0) if h is None else _finite_number(h, "SVG height")
+        if w <= 0 or h <= 0:
+            raise PlanValidationError("SVG の幅と高さは正の有限数値である必要があります")
 
         # XML コメント内で "--" は禁止されているため置換する
         safe_prompt = html.escape(self.prompt).replace("--", "﹣﹣")
@@ -301,13 +375,15 @@ class DrawingPlan:
                 if len(pts) < 2:
                     continue
                 # 可変筆圧をセグメントのストローク幅に反映
-                for p0, p1 in zip(pts, pts[1:]):
+                for p0, p1 in zip(pts, pts[1:], strict=False):
                     avg_pressure = (p0.pressure + p1.pressure) * 0.5
                     stroke_w = max(0.5, stroke.size_px * avg_pressure)
-                    opacity_attr = f' stroke-opacity="{stroke.opacity:.2f}"' if stroke.opacity < 1.0 else ""
+                    stroke_color, color_alpha = split_color_alpha(stroke.color)
+                    combined_opacity = stroke.opacity * color_alpha
+                    opacity_attr = f' stroke-opacity="{combined_opacity:.2f}"' if combined_opacity < 1.0 else ""
                     svg_parts.append(
                         f'    <line x1="{p0.x:.2f}" y1="{p0.y:.2f}" x2="{p1.x:.2f}" y2="{p1.y:.2f}" '
-                        f'stroke="{stroke.color}" stroke-width="{stroke_w:.2f}" class="stroke"{opacity_attr} />'
+                        f'stroke="{stroke_color}" stroke-width="{stroke_w:.2f}" class="stroke"{opacity_attr} />'
                     )
             svg_parts.append("  </g>")
 

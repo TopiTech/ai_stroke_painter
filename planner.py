@@ -27,11 +27,22 @@ def validate_plan_request(
     """Planner 実装で共通の入力契約を検証して正規化する。"""
     if not isinstance(prompt, str):
         raise ValueError("prompt は文字列である必要があります")
+    if len(prompt) > 20_000:
+        raise ValueError("prompt は 20,000 文字以下である必要があります")
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
         raise ValueError("seed は 0 以上の整数である必要があります")
     if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 500:
         raise ValueError("count は 1 から 500 の整数である必要があります")
     return prompt, seed, count, _valid_dimension(width, "width"), _valid_dimension(height, "height")
+
+
+def validate_iterations(iteration: Any, max_iterations: Any) -> tuple[int, int]:
+    """反復番号が UI と Planner の共通契約内にあることを検証する。"""
+    if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or not 1 <= max_iterations <= 10:
+        raise ValueError("max_iterations は 1 から 10 の整数である必要があります")
+    if isinstance(iteration, bool) or not isinstance(iteration, int) or not 1 <= iteration <= max_iterations:
+        raise ValueError("iteration は 1 から max_iterations の整数である必要があります")
+    return iteration, max_iterations
 
 
 class RuleBasedPlanner(PlannerPort):
@@ -62,10 +73,11 @@ class RuleBasedPlanner(PlannerPort):
         valid_prompt, valid_seed, valid_count, valid_width, valid_height = validate_plan_request(
             prompt, seed, count, width, height
         )
+        iteration, max_iterations = validate_iterations(iteration, max_iterations)
 
         # 参照画像が渡されている場合は画像ストローク変換を実行
         if image_data:
-            return self.image_converter.convert_image_to_plan(
+            image_plan = self.image_converter.convert_image_to_plan(
                 image_bytes=image_data,
                 prompt=valid_prompt,
                 seed=valid_seed,
@@ -78,6 +90,21 @@ class RuleBasedPlanner(PlannerPort):
                 color_mode=color_mode,
                 palette_name=palette_name,
                 brush_profile=brush_profile,
+            )
+            return DrawingPlan(
+                prompt=image_plan.prompt,
+                seed=image_plan.seed,
+                strokes=image_plan.strokes,
+                title=image_plan.title,
+                iteration=iteration,
+                layers=image_plan.layers,
+                metadata={
+                    **dict(image_plan.metadata),
+                    "iteration": iteration,
+                    "max_iterations": max_iterations,
+                },
+                canvas_width=valid_width,
+                canvas_height=valid_height,
             )
 
         # 自律反復改善（イテレーション）時のプロシージャル描画計画
@@ -105,4 +132,6 @@ class RuleBasedPlanner(PlannerPort):
                 "palette": palette_name,
                 "brush_profile": brush_profile,
             },
+            canvas_width=valid_width,
+            canvas_height=valid_height,
         )

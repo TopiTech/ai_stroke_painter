@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import sys
 from typing import Any
 
 HAS_QT: bool = False
@@ -64,8 +65,36 @@ def password_echo_mode(line_edit_cls: Any | None = None) -> Any:
     raise RuntimeError("QLineEdit のパスワード表示モードを取得できません")
 
 
-# PyQt5 または PyQt6 のインポートを試行
-for binding in ("PyQt5", "PyQt6"):
+def write_only_open_mode(io_device_cls: Any | None = None) -> Any:
+    """Return QIODevice's write-only flag for Qt 5 or Qt 6."""
+    cls = QIODevice if io_device_cls is None else io_device_cls
+    scoped = getattr(cls, "OpenModeFlag", None)
+    scoped_value = getattr(scoped, "WriteOnly", None)
+    if scoped_value is not None:
+        return scoped_value
+    legacy_value = getattr(cls, "WriteOnly", None)
+    if legacy_value is not None:
+        return legacy_value
+    raise RuntimeError("QIODevice の WriteOnly モードを取得できません")
+
+
+def argb32_image_format(image_cls: Any | None = None) -> Any:
+    """Return QImage's ARGB32 format for Qt 5 or Qt 6."""
+    cls = QImage if image_cls is None else image_cls
+    scoped = getattr(cls, "Format", None)
+    scoped_value = getattr(scoped, "Format_ARGB32", None)
+    if scoped_value is not None:
+        return scoped_value
+    return getattr(cls, "Format_ARGB32", None)
+
+
+# Krita が既に読み込んだ Qt バインディングを最優先し、未確定時は Krita 6 の PyQt6 を先に試す。
+if any(name == "PyQt5" or name.startswith("PyQt5.") for name in sys.modules):
+    _binding_order = ("PyQt5", "PyQt6")
+else:
+    _binding_order = ("PyQt6", "PyQt5")
+
+for binding in _binding_order:
     try:
         _core = importlib.import_module(f"{binding}.QtCore")
         _widgets = importlib.import_module(f"{binding}.QtWidgets")
@@ -120,6 +149,19 @@ if not HAS_QT:
     class _FakeSignal:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             self._slots: list[Any] = []
+            self._attribute_name = ""
+
+        def __set_name__(self, _owner: Any, name: str) -> None:
+            self._attribute_name = f"__signal_{name}"
+
+        def __get__(self, instance: Any, _owner: Any = None) -> Any:
+            if instance is None or not self._attribute_name:
+                return self
+            signal = instance.__dict__.get(self._attribute_name)
+            if signal is None:
+                signal = _FakeSignal()
+                instance.__dict__[self._attribute_name] = signal
+            return signal
 
         def connect(self, slot: Any) -> None:
             self._slots.append(slot)
@@ -152,6 +194,9 @@ if not HAS_QT:
             pass
 
         def setFixedSize(self, *args: Any) -> None:
+            pass
+
+        def setToolTip(self, *args: Any) -> None:
             pass
 
         def setMinimumHeight(self, h: int) -> None:
@@ -240,17 +285,25 @@ if not HAS_QT:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__()
             self._val = 0
+            self.valueChanged = _FakeSignal()
 
         def value(self) -> int:
             return self._val
 
         def setValue(self, v: int) -> None:
             self._val = v
+            self.valueChanged.emit(self._val)
 
         def setRange(self, *args: Any) -> None:
             pass
 
         def setSingleStep(self, *args: Any) -> None:
+            pass
+
+        def setSuffix(self, *args: Any) -> None:
+            pass
+
+        def setPrefix(self, *args: Any) -> None:
             pass
 
         def setToolTip(self, *args: Any) -> None:
@@ -426,6 +479,13 @@ if not HAS_QT:
             pass
 
     class QMessageBox:  # type: ignore[no-redef]
+        Yes = 1
+        No = 2
+
+        class StandardButton:
+            Yes = 1
+            No = 2
+
         @staticmethod
         def information(*args: Any) -> None:
             pass
@@ -437,6 +497,10 @@ if not HAS_QT:
         @staticmethod
         def critical(*args: Any) -> None:
             pass
+
+        @staticmethod
+        def question(*args: Any) -> int:
+            return 2
 
     class QFileDialog:  # type: ignore[no-redef]
         @staticmethod

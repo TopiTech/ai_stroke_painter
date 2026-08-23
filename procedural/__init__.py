@@ -113,4 +113,6 @@ def generate_procedural_plan(
         title=title,
         iteration=1,
         layers=present_layers,
+        canvas_width=width,
+        canvas_height=height,
     )

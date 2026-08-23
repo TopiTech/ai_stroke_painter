@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import heapq
 import math
 import random
 from typing import Any
@@ -9,7 +10,75 @@ import uuid
 
 from .domain import DrawingPlan, Stroke
 from .procedural.base import catmull_rom_spline, color_palette, create_stroke, sample_strokes_by_priority
-from .qt_compat import QImage
+from .qt_compat import QImage, argb32_image_format
+
+MAX_DECODED_IMAGE_PIXELS = 50_000_000
+MAX_ENCODED_IMAGE_BYTES = 25 * 1024 * 1024
+
+
+def _image_dimensions_from_header(data: bytes) -> tuple[int, int] | None:
+    """Decode dimensions without allocating the image (PNG/JPEG/BMP/WebP)."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
+        return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
+    if data.startswith(b"BM") and len(data) >= 26:
+        width = abs(int.from_bytes(data[18:22], "little", signed=True))
+        height = abs(int.from_bytes(data[22:26], "little", signed=True))
+        return width, height
+    if data.startswith(b"RIFF") and len(data) >= 30 and data[8:12] == b"WEBP":
+        chunk_type = data[12:16]
+        if chunk_type == b"VP8X":
+            width = 1 + int.from_bytes(data[24:27], "little")
+            height = 1 + int.from_bytes(data[27:30], "little")
+            return width, height
+        if chunk_type == b"VP8 " and data[23:26] == b"\x9d\x01\x2a":
+            width = int.from_bytes(data[26:28], "little") & 0x3FFF
+            height = int.from_bytes(data[28:30], "little") & 0x3FFF
+            return width, height
+        if chunk_type == b"VP8L" and data[20] == 0x2F:
+            packed = int.from_bytes(data[21:25], "little")
+            width = 1 + (packed & 0x3FFF)
+            height = 1 + ((packed >> 14) & 0x3FFF)
+            return width, height
+    if data.startswith(b"\xff\xd8"):
+        offset = 2
+        sof_markers = {
+            0xC0,
+            0xC1,
+            0xC2,
+            0xC3,
+            0xC5,
+            0xC6,
+            0xC7,
+            0xC9,
+            0xCA,
+            0xCB,
+            0xCD,
+            0xCE,
+            0xCF,
+        }
+        while offset + 4 <= len(data):
+            if data[offset] != 0xFF:
+                offset += 1
+                continue
+            while offset < len(data) and data[offset] == 0xFF:
+                offset += 1
+            if offset >= len(data):
+                break
+            marker = data[offset]
+            offset += 1
+            if marker in {0xD8, 0xD9} or 0xD0 <= marker <= 0xD7:
+                continue
+            if offset + 2 > len(data):
+                break
+            segment_length = int.from_bytes(data[offset : offset + 2], "big")
+            if segment_length < 2 or offset + segment_length > len(data):
+                break
+            if marker in sof_markers and segment_length >= 7:
+                height = int.from_bytes(data[offset + 3 : offset + 5], "big")
+                width = int.from_bytes(data[offset + 5 : offset + 7], "big")
+                return width, height
+            offset += segment_length
+    return None
 
 
 def _hex_to_rgb(hex_str: str) -> tuple[int, int, int]:
@@ -31,6 +100,76 @@ def _find_closest_palette_color(r: int, g: int, b: int, palette_hex_list: list[s
             min_dist_sq = dist_sq
             best_color = p_hex
     return best_color
+
+
+_EDGE_NEIGHBORS = ((-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1))
+
+
+def _trace_edge_paths(edge_mask: list[list[bool]], max_paths: int) -> list[list[tuple[int, int]]]:
+    """8近傍で連結したエッジを、連続する決定論的な点列へ変換する。"""
+    remaining = {(x, y) for y, row in enumerate(edge_mask) for x, is_edge in enumerate(row) if is_edge}
+    paths: list[list[tuple[int, int]]] = []
+
+    def neighbors(point: tuple[int, int]) -> list[tuple[int, int]]:
+        x, y = point
+        return [(x + dx, y + dy) for dx, dy in _EDGE_NEIGHBORS if (x + dx, y + dy) in remaining]
+
+    degrees = {point: len(neighbors(point)) for point in remaining}
+    endpoints = [(point[1], point[0]) for point, degree in degrees.items() if degree <= 1]
+    heapq.heapify(endpoints)
+
+    def remove_point(point: tuple[int, int]) -> None:
+        remaining.remove(point)
+        x, y = point
+        for dx, dy in _EDGE_NEIGHBORS:
+            adjacent = (x + dx, y + dy)
+            if adjacent not in remaining:
+                continue
+            degrees[adjacent] -= 1
+            if degrees[adjacent] <= 1:
+                heapq.heappush(endpoints, (adjacent[1], adjacent[0]))
+
+    def next_start() -> tuple[int, int]:
+        while endpoints:
+            y, x = heapq.heappop(endpoints)
+            if (x, y) in remaining and degrees[(x, y)] <= 1:
+                return x, y
+        return min(remaining, key=lambda point: (point[1], point[0]))
+
+    while remaining and len(paths) < max_paths:
+        current = next_start()
+        remove_point(current)
+        path = [current]
+        previous: tuple[int, int] | None = None
+
+        while True:
+            candidates = neighbors(current)
+            if not candidates:
+                break
+            if previous is None:
+                next_point = min(candidates, key=lambda point: (point[1], point[0]))
+            else:
+                incoming = (current[0] - previous[0], current[1] - previous[1])
+
+                def continuity_score(
+                    point: tuple[int, int],
+                    origin: tuple[int, int] = current,
+                    direction: tuple[int, int] = incoming,
+                ) -> tuple[int, int, int]:
+                    outgoing = (point[0] - origin[0], point[1] - origin[1])
+                    dot = direction[0] * outgoing[0] + direction[1] * outgoing[1]
+                    return dot, -point[1], -point[0]
+
+                next_point = max(candidates, key=continuity_score)
+            remove_point(next_point)
+            previous, current = current, next_point
+            path.append(current)
+
+        if len(path) >= 2:
+            paths.append(path)
+
+    paths.sort(key=lambda path: (-len(path), path[0][1], path[0][0]))
+    return paths
 
 
 class ImageStrokeConverter:
@@ -55,41 +194,67 @@ class ImageStrokeConverter:
         brush_profile: str = "auto",
     ) -> DrawingPlan:
         """画像バイトデータから DrawingPlan を生成する。"""
+        if not isinstance(image_bytes, bytes):
+            raise ValueError("image_bytes は bytes である必要があります")
+        if len(image_bytes) > MAX_ENCODED_IMAGE_BYTES:
+            raise ValueError("参照画像のファイルサイズが上限を超えています")
+        if not isinstance(prompt, str):
+            raise ValueError("prompt は文字列である必要があります")
+        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
+            raise ValueError("seed は 0 以上の整数である必要があります")
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 500:
+            raise ValueError("count は 1 から 500 の整数である必要があります")
+        if any(
+            isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 2
+            for value in (target_width, target_height)
+        ):
+            raise ValueError("target_width と target_height は 2 以上の有限数値である必要があります")
+        if (
+            isinstance(edge_threshold, bool)
+            or not isinstance(edge_threshold, (int, float))
+            or not math.isfinite(edge_threshold)
+        ):
+            raise ValueError("edge_threshold は有限数値である必要があります")
+        if shading_density not in {"off", "low", "medium", "high"}:
+            raise ValueError("shading_density は off/low/medium/high のいずれかである必要があります")
+        if color_mode not in {"original", "palette"}:
+            raise ValueError("color_mode は original または palette である必要があります")
+        if not isinstance(enable_flats, bool):
+            raise ValueError("enable_flats は真偽値である必要があります")
         rng = random.Random(seed)
         strokes: list[Stroke] = []
 
-        if self.qimage_cls is not None and image_bytes:
-            qimg = self.qimage_cls()
-            loaded = qimg.loadFromData(image_bytes)
-            if loaded:
-                strokes = self._process_qimage(
-                    qimg=qimg,
-                    seed=seed,
-                    count=count,
-                    target_width=target_width,
-                    target_height=target_height,
-                    rng=rng,
-                    edge_threshold=edge_threshold,
-                    shading_density=shading_density,
-                    enable_flats=enable_flats,
-                    color_mode=color_mode,
-                    palette_name=palette_name,
-                    brush_profile=brush_profile,
-                )
+        if self.qimage_cls is None:
+            raise RuntimeError("この環境では参照画像をデコードできません")
+        header_dimensions = _image_dimensions_from_header(image_bytes)
+        if header_dimensions is not None:
+            header_width, header_height = header_dimensions
+            if header_width <= 0 or header_height <= 0:
+                raise ValueError("参照画像の寸法が不正です")
+            if header_width * header_height > MAX_DECODED_IMAGE_PIXELS:
+                raise ValueError("参照画像の画素数が上限を超えています")
+        qimg = self.qimage_cls()
+        if not qimg.loadFromData(image_bytes):
+            raise ValueError("参照画像をデコードできませんでした")
+        if qimg.width() * qimg.height() > MAX_DECODED_IMAGE_PIXELS:
+            raise ValueError("参照画像の画素数が上限を超えています")
+        strokes = self._process_qimage(
+            qimg=qimg,
+            seed=seed,
+            count=count,
+            target_width=target_width,
+            target_height=target_height,
+            rng=rng,
+            edge_threshold=edge_threshold,
+            shading_density=shading_density,
+            enable_flats=enable_flats,
+            color_mode=color_mode,
+            palette_name=palette_name,
+            brush_profile=brush_profile,
+        )
 
-        # 画像パースに失敗した場合、またはQt環境がない場合のプロシージャルフォールバック
         if not strokes:
-            from .procedural import generate_procedural_plan
-
-            return generate_procedural_plan(
-                prompt=prompt,
-                seed=seed,
-                count=count,
-                width=target_width,
-                height=target_height,
-                palette_name=palette_name,
-                brush_profile=brush_profile,
-            )
+            raise ValueError("参照画像から有効なストロークを抽出できませんでした")
 
         return DrawingPlan(
             prompt=f"Image2Stroke: {prompt}" if prompt else "Image to Stroke Art",
@@ -98,6 +263,8 @@ class ImageStrokeConverter:
             title="Image Reference Art",
             iteration=1,
             layers=["Flats", "Shading", "Lineart", "Highlights"],
+            canvas_width=target_width,
+            canvas_height=target_height,
         )
 
     def _process_qimage(
@@ -115,46 +282,64 @@ class ImageStrokeConverter:
         palette_name: str = "anime",
         brush_profile: str = "auto",
     ) -> list[Stroke]:
-        # 処理速度と解析精度のバランスのため、グリッドサイズを正規化（最大 160x160）
-        grid_w = min(160, qimg.width())
-        grid_h = min(160, qimg.height())
+        # 長辺を最大160pxに抑えつつ、入力画像の縦横比を維持する。
+        source_w = qimg.width()
+        source_h = qimg.height()
+        if source_w <= 0 or source_h <= 0:
+            return []
+        downscale = min(1.0, 160.0 / source_w, 160.0 / source_h)
+        grid_w = max(1, round(source_w * downscale))
+        grid_h = max(1, round(source_h * downscale))
         if grid_w <= 0 or grid_h <= 0:
             return []
         scaled = qimg.scaled(grid_w, grid_h)
-        if hasattr(scaled, "convertToFormat") and hasattr(self.qimage_cls, "Format_ARGB32"):
-            scaled = scaled.convertToFormat(self.qimage_cls.Format_ARGB32)
+        argb32_format = argb32_image_format(self.qimage_cls)
+        if hasattr(scaled, "convertToFormat") and argb32_format is not None:
+            scaled = scaled.convertToFormat(argb32_format)
 
         palette_hexes = list(color_palette(palette_name).values()) if color_mode == "palette" else []
 
         # 輝度マップとカラーマップの構築
         luminance_map: list[list[float]] = []
         color_map: list[list[str]] = []
+        alpha_map: list[list[float]] = []
 
         for y in range(grid_h):
             lum_row: list[float] = []
             col_row: list[str] = []
+            alpha_row: list[float] = []
             for x in range(grid_w):
                 pixel = scaled.pixelColor(x, y)
                 r, g, b = pixel.red(), pixel.green(), pixel.blue()
-                lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+                alpha = pixel.alpha() / 255.0 if hasattr(pixel, "alpha") else 1.0
+                composited_r = r * alpha + 255.0 * (1.0 - alpha)
+                composited_g = g * alpha + 255.0 * (1.0 - alpha)
+                composited_b = b * alpha + 255.0 * (1.0 - alpha)
+                lum = (0.299 * composited_r + 0.587 * composited_g + 0.114 * composited_b) / 255.0
                 lum_row.append(lum)
+                sample_r = round(composited_r)
+                sample_g = round(composited_g)
+                sample_b = round(composited_b)
                 if color_mode == "palette":
-                    col_row.append(_find_closest_palette_color(r, g, b, palette_hexes))
+                    col_row.append(_find_closest_palette_color(sample_r, sample_g, sample_b, palette_hexes))
                 else:
-                    col_row.append(f"#{r:02x}{g:02x}{b:02x}")
+                    col_row.append(f"#{sample_r:02x}{sample_g:02x}{sample_b:02x}")
+                alpha_row.append(alpha)
             luminance_map.append(lum_row)
             color_map.append(col_row)
+            alpha_map.append(alpha_row)
 
         strokes: list[Stroke] = []
-        scale_x = target_width / grid_w
-        scale_y = target_height / grid_h
+        fit_scale = min(target_width / grid_w, target_height / grid_h)
+        offset_x = (target_width - grid_w * fit_scale) * 0.5
+        offset_y = (target_height - grid_h * fit_scale) * 0.5
 
         def uid(name: str, idx: int = 0) -> str:
             return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/img/{seed}/{name}/{idx}"))
 
         # 1. エッジ検出（Sobel風フィルタによる輪郭抽出）-> Lineart
         safe_edge_threshold = max(0.02, min(0.60, edge_threshold))
-        edge_points: list[tuple[float, float, str]] = []
+        edge_mask = [[False for _x in range(grid_w)] for _y in range(grid_h)]
 
         for y in range(1, grid_h - 1):
             for x in range(1, grid_w - 1):
@@ -167,16 +352,19 @@ class ImageStrokeConverter:
                 )
                 mag = math.sqrt(dx * dx + dy * dy)
                 if mag > safe_edge_threshold:
-                    edge_points.append((x * scale_x, y * scale_y, color_map[y][x]))
+                    edge_mask[y][x] = True
 
-        # エッジ点から連続ストロークを構築
-        rng.shuffle(edge_points)
-        for i, (ex, ey, col) in enumerate(edge_points[: min(count * 2, 120)]):
-            tangent_len = rng.uniform(scale_x * 2.0, scale_x * 6.0)
-            p0 = (ex - tangent_len * 0.5 + rng.uniform(-2, 2), ey + rng.uniform(-2, 2))
-            p1 = (ex, ey)
-            p2 = (ex + tangent_len * 0.5 + rng.uniform(-2, 2), ey + rng.uniform(-2, 2))
-            spline = catmull_rom_spline([p0, p1, p2], 4)
+        # エッジを連結し、輪郭に沿う連続ストロークを構築する。
+        edge_paths = _trace_edge_paths(edge_mask, max_paths=min(max(20, count * 3), 500))
+        for i, pixel_path in enumerate(edge_paths):
+            sample_step = max(1, math.ceil(len(pixel_path) / 24))
+            control_pixels = pixel_path[::sample_step]
+            if control_pixels[-1] != pixel_path[-1]:
+                control_pixels.append(pixel_path[-1])
+            controls = [(offset_x + px * fit_scale, offset_y + py * fit_scale) for px, py in control_pixels]
+            mid_x, mid_y = pixel_path[len(pixel_path) // 2]
+            col = color_map[mid_y][mid_x]
+            spline = catmull_rom_spline(controls, 2) if len(controls) >= 3 else controls
             strokes.append(
                 create_stroke(
                     spline,
@@ -209,9 +397,11 @@ class ImageStrokeConverter:
                 for x in range(0, grid_w, dark_step):
                     lum = luminance_map[y][x]
                     if lum < lum_cutoff:
-                        hx = x * scale_x
-                        hy = y * scale_y
-                        h_len = scale_x * dark_step * 1.5
+                        if alpha_map[y][x] < 0.05:
+                            continue
+                        hx = offset_x + x * fit_scale
+                        hy = offset_y + y * fit_scale
+                        h_len = fit_scale * dark_step * 1.5
                         h_stroke = [(hx, hy), (hx + h_len, hy + h_len * 0.5)]
                         strokes.append(
                             create_stroke(
@@ -235,16 +425,18 @@ class ImageStrokeConverter:
             flat_step = max(3, int(grid_w / 15))
             for y in range(0, grid_h, flat_step):
                 for x in range(0, grid_w, flat_step):
-                    fx = x * scale_x
-                    fy = y * scale_y
-                    f_stroke = [(fx - scale_x * 2, fy), (fx + scale_x * flat_step * 0.8, fy)]
+                    if alpha_map[y][x] < 0.05:
+                        continue
+                    fx = offset_x + x * fit_scale
+                    fy = offset_y + y * fit_scale
+                    f_stroke = [(fx - fit_scale * 2, fy), (fx + fit_scale * flat_step * 0.8, fy)]
                     strokes.append(
                         create_stroke(
                             f_stroke,
                             profile_type="brush",
                             base_pressure=0.75,
                             color=color_map[y][x],
-                            size_px=scale_y * flat_step * 0.9,
+                            size_px=fit_scale * flat_step * 0.9,
                             layer_name="Flats",
                             opacity=0.85,
                             rng=rng,

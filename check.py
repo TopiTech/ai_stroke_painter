@@ -30,6 +30,11 @@ def main() -> int:
             [sys.executable, "-m", "unittest", "ai_stroke_painter.self_test", "-v"],
             parent_dir,
         ),
+        (
+            "Headless Compatibility Tests",
+            [sys.executable, "-S", "-m", "unittest", "ai_stroke_painter.self_test"],
+            parent_dir,
+        ),
     ]
 
     failed: list[str] = []
