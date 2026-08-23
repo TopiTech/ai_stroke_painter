@@ -238,6 +238,33 @@ class PlannerAndStorageTests(unittest.TestCase):
         with self.assertRaises(PlanValidationError):
             DrawingPlan.from_dict({"schema_version": 99, "prompt": "", "seed": 0, "strokes": []})
 
+    def test_compact_points_domain_parsing(self) -> None:
+        p2 = StrokePoint.from_dict([100.5, 200.5])
+        self.assertEqual(p2.x, 100.5)
+        self.assertEqual(p2.y, 200.5)
+        self.assertEqual(p2.pressure, 0.8)
+        self.assertEqual(p2.time_ms, 0)
+
+        p3 = StrokePoint.from_dict([50, 60, 0.95])
+        self.assertEqual(p3.pressure, 0.95)
+
+        p4 = StrokePoint.from_dict([50, 60, 0.95, 120])
+        self.assertEqual(p4.time_ms, 120)
+
+        st = Stroke.from_dict(
+            {
+                "id": "compact_stroke",
+                "points": [[10, 20], [30, 40, 0.7], [50, 60, 0.9, 30]],
+                "brush_preset": "Basic-5 Size",
+                "color": "#ff007f",
+                "size_px": 12.0,
+                "layer_name": "Flats",
+            }
+        )
+        self.assertEqual(st.id, "compact_stroke")
+        self.assertEqual(len(st.points), 3)
+        self.assertEqual(st.layer_name, "Flats")
+
     def test_vision_critique_dataclass(self) -> None:
         critique = VisionCritique("Good draft", 0.85, "Add clean lineart", 2)
         d = critique.as_dict()
@@ -404,7 +431,11 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
             server.server_close()
             thread.join()
 
-        self.assertEqual(plan, DrawingPlan.from_dict(expected_plan))
+        self.assertEqual(plan.prompt, str(expected_plan["prompt"]))
+        self.assertEqual(len(plan.strokes), 1)
+        self.assertEqual(plan.strokes[0].color, "#3366cc")
+        self.assertEqual(plan.strokes[0].layer_name, "Lineart")
+        self.assertGreaterEqual(len(plan.strokes[0].points), 2)
         assert Handler.received is not None
         self.assertEqual(Handler.received["path"], "/v1/chat/completions")
         self.assertEqual(Handler.received["authorization"], "Bearer test-key")
@@ -469,7 +500,7 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertEqual(len(plan.strokes), 1)
         pts = plan.strokes[0].points
         self.assertGreaterEqual(pts[0].x, 0.0)
-        self.assertLessEqual(pts[1].x, 100.0)
+        self.assertLessEqual(pts[-1].x, 100.0)
 
         response_norm = {
             "choices": [
@@ -501,8 +532,230 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         scaled_pts = scaled_plan.strokes[0].points
         self.assertAlmostEqual(scaled_pts[0].x, 100.0, places=1)
         self.assertAlmostEqual(scaled_pts[0].y, 100.0, places=1)
-        self.assertAlmostEqual(scaled_pts[1].x, 900.0, places=1)
-        self.assertAlmostEqual(scaled_pts[1].y, 400.0, places=1)
+        self.assertAlmostEqual(scaled_pts[-1].x, 900.0, places=1)
+        self.assertAlmostEqual(scaled_pts[-1].y, 400.0, places=1)
+
+    def test_compact_points_plan_from_llm(self) -> None:
+        compact_json = {
+            "schema_version": 1,
+            "prompt": "fantasy sakura landscape",
+            "seed": 42,
+            "title": "Sakura Art",
+            "layers": ["Flats", "Shading", "Lineart", "Highlights"],
+            "strokes": [
+                {
+                    "id": "s_flat",
+                    "brush_preset": "Basic-5 Size",
+                    "color": "#ffb7c5",
+                    "size_px": 150.0,
+                    "layer_name": "Flats",
+                    "points": [[100, 200], [500, 250], [900, 220]],
+                },
+                {
+                    "id": "s_line",
+                    "brush_preset": "Basic-5 Size",
+                    "color": "#2c1810",
+                    "size_px": 12.0,
+                    "layer_name": "Lineart",
+                    "points": [[500, 900, 0.9], [510, 600, 0.8], [490, 400, 0.7]],
+                },
+            ],
+        }
+
+        class FakeCompactResponse:
+            def __init__(self) -> None:
+                pass
+
+            def read(self, _size: int) -> bytes:
+                return json.dumps(
+                    {"choices": [{"message": {"content": "```json\n" + json.dumps(compact_json) + "\n```"}}]}
+                ).encode("utf-8")
+
+            def __enter__(self) -> FakeCompactResponse:
+                return self
+
+            def __exit__(self, *_args: Any) -> None:
+                pass
+
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "model"),
+            opener=lambda *_args, **_kwargs: FakeCompactResponse(),
+        )
+        plan = planner.plan("fantasy sakura landscape", 42, 2, 2480, 3508)
+        self.assertEqual(len(plan.strokes), 2)
+        self.assertEqual(plan.strokes[0].layer_name, "Flats")
+        self.assertGreaterEqual(plan.strokes[0].size_px, 60.0)  # Adaptive sizing for Flats on 2480x3508
+        self.assertGreaterEqual(len(plan.strokes[0].points), 6)  # Spline smoothed
+        self.assertEqual(plan.strokes[1].layer_name, "Lineart")
+
+    def test_system_instruction_prompt_generation(self) -> None:
+        from ai_stroke_painter.llm_planner import _system_instruction
+
+        prompt_sakura = _system_instruction(
+            iteration=1,
+            max_iterations=1,
+            is_reasoning=False,
+            width=2480,
+            height=3508,
+            prompt="fantasy sakura landscape with mountains and clouds",
+        )
+        self.assertIn("Landscape, Mountains, Clouds & Sakura", prompt_sakura)
+        self.assertIn("Flats", prompt_sakura)
+        self.assertIn("Shading", prompt_sakura)
+        self.assertIn("Lineart", prompt_sakura)
+        self.assertIn("Highlights", prompt_sakura)
+        self.assertIn("[[x, y], [x, y, pressure]]", prompt_sakura)
+
+        prompt_anime = _system_instruction(
+            iteration=1,
+            max_iterations=1,
+            is_reasoning=False,
+            width=1000,
+            height=1000,
+            prompt="anime girl portrait with delicate eyes",
+        )
+        self.assertIn("Anime / Manga Character Portrait", prompt_anime)
+
+    def test_drawing_plan_request_canvas_image_roundtrip(self) -> None:
+        plan = DrawingPlan(
+            prompt="test",
+            seed=42,
+            strokes=[Stroke("s1", [StrokePoint(0, 0, 0.5, 0), StrokePoint(10, 10, 0.8, 10)])],
+            request_canvas_image=True,
+        )
+        d = plan.as_dict()
+        self.assertTrue(d["request_canvas_image"])
+        loaded = DrawingPlan.from_dict(d)
+        self.assertTrue(loaded.request_canvas_image)
+
+        plan_false = DrawingPlan(
+            prompt="test",
+            seed=42,
+            strokes=[Stroke("s1", [StrokePoint(0, 0, 0.5, 0), StrokePoint(10, 10, 0.8, 10)])],
+            request_canvas_image=False,
+        )
+        self.assertFalse(plan_false.as_dict()["request_canvas_image"])
+        self.assertFalse(DrawingPlan.from_dict(plan_false.as_dict()).request_canvas_image)
+
+    def test_system_instruction_progressive_phases(self) -> None:
+        from ai_stroke_painter.llm_planner import _system_instruction
+
+        step1 = _system_instruction(iteration=1, max_iterations=3, prompt="sakura tree")
+        self.assertIn("Step 1/3", step1)
+        self.assertIn("MULTI-STEP PROGRESSIVE DRAWING MODE", step1)
+        self.assertIn("ON-DEMAND VISUAL INSPECTION", step1)
+        self.assertIn("Flats", step1)
+
+        step2 = _system_instruction(iteration=2, max_iterations=3, prompt="sakura tree")
+        self.assertIn("Step 2/3", step2)
+        self.assertIn("Shading", step2)
+
+        step3 = _system_instruction(iteration=3, max_iterations=3, prompt="sakura tree")
+        self.assertIn("Step 3/3", step3)
+        self.assertIn("FINAL", step3)
+
+    def test_multi_stage_conversation_history_and_on_demand_capture(self) -> None:
+        received_payloads: list[dict[str, Any]] = []
+
+        step1_response = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "schema_version": 1,
+                                "prompt": "mountain landscape",
+                                "seed": 42,
+                                "iteration": 1,
+                                "request_canvas_image": False,
+                                "strokes": [
+                                    {
+                                        "id": "s_base",
+                                        "layer_name": "Flats",
+                                        "color": "#336699",
+                                        "size_px": 80.0,
+                                        "points": [[0, 100], [400, 100]],
+                                    }
+                                ],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+        step2_response = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "schema_version": 1,
+                                "prompt": "mountain landscape",
+                                "seed": 42,
+                                "iteration": 2,
+                                "request_canvas_image": True,
+                                "strokes": [
+                                    {
+                                        "id": "s_detail",
+                                        "layer_name": "Lineart",
+                                        "color": "#111111",
+                                        "size_px": 10.0,
+                                        "points": [[100, 50], [200, 50]],
+                                    }
+                                ],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+
+        class FakeMultiStepResponse:
+            def __init__(self, idx: int) -> None:
+                self._idx = idx
+
+            def read(self, _size: int) -> bytes:
+                data = step1_response if self._idx == 0 else step2_response
+                return json.dumps(data).encode("utf-8")
+
+            def __enter__(self) -> FakeMultiStepResponse:
+                return self
+
+            def __exit__(self, *_args: Any) -> None:
+                pass
+
+        def fake_opener(req: Any, *_args: Any, **_kwargs: Any) -> FakeMultiStepResponse:
+            body = json.loads(req.data.decode("utf-8"))
+            received_payloads.append(body)
+            return FakeMultiStepResponse(len(received_payloads) - 1)
+
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "test-model"), opener=fake_opener
+        )
+
+        # Step 1: 実行
+        plan1 = planner.plan("mountain landscape", 42, 1, 800, 600, iteration=1, max_iterations=2)
+        self.assertEqual(len(plan1.strokes), 1)
+        self.assertFalse(plan1.request_canvas_image)
+
+        # Step 2: 実行 (AI要求なしのため canvas_image=None で呼び出し)
+        plan2 = planner.plan("mountain landscape", 42, 1, 800, 600, canvas_image=None, iteration=2, max_iterations=2)
+        self.assertEqual(len(plan2.strokes), 1)
+        self.assertTrue(plan2.request_canvas_image)
+
+        # Step 2 のペイロード検証: 前ステップの会話履歴（assistant 要約）が含まれており、canvas_image なしのため text のみ
+        self.assertEqual(len(received_payloads), 2)
+        step2_messages = received_payloads[1]["messages"]
+        # system (0), user_step1 (1), assistant_step1 (2), user_step2 (3)
+        self.assertEqual(len(step2_messages), 4)
+        self.assertEqual(step2_messages[0]["role"], "system")
+        self.assertEqual(step2_messages[1]["role"], "user")
+        self.assertEqual(step2_messages[2]["role"], "assistant")
+        self.assertEqual(step2_messages[3]["role"], "user")
+        # Step 2 user_content は画像なし
+        self.assertIsInstance(step2_messages[3]["content"], str)
+        self.assertNotIn("image_url", step2_messages[3]["content"])
 
     def test_extracts_json_with_surrounding_markdown_and_commentary(self) -> None:
         raw_text = (
@@ -2282,6 +2535,91 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertIsNone(docker._active_doc)
         self.assertTrue(docker.run_btn.isEnabled())
         self.assertFalse(docker.stop_btn.isEnabled())
+
+    def test_docker_on_plan_ready_on_demand_canvas_capture(self) -> None:
+        class _TestWidget:
+            def __init__(self) -> None:
+                self._text = ""
+
+            def setText(self, t: str) -> None:  # noqa: N802
+                self._text = t
+
+            def isChecked(self) -> bool:  # noqa: N802
+                return False
+
+            def setRange(self, *args: Any) -> None:  # noqa: N802
+                pass
+
+            def setValue(self, *args: Any) -> None:  # noqa: N802
+                pass
+
+            def setEnabled(self, *args: Any) -> None:  # noqa: N802
+                pass
+
+            def set_plan(self, *args: Any) -> None:
+                pass
+
+            def appendPlainText(self, *args: Any) -> None:  # noqa: N802
+                pass
+
+        class FakeWorker:
+            def __init__(self) -> None:
+                self.max_iterations = 3
+                self.provided_captures: list[bytes | None] = []
+
+            def provide_canvas_capture(self, cap: bytes | None) -> None:
+                self.provided_captures.append(cap)
+
+            def isRunning(self) -> bool:  # noqa: N802
+                return True
+
+        class FakeCanvasPort:
+            def render(self, *args: Any) -> int:
+                return 5
+
+            def capture_canvas(self, doc: Any, w: int, h: int) -> bytes:
+                return b"real-canvas-capture-bytes"
+
+        docker = AIStrokePainterDocker.__new__(AIStrokePainterDocker)
+        docker.preview = cast(Any, _TestWidget())
+        docker.status = cast(Any, _TestWidget())
+        docker.save_json = cast(Any, _TestWidget())
+        docker.save_svg_chk = cast(Any, _TestWidget())
+        docker.progress = cast(Any, _TestWidget())
+        docker.run_btn = cast(Any, _TestWidget())
+        docker.stop_btn = cast(Any, _TestWidget())
+        docker.debug_log_edit = cast(Any, _TestWidget())
+        docker._active_doc = "dummy_doc"
+        docker._cancel = False
+        docker.canvas_port = cast(Any, FakeCanvasPort())
+
+        # Case 1: AI は画像要求なし (request_canvas_image=False)
+        worker1 = FakeWorker()
+        docker._worker = cast(Any, worker1)
+        plan_no_req = DrawingPlan(
+            prompt="test",
+            seed=1,
+            strokes=[Stroke("s1", [StrokePoint(0, 0, 0.5, 0), StrokePoint(10, 10, 0.8, 10)])],
+            iteration=1,
+            request_canvas_image=False,
+        )
+        docker._on_plan_ready(plan_no_req)
+        self.assertEqual(len(worker1.provided_captures), 1)
+        self.assertIsNone(worker1.provided_captures[0])  # 高速進行: 画像なし
+
+        # Case 2: AI が画像要求 (request_canvas_image=True)
+        worker2 = FakeWorker()
+        docker._worker = cast(Any, worker2)
+        plan_with_req = DrawingPlan(
+            prompt="test",
+            seed=1,
+            strokes=[Stroke("s1", [StrokePoint(0, 0, 0.5, 0), StrokePoint(10, 10, 0.8, 10)])],
+            iteration=1,
+            request_canvas_image=True,
+        )
+        docker._on_plan_ready(plan_with_req)
+        self.assertEqual(len(worker2.provided_captures), 1)
+        self.assertEqual(worker2.provided_captures[0], b"real-canvas-capture-bytes")
 
 
 def run() -> bool:

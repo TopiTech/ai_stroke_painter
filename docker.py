@@ -222,9 +222,9 @@ class PlanWorker(QObject):
                     self.debug_log.emit("[ワーカー] 処理が中断されました")
                     return
 
-                msg = f"イテレーション {iter_idx}/{self.max_iterations}: 計画を生成中..."
+                msg = f"ステップ {iter_idx}/{self.max_iterations}: 計画を生成中..."
                 self.iteration_progress.emit(iter_idx, self.max_iterations, msg)
-                self.debug_log.emit(f"[イテレーション {iter_idx}/{self.max_iterations}] 計画生成処理を開始")
+                self.debug_log.emit(f"[ステップ {iter_idx}/{self.max_iterations}] 計画生成処理を開始")
 
                 canvas_img: bytes | None = self._next_canvas_image if iter_idx > 1 else None
 
@@ -246,7 +246,7 @@ class PlanWorker(QObject):
                     return
 
                 self.debug_log.emit(
-                    f"[イテレーション {iter_idx}] 計画生成完了。メインスレッドへ描画を要求します (ストローク数: {len(current_plan.strokes)})"
+                    f"[ステップ {iter_idx}] 計画生成完了。メインスレッドへ描画を要求します (ストローク数: {len(current_plan.strokes)})"
                 )
 
                 self._render_done_event.clear()
@@ -260,7 +260,7 @@ class PlanWorker(QObject):
                         return
 
             if not self.is_cancelled():
-                self.iteration_progress.emit(self.max_iterations, self.max_iterations, "全イテレーションが完了しました")
+                self.iteration_progress.emit(self.max_iterations, self.max_iterations, "全ステップの描画が完了しました")
                 self.debug_log.emit("[ワーカー完了] 全ての処理が正常に完了しました")
 
         except Exception as exc:
@@ -348,12 +348,15 @@ class AIStrokePainterDocker(DockWidget):
         params_layout.addWidget(self.count)
         root_layout.addLayout(params_layout)
 
-        # 自律改善反復設定
+        # 段階的ステップ描画設定
         refine_layout = QHBoxLayout()
-        self.auto_refine = QCheckBox("自律反復改善 (Auto-Refine)")
+        self.auto_refine = QCheckBox("段階的ステップ描画 (Progressive)")
+        self.auto_refine.setToolTip(
+            "下塗り→陰影→線画→ハイライトを段階的に描き進めます。AI要求時のみキャンバス画像を送信します。"
+        )
         self.auto_refine.setChecked(False)
         refine_layout.addWidget(self.auto_refine)
-        refine_layout.addWidget(QLabel("反復回数"))
+        refine_layout.addWidget(QLabel("ステップ数"))
         self.iterations = QSpinBox()
         self.iterations.setRange(1, 10)
         self.iterations.setValue(3)
@@ -782,7 +785,7 @@ class AIStrokePainterDocker(DockWidget):
             self._log_debug(f"[描画レンダリング例外] {exc}\n{traceback.format_exc()}")
             self.status.setText(f"描画エラー: {exc}")
         finally:
-            # 次イテレーション用のキャンバスキャプチャをメインスレッドで安全に取得してワーカーへ渡す
+            # 次ステップ用のキャンバスキャプチャをメインスレッドで安全に取得してワーカーへ渡す
             if self._worker is not None:
                 if (
                     document is not None
@@ -790,10 +793,20 @@ class AIStrokePainterDocker(DockWidget):
                     and hasattr(self._worker, "provide_canvas_capture")
                     and self._worker.max_iterations > plan.iteration
                 ):
-                    self._log_debug("[自律改善] メインスレッドでキャンバスキャプチャを取得中...")
-                    cap_img = self.canvas_port.capture_canvas(document, 512, 512)
-                    self._log_debug(f"[自律改善] キャプチャ完了 ({len(cap_img)} bytes)")
-                    self._worker.provide_canvas_capture(cap_img)
+                    if plan.request_canvas_image:
+                        self._log_debug(
+                            "[AI画像要求] AIが視覚確認を要求したため、現在のキャンバスキャプチャを取得します..."
+                        )
+                        cap_img = self.canvas_port.capture_canvas(document, 512, 512)
+                        self._log_debug(
+                            f"[AI画像要求] キャプチャ完了 ({len(cap_img)} bytes)。次ステップへ画像を送信します"
+                        )
+                        self._worker.provide_canvas_capture(cap_img)
+                    else:
+                        self._log_debug(
+                            "[高速進行] AIからの画像要求がないため、画像送信をスキップして次ステップへ高速進行します"
+                        )
+                        self._worker.provide_canvas_capture(None)
                 elif hasattr(self._worker, "notify_render_done"):
                     self._worker.notify_render_done()
             if self._worker is None or not self._worker.isRunning():

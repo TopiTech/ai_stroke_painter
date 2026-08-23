@@ -49,11 +49,24 @@ class StrokePoint:
         return {"x": self.x, "y": self.y, "pressure": self.pressure, "time_ms": self.time_ms}
 
     @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> StrokePoint:
+    def from_dict(cls, value: Any) -> StrokePoint:
+        if isinstance(value, (list, tuple)):
+            if len(value) < 2:
+                raise PlanValidationError("point 配列には少なくとも [x, y] の 2 要素が必要です")
+            x = value[0]
+            y = value[1]
+            pressure = value[2] if len(value) >= 3 else 0.8
+            time_ms = int(value[3]) if len(value) >= 4 else 0
+            return cls(x=x, y=y, pressure=pressure, time_ms=time_ms)
+
         if not isinstance(value, Mapping):
-            raise PlanValidationError("point はオブジェクトである必要があります")
+            raise PlanValidationError("point はオブジェクトまたは配列である必要があります")
         try:
-            return cls(value["x"], value["y"], value["pressure"], value["time_ms"])
+            x = value["x"]
+            y = value["y"]
+            pressure = value.get("pressure", 0.8)
+            time_ms = value.get("time_ms", 0)
+            return cls(x=x, y=y, pressure=pressure, time_ms=time_ms)
         except KeyError as exc:
             raise PlanValidationError(f"point に必須項目 {exc.args[0]} がありません") from exc
 
@@ -115,10 +128,21 @@ class Stroke:
         if version != SCHEMA_VERSION:
             raise PlanValidationError(f"未対応の stroke schema_version: {version!r}")
         try:
-            points = tuple(StrokePoint.from_dict(point) for point in value["points"])
+            raw_points = value["points"]
+            if not isinstance(raw_points, Sequence) or isinstance(raw_points, (str, bytes)):
+                raise PlanValidationError("stroke points は配列である必要があります")
+            points_list: list[StrokePoint] = []
+            curr_time = 0
+            for idx, point in enumerate(raw_points):
+                sp = StrokePoint.from_dict(point)
+                t = max(curr_time, sp.time_ms) if (sp.time_ms > 0 or idx > 0) else 0
+                if idx > 0 and t == curr_time and sp.time_ms == 0:
+                    t = curr_time + 10
+                curr_time = t
+                points_list.append(StrokePoint(x=sp.x, y=sp.y, pressure=sp.pressure, time_ms=curr_time))
             return cls(
-                id=value["id"],
-                points=points,
+                id=str(value["id"]),
+                points=tuple(points_list),
                 brush_preset=value.get("brush_preset", "Basic-5 Size"),
                 color=value.get("color", "#232323"),
                 size_px=value.get("size_px", 8.0),
@@ -170,6 +194,7 @@ class DrawingPlan:
     title: str = ""
     iteration: int = 1
     layers: Sequence[str] = field(default_factory=tuple)
+    request_canvas_image: bool = False
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -184,6 +209,7 @@ class DrawingPlan:
         object.__setattr__(self, "strokes", strokes)
         object.__setattr__(self, "title", self.title)
         object.__setattr__(self, "iteration", _non_negative_int(self.iteration, "iteration"))
+        object.__setattr__(self, "request_canvas_image", bool(self.request_canvas_image))
 
         # レイヤー一覧を自動推定または指定値で初期化
         if self.layers:
@@ -206,6 +232,7 @@ class DrawingPlan:
             "title": self.title,
             "iteration": self.iteration,
             "layers": list(self.layers),
+            "request_canvas_image": self.request_canvas_image,
         }
         if self.metadata:
             result["metadata"] = dict(self.metadata)
@@ -227,6 +254,7 @@ class DrawingPlan:
                 title=str(value.get("title", "")),
                 iteration=int(value.get("iteration", 1)),
                 layers=value.get("layers", ()),
+                request_canvas_image=bool(value.get("request_canvas_image", False)),
                 metadata=value.get("metadata", {}),
             )
         except KeyError as exc:

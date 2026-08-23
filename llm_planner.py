@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 import contextlib
 from dataclasses import dataclass
 import datetime
@@ -165,6 +165,7 @@ class OpenAICompatiblePlanner(PlannerPort):
         self.settings = settings
         self._opener = opener or build_opener(_SameOriginRedirectHandler()).open
         self.log_callback = log_callback
+        self._conversation_history: list[dict[str, Any]] = []
 
     def _log(self, message: str) -> None:
         if self.log_callback is not None:
@@ -222,16 +223,47 @@ class OpenAICompatiblePlanner(PlannerPort):
             prompt, seed, count, width, height
         )
 
+        if iteration == 1:
+            self._conversation_history = []
+
         is_reasoning = _is_reasoning_model(self.settings.model)
         self._log(
-            f"--- 描画計画生成開始 (Iteration {iteration}/{max_iterations}) ---\n"
+            f"--- 描画計画生成開始 (Step {iteration}/{max_iterations}) ---\n"
             f"Prompt: {valid_prompt!r}, Seed: {valid_seed}, Count: {valid_count}, Canvas: {valid_width}x{valid_height}\n"
             f"Endpoint: {self.settings.endpoint_url}, Model: {self.settings.model} (思考モデル最適化: {is_reasoning}, ReasoningEffort: {self.settings.reasoning_effort}), Timeout: {self.settings.timeout_seconds}s"
         )
 
+        # 段階的ステップ描画時のフェーズ目標の導出
+        phase_goal = ""
+        if max_iterations > 1:
+            if max_iterations == 2:
+                phase_goal = (
+                    "Phase 1/2: Base Color Blocking, Environment & Initial Shadows (Flats/Shading layer)"
+                    if iteration == 1
+                    else "Phase 2/2 [FINAL]: Structural Lineart, Highlights, Petals & Final Polish (Lineart/Highlights/FX)"
+                )
+            elif max_iterations == 3:
+                if iteration == 1:
+                    phase_goal = "Phase 1/3: Base Color Masses & Silhouettes (Flats layer)"
+                elif iteration == 2:
+                    phase_goal = "Phase 2/3: 3D Form Sculpting, Ambient Occlusion & Shadows (Shading layer)"
+                else:
+                    phase_goal = (
+                        "Phase 3/3 [FINAL]: Crisp Lineart, Highlights, Petal Scatter & Polish (Lineart/Highlights/FX)"
+                    )
+            else:
+                if iteration == 1:
+                    phase_goal = f"Phase {iteration}/{max_iterations}: Base Color Blocking & Foundations (Flats layer)"
+                elif iteration == 2:
+                    phase_goal = f"Phase {iteration}/{max_iterations}: 3D Volume Sculpting & Secondary Masses (Flats/Shading layer)"
+                elif iteration < max_iterations:
+                    phase_goal = f"Phase {iteration}/{max_iterations}: Shadow Crevices & Structural Contours (Shading/Lineart layer)"
+                else:
+                    phase_goal = f"Phase {iteration}/{max_iterations} [FINAL]: Fine Lineart, Highlights, Petals & Polish (Lineart/Highlights/FX)"
+
         user_content_parts: list[dict[str, Any]] = []
 
-        # 構造化テキスト指示（思考抑制・即時JSON出力の明確なアンカーを含む）
+        # 構造化テキスト指示
         req_dict = {
             "prompt": valid_prompt,
             "seed": valid_seed,
@@ -240,7 +272,11 @@ class OpenAICompatiblePlanner(PlannerPort):
             "palette": palette_name,
             "iteration": iteration,
             "max_iterations": max_iterations,
-            "instruction": "Generate drawing strokes strictly in valid DrawingPlan JSON format. Do not include conversational thoughts or analysis. Output starts directly with JSON.",
+            "phase_goal": phase_goal or "Complete full professional illustration.",
+            "instruction": (
+                f"Generate drawing strokes for {phase_goal or 'the artwork'} strictly in valid DrawingPlan JSON format. "
+                "Set request_canvas_image to true ONLY if you need to visually inspect the rendered canvas before the next step."
+            ),
         }
         req_json = json.dumps(req_dict, ensure_ascii=False)
         user_content_parts.append({"type": "text", "text": req_json})
@@ -257,10 +293,12 @@ class OpenAICompatiblePlanner(PlannerPort):
                 }
             )
 
-        # 現在のキャンバスキャプチャ (Base64) の添付 (自律改善ループ時)
+        # AIが要求した場合のみキャンバスキャプチャ (Base64) を添付
         if canvas_image:
             canvas_mime = _detect_image_mime_type(canvas_image)
-            self._log(f"現在のキャンバス状態を添付します ({len(canvas_image)} bytes, MIME: {canvas_mime})")
+            self._log(
+                f"AIの要求に基づき現在のキャンバス状態を添付します ({len(canvas_image)} bytes, MIME: {canvas_mime})"
+            )
             b64_canvas = base64.b64encode(canvas_image).decode("ascii")
             user_content_parts.append(
                 {
@@ -268,19 +306,29 @@ class OpenAICompatiblePlanner(PlannerPort):
                     "image_url": {"url": f"data:{canvas_mime};base64,{b64_canvas}", "detail": "high"},
                 }
             )
+        elif max_iterations > 1 and iteration > 1:
+            self._log("キャンバス画像送信スキップ (AI要求なし / 高速テキスト進行)")
 
         user_content: Any = user_content_parts if len(user_content_parts) > 1 else req_json
 
-        # ベースペイロードの構築（思考モデル特性に応じた初期適応）
+        # メッセージ履歴（マルチターン会話文脈）の構築
+        system_content = _system_instruction(
+            iteration=iteration,
+            max_iterations=max_iterations,
+            is_reasoning=is_reasoning,
+            width=valid_width,
+            height=valid_height,
+            prompt=valid_prompt,
+            palette_name=palette_name,
+        )
+        base_messages: list[dict[str, Any]] = [{"role": "system", "content": system_content}]
+        if self._conversation_history and iteration > 1:
+            base_messages.extend(self._conversation_history)
+        base_messages.append({"role": "user", "content": user_content})
+
         payload: dict[str, Any] = {
             "model": self.settings.model.strip(),
-            "messages": [
-                {
-                    "role": "system",
-                    "content": _system_instruction(iteration, max_iterations, is_reasoning=is_reasoning),
-                },
-                {"role": "user", "content": user_content},
-            ],
+            "messages": base_messages,
             "response_format": {"type": "json_object"},
         }
 
@@ -309,14 +357,24 @@ class OpenAICompatiblePlanner(PlannerPort):
                 current_payload.pop("reasoning_effort", None)
                 if not is_reasoning:
                     current_payload["temperature"] = 0.2
-                current_payload["messages"] = [
-                    {
-                        "role": "system",
-                        "content": _system_instruction(iteration, max_iterations, is_reasoning=True)
-                        + "\nIMPORTANT: Output ONLY the raw JSON starting immediately with ```json. Do NOT write any reasoning text or preamble.",
-                    },
-                    {"role": "user", "content": user_content},
-                ]
+
+                retry_sys = (
+                    _system_instruction(
+                        iteration=iteration,
+                        max_iterations=max_iterations,
+                        is_reasoning=True,
+                        width=valid_width,
+                        height=valid_height,
+                        prompt=valid_prompt,
+                        palette_name=palette_name,
+                    )
+                    + "\nIMPORTANT: Output ONLY the raw JSON starting immediately with ```json. Do NOT write any reasoning text or preamble."
+                )
+                r_messages: list[dict[str, Any]] = [{"role": "system", "content": retry_sys}]
+                if self._conversation_history and iteration > 1:
+                    r_messages.extend(self._conversation_history)
+                r_messages.append({"role": "user", "content": user_content})
+                current_payload["messages"] = r_messages
             else:
                 self._log("[自動リトライ 2/2] 思考抑制・最小構造モードで再試行します...")
                 current_payload = dict(payload)
@@ -324,13 +382,16 @@ class OpenAICompatiblePlanner(PlannerPort):
                 current_payload.pop("reasoning_effort", None)
                 if not is_reasoning:
                     current_payload["temperature"] = 0.0
-                current_payload["messages"] = [
-                    {
-                        "role": "system",
-                        "content": 'You must output ONLY valid JSON matching DrawingPlan schema. Start output directly with {"schema_version": 1. No thoughts, no analysis.',
-                    },
-                    {"role": "user", "content": user_content},
-                ]
+
+                min_sys = (
+                    'You must output ONLY valid JSON matching DrawingPlan schema. Start output directly with {"schema_version": 1. '
+                    "Include request_canvas_image: false/true. No thoughts, no analysis."
+                )
+                r_messages_min: list[dict[str, Any]] = [{"role": "system", "content": min_sys}]
+                if self._conversation_history and iteration > 1:
+                    r_messages_min.extend(self._conversation_history)
+                r_messages_min.append({"role": "user", "content": user_content})
+                current_payload["messages"] = r_messages_min
 
             try:
                 response = self._post_with_parameter_fallback(current_payload)
@@ -355,8 +416,37 @@ class OpenAICompatiblePlanner(PlannerPort):
                 total_pts = sum(len(s.points) for s in sanitized_plan.strokes)
                 layers_str = ", ".join(sanitized_plan.layers)
                 self._log(
-                    f"描画計画生成成功: ストローク数={len(sanitized_plan.strokes)}, 総点数={total_pts}, レイヤー=[{layers_str}]"
+                    f"描画計画生成成功: ストローク数={len(sanitized_plan.strokes)}, 総点数={total_pts}, レイヤー=[{layers_str}], "
+                    f"AI画像要求(request_canvas_image)={sanitized_plan.request_canvas_image}"
                 )
+
+                # 会話履歴に記録（次ステップへの文脈継承）
+                if max_iterations > 1:
+                    summary_dict = {
+                        "schema_version": 1,
+                        "iteration": iteration,
+                        "completed_layers": list(sanitized_plan.layers),
+                        "stroke_count": len(sanitized_plan.strokes),
+                        "request_canvas_image": sanitized_plan.request_canvas_image,
+                        "strokes_summary": [
+                            {
+                                "id": s.id,
+                                "layer": s.layer_name,
+                                "color": s.color,
+                                "size_px": s.size_px,
+                                "start_xy": [round(s.points[0].x, 1), round(s.points[0].y, 1)],
+                                "end_xy": [round(s.points[-1].x, 1), round(s.points[-1].y, 1)],
+                            }
+                            for s in sanitized_plan.strokes[:15]
+                        ],
+                    }
+                    self._conversation_history.append({"role": "user", "content": user_content})
+                    self._conversation_history.append(
+                        {"role": "assistant", "content": json.dumps(summary_dict, ensure_ascii=False)}
+                    )
+                    if len(self._conversation_history) > 8:
+                        self._conversation_history = self._conversation_history[-8:]
+
                 return sanitized_plan
 
             except LLMPlannerError as exc:
@@ -610,50 +700,253 @@ class OpenAICompatiblePlanner(PlannerPort):
         return decoded
 
 
-def _system_instruction(iteration: int = 1, max_iterations: int = 1, is_reasoning: bool = False) -> str:
-    phase_guide = (
-        "Phase 1: Rough draft and anatomical gesture/composition lines."
-        if iteration == 1 and max_iterations > 1
-        else "Phase: Refined clean lineart, flat colors, shading hatchings, and specular highlights."
+def _system_instruction(
+    iteration: int = 1,
+    max_iterations: int = 1,
+    is_reasoning: bool = False,
+    width: float = 1000.0,
+    height: float = 1000.0,
+    prompt: str = "",
+    palette_name: str = "anime",
+) -> str:
+    """プロフェッショナルなデジタルイラスト作画戦略・レイヤー階層・キャンバス連動ブラシサイズを含む高品質プロンプト。"""
+    min_dim = min(width, height)
+
+    # 推奨ブラシサイズ（キャンバス解像度連動）
+    flats_sz = f"{max(30, round(min_dim * 0.06))} to {max(80, round(min_dim * 0.16))} px"
+    shading_sz = f"{max(15, round(min_dim * 0.02))} to {max(40, round(min_dim * 0.06))} px"
+    lineart_sz = f"{max(4, round(min_dim * 0.004))} to {max(12, round(min_dim * 0.012))} px"
+    hl_sz = f"{max(6, round(min_dim * 0.005))} to {max(20, round(min_dim * 0.02))} px"
+
+    # ドメイン別作画ガイダンス
+    prompt_lower = prompt.lower()
+    domain_guidance = ""
+
+    if any(
+        k in prompt_lower
+        for k in [
+            "sakura",
+            "桜",
+            "landscape",
+            "mountain",
+            "山",
+            "cloud",
+            "雲",
+            "nature",
+            "風景",
+            "forest",
+            "tree",
+            "river",
+            "lake",
+            "ocean",
+            "sea",
+            "wave",
+        ]
+    ):
+        domain_guidance = (
+            "\n[DOMAIN ART DIRECTION: Landscape, Mountains, Clouds & Sakura]\n"
+            "1. Layer 'Flats':\n"
+            f"   - Paint sweeping sky wash & horizon strokes (size_px: {flats_sz}).\n"
+            f"   - Paint solid mountain silhouette blocks (size_px: {flats_sz}) across midground.\n"
+            f"   - Paint lush sakura blossom canopy clusters / clouds of pink foliage (size_px: {flats_sz}, colors: #ffb7c5, #ffccd7, #f78da7).\n"
+            "2. Layer 'Shading':\n"
+            f"   - Carve shadow ridges & crags on mountains (size_px: {shading_sz}, opacity: 0.5-0.7, colors: #2d3748, #3b4252).\n"
+            f"   - Paint darker underside shadows for clouds and cherry blossom canopy masses (size_px: {shading_sz}, colors: #b85d7f, #8a9bb8).\n"
+            "3. Layer 'Lineart':\n"
+            f"   - Draw organic, twisting tree trunk and branching boughs (size_px: {lineart_sz}, colors: #3e2723, #2c1810).\n"
+            f"   - Outline sharp mountain peak ridges and cloud crests (size_px: {lineart_sz}).\n"
+            "4. Layer 'Highlights' & 'FX':\n"
+            f"   - Scatter bright falling sakura petal strokes (size_px: {hl_sz}, 2-3 points per petal, colors: #ffffff, #ffe4ec).\n"
+            f"   - Add glowing cloud rim lights and sun glints (size_px: {hl_sz}, colors: #fff9db, #ffffff).\n"
+        )
+    elif any(
+        k in prompt_lower
+        for k in [
+            "girl",
+            "boy",
+            "portrait",
+            "face",
+            "anime",
+            "character",
+            "hero",
+            "eyes",
+            "hair",
+            "美少女",
+            "人物",
+            "顔",
+        ]
+    ):
+        domain_guidance = (
+            "\n[DOMAIN ART DIRECTION: Anime / Manga Character Portrait]\n"
+            "1. Layer 'Flats':\n"
+            f"   - Paint skin base mass (size_px: {flats_sz}, color: #ffebe0 / #fef0e6).\n"
+            f"   - Paint solid hair volume silhouette & clothing base (size_px: {flats_sz}).\n"
+            "2. Layer 'Shading':\n"
+            f"   - Paint soft cast shadows under chin, nose, hairline, eye sockets (size_px: {shading_sz}, opacity: 0.4-0.7, color: #f2b5a5).\n"
+            f"   - Sculpt hair depth and clothing folds (size_px: {shading_sz}).\n"
+            "3. Layer 'Lineart':\n"
+            f"   - Draw crisp expressive eyes (upper lash, double eyelid, lower lash, iris outline) (size_px: {lineart_sz}, color: #281820).\n"
+            f"   - Draw jawline, nose tip, lips, eyebrows, and flowing hair locks (size_px: {lineart_sz}).\n"
+            "4. Layer 'Highlights':\n"
+            f"   - Draw luminous hair ring highlight (angel halo) and eye specular sparkles (size_px: {hl_sz}, color: #ffffff).\n"
+        )
+    elif any(
+        k in prompt_lower
+        for k in ["cat", "dog", "animal", "creature", "dragon", "bird", "wolf", "猫", "犬", "動物", "獣", "竜"]
+    ):
+        domain_guidance = (
+            "\n[DOMAIN ART DIRECTION: Animal / Creature Art]\n"
+            f"1. Layer 'Flats': Base body volume & fur base masses (size_px: {flats_sz}).\n"
+            f"2. Layer 'Shading': Musculature shadows & fur tone gradations (size_px: {shading_sz}, opacity: 0.6).\n"
+            f"3. Layer 'Lineart': Facial contours, ears, paws, expressive eyes & whiskers (size_px: {lineart_sz}).\n"
+            f"4. Layer 'Highlights': Glowing eyes, rim light on fur & whiskers (size_px: {hl_sz}, color: #ffffff).\n"
+        )
+    elif any(
+        k in prompt_lower
+        for k in ["cyber", "cyberpunk", "city", "neon", "skyline", "sci-fi", "mech", "都市", "ビル", "ネオン"]
+    ):
+        domain_guidance = (
+            "\n[DOMAIN ART DIRECTION: Cyberpunk City & Sci-Fi]\n"
+            f"1. Layer 'Flats': Dark atmospheric background & skyscraper building silhouettes (size_px: {flats_sz}, colors: #0a0e17, #131b2e).\n"
+            f"2. Layer 'Shading': Deep occlusion between buildings and foggy street glow (size_px: {shading_sz}).\n"
+            f"3. Layer 'Lineart': Sharp structural edges, perspective grid, antenna spires (size_px: {lineart_sz}).\n"
+            f"4. Layer 'Highlights' & 'FX': Vibrant neon signs, window grids, laser light beams (size_px: {hl_sz}, colors: #00f0ff, #ff007f, #ffe600).\n"
+        )
+    elif any(k in prompt_lower for k in ["flower", "rose", "bouquet", "petal", "花", "バラ", "薔薇"]):
+        domain_guidance = (
+            "\n[DOMAIN ART DIRECTION: Blooming Flowers & Botanical]\n"
+            f"1. Layer 'Flats': Petal base color blocks & leaf masses (size_px: {flats_sz}).\n"
+            f"2. Layer 'Shading': Petal inner spiral crevice shadows (size_px: {shading_sz}, opacity: 0.6).\n"
+            f"3. Layer 'Lineart': Organic petal edges, curving stem, leaf vein contours (size_px: {lineart_sz}).\n"
+            f"4. Layer 'Highlights': Dewdrops, petal edge rim highlights (size_px: {hl_sz}, color: #ffffff).\n"
+        )
+
+    progressive_section = ""
+    if max_iterations > 1:
+        if max_iterations == 2:
+            if iteration == 1:
+                phase_title = "Step 1/2: Foundation, Backdrop & Base Color Blocking (Flats/Shading layer)"
+                phase_task = (
+                    "Focus strictly on painting broad base colors (Flats): sky, terrain/ground, mountain silhouettes, "
+                    "skin/hair masses, or foliage clumps with large brush sizes. Do not draw lineart or fine details yet."
+                )
+            else:
+                phase_title = (
+                    "Step 2/2 [FINAL]: Shading, Structural Lineart, Highlights & Details (Lineart/Highlights/FX)"
+                )
+                phase_task = (
+                    "Complete the artwork by layering shadow depths (Shading), drawing crisp expressive contours (Lineart), "
+                    "and scattering sparkling highlights / petals (Highlights/FX) over the existing base."
+                )
+        elif max_iterations == 3:
+            if iteration == 1:
+                phase_title = "Step 1/3: Foundation, Backdrop & Base Color Masses (Flats layer)"
+                phase_task = (
+                    "Paint ONLY the broad foundation and base color silhouettes (Flats layer) with large brush sizes."
+                )
+            elif iteration == 2:
+                phase_title = "Step 2/3: 3D Form Sculpting, Ambient Occlusion & Shadows (Shading layer)"
+                phase_task = (
+                    "Paint shadow crevices, cloud depth, muscle/cloth shading, and midtones over the base colors."
+                )
+            else:
+                phase_title = (
+                    "Step 3/3 [FINAL]: Expressive Lineart, Highlights, Petal Scatter & Polish (Lineart/Highlights/FX)"
+                )
+                phase_task = (
+                    "Draw crisp structural lines, facial/branch details, glowing highlights, and finishing touches."
+                )
+        else:
+            if iteration == 1:
+                phase_title = (
+                    f"Step {iteration}/{max_iterations}: Base Color Blocking & Silhouette Masses (Flats layer)"
+                )
+                phase_task = "Paint foundational backdrop, environment wash, and base color masses (Flats layer)."
+            elif iteration == 2:
+                phase_title = (
+                    f"Step {iteration}/{max_iterations}: 3D Volume Sculpting & Secondary Masses (Flats/Shading layer)"
+                )
+                phase_task = "Sculpt intermediate forms, secondary color variations, and primary shadow volumes."
+            elif iteration < max_iterations:
+                phase_title = f"Step {iteration}/{max_iterations}: Deep Shadow Crevices & Structural Contours (Shading/Lineart layer)"
+                phase_task = "Add deep occlusion shadows and organic structural contours over the existing shapes."
+            else:
+                phase_title = f"Step {iteration}/{max_iterations} [FINAL]: Fine Lineart, Highlights, Petals & Polish (Lineart/Highlights/FX)"
+                phase_task = "Finish the painting with sharp line details, sparkling highlights, falling petals, and lighting FX."
+
+        progressive_section = (
+            f"\n=== MULTI-STEP PROGRESSIVE DRAWING MODE ===\n"
+            f"Current Execution: {phase_title}\n"
+            f"Goal for this step: {phase_task}\n"
+            "Draw ONLY the strokes appropriate for THIS step. Do not try to rush and draw everything at once; build coherently upon previous steps.\n"
+        )
+
+    visual_feedback_section = (
+        "\n=== ON-DEMAND VISUAL INSPECTION (CANVAS FEEDBACK) ===\n"
+        'If and only if you need to visually inspect the actual rendered canvas before the next drawing step (e.g. to verify spatial alignment, colors, or composition), set `"request_canvas_image": true` in your JSON output.\n'
+        'Otherwise, set `"request_canvas_image": false` to continue rapidly without sending heavy image data.\n'
     )
+
     reasoning_guide = (
-        "Output ONLY the JSON object. Do not output any conversational thoughts, explanations, reasoning steps, or analysis."
+        "Output ONLY the JSON object. Do not output any conversational thoughts, explanations, or commentary."
         if is_reasoning
         else "Do not output conversational commentary."
     )
+
     return (
-        "You are an expert digital artist and vector drawing-plan director. Return exactly one valid JSON object. "
-        f"{phase_guide} {reasoning_guide} "
-        "The schema must strictly be:\n"
+        "You are an elite master digital painter directing layer-by-layer drawing plans for Krita. "
+        "Create a rich, complete, painterly illustration by generating multi-layered strokes from back to front.\n"
+        f"{reasoning_guide}\n\n"
+        "=== DIGITAL PAINTING METHODOLOGY (BACK-TO-FRONT LAYERS) ===\n"
+        f"1. Layer 'Flats' (Backdrop & Color Blocking):\n"
+        f"   - Must use LARGE brush sizes (size_px: {flats_sz}) to paint broad masses: sky, ground, mountain silhouettes, tree canopy foliage, skin/body base.\n"
+        f"2. Layer 'Shading' (Volume, Shadow & Depth):\n"
+        f"   - Use medium brush sizes (size_px: {shading_sz}, opacity: 0.4-0.8) with darker/cooler tones to sculpt form, cast shadows, and crevices.\n"
+        f"3. Layer 'Lineart' (Contours & Details):\n"
+        f"   - Use crisp dynamic brush sizes (size_px: {lineart_sz}, opacity: 0.9-1.0) for expressive outlines, tree trunks/branches, facial features, petal contours.\n"
+        f"4. Layer 'Highlights' & 'FX' (Light, Petals, Particle Atmosphere):\n"
+        f"   - Use accent brush sizes (size_px: {hl_sz}) with bright/luminous colors for falling petals, cloud rims, sparkles, and rim lighting.\n"
+        f"{domain_guidance}"
+        f"{progressive_section}"
+        f"{visual_feedback_section}\n"
+        "=== OUTPUT SCHEMA & TOKEN-EFFICIENT POINT FORMAT ===\n"
+        "Return exactly one valid JSON object. Points use high-efficiency compact arrays [[x, y], [x, y, pressure]] or object format:\n"
+        "```json\n"
         "{\n"
         '  "schema_version": 1,\n'
-        '  "prompt": string,\n'
-        '  "seed": integer,\n'
-        '  "title": string,\n'
-        '  "iteration": integer,\n'
-        '  "layers": ["Draft", "Lineart", "Flats", "Shading", "Highlights", "FX"],\n'
+        f'  "prompt": {json.dumps(prompt or "illustration")},\n'
+        '  "seed": 42,\n'
+        '  "title": "Artwork Title",\n'
+        f'  "iteration": {iteration},\n'
+        '  "request_canvas_image": false,\n'
+        '  "layers": ["Flats", "Shading", "Lineart", "Highlights", "FX"],\n'
         '  "strokes": [\n'
         "    {\n"
-        '      "id": string,\n'
+        '      "id": "s1",\n'
         '      "brush_preset": "Basic-5 Size",\n'
-        '      "color": "#RRGGBB",\n'
-        '      "size_px": number (2.0 to 15.0),\n'
-        '      "layer_name": string,\n'
-        '      "opacity": number (0.1 to 1.0),\n'
-        '      "points": [\n'
-        '        {"x": number, "y": number, "pressure": number (0.05 to 1.0), "time_ms": integer},\n'
-        "        ...\n"
-        "      ]\n"
+        '      "color": "#7ea0c4",\n'
+        f'      "size_px": {max(60, round(min_dim * 0.10))},\n'
+        '      "layer_name": "Flats",\n'
+        '      "opacity": 1.0,\n'
+        f'      "points": [[0, {round(height * 0.3)}], [{round(width * 0.5)}, {round(height * 0.25)}], [{round(width)}, {round(height * 0.35)}]]\n'
+        "    },\n"
+        "    {\n"
+        '      "id": "s2",\n'
+        '      "brush_preset": "Basic-5 Size",\n'
+        '      "color": "#2c1810",\n'
+        f'      "size_px": {max(10, round(min_dim * 0.008))},\n'
+        '      "layer_name": "Lineart",\n'
+        '      "opacity": 1.0,\n'
+        f'      "points": [[{round(width * 0.5)}, {round(height * 0.95)}, 0.95], [{round(width * 0.51)}, {round(height * 0.65)}, 0.85], [{round(width * 0.48)}, {round(height * 0.42)}, 0.7]]\n'
         "    }\n"
         "  ]\n"
         "}\n"
-        "Rules:\n"
-        "1. Layer names: 'Draft', 'Lineart', 'Flats', 'Shading', 'Highlights', 'FX'.\n"
-        "2. Colors: Hex #RRGGBB.\n"
-        "3. Coordinates x, y: Canvas dimensions (use integers or 1-2 decimal places to conserve tokens).\n"
-        "4. Pressure: 0.05 to 1.0.\n"
-        "5. Efficiency: Keep 2 to 6 key curve points per stroke. Engine interpolates smoothly.\n"
-        "6. First character of output must be '{' or '```json'."
+        "```\n"
+        "=== CRITICAL RULES ===\n"
+        f"1. Coordinates (x, y): Must be within canvas dimensions (0 to {width:.0f} width, 0 to {height:.0f} height).\n"
+        "2. Stroke Points: Provide 2 to 6 key curve control points per stroke in compact format [[x, y], [x, y, pressure]]. The engine automatically interpolates smooth Catmull-Rom splines and natural pressure tapering.\n"
+        f"3. Brush Sizes: Do NOT make all strokes tiny. Follow the recommended sizes ({flats_sz} for Flats, {shading_sz} for Shading, {lineart_sz} for Lineart).\n"
+        "4. First character of output must be '{' or '```json'."
     )
 
 
@@ -1193,6 +1486,7 @@ def _harvest_stroke_fragments(text: str, log_func: Callable[[str], None] | None 
             "seed": found_seed,
             "title": f"Rescued AI Plan - {found_prompt[:20]}",
             "iteration": 1,
+            "request_canvas_image": bool(re.search(r'"request_canvas_image"\s*:\s*true', text, re.I)),
             "layers": ["Draft", "Lineart", "Flats", "Shading", "Highlights", "FX"],
             "strokes": strokes,
         }
@@ -1214,25 +1508,31 @@ def _sanitize_repaired_dict(val: Mapping[str, Any]) -> dict[str, Any] | None:
         pts = st.get("points")
         if not isinstance(pts, list) or len(pts) == 0:
             continue
-        clean_pts = [
-            dict(p)
-            for p in pts
-            if isinstance(p, Mapping)
-            and "x" in p
-            and "y" in p
-            and not isinstance(p.get("x"), bool)
-            and not isinstance(p.get("y"), bool)
-        ]
+        clean_pts: list[Any] = []
+        for p in pts:
+            if isinstance(p, Mapping):
+                if "x" in p and "y" in p and not isinstance(p.get("x"), bool) and not isinstance(p.get("y"), bool):
+                    clean_pts.append(dict(p))
+            elif (
+                isinstance(p, (list, tuple))
+                and len(p) >= 2
+                and not isinstance(p[0], bool)
+                and not isinstance(p[1], bool)
+            ):
+                clean_pts.append(list(p))
         if len(clean_pts) == 1:
             p0 = clean_pts[0]
-            clean_pts.append(
-                {
-                    "x": float(p0.get("x", 0.0)) + 1.0,
-                    "y": float(p0.get("y", 0.0)) + 1.0,
-                    "pressure": float(p0.get("pressure", 0.5)),
-                    "time_ms": int(p0.get("time_ms", 0)) + 10,
-                }
-            )
+            if isinstance(p0, Mapping):
+                clean_pts.append(
+                    {
+                        "x": float(p0.get("x", 0.0)) + 1.0,
+                        "y": float(p0.get("y", 0.0)) + 1.0,
+                        "pressure": float(p0.get("pressure", 0.5)),
+                        "time_ms": int(p0.get("time_ms", 0)) + 10,
+                    }
+                )
+            else:
+                clean_pts.append([float(p0[0]) + 1.0, float(p0[1]) + 1.0, 0.8, 10])
         if len(clean_pts) >= 2:
             st_clean = dict(st)
             st_clean["points"] = clean_pts
@@ -1340,6 +1640,147 @@ def _attempt_json_repair(text: str) -> Mapping[str, Any] | None:
     return None
 
 
+def _catmull_rom_points(
+    control_points: list[tuple[float, float, float]],
+    samples_per_segment: int = 6,
+) -> list[tuple[float, float, float]]:
+    """Catmull-Rom スプライン補間により、制御点 (x, y, pressure) を通る滑らかな曲線を算出する。"""
+    if len(control_points) < 2:
+        return list(control_points)
+    if len(control_points) == 2:
+        p0, p1 = control_points
+        return [
+            (
+                p0[0] + (p1[0] - p0[0]) * (i / samples_per_segment),
+                p0[1] + (p1[1] - p0[1]) * (i / samples_per_segment),
+                p0[2] + (p1[2] - p0[2]) * (i / samples_per_segment),
+            )
+            for i in range(samples_per_segment + 1)
+        ]
+
+    pts = [control_points[0]] + list(control_points) + [control_points[-1]]
+    result: list[tuple[float, float, float]] = []
+
+    for i in range(1, len(pts) - 2):
+        p0, p1, p2, p3 = pts[i - 1], pts[i], pts[i + 1], pts[i + 2]
+        num_steps = samples_per_segment if i < len(pts) - 3 else samples_per_segment + 1
+        for step in range(num_steps):
+            t = step / samples_per_segment
+            t2 = t * t
+            t3 = t2 * t
+
+            x = 0.5 * (
+                (2 * p1[0])
+                + (-p0[0] + p2[0]) * t
+                + (2 * p0[0] - 5 * p1[0] + 4 * p2[0] - p3[0]) * t2
+                + (-p0[0] + 3 * p1[0] - 3 * p2[0] + p3[0]) * t3
+            )
+            y = 0.5 * (
+                (2 * p1[1])
+                + (-p0[1] + p2[1]) * t
+                + (2 * p0[1] - 5 * p1[1] + 4 * p2[1] - p3[1]) * t2
+                + (-p0[1] + 3 * p1[1] - 3 * p2[1] + p3[1]) * t3
+            )
+            p = 0.5 * (
+                (2 * p1[2])
+                + (-p0[2] + p2[2]) * t
+                + (2 * p0[2] - 5 * p1[2] + 4 * p2[2] - p3[2]) * t2
+                + (-p0[2] + 3 * p1[2] - 3 * p2[2] + p3[2]) * t3
+            )
+            result.append((x, y, p))
+    return result
+
+
+def _smooth_and_densify_points(
+    raw_points: Sequence[StrokePoint],
+    width: float,
+    height: float,
+    layer_name: str = "Lineart",
+    max_dense_points: int = 40,
+) -> list[StrokePoint]:
+    """大まかな制御点列を Catmull-Rom スプライン補間および自然な筆圧テーパリングで滑らかな手描きストロークへ変換する。"""
+    if not raw_points:
+        return []
+    if len(raw_points) == 1:
+        p0 = raw_points[0]
+        return [
+            p0,
+            StrokePoint(
+                x=min(width - 0.1, p0.x + 1.0),
+                y=min(height - 0.1, p0.y + 1.0),
+                pressure=p0.pressure,
+                time_ms=p0.time_ms + 10,
+            ),
+        ]
+
+    # 点数がすでに十分多い場合 (>= 35点) はそのままバウンディングのみ
+    if len(raw_points) >= 35:
+        return [
+            StrokePoint(
+                x=min(max(0.0, pt.x), width - 0.5),
+                y=min(max(0.0, pt.y), height - 0.5),
+                pressure=min(max(0.05, pt.pressure), 1.0),
+                time_ms=pt.time_ms,
+            )
+            for pt in raw_points
+        ]
+
+    ctrl = [(pt.x, pt.y, pt.pressure) for pt in raw_points]
+    num_segs = max(1, len(ctrl) - 1)
+    samples_per_seg = max(3, min(8, max_dense_points // num_segs))
+
+    spline_pts = _catmull_rom_points(ctrl, samples_per_segment=samples_per_seg)
+    if len(spline_pts) > max_dense_points:
+        step = len(spline_pts) / max_dense_points
+        spline_pts = [spline_pts[int(i * step)] for i in range(max_dense_points)]
+
+    smoothed: list[StrokePoint] = []
+    total_n = len(spline_pts) - 1
+    start_time = raw_points[0].time_ms
+
+    for idx, (sx, sy, sp) in enumerate(spline_pts):
+        t = idx / max(1, total_n)
+        # テーパー関数: 先頭 10% と末尾 12% を細くして入り抜きを表現
+        taper_in = min(1.0, t / 0.10) if total_n > 2 else 1.0
+        taper_out = min(1.0, (1.0 - t) / 0.12) if total_n > 2 else 1.0
+        taper_factor = 0.3 + 0.7 * (taper_in * taper_out)
+        final_pressure = max(0.05, min(1.0, sp * taper_factor))
+
+        bx = min(max(0.0, sx), width - 0.5)
+        by = min(max(0.0, sy), height - 0.5)
+        t_ms = start_time + idx * 10
+        smoothed.append(StrokePoint(x=bx, y=by, pressure=final_pressure, time_ms=t_ms))
+
+    return smoothed
+
+
+def _adaptive_stroke_size(
+    raw_size: float,
+    layer_name: str,
+    width: float,
+    height: float,
+) -> float:
+    """キャンバス解像度とレイヤー特性に基づいて、ストローク太さを適切に自動補正する。"""
+    min_dim = min(width, height)
+    layer_lower = layer_name.lower().strip()
+
+    if "flat" in layer_lower or "back" in layer_lower or "draft" in layer_lower:
+        # 下塗り・背景: 最低でもキャンバス短辺の 2.5% 以上、上限 450px
+        min_sz = max(20.0, min_dim * 0.025)
+        return float(min(max(raw_size, min_sz), 450.0))
+    elif "shad" in layer_lower:
+        # 陰影: 最低でもキャンバス短辺の 1.2% 以上
+        min_sz = max(10.0, min_dim * 0.012)
+        return float(min(max(raw_size, min_sz), 250.0))
+    elif "line" in layer_lower:
+        # 主線: 2.5px 〜 キャンバス短辺の 3%
+        min_sz = max(2.5, min_dim * 0.003)
+        return float(min(max(raw_size, min_sz), min_dim * 0.03))
+    else:  # Highlights, FX, etc.
+        min_sz = max(2.5, min_dim * 0.003)
+        return float(min(max(raw_size, min_sz), min_dim * 0.05))
+
+
 def _validate_and_sanitize_plan(
     plan: DrawingPlan,
     prompt: str,
@@ -1349,7 +1790,7 @@ def _validate_and_sanitize_plan(
     height: float,
     log_func: Callable[[str], None] | None = None,
 ) -> DrawingPlan:
-    """LLM の応答を堅牢にサニタイズし、契約違反（範囲外、正規化座標、属性欠落等）を自動修正する。"""
+    """LLM の応答を堅牢にサニタイズし、Catmull-Rom スプライン平滑化・筆圧テーパリング・解像度適応を実行する。"""
     # 1. prompt, seed の補正
     safe_prompt = prompt if not plan.prompt.strip() or plan.prompt != prompt else plan.prompt
     safe_seed = seed if plan.seed == 0 and seed != 0 else plan.seed
@@ -1376,12 +1817,11 @@ def _validate_and_sanitize_plan(
     stroke_id_set: set[str] = set()
 
     for idx, stroke in enumerate(plan.strokes[:count], start=1):
-        # ストローク ID の一意性確保
         st_id = stroke.id if stroke.id and stroke.id not in stroke_id_set else f"stroke_{idx}"
         stroke_id_set.add(st_id)
 
-        # 点のサニタイズ
-        sanitized_pts: list[StrokePoint] = []
+        # 制御点のバウンディング & 初期サニタイズ
+        raw_pts: list[StrokePoint] = []
         last_time = 0
         for p_idx, pt in enumerate(stroke.points[:150]):
             px = min(max(0.0, pt.x * scale_x), max(1.0, width - 0.5))
@@ -1389,32 +1829,37 @@ def _validate_and_sanitize_plan(
             pressure = min(max(0.05, pt.pressure), 1.0)
             time_ms = max(last_time, pt.time_ms) if pt.time_ms > 0 else (0 if p_idx == 0 else last_time + 15)
             last_time = time_ms
-            sanitized_pts.append(StrokePoint(x=px, y=py, pressure=pressure, time_ms=time_ms))
+            raw_pts.append(StrokePoint(x=px, y=py, pressure=pressure, time_ms=time_ms))
 
-        # 点数が 2 点未満の場合は補完
-        if len(sanitized_pts) == 1:
-            p0 = sanitized_pts[0]
-            sanitized_pts.append(
-                StrokePoint(
-                    x=min(width - 0.1, p0.x + 1.0),
-                    y=min(height - 0.1, p0.y + 1.0),
-                    pressure=p0.pressure,
-                    time_ms=p0.time_ms + 10,
-                )
-            )
-        elif len(sanitized_pts) == 0:
+        if not raw_pts:
             continue
 
-        # カラーのサニタイズ
-        color = stroke.color if re.match(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$", stroke.color) else "#232323"
         layer = stroke.layer_name.strip() if stroke.layer_name and stroke.layer_name.strip() else "Lineart"
-        size_px = min(max(0.5, stroke.size_px), 200.0)
+
+        # Catmull-Rom スプライン平滑化 & 筆圧テーパリング
+        smoothed_pts = _smooth_and_densify_points(
+            raw_points=raw_pts,
+            width=width,
+            height=height,
+            layer_name=layer,
+        )
+
+        if len(smoothed_pts) < 2:
+            continue
+
+        # カラー & サイズ & 不透明度のサニタイズ
+        color = (
+            stroke.color
+            if re.match(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$", stroke.color)
+            else "#232323"
+        )
+        size_px = _adaptive_stroke_size(stroke.size_px, layer, width, height)
         opacity = min(max(0.05, stroke.opacity), 1.0)
 
         sanitized_strokes.append(
             Stroke(
                 id=st_id,
-                points=sanitized_pts,
+                points=smoothed_pts,
                 brush_preset=stroke.brush_preset or "Basic-5 Size",
                 color=color,
                 size_px=size_px,
@@ -1433,6 +1878,7 @@ def _validate_and_sanitize_plan(
         title=plan.title or f"AI Artwork - {safe_prompt[:20]}",
         iteration=plan.iteration,
         layers=plan.layers,
+        request_canvas_image=getattr(plan, "request_canvas_image", False),
         metadata=plan.metadata,
     )
 
