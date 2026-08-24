@@ -67,6 +67,12 @@ def bezier_cubic(
     return points
 
 
+def _smoothstep(edge0: float, edge1: float, x: float) -> float:
+    """エルミート補間によるなめらかな 0.0〜1.0 遷移関数。"""
+    t = max(0.0, min(1.0, (x - edge0) / max(1e-6, edge1 - edge0)))
+    return t * t * (3.0 - 2.0 * t)
+
+
 def pressure_profile(
     t: float,
     profile_type: str = "gpen",
@@ -75,24 +81,37 @@ def pressure_profile(
 ) -> float:
     """描画スタイルに応じた本格的な筆圧ダイナミクスを算出 (0.05〜1.0)。"""
     noise = rng.uniform(-0.02, 0.02) if rng is not None else 0.0
+    ptype = profile_type.lower().strip()
 
-    if profile_type == "gpen":
-        taper_in = min(1.0, t / 0.12)
-        taper_out = min(1.0, (1.0 - t) / 0.15)
-        curve = math.sin(t * math.pi) ** 0.8
-        p = base * (0.2 + 0.8 * taper_in * taper_out * curve)
-    elif profile_type == "marupen":
-        taper = min(1.0, t / 0.08, (1.0 - t) / 0.08)
-        p = base * (0.5 + 0.5 * taper)
-    elif profile_type == "brush":
-        taper_in = min(1.0, t / 0.2)
-        taper_out = min(1.0, (1.0 - t) / 0.25)
-        wave = 0.08 * math.sin(t * math.pi * 3.0)
-        p = base * (0.3 + 0.7 * taper_in * taper_out) + wave
-    elif profile_type == "marker":
-        taper = min(1.0, t / 0.04, (1.0 - t) / 0.04)
-        p = base * (0.8 + 0.2 * taper)
-    else:  # soft
+    if ptype in {"gpen", "pen"}:
+        taper_in = _smoothstep(0.0, 0.14, t)
+        taper_out = _smoothstep(1.0, 0.84, t)
+        curve = math.sin(t * math.pi) ** 0.75
+        p = base * (0.15 + 0.85 * taper_in * taper_out * curve)
+    elif ptype == "marupen":
+        taper = min(_smoothstep(0.0, 0.09, t), _smoothstep(1.0, 0.91, t))
+        p = base * (0.45 + 0.55 * taper)
+    elif ptype in {"brush", "fude", "calligraphy"}:
+        taper_in = _smoothstep(0.0, 0.18, t)
+        taper_out = _smoothstep(1.0, 0.72, t)
+        wave = 0.09 * math.sin(t * math.pi * 3.0)
+        p = base * (0.25 + 0.75 * taper_in * taper_out) + wave
+    elif ptype == "marker":
+        taper = min(_smoothstep(0.0, 0.04, t), _smoothstep(1.0, 0.96, t))
+        p = base * (0.85 + 0.15 * taper)
+    elif ptype == "pencil":
+        taper_in = _smoothstep(0.0, 0.08, t)
+        taper_out = _smoothstep(1.0, 0.88, t)
+        jitter = rng.uniform(-0.06, 0.06) if rng is not None else 0.0
+        p = base * (0.4 + 0.6 * taper_in * taper_out) + jitter
+    elif ptype == "watercolor":
+        taper_in = _smoothstep(0.0, 0.25, t)
+        taper_out = _smoothstep(1.0, 0.70, t)
+        bleed = 0.05 * math.sin(t * math.pi * 5.0)
+        p = base * (0.3 + 0.7 * taper_in * taper_out) + bleed
+    elif ptype == "airbrush":
+        p = base * math.sin(t * math.pi) ** 0.5
+    else:  # soft / default
         p = base * math.sin(t * math.pi)
 
     return float(max(0.05, min(1.0, p + noise)))
@@ -280,6 +299,51 @@ def color_palette(name: str) -> dict[str, str]:
             "cloth_main": "#6d4c41",
             "cloth_shadow": "#4e342e",
             "fx": "#a1887f",
+        },
+        "botanical": {
+            "draft": "#95d5b2",
+            "lineart": "#1b4332",
+            "skin_base": "#fdf0d5",
+            "skin_shadow": "#ddb892",
+            "hair_main": "#2d6a4f",
+            "hair_shadow": "#081c15",
+            "hair_highlight": "#b7e4c7",
+            "eye_dark": "#1b4332",
+            "eye_light": "#52b788",
+            "highlight": "#ffffff",
+            "cloth_main": "#ff758f",
+            "cloth_shadow": "#c9184a",
+            "fx": "#ffb703",
+        },
+        "sumie": {
+            "draft": "#b0bec5",
+            "lineart": "#111111",
+            "skin_base": "#f9f7f1",
+            "skin_shadow": "#cfd8dc",
+            "hair_main": "#212121",
+            "hair_shadow": "#000000",
+            "hair_highlight": "#eceff1",
+            "eye_dark": "#111111",
+            "eye_light": "#424242",
+            "highlight": "#ffffff",
+            "cloth_main": "#37474f",
+            "cloth_shadow": "#263238",
+            "fx": "#c21807",
+        },
+        "cyber_gold": {
+            "draft": "#00f0ff",
+            "lineart": "#1a1a24",
+            "skin_base": "#fff8e7",
+            "skin_shadow": "#d4af37",
+            "hair_main": "#ffd700",
+            "hair_shadow": "#b8860b",
+            "hair_highlight": "#ffffff",
+            "eye_dark": "#0a192f",
+            "eye_light": "#00f0ff",
+            "highlight": "#ffffff",
+            "cloth_main": "#1e293b",
+            "cloth_shadow": "#0f172a",
+            "fx": "#ff9f1c",
         },
     }
     key = name.lower().strip()

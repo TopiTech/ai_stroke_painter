@@ -18,7 +18,7 @@
     </style>
 </head>
 <body>
-    <h1>AI Stroke Painter Pro <span class="badge">v1.1.0 Customization Expanded</span></h1>
+    <h1>AI Stroke Painter Pro <span class="badge">v1.1.0 Enhanced</span></h1>
     <p>Krita 上で、プロフェッショナルな本格イラスト・アニメ線画・風景・エフェクト・幾何学アートの描画計画を生成し、マルチレイヤーへ自動分割して筆圧付きストロークを描画する AI ペイントプラグインです。</p>
 
     <h2>🌟 主な機能とカスタマイズ性</h2>
@@ -27,25 +27,26 @@
         <h3>1. 本格プロシージャル・イラストエンジン (Offline)</h3>
         <p>アニメ美少女・少年の顔、風景（山・樹木・北斎風大波・水墨画・花）、集中線・カケアミ・魔法陣、マンダラ、動物（猫・犬・鳥・ドラゴン）を完全オフラインで生成。</p>
         <p>
-            <span class="tag">9種カラーパレット</span> (アニメ、モノクロ、サイバーパンク、自然、パステル、水彩、レトロポップ、ダークファンタジー、セピア)<br>
-            <span class="tag">5種ブラシプロファイル</span> (自動、Gペン、丸ペン、毛筆・水彩、マーカー)
+            <span class="tag">12種カラーパレット</span> (アニメ、モノクロ、サイバーパンク、自然、パステル、水彩、レトロポップ、ダークファンタジー、セピア、ボタニカル、水墨画、サイバーゴールド)<br>
+            <span class="tag">8種ブラシプロファイル</span> (自動、Gペン、丸ペン、毛筆、マーカー、鉛筆、透明水彩、エアブラシ)
         </p>
     </div>
 
     <div class="feature-card">
         <h3>2. 参照画像の読み込み & 画像解析 (Image-to-Stroke)</h3>
-        <p>画像の連結輪郭・陰影・カラーを解析し、縦横比と透過領域を保った手描き風ストロークへ自動変換。読み込み上限は 25 MB / 展開後 5,000 万画素です。</p>
+        <p>画像の連結輪郭・立体感陰影・カラーを解析し、縦横比と透過領域を保った手描き風ストロークへ自動変換。微小ノイズの除去と深層クロスハッチングに対応。</p>
         <ul>
             <li><strong>エッジ感度:</strong> 0.02〜0.50（微細な質感〜大胆な主線）</li>
-            <li><strong>陰影ハッチング:</strong> 標準、高密度、低密度、オフ</li>
+            <li><strong>立体感ハッチング:</strong> 標準、高密度、低密度、オフ（最暗部でのクロスハッチング対応）</li>
             <li><strong>下塗り描画:</strong> ON / OFF</li>
             <li><strong>カラーモード:</strong> 元画像カラー / パレット近似マッピング</li>
         </ul>
     </div>
 
     <div class="feature-card">
-        <h3>3. 🖌️ ブラシ・描画 & レイヤー設定</h3>
+        <h3>3. 🖌️ ブラシ・描画 & レイヤー・アンドゥ統合</h3>
         <ul>
+            <li><strong>Krita アンドゥ（Undo/Redo）マクロ統合:</strong> 1回の描画セッション全体を 1 つのアンドゥ単位として記録。<code>Ctrl+Z</code> 1回で全レイヤーの描画を一括アンドゥ/リドゥ可能。</li>
             <li><strong>太さ倍率:</strong> 0.1x 〜 5.0x / <strong>不透明度:</strong> 10% 〜 100%</li>
             <li><strong>レイヤー出力:</strong> 実行ごとの一意なマルチレイヤーグループ / アクティブレイヤー直接描画 / 単一新規レイヤー</li>
             <li><strong>出力グループ / レイヤー名:</strong> 自由設定</li>
@@ -55,13 +56,13 @@
 
     <div class="feature-card">
         <h3>4. 🤖 OpenAI 互換 LLM / Vision & 自律反復改善 (Auto-Refine)</h3>
-        <p>Chat Completions 互換 API と連携。各中間ステップのキャンバスを次のリクエストへ添付し、視覚評価しながら下塗り→陰影→主線→仕上げと段階的に描き進めます。</p>
+        <p>Claude 3.7 / GPT-4o / Gemini 2.0 / DeepSeek-R1 等の Chat Completions 互換 API と連携。各中間ステップのキャンバスを視覚評価しながら下塗り→陰影→主線→消しゴム彫刻→仕上げと段階的に描き進めます。</p>
         <ul>
-            <li><strong>Temperature (0.0〜2.0) & Top-P (0.1〜1.0)</strong></li>
-            <li><strong>Reasoning Effort:</strong> 思考モデル（o1/o3/DeepSeek R1等）の思考強度制御</li>
+            <li><strong>消しゴム彫刻 ('is_eraser': true):</strong> 輪郭の修正やハイライト彫刻の自律指示に対応</li>
+            <li><strong>Temperature & Top-P:</strong> サンプリング調整</li>
+            <li><strong>Reasoning Effort:</strong> 思考モデルの思考強度制御</li>
             <li><strong>Vision 解像度:</strong> 256, 512, 768, 1024 px</li>
             <li><strong>追加カスタム指示:</strong> ユーザー独自の描画指示をシステムプロンプトへ追加</li>
-            <li><strong>障害時フォールバック:</strong> 明示的に有効化した場合だけオフライン生成へ切替</li>
         </ul>
         <p><strong>プライバシー:</strong> Auto-Refine ではキャンバス画像を設定先 API へ送信します。API Key を使う外部接続は HTTPS 必須で、HTTP はローカル接続だけ許可されます。API Key は設定へ保存されません。</p>
     </div>
@@ -71,6 +72,7 @@
         <ul>
             <li><strong>12種のビルトインプリセット</strong></li>
             <li><strong>カスタムプリセット保存 (💾) & 削除 (🗑️):</strong> 現在の設定を QSettings へ永続保存</li>
+            <li><strong>📤 プリセットの JSON 入出力 (Import / Export):</strong> カスタムプリセットのファイル保存・読み込み共有に対応</li>
             <li><strong>初期設定リセット (🔄)</strong></li>
             <li><strong>🐞 デバッグモード:</strong> 通信ログのリアルタイム表示、コピー、保存</li>
         </ul>

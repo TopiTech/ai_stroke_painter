@@ -132,6 +132,30 @@ def _safe_endpoint_label(url: str) -> str:
         return "[invalid URL]"
 
 
+def _safe_get_save_filename(parent: Any, title: str, default_dir: str, filter_str: str) -> tuple[str, str]:
+    """Pyrefly / Qt5 / Qt6 互換の安全なファイル保存ダイアログ呼び出し。"""
+    func = getattr(QFileDialog, "getSaveFileName", None)
+    if func is not None and callable(func):
+        res = func(parent, title, default_dir, filter_str)
+        if isinstance(res, tuple) and len(res) >= 2:
+            return str(res[0]), str(res[1])
+        if isinstance(res, str):
+            return res, ""
+    return "", ""
+
+
+def _safe_get_open_filename(parent: Any, title: str, default_dir: str, filter_str: str) -> tuple[str, str]:
+    """Pyrefly / Qt5 / Qt6 互換の安全なファイル読込ダイアログ呼び出し。"""
+    func = getattr(QFileDialog, "getOpenFileName", None)
+    if func is not None and callable(func):
+        res = func(parent, title, default_dir, filter_str)
+        if isinstance(res, tuple) and len(res) >= 2:
+            return str(res[0]), str(res[1])
+        if isinstance(res, str):
+            return res, ""
+    return "", ""
+
+
 class PreviewWidget(QWidget):
     """描画計画のストロークをリアルタイムでベクタープレビューするミニキャンバス。"""
 
@@ -515,12 +539,18 @@ class AIStrokePainterDocker(DockWidget):
         preset_layout.addLayout(preset_row1)
 
         preset_row2 = QHBoxLayout()
-        self.save_preset_btn = QPushButton("💾 プリセット保存...")
+        self.save_preset_btn = QPushButton("💾 保存...")
         self.save_preset_btn.clicked.connect(self._save_custom_preset)
         self.del_preset_btn = QPushButton("🗑️ 削除")
         self.del_preset_btn.clicked.connect(self._delete_custom_preset)
+        self.export_preset_btn = QPushButton("📤 出力...")
+        self.export_preset_btn.clicked.connect(self._export_presets)
+        self.import_preset_btn = QPushButton("📥 読込...")
+        self.import_preset_btn.clicked.connect(self._import_presets)
         preset_row2.addWidget(self.save_preset_btn)
         preset_row2.addWidget(self.del_preset_btn)
+        preset_row2.addWidget(self.export_preset_btn)
+        preset_row2.addWidget(self.import_preset_btn)
         preset_layout.addLayout(preset_row2)
 
         root_layout.addWidget(preset_box)
@@ -619,6 +649,9 @@ class AIStrokePainterDocker(DockWidget):
         self.palette_combo.addItem("80s レトロポップ", "retro_pop")
         self.palette_combo.addItem("ダークファンタジー", "dark_fantasy")
         self.palette_combo.addItem("クラシックセピア", "sepia")
+        self.palette_combo.addItem("ボタニカル・植物", "botanical")
+        self.palette_combo.addItem("水墨画 (墨・朱印)", "sumie")
+        self.palette_combo.addItem("サイバーゴールド", "cyber_gold")
         style_row.addWidget(self.palette_combo)
 
         style_row.addWidget(QLabel("タッチ"))
@@ -628,6 +661,9 @@ class AIStrokePainterDocker(DockWidget):
         self.brush_profile.addItem("丸ペン (均一線)", "marupen")
         self.brush_profile.addItem("毛筆・水彩", "brush")
         self.brush_profile.addItem("マーカー", "marker")
+        self.brush_profile.addItem("鉛筆・デッサン", "pencil")
+        self.brush_profile.addItem("透明水彩タッチ", "watercolor")
+        self.brush_profile.addItem("エアブラシ", "airbrush")
         style_row.addWidget(self.brush_profile)
         gen_layout.addLayout(style_row)
 
@@ -1013,6 +1049,77 @@ class AIStrokePainterDocker(DockWidget):
 
         self._populate_presets()
         self._log_debug(f"[プリセット削除] カスタムプリセット '{name}' を削除しました")
+
+    def _export_presets(self) -> None:
+        """保存済みカスタムプリセットを JSON ファイルとしてエクスポートする。"""
+        if not callable(QSettings) or not callable(QFileDialog):
+            QMessageBox.critical(self, "プリセット出力", "この環境ではファイル出力機能を利用できません。")
+            return
+        try:
+            settings: Any = QSettings("AIStrokePainter", "CustomPresets")
+            raw_json = settings.value("presets_json")
+            if not raw_json:
+                QMessageBox.information(self, "プリセット出力", "エクスポート可能なカスタムプリセットがありません。")
+                return
+            loaded = json.loads(str(raw_json))
+            if not isinstance(loaded, dict) or not loaded:
+                QMessageBox.information(self, "プリセット出力", "エクスポート可能なカスタムプリセットがありません。")
+                return
+        except Exception as exc:
+            self._log_debug(f"[プリセット出力失敗] {exc}")
+            QMessageBox.critical(self, "プリセット出力", f"プリセットの読み出しに失敗しました: {exc}")
+            return
+
+        file_path, _ = _safe_get_save_filename(self, "カスタムプリセットを保存", "", "JSON Files (*.json)")
+        if not file_path:
+            return
+        try:
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(loaded, f, ensure_ascii=False, indent=2)
+            self._log_debug(f"[プリセット出力成功] {file_path}")
+            QMessageBox.information(self, "プリセット出力", f"カスタムプリセットを出力しました:\n{file_path}")
+        except Exception as exc:
+            self._log_debug(f"[プリセット出力ファイル保存失敗] {exc}")
+            QMessageBox.critical(self, "プリセット出力", f"ファイルの保存に失敗しました: {exc}")
+
+    def _import_presets(self) -> None:
+        """JSON ファイルからカスタムプリセットを読み込んでインポート・マージする。"""
+        if not callable(QSettings):
+            QMessageBox.critical(self, "プリセット読込", "この環境ではファイル読込機能を利用できません。")
+            return
+        file_path, _ = _safe_get_open_filename(self, "カスタムプリセットを読込", "", "JSON Files (*.json)")
+        if not file_path:
+            return
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                imported_data = json.load(f)
+            if not isinstance(imported_data, dict):
+                raise ValueError("JSONのルートがオブジェクト(辞書)ではありません")
+            # プリセット構造の検証
+            valid_presets: dict[str, Any] = {}
+            for k, v in imported_data.items():
+                if isinstance(k, str) and isinstance(v, dict) and "prompt" in v:
+                    valid_presets[k.strip()] = v
+            if not valid_presets:
+                raise ValueError("有効なプリセットデータが見つかりませんでした")
+
+            settings: Any = QSettings("AIStrokePainter", "CustomPresets")
+            raw_json = settings.value("presets_json")
+            existing = json.loads(str(raw_json)) if raw_json else {}
+            if not isinstance(existing, dict):
+                existing = {}
+            existing.update(valid_presets)
+            settings.setValue("presets_json", json.dumps(existing, ensure_ascii=False))
+            if hasattr(settings, "sync"):
+                settings.sync()
+            self._populate_presets()
+            self._log_debug(f"[プリセット読込成功] {len(valid_presets)} 個のプリセットをマージしました")
+            QMessageBox.information(
+                self, "プリセット読込", f"{len(valid_presets)} 個のカスタムプリセットを読み込みました。"
+            )
+        except Exception as exc:
+            self._log_debug(f"[プリセット読込失敗] {exc}")
+            QMessageBox.critical(self, "プリセット読込", f"プリセットの読み込みに失敗しました: {exc}")
 
     def _reset_to_defaults(self) -> None:
         """全設定値を標準デフォルト値にリセットする。"""

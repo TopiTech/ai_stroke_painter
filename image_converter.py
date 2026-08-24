@@ -354,9 +354,14 @@ class ImageStrokeConverter:
                 if mag > safe_edge_threshold:
                     edge_mask[y][x] = True
 
-        # エッジを連結し、輪郭に沿う連続ストロークを構築する。
+        # エッジを連結し、輪郭に沿う連続ストロークを構築する（微小ノイズパスはフィルタ）。
         max_paths = min(max(20, (count * 3) if count is not None else 150), 500)
-        edge_paths = _trace_edge_paths(edge_mask, max_paths=max_paths)
+        raw_edge_paths = _trace_edge_paths(edge_mask, max_paths=max_paths)
+        # 1ピクセルのみの微小孤立ノイズをカットし、意味のある輪郭線のみを保持
+        edge_paths = [p for p in raw_edge_paths if len(p) >= 2 or len(raw_edge_paths) <= 10]
+        if not edge_paths and raw_edge_paths:
+            edge_paths = raw_edge_paths
+
         for i, pixel_path in enumerate(edge_paths):
             sample_step = max(1, math.ceil(len(pixel_path) / 24))
             control_pixels = pixel_path[::sample_step]
@@ -382,7 +387,7 @@ class ImageStrokeConverter:
                 )
             )
 
-        # 2. 暗部領域の陰影ハッチング -> Shading
+        # 2. 暗部領域の立体感ハッチング（深さに応じたクロスハッチング対応） -> Shading
         if shading_density != "off":
             if shading_density == "low":
                 dark_step = max(3, int(grid_w / 18))
@@ -403,6 +408,7 @@ class ImageStrokeConverter:
                         hx = offset_x + x * fit_scale
                         hy = offset_y + y * fit_scale
                         h_len = fit_scale * dark_step * 1.5
+                        # 第1方向ハッチング
                         h_stroke = [(hx, hy), (hx + h_len, hy + h_len * 0.5)]
                         strokes.append(
                             create_stroke(
@@ -420,6 +426,25 @@ class ImageStrokeConverter:
                                 preferred_profile=brush_profile,
                             )
                         )
+                        # 最暗部（lum < 0.20）ではクロスハッチングを追加して深みを表現
+                        if lum < 0.20 and shading_density in {"medium", "high"}:
+                            cross_stroke = [(hx + h_len, hy), (hx, hy + h_len * 0.5)]
+                            strokes.append(
+                                create_stroke(
+                                    cross_stroke,
+                                    profile_type="marupen",
+                                    base_pressure=0.5,
+                                    color=color_map[y][x],
+                                    size_px=2.5,
+                                    layer_name="Shading",
+                                    opacity=0.55,
+                                    rng=rng,
+                                    width=target_width,
+                                    height=target_height,
+                                    stroke_id=uid("cross_shade", len(strokes)),
+                                    preferred_profile=brush_profile,
+                                )
+                            )
 
         # 3. カラーパレットサンプリングによる下塗りストローク -> Flats
         if enable_flats:

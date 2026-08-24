@@ -10,6 +10,6 @@ C++ bridge should accept line-delimited JSON over a local authenticated IPC chan
 2. [x] LLM adapter producing validated DrawingPlan JSON
 3. [x] Per-run output groups, generated-output rollback, and active view pinning
 4. [x] Automatic canvas feedback between Auto-Refine iterations
-5. [ ] Krita action/undo macro integration (especially active-layer mode)
+5. [x] Krita action/undo macro integration (especially active-layer mode)
 6. [ ] Native bridge prototype
 7. [ ] Replace segment rendering with native continuous stroke

@@ -114,6 +114,14 @@ class _FakeDocument:
         self.unlocked = 0
         self.waited_for_done = 0
         self._batchmode = False
+        self.macros_started: list[str] = []
+        self.macros_ended = 0
+
+    def createMacro(self, title: str) -> None:
+        self.macros_started.append(title)
+
+    def endMacro(self) -> None:
+        self.macros_ended += 1
 
     def activeNode(self) -> Any | None:
         return self.active
@@ -2307,6 +2315,32 @@ class CanvasAdapterTests(unittest.TestCase):
             adapter.render(document, plan)
             self.assertGreater(fake_view.setForeGroundColor.call_count, first_call_count)
 
+    def test_render_session_macro_lifecycle(self) -> None:
+        document = _FakeDocument(root=_FakeNode("root", "grouplayer"))
+        plan = RuleBasedPlanner().plan("test", 1, 1, 200, 200)
+        adapter = KritaCanvasAdapter()
+
+        adapter.begin_render_session(document)
+        self.assertEqual(document.macros_started, ["AI Stroke Painter Session"])
+        self.assertEqual(document.macros_ended, 0)
+
+        adapter.render(document, plan)
+        # Session is still open, macro should not end yet
+        self.assertEqual(document.macros_ended, 0)
+
+        adapter.end_render_session(commit=True)
+        self.assertEqual(document.macros_ended, 1)
+
+    def test_standalone_render_macro_lifecycle(self) -> None:
+        document = _FakeDocument(root=_FakeNode("root", "grouplayer"))
+        plan = RuleBasedPlanner().plan("test", 1, 1, 200, 200)
+        adapter = KritaCanvasAdapter()
+
+        rendered = adapter.render(document, plan)
+        self.assertEqual(rendered, 1)
+        self.assertEqual(document.macros_started, ["AI Stroke Paint"])
+        self.assertEqual(document.macros_ended, 1)
+
 
 class WorkerAndDockerTests(unittest.TestCase):
     _app: Any = None
@@ -3122,6 +3156,9 @@ class ExtendedCustomizationTests(unittest.TestCase):
             "retro_pop",
             "dark_fantasy",
             "sepia",
+            "botanical",
+            "sumie",
+            "cyber_gold",
         ]
         for pal in palettes:
             colors_dict = color_palette(pal)
@@ -3134,6 +3171,18 @@ class ExtendedCustomizationTests(unittest.TestCase):
         # 未知のパレットはデフォルト(anime)にフォールバック
         fallback_colors = color_palette("unknown_palette_name")
         self.assertEqual(fallback_colors, color_palette("anime"))
+
+    def test_expanded_pressure_profiles(self) -> None:
+        from .procedural.base import pressure_profile
+
+        profiles = ["gpen", "marupen", "brush", "marker", "pencil", "watercolor", "airbrush"]
+        for prof in profiles:
+            p_start = pressure_profile(0.0, prof, 0.8)
+            p_mid = pressure_profile(0.5, prof, 0.8)
+            p_end = pressure_profile(1.0, prof, 0.8)
+            self.assertTrue(0.05 <= p_start <= 1.0, f"{prof} start pressure {p_start} out of bounds")
+            self.assertTrue(0.05 <= p_mid <= 1.0, f"{prof} mid pressure {p_mid} out of bounds")
+            self.assertTrue(0.05 <= p_end <= 1.0, f"{prof} end pressure {p_end} out of bounds")
 
     def test_procedural_brush_profiles_applied(self) -> None:
         from .procedural import generate_procedural_plan

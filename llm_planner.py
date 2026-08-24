@@ -1104,7 +1104,9 @@ def _system_instruction(
         f"4. Layer 'Highlights' & 'FX' (Specular Glints, Petal Swarms, Atmosphere):\n"
         f"   - Use accent brush sizes ({hl_glint_sz}) with luminous colors for falling petals, cloud rim light, sun flecks, and particle FX.\n"
         "5. Eraser Strokes ('is_eraser': true):\n"
-        '   - You can add eraser strokes (`"is_eraser": true`) on any layer to cleanly shape silhouettes, remove rough overlap, or carve sharp light edges.\n'
+        '   - You can add eraser strokes (`"is_eraser": true`) on any layer to cleanly sculpt contours, sharpen silhouette edges, fix color bleeds, or carve sharp light highlights.\n\n'
+        f"=== PALETTE DIRECTION: {palette_name.upper()} ===\n"
+        f"Harmonize colors to match the '{palette_name}' aesthetic: prioritize cohesive color theory, distinct value contrast between shadow and light, and vibrant accent highlights.\n"
         f"{domain_guidance}"
         f"{progressive_section}"
         f"{visual_feedback_section}\n"
@@ -2002,7 +2004,7 @@ def _adaptive_stroke_size(
     height: float,
 ) -> float:
     """キャンバス解像度とレイヤー特性に基づいて、ストローク太さを適切に自動補正する。
-    
+
     高解像度キャンバス（2000〜4000px等）でも、目・瞳・まつ毛・毛先などの微細線画（1.0〜4.0px）を
     強制的に太くせず、繊細な描写を完全に保持する。
     """

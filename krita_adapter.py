@@ -61,9 +61,10 @@ class KritaCanvasAdapter(CanvasPort):
         self._session_container: Any | None = None
         self._session_active_target: Any | None = None
         self._session_layer_cache: dict[str, Any] = {}
+        self._session_macro_open: bool = False
 
     def begin_render_session(self, document: Any) -> None:
-        """複数の Auto-Refine 描画を一つのコミット／ロールバック単位として開始する。"""
+        """複数の Auto-Refine 描画を一つのコミット／ロールバックおよびUndoマクロ単位として開始する。"""
         if document is None:
             raise ValueError("描画セッションにはドキュメントが必要です")
         if self._session_document is not None:
@@ -73,9 +74,10 @@ class KritaCanvasAdapter(CanvasPort):
         self._session_container = None
         self._session_active_target = None
         self._session_layer_cache = {}
+        self._session_macro_open = _start_macro(document, "AI Stroke Painter Session")
 
     def end_render_session(self, document: Any | None = None, *, commit: bool) -> None:
-        """描画セッションを確定するか、その実行で生成したコンテナを除去する。"""
+        """描画セッションを確定するか、その実行で生成したコンテナを除去しUndoマクロを閉じる。"""
         session_document = self._session_document
         if session_document is None:
             return
@@ -92,6 +94,8 @@ class KritaCanvasAdapter(CanvasPort):
                     with contextlib.suppress(Exception):
                         session_document.refreshProjection()
         finally:
+            if self._session_macro_open:
+                _end_macro(session_document)
             self._clear_session()
 
     def _clear_session(self) -> None:
@@ -100,6 +104,7 @@ class KritaCanvasAdapter(CanvasPort):
         self._session_container = None
         self._session_active_target = None
         self._session_layer_cache = {}
+        self._session_macro_open = False
 
     def ensure_target(self, document: Any) -> Any:
         return self.ensure_layer(document, self.DEFAULT_LAYER_NAME)
@@ -279,6 +284,10 @@ class KritaCanvasAdapter(CanvasPort):
         old_batchmode: bool | None = None
         completed = False
         use_float_points = QPointF is not None and callable(QPointF)
+        standalone_macro_open = False
+
+        if not session_active:
+            standalone_macro_open = _start_macro(document, "AI Stroke Paint")
 
         try:
             if mode == "active_layer":
@@ -391,6 +400,8 @@ class KritaCanvasAdapter(CanvasPort):
                 restore_node = original_active if original_active is not None else document.rootNode()
                 with contextlib.suppress(Exception):
                     document.setActiveNode(restore_node)
+            if standalone_macro_open:
+                _end_macro(document)
             _restore_view_state(target_view, view_state)
 
         return rendered
@@ -415,6 +426,22 @@ class KritaCanvasAdapter(CanvasPort):
         if hasattr(node, "remove"):
             with contextlib.suppress(Exception):
                 node.remove()
+
+
+def _start_macro(document: Any, title: str = "AI Stroke Paint") -> bool:
+    """Krita のアンドゥマクロを開始する。"""
+    if hasattr(document, "createMacro"):
+        with contextlib.suppress(Exception):
+            document.createMacro(title)
+            return True
+    return False
+
+
+def _end_macro(document: Any) -> None:
+    """Krita のアンドゥマクロを終了・確定する。"""
+    if hasattr(document, "endMacro"):
+        with contextlib.suppress(Exception):
+            document.endMacro()
 
 
 def _qpoint(x: float, y: float) -> Any:
