@@ -25,7 +25,7 @@ def generate_manga_fx_strokes(
     def uid(name: str, idx: int = 0) -> str:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/fx/{seed}/{name}/{idx}"))
 
-    is_magic = any(k in prompt_l for k in ["magic", "魔法", "circle", "ルーン", "rune", "エフェクト", "fx"])
+    is_magic = any(k in prompt_l for k in ["magic", "魔法", "circle", "ルーン", "rune"])
     is_speed = any(k in prompt_l for k in ["speed", "流線", "スピード", "motion"])
     is_hatch = any(k in prompt_l for k in ["hatch", "カケアミ", "ハッチング", "shadow", "トーン"])
 

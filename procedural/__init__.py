@@ -324,6 +324,13 @@ def generate_procedural_program(
         strokes = generate_character_strokes(prompt, seed, None, width, height, palette_name)
         title = "Character Portrait"
 
+    has_fx_modifier = any(
+        keyword in prompt.casefold()
+        for keyword in ("magic", "magical", "spell", "aura", "rune", "魔法", "オーラ", "ルーン")
+    )
+    if category != "fx" and has_fx_modifier:
+        strokes.extend(generate_manga_fx_strokes(prompt, seed + 7_919, None, width, height))
+
     # 歴史的に固定色を持つ風景・動物・幾何・FXも、UIで選んだパレットへ確実に収める。
     strokes = recolor_strokes_to_palette(strokes, palette_name)
 
@@ -334,13 +341,6 @@ def generate_procedural_program(
     }
     if color_replacements:
         strokes = [replace(stroke, color=color_replacements.get(stroke.color, stroke.color)) for stroke in strokes]
-
-    has_fx_modifier = any(
-        keyword in prompt.casefold()
-        for keyword in ("magic", "magical", "spell", "aura", "rune", "魔法", "オーラ", "ルーン")
-    )
-    if category != "fx" and has_fx_modifier:
-        strokes.extend(generate_manga_fx_strokes(prompt, seed + 7_919, None, width, height))
 
     # 指定されたブラシプロファイルの一括適用
     if brush_profile and brush_profile != "auto":

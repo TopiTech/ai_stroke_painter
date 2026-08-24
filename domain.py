@@ -199,7 +199,7 @@ class Stroke:
                     t = curr_time + 10
                 curr_time = t
                 points_list.append(StrokePoint(x=sp.x, y=sp.y, pressure=sp.pressure, time_ms=curr_time))
-            preset_name = str(value.get("brush_preset", "Basic-5 Size"))
+            preset_name = str(value.get("brush_preset") or "Basic-5 Size")
             # 外部 JSON の "false" のような非真偽値を truthy と解釈すると、
             # 通常ストロークを意図せず消しゴムとして描画してしまう。
             is_eraser_val = (

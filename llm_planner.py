@@ -723,8 +723,10 @@ class OpenAICompatiblePlanner(PlannerPort):
                         self._log("[パラメータ自動適応] system ロールを user プロンプトに統合します")
                         sys_content = messages[0].get("content", "")
                         new_messages = []
+                        first_user_merged = False
                         for m in messages[1:]:
-                            if m.get("role") == "user":
+                            if m.get("role") == "user" and not first_user_merged:
+                                first_user_merged = True
                                 u_content = m.get("content")
                                 if isinstance(u_content, list):
                                     new_parts: list[dict[str, Any]] = []
@@ -1722,7 +1724,9 @@ def _harvest_stroke_fragments(text: str, log_func: Callable[[str], None] | None 
                 # 重複防止
                 st_id = obj.get("id") or f"stroke_{len(strokes) + 1}"
                 if not any(s.get("id") == st_id for s in strokes):
-                    strokes.append(dict(obj))
+                    st_dict = dict(obj)
+                    st_dict["id"] = st_id
+                    strokes.append(st_dict)
         except (json.JSONDecodeError, ValueError):
             continue
 

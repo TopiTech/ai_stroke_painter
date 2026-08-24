@@ -4773,6 +4773,147 @@ class ExtendedCustomizationTests(unittest.TestCase):
         self.assertGreater(max(pressures), 0.70)
         self.assertLess(pressures[-1], 0.15)
 
+    def test_harvest_stroke_fragments_without_explicit_id(self) -> None:
+        """F1 回帰テスト: stroke に id フィールドがない場合でも rescue 時に自動 ID が付与され DrawingPlan が生成できる。"""
+        from ai_stroke_painter.llm_planner import _harvest_stroke_fragments
+
+        text_sample = (
+            'Some thinking output... {"points": [{"x": 10, "y": 20}, {"x": 30, "y": 40}], '
+            '"brush_preset": "Ink-3 Gpen", "color": "#111111", "size_px": 5.0, "layer_name": "Lineart"}'
+        )
+        harvested = _harvest_stroke_fragments(text_sample)
+        self.assertIsNotNone(harvested)
+        assert harvested is not None
+        self.assertGreaterEqual(len(harvested.get("strokes", [])), 1)
+        plan = DrawingPlan.from_dict(harvested)
+        self.assertEqual(len(plan.strokes), 1)
+        self.assertTrue(plan.strokes[0].id.startswith("stroke_"))
+
+    def test_manga_fx_generic_fx_keyword_does_not_hijack_speed_or_focus_lines(self) -> None:
+        """F2 回帰テスト: 'fx' を含むプロンプトでも、速度線や集中線が魔法陣にハイジャックされない。"""
+        from ai_stroke_painter.procedural.manga_fx import generate_manga_fx_strokes
+
+        # speed lines fx -> 流線 (Lineart レイヤーのみで構成され、FX レイヤーの魔法円を含まない)
+        speed_strokes = generate_manga_fx_strokes("speed lines fx", seed=1, count=None, width=1000, height=1000)
+        self.assertTrue(all(s.layer_name == "Lineart" for s in speed_strokes))
+        self.assertFalse(any(s.color in ("#ffd700", "#ffaa00", "#00ffff") for s in speed_strokes))
+
+        # focus lines fx -> 集中線 (中心抜け放射線、魔法陣の多重同心円や星型を含まない)
+        focus_strokes = generate_manga_fx_strokes("focus lines fx", seed=1, count=None, width=1000, height=1000)
+        self.assertTrue(all(s.color == "#1a1a1a" for s in focus_strokes))
+        self.assertFalse(any(s.color in ("#ffd700", "#ffaa00", "#00ffff") for s in focus_strokes))
+
+    def test_procedural_fx_modifier_follows_palette_recoloring(self) -> None:
+        """F3 回帰テスト: FX 修飾子 (magic 等) で追加されたストロークも選択パレットへリカラーされる。"""
+        from ai_stroke_painter.procedural import generate_procedural_plan
+        from ai_stroke_painter.procedural.base import color_palette
+
+        plan = generate_procedural_plan(
+            prompt="anime girl casting magic spell",
+            seed=42,
+            count=None,
+            width=1000,
+            height=1000,
+            palette_name="monochrome",
+        )
+        mono_palette_hexes = set(color_palette("monochrome").values())
+        for stroke in plan.strokes:
+            self.assertIn(stroke.color.lower(), {c.lower() for c in mono_palette_hexes})
+
+    def test_stroke_from_dict_null_brush_preset_fallback(self) -> None:
+        """F4 回帰テスト: JSON 内で brush_preset が null (None) の場合、文字列 'None' ではなくデフォルトにフォールバックする。"""
+        raw = {
+            "id": "s_test_null",
+            "points": [{"x": 10.0, "y": 20.0}, {"x": 30.0, "y": 40.0}],
+            "brush_preset": None,
+            "color": "#111111",
+            "size_px": 5.0,
+            "layer_name": "Lineart",
+        }
+        st = Stroke.from_dict(raw)
+        self.assertNotEqual(st.brush_preset, "None")
+        self.assertEqual(st.brush_preset, "Basic-5 Size")
+
+    def test_system_role_fallback_single_user_merge_multi_turn(self) -> None:
+        """F5 回帰テスト: マルチターン会話で system ロール適応時、sys_content が最初の user ターンにのみ統合される。"""
+        from io import BytesIO
+        from unittest.mock import MagicMock
+        from urllib.error import HTTPError
+
+        from ai_stroke_painter.llm_planner import OpenAICompatiblePlanner, OpenAICompatibleSettings
+
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings(base_url="https://api.openai.com/v1", api_key="sk-test", model="test-model")
+        )
+
+        err_body = b'{"error": {"message": "system role not supported"}}'
+        http_err = HTTPError(
+            url="https://api.openai.com/v1",
+            code=400,
+            msg="Bad Request",
+            hdrs=cast(Any, {}),
+            fp=BytesIO(err_body),
+        )
+
+        captured_payloads = []
+
+        def mock_opener(req: Any, timeout: Any = None) -> Any:
+            import json
+
+            payload = json.loads(req.data.decode("utf-8"))
+            captured_payloads.append(payload)
+            if len(captured_payloads) == 1:
+                raise http_err
+            resp_content = json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "schema_version": 1,
+                                        "prompt": "test",
+                                        "seed": 1,
+                                        "strokes": [
+                                            {
+                                                "id": "s1",
+                                                "points": [{"x": 0, "y": 0}, {"x": 10, "y": 10}],
+                                                "brush_preset": "Basic-5 Size",
+                                                "color": "#000000",
+                                                "size_px": 2.0,
+                                                "layer_name": "Lineart",
+                                            }
+                                        ],
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = resp_content
+            mock_resp.getcode.return_value = 200
+            mock_resp.__enter__.return_value = mock_resp
+            return mock_resp
+
+        planner._opener = mock_opener
+
+        planner._conversation_history = [
+            {"role": "user", "content": "Turn 1 user prompt"},
+            {"role": "assistant", "content": "Turn 1 response"},
+        ]
+
+        planner.plan(prompt="Turn 2 user prompt", seed=1, count=1, width=100, height=100, iteration=2, max_iterations=3)
+
+        self.assertGreaterEqual(len(captured_payloads), 2)
+        retried_messages = captured_payloads[1]["messages"]
+        user_msgs = [m for m in retried_messages if m.get("role") == "user"]
+        self.assertGreaterEqual(len(user_msgs), 2)
+        self.assertIn("[USER REQUEST]", str(user_msgs[0]["content"]))
+        self.assertNotIn("[USER REQUEST]", str(user_msgs[1]["content"]))
+        self.assertIn("Turn 2 user prompt", str(user_msgs[1]["content"]))
+
 
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))
