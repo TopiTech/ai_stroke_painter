@@ -3654,6 +3654,44 @@ class ExtendedCustomizationTests(unittest.TestCase):
         node_line = adapter.ensure_layer(document, "Lineart")
         self.assertEqual(node_line._blending_mode, "normal")
 
+    def test_fine_lineart_preserved_on_high_res_canvas(self) -> None:
+        """A4 300dpi (2480x3508) 等の高解像度キャンバスでも目やまつ毛の極細線 (1.5〜3.5px) が太くならずに維持されるテスト。"""
+        from ai_stroke_painter.llm_planner import _adaptive_stroke_size
+
+        w, h = 2480.0, 3508.0
+
+        # 極細ディテール線 (目、二重、まつ毛、鼻先、唇)
+        self.assertEqual(_adaptive_stroke_size(2.0, "Lineart", w, h), 2.0)
+        self.assertEqual(_adaptive_stroke_size(3.5, "Lineart", w, h), 3.5)
+
+        # 極細ハイライト点
+        self.assertEqual(_adaptive_stroke_size(2.5, "Highlights", w, h), 2.5)
+
+        # 細部シェーディング (チーク、鼻下、瞳の影)
+        self.assertEqual(_adaptive_stroke_size(15.0, "Shading", w, h), 15.0)
+
+        # 背景・下塗り (広域塗りつぶしは隙間防止のため適正サイズを確保)
+        self.assertGreaterEqual(_adaptive_stroke_size(5.0, "Flats", w, h), 40.0)
+
+    def test_pressure_dynamics_interpolation_and_tapering(self) -> None:
+        """AIが指定した筆圧ダイナミクス ([0.2, 0.95, 0.1]) がスプライン補間後も抑揚を維持するテスト。"""
+        from ai_stroke_painter.llm_planner import _smooth_and_densify_points
+
+        dynamic_pts = [
+            StrokePoint(100.0, 150.0, 0.2, 0),
+            StrokePoint(130.0, 140.0, 0.95, 10),
+            StrokePoint(160.0, 130.0, 0.08, 20),
+        ]
+
+        smoothed = _smooth_and_densify_points(dynamic_pts, 1000, 1000, layer_name="Lineart", size_px=2.5)
+        self.assertGreaterEqual(len(smoothed), 6)
+
+        pressures = [p.pressure for p in smoothed]
+        # 入りと抜きが細く、中央で高い筆圧ピークを持つ
+        self.assertLess(pressures[0], 0.25)
+        self.assertGreater(max(pressures), 0.70)
+        self.assertLess(pressures[-1], 0.15)
+
 
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))
