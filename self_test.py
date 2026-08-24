@@ -69,6 +69,9 @@ from .qt_compat import (
 from .quality import evaluate_plan_quality
 from .storage import load_plan, load_program, save_plan, save_program, save_svg
 from .stroke_program import (
+    FillOperation,
+    HatchOperation,
+    ParticleOperation,
     PathOperation,
     ProgramPoint,
     StrokeProgram,
@@ -356,6 +359,121 @@ class PlannerAndStorageTests(unittest.TestCase):
         dense_plan = compile_stroke_program(dense_first)
         self.assertLessEqual(len(dense_plan.strokes), 2_000)
         self.assertTrue(any(stroke.id == "final-contour" for stroke in dense_plan.strokes))
+
+    def test_stroke_program_rich_primitives_compilation(self) -> None:
+        program = StrokeProgram.from_dict(
+            {
+                "schema_version": 2,
+                "prompt": "sakura rich primitives",
+                "seed": 42,
+                "canvas": {"width": 800, "height": 600},
+                "operations": [
+                    {
+                        "kind": "fill",
+                        "id": "wash-sky",
+                        "layer": "Flats",
+                        "style": "wash",
+                        "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.0, 0.5]],
+                        "brush": {"profile": "airbrush", "size": 0.08},
+                    },
+                    {
+                        "kind": "hatch",
+                        "id": "shadow-hatch",
+                        "layer": "Shading",
+                        "polygon": [[0.2, 0.3], [0.8, 0.3], [0.7, 0.7], [0.3, 0.7]],
+                        "angle_deg": 45,
+                        "spacing": 0.02,
+                    },
+                    {
+                        "kind": "particles",
+                        "id": "falling-petals",
+                        "layer": "FX",
+                        "shape": "petal",
+                        "bounds": [0.1, 0.1, 0.9, 0.9],
+                        "count": 15,
+                    },
+                    {
+                        "kind": "particles",
+                        "id": "sparkle-stars",
+                        "layer": "Highlights",
+                        "shape": "sparkle",
+                        "bounds": [0.1, 0.1, 0.9, 0.9],
+                        "count": 8,
+                    },
+                    {
+                        "kind": "particles",
+                        "id": "wind-drift",
+                        "layer": "FX",
+                        "shape": "drift",
+                        "bounds": [0.1, 0.1, 0.9, 0.9],
+                        "count": 5,
+                    },
+                ],
+            }
+        )
+        op_fill = program.operations[0]
+        self.assertIsInstance(op_fill, FillOperation)
+        if isinstance(op_fill, FillOperation):
+            self.assertEqual(op_fill.style, "wash")
+
+        op_hatch = program.operations[1]
+        self.assertIsInstance(op_hatch, HatchOperation)
+
+        op_p1 = program.operations[2]
+        self.assertIsInstance(op_p1, ParticleOperation)
+        if isinstance(op_p1, ParticleOperation):
+            self.assertEqual(op_p1.shape, "petal")
+
+        op_p2 = program.operations[3]
+        self.assertIsInstance(op_p2, ParticleOperation)
+        if isinstance(op_p2, ParticleOperation):
+            self.assertEqual(op_p2.shape, "sparkle")
+
+        op_p3 = program.operations[4]
+        self.assertIsInstance(op_p3, ParticleOperation)
+        if isinstance(op_p3, ParticleOperation):
+            self.assertEqual(op_p3.shape, "drift")
+
+        plan = compile_stroke_program(program)
+        self.assertTrue(len(plan.strokes) > 0)
+
+        # wash fill generates feathered endpoints
+        wash_strokes = [s for s in plan.strokes if s.layer_name == "Flats"]
+        self.assertTrue(any(len(s.points) >= 4 for s in wash_strokes))
+        # petal particles generate 3-point curved strokes with pressure swell
+        petal_strokes = [s for s in plan.strokes if s.layer_name == "FX" and len(s.points) == 3]
+        self.assertTrue(len(petal_strokes) >= 15)
+        self.assertTrue(all(s.points[1].pressure > s.points[0].pressure for s in petal_strokes))
+
+        # test invalid style and shape raises PlanValidationError
+        with self.assertRaises(PlanValidationError):
+            StrokeProgram(
+                prompt="bad style",
+                seed=1,
+                canvas_width=100,
+                canvas_height=100,
+                operations=[
+                    FillOperation(
+                        id="bad",
+                        polygon=[ProgramPoint(0, 0), ProgramPoint(1, 0), ProgramPoint(1, 1)],
+                        style="invalid-style",
+                    )
+                ],
+            )
+        with self.assertRaises(PlanValidationError):
+            StrokeProgram(
+                prompt="bad shape",
+                seed=1,
+                canvas_width=100,
+                canvas_height=100,
+                operations=[
+                    ParticleOperation(
+                        id="bad",
+                        bounds=(0, 0, 1, 1),
+                        shape="invalid-shape",
+                    )
+                ],
+            )
 
     def test_v1_v2_storage_migration_preserves_render_contract(self) -> None:
         legacy = RuleBasedPlanner().plan("custom preset", 21, 8, 320, 180)

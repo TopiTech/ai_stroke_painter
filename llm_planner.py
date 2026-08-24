@@ -922,9 +922,9 @@ def _system_instruction(
             "from deep blue zenith (#2b5c8f) down to clear sky (#5c93cf), horizon haze (#b8d8f8), and soft white (#eef6ff). Leave NO white canvas gaps.\n"
             f"   - Distant & Midground Mountains: Paint sweeping mountain silhouettes (size_px: {flats_sz}, brush: 'Basic-5 Size'). "
             "Use atmospheric perspective (distant peaks in soft blue-gray #6f829d, nearer peaks in deep pine/slate #283e50).\n"
-            f"   - Rolling Hills & Ground: Dense green terrain wash (#4e7d58, #72a37c, #9ec4a5) with organic curving strokes.\n"
+            f"   - Rolling Hills & Ground: Dense green terrain wash (#4e7d58, #72a37c, #9ec4a5) with organic curving strokes. NEVER use orthogonal wireframe grid hatching on ground.\n"
             f"   - Sakura Blossom Canopy Clumps: Paint rich, billowing clouds of pink foliage masses (size_px: {flats_sz}, brush: 'Wet Textured Soft' or 'Basic-5 Size') "
-            "arranged above and around the branches (colors: #ff9ebb, #ffb8cd, #ffd6e5). Overlap multiple puffy clusters to create huge 3D volume.\n"
+            "arranged above and around the branches (colors: #ff9ebb, #ffb8cd, #ffd6e5). Overlap multiple puffy clusters to create huge 3D volume rather than flat umbrella tiers.\n"
             "2. Layer 'Shading' (3D Depth, Occlusion & Mountain Crags):\n"
             f"   - Mountain Ridges & Shadow Facets: Carve dramatic shadow slopes along mountain ridge lines (size_px: {form_shad_sz}, opacity: 0.6-0.8, brush: 'Dry Bristles' or 'Basic-5 Size', colors: #1a2733, #223445).\n"
             f"   - Cloud Undersides: Paint soft purplish shadow bulges under cloud masses (size_px: {form_shad_sz}, opacity: 0.5-0.7, colors: #92a4bc, #7b8ea7).\n"
@@ -932,9 +932,9 @@ def _system_instruction(
             "3. Layer 'Lineart' (Organic Tree Anatomy & Crisp Ridge Contours):\n"
             f"   - Majestic Sakura Tree Trunk & Branches: Draw powerful, organic twisting tree trunks with S-curves and wide root flares (size_px: {main_line_sz}, brush: 'Ink-3 Gpen' or 'Basic-5 Size', colors: #342017, #24140d). "
             f"Crucial: Branch hierarchically! Main thick trunk -> major bending limbs -> tapering fine secondary branches (size_px: {detail_line_sz}, pressure: 0.2->0.8->0.1) threading through the pink blossom canopy.\n"
-            f"   - Mountain Crests & Sharp Contours: Outline sharp jagged crags and crisp cloud rim curves (size_px: {main_line_sz}, brush: 'Ink-3 Gpen').\n"
+            f"   - Mountain Crests & Sharp Contours: Outline sharp jagged crags and crisp cloud rim curves (size_px: {main_line_sz}, brush: 'Ink-3 Gpen'). NEVER draw arbitrary geometric parabolic arcs across mountains or foliage.\n"
             "4. Layer 'Highlights' & 'FX' (Light Accents & Falling Petal Blizzard):\n"
-            f"   - Falling Petal Blizzard: Scatter 30 to 60+ individual falling petal strokes and petals drifting on wind (size_px: {detail_line_sz}, 2-3 curve points each, colors: #ffffff, #ffe6f0, #ffd0e2) across foreground and midground.\n"
+            f"   - Falling Petal Blizzard: Use particle operations with 'shape': 'petal' or scatter individual curved petal strokes drifting on wind (size_px: {detail_line_sz}, colors: #ffffff, #ffe6f0, #ffd0e2) across foreground and midground.\n"
             f"   - Luminous Rim Lighting & Cloud Edges: Pure glowing white/pale-gold rim highlights on sunny mountain peaks and top cloud rims (size_px: {hl_glint_sz}, colors: #ffffff, #fffde6).\n"
         )
     elif any(
@@ -1130,20 +1130,24 @@ def _system_instruction(
         '  "completion_score": 0.85,\n'
         f'  "canvas": {{"width": {width:.0f}, "height": {height:.0f}}},\n'
         '  "operations": [\n'
-        '    {"kind":"fill","id":"base","layer":"Flats","polygon":[[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]],"brush":{"profile":"marker","color":"#3a7bd5","size":0.10}},\n'
+        '    {"kind":"fill","id":"base","layer":"Flats","style":"wash","polygon":[[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]],"brush":{"profile":"marker","color":"#3a7bd5","size":0.10}},\n'
         '    {"kind":"hatch","id":"form-shadow","layer":"Shading","polygon":[[0.2,0.2],[0.8,0.2],[0.7,0.8],[0.25,0.75]],"angle_deg":30,"spacing":0.015,"brush":{"profile":"pencil","color":"#203050","size":0.003,"opacity":0.65}},\n'
         '    {"kind":"path","id":"contour","layer":"Lineart","points":[[0.25,0.8,0.15],[0.5,0.2,0.95],[0.75,0.8,0.1]],"smooth":true,"brush":{"profile":"gpen","color":"#2c1810","size":0.005}},\n'
-        '    {"kind":"particles","id":"accents","layer":"FX","bounds":[0.05,0.05,0.95,0.95],"count":30,"length":0.012,"angle_deg":90,"angle_jitter":35,"brush":{"profile":"gpen","color":"#ffffff","size":0.002}}\n'
+        '    {"kind":"particles","id":"accents","layer":"FX","shape":"petal","bounds":[0.05,0.05,0.95,0.95],"count":30,"length":0.012,"angle_deg":90,"angle_jitter":35,"brush":{"profile":"gpen","color":"#ffffff","size":0.002}}\n'
         "  ]\n"
         "}\n"
         "```\n"
-        "=== CRITICAL RULES ===\n"
-        "1. Operation kinds: path (2+ points), fill (3+ polygon points), hatch (polygon), particles (bounds/count). IDs must be unique.\n"
+        "=== CRITICAL RULES & ANTI-PATTERNS ===\n"
+        "1. Operation kinds: path (2+ points), fill (3+ polygon points, style: 'wash'/'feathered'/'scanline'), hatch (polygon, single-angle preferred), particles (bounds/count, shape: 'petal'/'sparkle'/'drift'/'line'). IDs must be unique.\n"
         "2. Brush profiles: auto, gpen, marupen, brush, marker, pencil, watercolor, airbrush, eraser. Size defaults to a canvas ratio; use size_mode='px' only for deliberately fixed pixel sizes.\n"
-        "3. Composition: Establish large coherent silhouettes with fill, then form shadows with hatch/path, then tapered contour paths and sparse accents. Avoid disconnected random marks.\n"
-        "4. Curves: Give path 2-12 meaningful control points [x,y,pressure]; the compiler creates continuous smooth geometry.\n"
-        "5. Goal Evaluation: Set goal_reached true only when the artwork is fully finished and composition, values, edges, and requested details are complete.\n"
-        "6. First character of output must be '{' or '```json'."
+        "3. Anti-Patterns (STRICTLY FORBIDDEN):\n"
+        "   - NEVER use cross: true on ground, terrain, grass, or natural foliage (causes artificial wireframe/graph-paper look).\n"
+        "   - NEVER draw isolated mathematical parabolic/bezier arc paths across foliage clumps or mountain peaks as fake highlights.\n"
+        "   - NEVER draw flat rectangular fog/mist bars cutting across the scenery; use soft curved wash strokes on Flats/Shading.\n"
+        "4. Composition: Establish large coherent silhouettes with fill, then form shadows with hatch/path, then tapered contour paths and sparse accents. Avoid disconnected random marks.\n"
+        "5. Curves: Give path 2-12 meaningful control points [x,y,pressure]; the compiler creates continuous smooth geometry.\n"
+        "6. Goal Evaluation: Set goal_reached true only when the artwork is fully finished and composition, values, edges, and requested details are complete.\n"
+        "7. First character of output must be '{' or '```json'."
     )
 
 

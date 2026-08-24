@@ -181,6 +181,7 @@ class FillOperation:
     brush: ProgramBrush = field(default_factory=lambda: ProgramBrush(profile="marker", size=0.035))
     layer: str = "Flats"
     spacing: float = 0.72
+    style: str = "wash"
     kind: Literal["fill"] = "fill"
 
     def __post_init__(self) -> None:
@@ -195,6 +196,14 @@ class FillOperation:
         if not 0.2 <= spacing <= 1.0:
             raise PlanValidationError("fill spacing は 0.2 から 1.0 の範囲である必要があります")
         object.__setattr__(self, "spacing", spacing)
+        if not isinstance(self.style, str) or self.style.strip().lower() not in {
+            "wash",
+            "scanline",
+            "feathered",
+            "contour",
+        }:
+            raise PlanValidationError("fill style は wash, scanline, feathered, contour のいずれかである必要があります")
+        object.__setattr__(self, "style", self.style.strip().lower())
 
 
 @dataclass(frozen=True)
@@ -235,6 +244,7 @@ class ParticleOperation:
     length: float = 0.015
     angle_deg: float = 90.0
     angle_jitter: float = 35.0
+    shape: str = "petal"
     kind: Literal["particles"] = "particles"
 
     def __post_init__(self) -> None:
@@ -256,6 +266,17 @@ class ParticleOperation:
         if not 0.0 <= jitter <= 180.0:
             raise PlanValidationError("particle angle_jitter は 0 から 180 の範囲である必要があります")
         object.__setattr__(self, "angle_jitter", jitter)
+        if not isinstance(self.shape, str) or self.shape.strip().lower() not in {
+            "petal",
+            "line",
+            "sparkle",
+            "drift",
+            "bokeh",
+        }:
+            raise PlanValidationError(
+                "particle shape は petal, line, sparkle, drift, bokeh のいずれかである必要があります"
+            )
+        object.__setattr__(self, "shape", self.shape.strip().lower())
 
 
 ProgramOperation: TypeAlias = PathOperation | FillOperation | HatchOperation | ParticleOperation
@@ -300,7 +321,7 @@ def operation_from_dict(value: Any) -> ProgramOperation:
     if kind == "fill":
         _reject_unknown_keys(
             value,
-            {"kind", "id", "polygon", "points", "brush", "layer", "layer_name", "spacing"},
+            {"kind", "id", "polygon", "points", "brush", "layer", "layer_name", "spacing", "style"},
             "fill operation",
         )
         return FillOperation(
@@ -313,6 +334,7 @@ def operation_from_dict(value: Any) -> ProgramOperation:
             ),
             layer=value.get("layer", value.get("layer_name", "Flats")),
             spacing=value.get("spacing", 0.72),
+            style=value.get("style", "wash"),
         )
     if kind == "hatch":
         _reject_unknown_keys(
@@ -358,6 +380,7 @@ def operation_from_dict(value: Any) -> ProgramOperation:
                 "length",
                 "angle_deg",
                 "angle_jitter",
+                "shape",
             },
             "particles operation",
         )
@@ -373,6 +396,7 @@ def operation_from_dict(value: Any) -> ProgramOperation:
             length=value.get("length", 0.015),
             angle_deg=value.get("angle_deg", 90.0),
             angle_jitter=value.get("angle_jitter", 35.0),
+            shape=value.get("shape", "petal"),
         )
     raise PlanValidationError(f"未対応の operation kind: {kind}")
 
@@ -465,7 +489,9 @@ class StrokeProgram:
             elif isinstance(operation, (FillOperation, HatchOperation)):
                 item["polygon"] = [point.as_list() for point in operation.polygon]
                 item["spacing"] = operation.spacing
-                if isinstance(operation, HatchOperation):
+                if isinstance(operation, FillOperation):
+                    item["style"] = operation.style
+                elif isinstance(operation, HatchOperation):
                     item["angle_deg"] = operation.angle_deg
                     item["cross"] = operation.cross
             else:
@@ -475,6 +501,7 @@ class StrokeProgram:
                     length=operation.length,
                     angle_deg=operation.angle_deg,
                     angle_jitter=operation.angle_jitter,
+                    shape=operation.shape,
                 )
             operations.append(item)
         return {
@@ -573,7 +600,8 @@ def _compile_fill(program: StrokeProgram, operation: FillOperation, limit: int) 
     polygon = [(point.x * program.canvas_width, point.y * program.canvas_height) for point in operation.polygon]
     min_y = min(point[1] for point in polygon)
     max_y = max(point[1] for point in polygon)
-    spacing = max(0.5, operation.brush.size_px(program.canvas_width, program.canvas_height) * operation.spacing)
+    spacing_scale = 0.55 if operation.style in {"wash", "feathered"} else operation.spacing
+    spacing = max(0.5, operation.brush.size_px(program.canvas_width, program.canvas_height) * spacing_scale)
     strokes: list[Stroke] = []
     row = 0
     y = min_y + spacing * 0.5
@@ -585,7 +613,19 @@ def _compile_fill(program: StrokeProgram, operation: FillOperation, limit: int) 
             if len(strokes) >= limit:
                 break
             first_x, second_x = (end_x, start_x) if row % 2 else (start_x, end_x)
-            strokes.append(_make_stroke(program, operation, len(strokes), [(first_x, y, 1.0), (second_x, y, 1.0)]))
+            seg_len = abs(second_x - first_x)
+            if operation.style in {"wash", "feathered"} and seg_len > 4.0:
+                p1_x = first_x + (second_x - first_x) * 0.12
+                p2_x = second_x - (second_x - first_x) * 0.12
+                pts = [
+                    (first_x, y, 0.45),
+                    (p1_x, y, 0.95),
+                    (p2_x, y, 0.95),
+                    (second_x, y, 0.45),
+                ]
+            else:
+                pts = [(first_x, y, 1.0), (second_x, y, 1.0)]
+            strokes.append(_make_stroke(program, operation, len(strokes), pts))
         row += 1
         y += spacing
     return strokes
@@ -624,12 +664,23 @@ def _compile_hatch_angle(
                 break
             first = _rotate((start_x, y), center, angle)
             second = _rotate((end_x, y), center, angle)
+            line_len = math.hypot(second[0] - first[0], second[1] - first[1])
+            if line_len > 4.0:
+                mid_x = (first[0] + second[0]) * 0.5
+                mid_y = (first[1] + second[1]) * 0.5
+                pts = [
+                    (first[0], first[1], 0.25),
+                    (mid_x, mid_y, 0.85),
+                    (second[0], second[1], 0.25),
+                ]
+            else:
+                pts = [(first[0], first[1], 0.65), (second[0], second[1], 0.65)]
             strokes.append(
                 _make_stroke(
                     program,
                     operation,
                     start_index + len(strokes),
-                    [(first[0], first[1], 0.65), (second[0], second[1], 0.65)],
+                    pts,
                 )
             )
         y += spacing
@@ -649,14 +700,51 @@ def _compile_particles(program: StrokeProgram, operation: ParticleOperation, lim
     x0, y0, x1, y1 = operation.bounds
     base_length = operation.length * min(program.canvas_width, program.canvas_height)
     strokes: list[Stroke] = []
+    shape = getattr(operation, "shape", "petal")
     for index in range(min(operation.count, limit)):
         start_x = rng.uniform(x0, x1) * program.canvas_width
         start_y = rng.uniform(y0, y1) * program.canvas_height
         angle = math.radians(operation.angle_deg + rng.uniform(-operation.angle_jitter, operation.angle_jitter))
-        length = base_length * rng.uniform(0.55, 1.25)
-        end_x = start_x + math.cos(angle) * length
-        end_y = start_y + math.sin(angle) * length
-        strokes.append(_make_stroke(program, operation, index, [(start_x, start_y, 0.7), (end_x, end_y, 0.15)]))
+        length = base_length * rng.uniform(0.65, 1.35)
+        dx = math.cos(angle) * length
+        dy = math.sin(angle) * length
+        end_x = start_x + dx
+        end_y = start_y + dy
+
+        if shape == "petal":
+            curl_mag = length * rng.uniform(-0.35, 0.35)
+            norm_x = -dy / max(1e-5, length)
+            norm_y = dx / max(1e-5, length)
+            mid_x = start_x + dx * 0.5 + norm_x * curl_mag
+            mid_y = start_y + dy * 0.5 + norm_y * curl_mag
+            pts = [
+                (start_x, start_y, 0.25),
+                (mid_x, mid_y, 0.95),
+                (end_x, end_y, 0.15),
+            ]
+        elif shape == "sparkle":
+            mid_x = (start_x + end_x) * 0.5
+            mid_y = (start_y + end_y) * 0.5
+            pts = [
+                (start_x, start_y, 0.15),
+                (mid_x, mid_y, 1.0),
+                (end_x, end_y, 0.15),
+            ]
+        elif shape == "drift":
+            p1_x = start_x + dx * 0.33 + (-dy / max(1e-5, length)) * length * 0.15
+            p1_y = start_y + dy * 0.33 + (dx / max(1e-5, length)) * length * 0.15
+            p2_x = start_x + dx * 0.66 - (-dy / max(1e-5, length)) * length * 0.15
+            p2_y = start_y + dy * 0.66 - (dx / max(1e-5, length)) * length * 0.15
+            pts = [
+                (start_x, start_y, 0.3),
+                (p1_x, p1_y, 0.8),
+                (p2_x, p2_y, 0.7),
+                (end_x, end_y, 0.1),
+            ]
+        else:
+            pts = [(start_x, start_y, 0.7), (end_x, end_y, 0.15)]
+
+        strokes.append(_make_stroke(program, operation, index, pts))
     return strokes
 
 
