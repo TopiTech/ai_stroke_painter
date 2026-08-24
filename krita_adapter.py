@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import contextlib
+from dataclasses import dataclass
 import math
 from typing import TYPE_CHECKING, Any
 
-from .domain import split_color_alpha
-from .ports import CanvasPort
+from .brushes import brush_definition, infer_brush_profile
+from .domain import LAYER_RENDER_ORDER, Stroke, split_color_alpha
+from .native_bridge import NativeBridgeUnavailable, discover_native_bridge
+from .ports import CanvasPort, NativeStrokeBridgePort
 from .qt_compat import (
     QApplication,
     QBuffer,
@@ -25,17 +28,20 @@ if TYPE_CHECKING:
 
 
 # 標準的なレイヤー階層順序（インデックスが大きいほど上層/前面に配置）
-LAYER_STACK_ORDER: dict[str, int] = {
-    "Draft": 10,
-    "Flats": 20,
-    "Shading": 30,
-    "Lineart": 40,
-    "Highlights": 50,
-    "FX": 60,
-}
+LAYER_STACK_ORDER = LAYER_RENDER_ORDER
 
 
 _last_applied_color: str | None = None
+
+
+@dataclass(frozen=True)
+class _LayerSnapshot:
+    """既存ペイントレイヤーを失敗前の状態へ戻すための画素スナップショット。"""
+
+    node: Any
+    pixels: Any
+    width: int
+    height: int
 
 
 class KritaCanvasAdapter(CanvasPort):
@@ -50,21 +56,27 @@ class KritaCanvasAdapter(CanvasPort):
         layer_mode: str = "multi_layer",
         layer_prefix: str = "AI Artwork",
         event_interval: int = 30,
+        native_bridge: NativeStrokeBridgePort | None = None,
     ) -> None:
         self.brush_size_multiplier = float(brush_size_multiplier)
         self.opacity_multiplier = float(opacity_multiplier)
         self.layer_mode = layer_mode
         self.layer_prefix = layer_prefix
         self.event_interval = max(1, int(event_interval))
+        self.native_bridge = native_bridge if native_bridge is not None else discover_native_bridge()
         self._session_document: Any | None = None
         self._session_mode: str | None = None
         self._session_container: Any | None = None
         self._session_active_target: Any | None = None
+        self._session_active_snapshot: _LayerSnapshot | None = None
+        self._session_active_created: bool = False
         self._session_layer_cache: dict[str, Any] = {}
         self._session_macro_open: bool = False
+        self._session_has_changes: bool = False
+        self._brush_preset_cache: dict[tuple[str, bool], Any] = {}
 
     def begin_render_session(self, document: Any) -> None:
-        """複数の Auto-Refine 描画を一つのコミット／ロールバックおよびUndoマクロ単位として開始する。"""
+        """複数の Auto-Refine 描画を一つのコミット／ロールバック単位として開始する。"""
         if document is None:
             raise ValueError("描画セッションにはドキュメントが必要です")
         if self._session_document is not None:
@@ -73,11 +85,14 @@ class KritaCanvasAdapter(CanvasPort):
         self._session_mode = None
         self._session_container = None
         self._session_active_target = None
+        self._session_active_snapshot = None
+        self._session_active_created = False
         self._session_layer_cache = {}
+        self._session_has_changes = False
         self._session_macro_open = _start_macro(document, "AI Stroke Painter Session")
 
     def end_render_session(self, document: Any | None = None, *, commit: bool) -> None:
-        """描画セッションを確定するか、その実行で生成したコンテナを除去しUndoマクロを閉じる。"""
+        """描画セッションを確定するか、その実行の変更だけをロールバックする。"""
         session_document = self._session_document
         if session_document is None:
             return
@@ -85,26 +100,37 @@ class KritaCanvasAdapter(CanvasPort):
             raise RuntimeError("終了対象の描画セッションとドキュメントが一致しません")
         container = self._session_container
         try:
-            if not commit and container is not None:
-                self._remove_node(session_document.rootNode(), container)
+            if not commit and self._session_has_changes:
                 if hasattr(session_document, "waitForDone"):
                     with contextlib.suppress(Exception):
                         session_document.waitForDone()
+                if self._session_mode == "active_layer":
+                    if self._session_active_created and container is not None:
+                        self._remove_node(session_document.rootNode(), container)
+                    elif self._session_active_snapshot is not None:
+                        _restore_layer_snapshot(self._session_active_snapshot)
+                elif container is not None:
+                    self._remove_node(session_document.rootNode(), container)
                 if hasattr(session_document, "refreshProjection"):
                     with contextlib.suppress(Exception):
                         session_document.refreshProjection()
         finally:
-            if self._session_macro_open:
-                _end_macro(session_document)
-            self._clear_session()
+            try:
+                if self._session_macro_open:
+                    _end_macro(session_document)
+            finally:
+                self._clear_session()
 
     def _clear_session(self) -> None:
         self._session_document = None
         self._session_mode = None
         self._session_container = None
         self._session_active_target = None
+        self._session_active_snapshot = None
+        self._session_active_created = False
         self._session_layer_cache = {}
         self._session_macro_open = False
+        self._session_has_changes = False
 
     def ensure_target(self, document: Any) -> Any:
         return self.ensure_layer(document, self.DEFAULT_LAYER_NAME)
@@ -135,6 +161,8 @@ class KritaCanvasAdapter(CanvasPort):
 
         # レイヤーの新規作成
         node = document.createNode(layer_name, "paintlayer")
+        if node is None:
+            raise RuntimeError(f"Kritaがペイントレイヤーを作成できませんでした: {layer_name}")
         effective_blend = blend_mode
         if effective_blend == "normal":
             lname_lower = layer_name.lower()
@@ -162,27 +190,27 @@ class KritaCanvasAdapter(CanvasPort):
                 above_node = child
 
         if above_node is not None:
-            root.addChildNode(node, above_node)
+            self._add_child_node(root, node, above_node)
         else:
             higher_children = [
                 c
                 for c in root.childNodes()
                 if LAYER_STACK_ORDER.get(getattr(c, "name", lambda: "")(), 35) > target_rank
             ]
-            root.addChildNode(node, None)
+            self._add_child_node(root, node, None)
             if higher_children and not preserve_existing_order and hasattr(root, "removeChildNode"):
                 prev = node
                 for hc in higher_children:
                     removed = False
                     try:
-                        root.removeChildNode(hc)
+                        self._remove_node(root, hc)
                         removed = True
-                        root.addChildNode(hc, prev)
+                        self._add_child_node(root, hc, prev)
                         prev = hc
                     except Exception:
                         if removed:
                             with contextlib.suppress(Exception):
-                                root.addChildNode(hc, None)
+                                self._add_child_node(root, hc, None)
                         raise
         document.setActiveNode(node)
         return node
@@ -193,9 +221,22 @@ class KritaCanvasAdapter(CanvasPort):
         safe_name = group_name.strip() or self.DEFAULT_GROUP_NAME
         unique_name = self._unique_child_name(root, safe_name)
         node = document.createNode(unique_name, "grouplayer")
-        root.addChildNode(node, None)
+        if node is None:
+            raise RuntimeError(f"Kritaが出力グループを作成できませんでした: {unique_name}")
+        self._add_child_node(root, node, None)
         document.setActiveNode(node)
         return node
+
+    def _add_child_node(self, parent: Any, child: Any, above: Any | None) -> None:
+        add_child = getattr(parent, "addChildNode", None)
+        if not callable(add_child):
+            raise RuntimeError("Kritaノードが子レイヤー追加APIに対応していません")
+        try:
+            result = add_child(child, above)
+        except Exception as exc:
+            raise RuntimeError("Kritaレイヤー階層への追加に失敗しました") from exc
+        if result is False:
+            raise RuntimeError("Kritaがレイヤー階層への追加を拒否しました")
 
     def _unique_child_name(self, parent: Any, base_name: str) -> str:
         names = {str(getattr(child, "name", lambda: "")()) for child in parent.childNodes()}
@@ -280,23 +321,38 @@ class KritaCanvasAdapter(CanvasPort):
         current_node: Any | None = None
         current_layer_name = ""
         rendered = 0
+        mutated = False
         segment_count = 0
         old_batchmode: bool | None = None
         completed = False
         use_float_points = QPointF is not None and callable(QPointF)
         standalone_macro_open = False
+        active_snapshot: _LayerSnapshot | None = None
+        active_target_created = False
+        native_bridge = self.native_bridge
 
         if not session_active:
             standalone_macro_open = _start_macro(document, "AI Stroke Paint")
 
         try:
             if mode == "active_layer":
-                current_node = self._session_active_target if session_active else document.activeNode()
+                current_node = (
+                    self._session_active_target
+                    if session_active and self._session_active_target is not None
+                    else document.activeNode()
+                )
                 if current_node is None:
                     current_node = self.ensure_layer(document, self.DEFAULT_LAYER_NAME, preserve_existing_order=True)
                     generated_container = current_node
+                    active_target_created = True
                 if session_active and self._session_active_target is None:
                     self._session_active_target = current_node
+                    self._session_active_created = active_target_created
+                if session_active:
+                    if not self._session_active_created and self._session_active_snapshot is None:
+                        self._session_active_snapshot = _capture_layer_snapshot(document, current_node)
+                elif rollback_on_cancel and not active_target_created:
+                    active_snapshot = _capture_layer_snapshot(document, current_node)
                 current_layer_name = getattr(current_node, "name", lambda: self.DEFAULT_LAYER_NAME)()
             elif mode == "single_layer":
                 current_node = self._session_container if session_active else None
@@ -347,18 +403,55 @@ class KritaCanvasAdapter(CanvasPort):
                             layer_cache[target_layer_name] = current_node
                         current_layer_name = target_layer_name
 
-                if not hasattr(current_node, "paintLine"):
+                if not hasattr(current_node, "paintLine") and native_bridge is None:
                     raise RuntimeError("このKritaには Node.paintLine がありません。Krita 6.0以降を使用してください。")
-                _apply_stroke_style(stroke, size_multiplier=size_mult, opacity_multiplier=op_mult, view=target_view)
                 paint_ability = current_node.paintAbility()
                 if paint_ability != "PAINT":
                     raise RuntimeError(f"対象レイヤーに描画できません（paintAbility: {paint_ability}）")
 
+                if native_bridge is not None:
+                    effective_stroke = Stroke(
+                        id=stroke.id,
+                        points=stroke.points,
+                        brush_preset=stroke.brush_preset,
+                        color=stroke.color,
+                        size_px=stroke.size_px * size_mult,
+                        layer_name=stroke.layer_name,
+                        opacity=min(1.0, stroke.opacity * op_mult),
+                        is_eraser=stroke.is_eraser,
+                    )
+                    try:
+                        accepted_points = native_bridge.submit_stroke(document, current_node, effective_stroke)
+                    except NativeBridgeUnavailable:
+                        native_bridge = None
+                    else:
+                        if accepted_points != len(stroke.points):
+                            raise RuntimeError("Native Bridge がストローク全点を受理しませんでした")
+                        mutated = True
+                        rendered += 1
+                        segment_count += max(1, len(stroke.points) - 1)
+                        if segment_count >= evt_interval:
+                            segment_count = 0
+                            _process_events()
+                        continue
+
+                if not hasattr(current_node, "paintLine"):
+                    raise RuntimeError("このKritaには Node.paintLine がありません。Krita 6.0以降を使用してください。")
+                if stroke.is_eraser and target_view is None:
+                    raise RuntimeError("消しゴムストロークにはKritaのアクティブビューが必要です")
+                _apply_stroke_style(
+                    stroke,
+                    size_multiplier=size_mult,
+                    opacity_multiplier=op_mult,
+                    view=target_view,
+                    preset_cache=self._brush_preset_cache,
+                )
                 _apply_color_to_krita(stroke.color, view=target_view)
 
                 for start, end in zip(stroke.points, stroke.points[1:], strict=False):
                     if cancelled():
                         return rendered
+                    painted_with_float = False
                     if use_float_points:
                         try:
                             current_node.paintLine(
@@ -367,29 +460,57 @@ class KritaCanvasAdapter(CanvasPort):
                                 start.pressure,
                                 end.pressure,
                             )
-                            continue
+                            painted_with_float = True
                         except TypeError:
                             # 一部の Krita Python バインディングは QPoint のみを受け付ける。
                             use_float_points = False
-                    current_node.paintLine(
-                        _qpoint(start.x, start.y), _qpoint(end.x, end.y), start.pressure, end.pressure
-                    )
+                    if not painted_with_float:
+                        current_node.paintLine(
+                            _qpoint(start.x, start.y), _qpoint(end.x, end.y), start.pressure, end.pressure
+                        )
+
+                    mutated = True
+                    segment_count += 1
+                    if segment_count >= evt_interval:
+                        segment_count = 0
+                        _process_events()
 
                 rendered += 1
-                segment_count += max(1, len(stroke.points) - 1)
-                if segment_count >= evt_interval:
-                    segment_count = 0
-                    _process_events()
             completed = not cancelled()
         finally:
-            if generated_container is not None and rollback_on_cancel and not completed:
-                self._remove_node(document.rootNode(), generated_container)
-                if session_active and generated_container is self._session_container:
-                    self._clear_session()
+            rollback_error: Exception | None = None
+            macro_error: Exception | None = None
+            if session_active and mutated:
+                self._session_has_changes = True
             # キュー内の描画ジョブ完了を安全に待機してからプロジェクションを更新
             if hasattr(document, "waitForDone"):
                 with contextlib.suppress(Exception):
                     document.waitForDone()
+            if generated_container is not None and rollback_on_cancel and not completed:
+                try:
+                    self._remove_node(document.rootNode(), generated_container)
+                except Exception as exc:
+                    rollback_error = exc
+                else:
+                    if session_active and generated_container is self._session_container:
+                        # オプションのUndoマクロを閉じる責務は end_render_session に残す。
+                        self._session_container = None
+                        self._session_layer_cache = {}
+                        if mode == "active_layer":
+                            self._session_active_target = None
+                            self._session_active_created = False
+            elif (
+                mode == "active_layer"
+                and rollback_on_cancel
+                and not completed
+                and mutated
+                and not session_active
+                and active_snapshot is not None
+            ):
+                try:
+                    _restore_layer_snapshot(active_snapshot)
+                except Exception as exc:
+                    rollback_error = exc
             if hasattr(document, "refreshProjection"):
                 with contextlib.suppress(Exception):
                     document.refreshProjection()
@@ -401,8 +522,15 @@ class KritaCanvasAdapter(CanvasPort):
                 with contextlib.suppress(Exception):
                     document.setActiveNode(restore_node)
             if standalone_macro_open:
-                _end_macro(document)
+                try:
+                    _end_macro(document)
+                except Exception as exc:
+                    macro_error = exc
             _restore_view_state(target_view, view_state)
+            if rollback_error is not None:
+                raise rollback_error
+            if macro_error is not None:
+                raise macro_error
 
         return rendered
 
@@ -419,13 +547,27 @@ class KritaCanvasAdapter(CanvasPort):
         return None
 
     def _remove_node(self, parent: Any, node: Any) -> None:
-        if hasattr(parent, "removeChildNode"):
-            with contextlib.suppress(Exception):
-                parent.removeChildNode(node)
+        errors: list[Exception] = []
+        remove_child = getattr(parent, "removeChildNode", None)
+        if callable(remove_child):
+            try:
+                result = remove_child(node)
+                if result is False:
+                    raise RuntimeError("removeChildNode returned false")
                 return
-        if hasattr(node, "remove"):
-            with contextlib.suppress(Exception):
-                node.remove()
+            except Exception as exc:
+                errors.append(exc)
+        remove = getattr(node, "remove", None)
+        if callable(remove):
+            try:
+                result = remove()
+                if result is False:
+                    raise RuntimeError("Node.remove returned false")
+                return
+            except Exception as exc:
+                errors.append(exc)
+        cause = errors[-1] if errors else None
+        raise RuntimeError("Kritaレイヤー階層からノードを除去できませんでした") from cause
 
 
 def _start_macro(document: Any, title: str = "AI Stroke Paint") -> bool:
@@ -439,9 +581,45 @@ def _start_macro(document: Any, title: str = "AI Stroke Paint") -> bool:
 
 def _end_macro(document: Any) -> None:
     """Krita のアンドゥマクロを終了・確定する。"""
-    if hasattr(document, "endMacro"):
-        with contextlib.suppress(Exception):
-            document.endMacro()
+    end_macro = getattr(document, "endMacro", None)
+    if not callable(end_macro):
+        raise RuntimeError("Krita Undoマクロを終了できません")
+    try:
+        end_macro()
+    except Exception as exc:
+        raise RuntimeError("Krita Undoマクロの終了に失敗しました") from exc
+
+
+def _capture_layer_snapshot(document: Any, node: Any) -> _LayerSnapshot:
+    """標準Krita Node APIだけで、既存レイヤーの復元可能なコピーを取得する。"""
+    pixel_data = getattr(node, "pixelData", None)
+    set_pixel_data = getattr(node, "setPixelData", None)
+    if not callable(pixel_data) or not callable(set_pixel_data):
+        raise RuntimeError("対象レイヤーが画素スナップショットAPIに対応していないため安全に描画できません")
+    try:
+        width = int(document.width())
+        height = int(document.height())
+        if width <= 0 or height <= 0:
+            raise ValueError("invalid document dimensions")
+        pixels = pixel_data(0, 0, width, height)
+    except Exception as exc:
+        raise RuntimeError("アクティブレイヤーのロールバック用スナップショットを取得できません") from exc
+    if pixels is None:
+        raise RuntimeError("アクティブレイヤーのロールバック用スナップショットが空です")
+    return _LayerSnapshot(node=node, pixels=pixels, width=width, height=height)
+
+
+def _restore_layer_snapshot(snapshot: _LayerSnapshot) -> None:
+    """取得済みスナップショットを同じレイヤーだけに復元する。"""
+    set_pixel_data = getattr(snapshot.node, "setPixelData", None)
+    if not callable(set_pixel_data):
+        raise RuntimeError("対象レイヤーが画素復元APIに対応していません")
+    try:
+        result = set_pixel_data(snapshot.pixels, 0, 0, snapshot.width, snapshot.height)
+    except Exception as exc:
+        raise RuntimeError("アクティブレイヤーの画素復元に失敗しました") from exc
+    if result is False:
+        raise RuntimeError("Kritaがアクティブレイヤーの画素復元を拒否しました")
 
 
 def _qpoint(x: float, y: float) -> Any:
@@ -557,6 +735,7 @@ def _apply_stroke_style(
     size_multiplier: float = 1.0,
     opacity_multiplier: float = 1.0,
     view: Any | None = None,
+    preset_cache: dict[tuple[str, bool], Any] | None = None,
 ) -> None:
     """Apply the DrawingPlan brush contract to Krita's active view."""
     try:
@@ -569,12 +748,14 @@ def _apply_stroke_style(
 
         is_eraser = bool(getattr(stroke, "is_eraser", False))
         preset_name = str(stroke.brush_preset).strip()
+        cache_key = (preset_name.lower(), is_eraser)
+        cached_preset = preset_cache.get(cache_key) if preset_cache is not None else None
         presets: Any = getattr(app, "resources", lambda _kind: {})("preset")
-        preset: Any = None
+        preset: Any = cached_preset
 
-        if is_eraser:
+        if is_eraser and preset is None:
             # 消しゴム用プリセットの優先探索
-            eraser_candidates = ["Eraser Small", "Eraser Soft", "Eraser Circle", "Eraser"]
+            eraser_candidates = list(brush_definition("eraser").candidates)
             if hasattr(presets, "values"):
                 all_presets = list(presets.values())
                 for cand in eraser_candidates:
@@ -592,6 +773,11 @@ def _apply_stroke_style(
                         None,
                     )
 
+        if is_eraser and preset is None:
+            raise RuntimeError(
+                "利用可能な消しゴムプリセットを解決できませんでした。通常ブラシで上書きする危険があるため描画を中止します。"
+            )
+
         if preset is None and hasattr(presets, "get"):
             preset = presets.get(preset_name)
 
@@ -606,19 +792,10 @@ def _apply_stroke_style(
                     preset = p
                     break
 
-            # 2. プリセット名キーワードによるカテゴリ柔軟マッチング
+            # 2. 意味プロファイルに基づくカテゴリ柔軟マッチング
             if preset is None:
-                cat_keywords: list[str] = []
-                if "airbrush" in p_low or "spray" in p_low or "soft" in p_low:
-                    cat_keywords = ["airbrush", "soft", "spray"]
-                elif "ink" in p_low or "gpen" in p_low or "pen" in p_low:
-                    cat_keywords = ["ink", "gpen", "pen"]
-                elif "bristle" in p_low or "dry" in p_low or "chalk" in p_low or "pencil" in p_low:
-                    cat_keywords = ["bristle", "dry", "chalk", "pencil", "texture"]
-                elif "wet" in p_low or "water" in p_low or "acrylic" in p_low or "oil" in p_low:
-                    cat_keywords = ["wet", "water", "acrylic", "oil", "paint"]
-                elif "basic" in p_low or "fill" in p_low or "block" in p_low:
-                    cat_keywords = ["basic", "fill", "block"]
+                profile_key = infer_brush_profile(preset_name)
+                cat_keywords = list(brush_definition(profile_key).keywords)
 
                 for kw in cat_keywords:
                     for p in all_presets:
@@ -639,8 +816,13 @@ def _apply_stroke_style(
                         preset = p
                         break
 
-        if preset is not None and hasattr(target_view, "setCurrentBrushPreset"):
-            target_view.setCurrentBrushPreset(preset)
+        if preset is None:
+            raise RuntimeError(f"描画ブラシプリセットを解決できませんでした: {preset_name}")
+        if not hasattr(target_view, "setCurrentBrushPreset"):
+            raise RuntimeError("Kritaビューがブラシプリセット切替に対応していません")
+        target_view.setCurrentBrushPreset(preset)
+        if preset_cache is not None:
+            preset_cache[cache_key] = preset
 
         effective_size = max(0.5, float(stroke.size_px) * size_multiplier)
         _rgb_color, color_alpha = split_color_alpha(stroke.color)
@@ -651,5 +833,5 @@ def _apply_stroke_style(
         if hasattr(target_view, "setPaintingOpacity"):
             target_view.setPaintingOpacity(effective_opacity)
     except Exception:
-        if view is not None:
+        if view is not None or bool(getattr(stroke, "is_eraser", False)):
             raise

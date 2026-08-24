@@ -14,7 +14,14 @@ from unittest.mock import patch
 from zipfile import ZipFile
 
 from .build_plugin import PACKAGE_NAME, build
-from .docker import AIStrokePainterDocker, ApiConnectionWorker, PlanWorker, _confirm, _safe_endpoint_label
+from .docker import (
+    AIStrokePainterDocker,
+    ApiConnectionWorker,
+    PlanWorker,
+    _confirm,
+    _is_plan_goal_reached,
+    _safe_endpoint_label,
+)
 from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint, VisionCritique
 from .image_converter import ImageStrokeConverter, _image_dimensions_from_header, _trace_edge_paths
 from .krita_adapter import KritaCanvasAdapter
@@ -32,6 +39,12 @@ from .llm_planner import (
     _plan_from_response,
     _redact_sensitive_text,
     _SameOriginRedirectHandler,
+)
+from .native_bridge import (
+    JsonLineNativeStrokeBridge,
+    NativeBridgeProtocolError,
+    NativeBridgeUnavailable,
+    discover_native_bridge,
 )
 from .planner import RuleBasedPlanner
 from .procedural import (
@@ -53,7 +66,9 @@ from .qt_compat import (
     password_echo_mode,
     write_only_open_mode,
 )
-from .storage import load_plan, save_plan, save_svg
+from .quality import evaluate_plan_quality
+from .storage import load_plan, load_program, save_plan, save_program, save_svg
+from .stroke_program import StrokeProgram, compile_stroke_program, drawing_plan_to_stroke_program
 
 
 class _FakeNode:
@@ -64,6 +79,9 @@ class _FakeNode:
         self._blending_mode = "normal"
         self._children: list[Any] = []
         self.lines: list[tuple[Any, Any, float, float]] = []
+        self.pixels = b"initial pixels"
+        self.pixel_reads = 0
+        self.pixel_writes = 0
 
     def name(self) -> str:
         return self._name
@@ -78,12 +96,13 @@ class _FakeNode:
         if child in self._children:
             self._children.remove(child)
 
-    def addChildNode(self, child: Any, above_this: Any = None) -> None:
+    def addChildNode(self, child: Any, above_this: Any = None) -> bool | None:
         if above_this is not None and above_this in self._children:
             idx = self._children.index(above_this)
             self._children.insert(idx + 1, child)
         else:
             self._children.append(child)
+        return None
 
     def paintAbility(self) -> str:
         return self._paint_ability
@@ -102,6 +121,16 @@ class _FakeNode:
             )
         if self.paintAbility() == "PAINT":
             self.lines.append((start, end, start_pressure, end_pressure))
+            self.pixels = b"painted pixels"
+
+    def pixelData(self, _x: int, _y: int, _width: int, _height: int) -> bytes:  # noqa: N802
+        self.pixel_reads += 1
+        return self.pixels
+
+    def setPixelData(self, pixels: bytes, _x: int, _y: int, _width: int, _height: int) -> bool:  # noqa: N802
+        self.pixel_writes += 1
+        self.pixels = pixels
+        return True
 
 
 class _FakeDocument:
@@ -165,6 +194,160 @@ class _FakeDocument:
 
 
 class PlannerAndStorageTests(unittest.TestCase):
+    def test_stroke_program_round_trip_and_compiler_primitives(self) -> None:
+        raw_program = {
+            "schema_version": 2,
+            "prompt": "layered study",
+            "seed": 17,
+            "canvas": {"width": 400, "height": 240},
+            "operations": [
+                {
+                    "kind": "fill",
+                    "id": "base",
+                    "polygon": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.8], [0.1, 0.8]],
+                    "brush": {"profile": "marker", "color": "#6688aa", "size": 0.04},
+                },
+                {
+                    "kind": "hatch",
+                    "id": "shadow",
+                    "polygon": [[0.5, 0.2], [0.85, 0.25], [0.75, 0.75], [0.45, 0.65]],
+                    "angle_deg": 25,
+                    "cross": True,
+                },
+                {
+                    "kind": "path",
+                    "id": "contour",
+                    "points": [[0.1, 0.8, 0.15], [0.5, 0.15, 1.0], [0.9, 0.8, 0.1]],
+                    "brush": {"profile": "gpen", "size": 0.008},
+                },
+                {
+                    "kind": "particles",
+                    "id": "sparkles",
+                    "bounds": [0.05, 0.05, 0.95, 0.95],
+                    "count": 12,
+                },
+            ],
+        }
+        program = StrokeProgram.from_dict(raw_program)
+        self.assertEqual(StrokeProgram.from_dict(program.as_dict()), program)
+
+        first = compile_stroke_program(program)
+        second = compile_stroke_program(program)
+        self.assertEqual(first.as_dict(), second.as_dict())
+        self.assertEqual(first.metadata["source_schema_version"], 2)
+        self.assertEqual(first.metadata["operation_count"], 4)
+        self.assertEqual(set(first.layers), {"Flats", "Shading", "Lineart", "FX"})
+        self.assertTrue(all(0 <= point.x < 400 for stroke in first.strokes for point in stroke.points))
+        self.assertTrue(all(0 <= point.y < 240 for stroke in first.strokes for point in stroke.points))
+
+        limited = compile_stroke_program(program, count=20)
+        self.assertEqual(len(limited.strokes), 20)
+        self.assertIn("Lineart", limited.layers)
+
+    def test_stroke_program_validates_external_values_and_defaults(self) -> None:
+        fill = StrokeProgram.from_dict(
+            {
+                "schema_version": 2,
+                "prompt": "default fill",
+                "seed": 1,
+                "canvas_width": 100,
+                "canvas_height": 100,
+                "operations": [{"kind": "fill", "id": "fill", "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]]}],
+            }
+        )
+        self.assertEqual(fill.operations[0].layer, "Flats")
+        self.assertEqual(fill.operations[0].brush.profile, "marker")
+        self.assertLessEqual(len(compile_stroke_program(fill).strokes), 2_000)
+
+        invalid_values: list[dict[str, Any]] = [
+            {"kind": "path", "id": "bad", "points": [[0, 0], [1, 1]], "closed": "false"},
+            {
+                "kind": "particles",
+                "id": "bad",
+                "bounds": [0, 0, 1],
+            },
+            {
+                "kind": "path",
+                "id": "bad",
+                "points": [[0, 0], [1, 1]],
+                "brush": {"is_eraser": "false"},
+            },
+            {
+                "kind": "path",
+                "id": "bad",
+                "points": [[0, 0], [1, 1]],
+                "brush": {"profile": "typo-pen"},
+            },
+            {
+                "kind": "path",
+                "id": "bad",
+                "points": [[0, 0], [1, 1]],
+                "brush": {"profile": "gpen", "size_px": 3},
+            },
+        ]
+        for operation in invalid_values:
+            with self.subTest(operation=operation["kind"]), self.assertRaises(PlanValidationError):
+                StrokeProgram.from_dict(
+                    {
+                        "schema_version": 2,
+                        "prompt": "invalid",
+                        "seed": 1,
+                        "canvas_width": 100,
+                        "canvas_height": 100,
+                        "operations": [operation],
+                    }
+                )
+
+        dense_first = StrokeProgram.from_dict(
+            {
+                "schema_version": 2,
+                "prompt": "budget fairness",
+                "seed": 2,
+                "canvas": {"width": 1000, "height": 1000},
+                "operations": [
+                    {
+                        "kind": "fill",
+                        "id": "dense-fill",
+                        "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]],
+                        "brush": {"profile": "marker", "size": 0.00001},
+                        "spacing": 0.2,
+                    },
+                    {
+                        "kind": "path",
+                        "id": "final-contour",
+                        "points": [[0.1, 0.1], [0.9, 0.9]],
+                        "layer": "Lineart",
+                    },
+                ],
+            }
+        )
+        dense_plan = compile_stroke_program(dense_first)
+        self.assertLessEqual(len(dense_plan.strokes), 2_000)
+        self.assertTrue(any(stroke.id == "final-contour" for stroke in dense_plan.strokes))
+
+    def test_v1_v2_storage_migration_preserves_render_contract(self) -> None:
+        legacy = RuleBasedPlanner().plan("custom preset", 21, 8, 320, 180)
+        program = drawing_plan_to_stroke_program(legacy)
+        migrated = compile_stroke_program(program)
+        self.assertEqual([stroke.id for stroke in migrated.strokes], [stroke.id for stroke in legacy.strokes])
+        self.assertEqual(
+            [stroke.brush_preset for stroke in migrated.strokes],
+            [stroke.brush_preset for stroke in legacy.strokes],
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            legacy_path = save_plan(legacy, temp)
+            self.assertEqual(load_program(legacy_path), program)
+            program_path = save_program(program, temp)
+            self.assertEqual(load_program(program_path), program)
+            self.assertEqual(load_plan(program_path), migrated)
+            versionless = program.as_dict()
+            versionless.pop("schema_version")
+            versionless_path = Path(temp) / "program_without_explicit_version.json"
+            versionless_path.write_text(json.dumps(versionless), encoding="utf-8")
+            self.assertEqual(load_program(versionless_path), program)
+            self.assertEqual(load_plan(versionless_path), migrated)
+
     def test_planner_is_deterministic_and_bounded(self) -> None:
         planner = RuleBasedPlanner()
         first = planner.plan("anime girl portrait", 42, 15, 1024, 768)
@@ -228,6 +411,68 @@ class PlannerAndStorageTests(unittest.TestCase):
         self.assertEqual(plan.title, "Creature Artwork")
         self.assertTrue(len(plan.strokes) > 0)
 
+    def test_procedural_quality_foundations_prompt_intent_and_resolution_scaling(self) -> None:
+        prompts = (
+            "anime girl portrait",
+            "mountain landscape",
+            "blooming rose flower",
+            "cute cat",
+            "magic circle",
+            "cyberpunk city skyline",
+        )
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                plan = generate_procedural_plan(prompt, 42, None, 800, 600)
+                flats = [stroke for stroke in plan.strokes if stroke.layer_name == "Flats"]
+                self.assertTrue(flats)
+                self.assertTrue(any(abs(stroke.points[-1].x - stroke.points[0].x) >= 800 * 0.75 for stroke in flats))
+                self.assertTrue(any(stroke.size_px >= 600 * 0.05 for stroke in flats))
+                quality = evaluate_plan_quality(plan)
+                self.assertGreaterEqual(quality.coverage, 0.35)
+                self.assertGreaterEqual(quality.score, 0.75)
+                self.assertEqual(quality.out_of_bounds_points, 0)
+
+        mixed = generate_procedural_plan("anime girl casting a magic spell", 42, None, 800, 600)
+        self.assertEqual(mixed.title, "Character Portrait")
+        self.assertIn("Lineart", mixed.layers)
+        self.assertTrue(any(layer in mixed.layers for layer in ("FX", "Highlights")))
+        self.assertEqual(
+            generate_procedural_plan("mandala", 42, None, 800, 600).title,
+            "Geometric / City Artwork",
+        )
+        self.assertEqual(
+            generate_procedural_plan("cat in a cyberpunk city", 42, None, 800, 600).title,
+            "Creature Artwork",
+        )
+        self.assertEqual(
+            generate_procedural_plan("gothic cathedral", 42, None, 800, 600).title,
+            "Geometric / City Artwork",
+        )
+
+        from .procedural.base import color_palette
+
+        monochrome_colors = set(color_palette("monochrome").values())
+        for prompt in ("mountain landscape", "red rose", "cute cat", "magic circle", "cyberpunk city"):
+            monochrome = generate_procedural_plan(prompt, 42, None, 800, 600, palette_name="monochrome")
+            self.assertTrue(all(stroke.color[:7] in monochrome_colors for stroke in monochrome.strokes))
+        direct_landscape = generate_landscape_strokes("mountain landscape", 42, None, 800, 600, "monochrome")
+        self.assertTrue(all(stroke.color[:7] in monochrome_colors for stroke in direct_landscape))
+
+        blue = generate_procedural_plan("anime girl with blue hair and green eyes", 42, None, 800, 600)
+        pink = generate_procedural_plan("anime girl with pink hair and purple eyes", 42, None, 800, 600)
+        self.assertNotEqual(
+            [(stroke.id, stroke.color) for stroke in blue.strokes],
+            [(stroke.id, stroke.color) for stroke in pink.strokes],
+        )
+        self.assertTrue(any(stroke.color == "#4776d0" for stroke in blue.strokes))
+        self.assertTrue(any(stroke.color == "#e86f9d" for stroke in pink.strokes))
+
+        small = generate_procedural_plan("anime girl", 7, None, 400, 300)
+        large = generate_procedural_plan("anime girl", 7, None, 1600, 1200)
+        small_line = next(stroke for stroke in small.strokes if stroke.layer_name == "Lineart")
+        large_by_id = {stroke.id: stroke for stroke in large.strokes}
+        self.assertAlmostEqual(large_by_id[small_line.id].size_px / small_line.size_px, 4.0)
+
     def test_sample_strokes_by_priority(self) -> None:
         raw_strokes = generate_character_strokes("girl portrait", 42, 100, 800, 600)
         sampled = sample_strokes_by_priority(raw_strokes, 10)
@@ -259,6 +504,20 @@ class PlannerAndStorageTests(unittest.TestCase):
             svg_path = save_svg(plan, temp)
             self.assertTrue(svg_path.is_file())
             self.assertIn("<svg", svg_path.read_text(encoding="utf-8"))
+
+        points = [StrokePoint(0, 0, 1, 0), StrokePoint(10, 10, 1, 10)]
+        reverse_layers = DrawingPlan(
+            "layer order",
+            1,
+            [
+                Stroke("line", points, layer_name="Lineart"),
+                Stroke("draft", points, layer_name="Draft"),
+                Stroke("flat", points, layer_name="Flats"),
+            ],
+            layers=["Lineart", "Draft", "Flats"],
+        ).to_svg(100, 100)
+        self.assertLess(reverse_layers.index('id="layer_Draft"'), reverse_layers.index('id="layer_Flats"'))
+        self.assertLess(reverse_layers.index('id="layer_Flats"'), reverse_layers.index('id="layer_Lineart"'))
 
     def test_svg_comment_with_double_hyphen_stays_well_formed(self) -> None:
         import xml.etree.ElementTree as ET
@@ -352,6 +611,16 @@ class PlannerAndStorageTests(unittest.TestCase):
         self.assertEqual(d["iteration"], 2)
         loaded = VisionCritique.from_dict(d)
         self.assertEqual(loaded.suggested_action, "Add clean lineart")
+        self.assertFalse(VisionCritique.from_dict({"completion_score": 0.99, "iteration": 1}).goal_reached)
+
+    def test_goal_completion_requires_explicit_boolean(self) -> None:
+        stroke = Stroke("goal", [StrokePoint(0, 0, 1, 0), StrokePoint(1, 1, 1, 10)])
+        score_only = DrawingPlan("score only", 1, [stroke], completion_score=1.0)
+        explicit = DrawingPlan("explicit", 1, [stroke], completion_score=0.1, goal_reached=True)
+        metadata_explicit = DrawingPlan("metadata", 1, [stroke], metadata={"goal_reached": True})
+        self.assertFalse(_is_plan_goal_reached(score_only))
+        self.assertTrue(_is_plan_goal_reached(explicit))
+        self.assertTrue(_is_plan_goal_reached(metadata_explicit))
 
     def test_image_converter_rejects_invalid_data_without_silent_fallback(self) -> None:
         converter = ImageStrokeConverter()
@@ -419,7 +688,8 @@ class PlannerAndStorageTests(unittest.TestCase):
 
         converter = ImageStrokeConverter()
         converter.qimage_cls = FakeImage
-        plan = converter.convert_image_to_plan(b"fake-image-bytes", "test", 42, 5, 200, 200)
+        fake_png = b"\x89PNG\r\n\x1a\n" + (b"\x00" * 8) + (20).to_bytes(4, "big") * 2
+        plan = converter.convert_image_to_plan(fake_png, "test", 42, 5, 200, 200)
         self.assertIn(5, converted_formats)
         self.assertTrue(len(plan.strokes) > 0)
 
@@ -463,7 +733,7 @@ class PlannerAndStorageTests(unittest.TestCase):
         converter = ImageStrokeConverter()
         converter.qimage_cls = FakeImage
         strokes = converter._process_qimage(FakeImage(), 1, 20, 200, 200, random.Random(1))
-        self.assertEqual(scaled_sizes, [(160, 40)])
+        self.assertEqual(scaled_sizes, [(400, 100)])
         self.assertEqual(strokes, [])
 
         mask = [[False] * 5 for _ in range(5)]
@@ -474,6 +744,8 @@ class PlannerAndStorageTests(unittest.TestCase):
     def test_image_header_dimensions_prevent_oversized_decode(self) -> None:
         oversized_png = b"\x89PNG\r\n\x1a\n" + (b"\x00" * 8) + (10_000).to_bytes(4, "big") * 2
         self.assertEqual(_image_dimensions_from_header(oversized_png), (10_000, 10_000))
+        gif_header = b"GIF89a" + (640).to_bytes(2, "little") + (480).to_bytes(2, "little")
+        self.assertEqual(_image_dimensions_from_header(gif_header), (640, 480))
 
         class MustNotDecode:
             def __init__(self) -> None:
@@ -508,6 +780,12 @@ class PluginBuildTests(unittest.TestCase):
         self.assertIn(f"{PACKAGE_NAME}/qt_compat.py", names)
         self.assertIn(f"{PACKAGE_NAME}/procedural/__init__.py", names)
         self.assertIn(f"{PACKAGE_NAME}/image_converter.py", names)
+        self.assertIn(f"{PACKAGE_NAME}/brushes.py", names)
+        self.assertIn(f"{PACKAGE_NAME}/stroke_program.py", names)
+        self.assertIn(f"{PACKAGE_NAME}/native_bridge.py", names)
+        self.assertIn(f"{PACKAGE_NAME}/krita_smoke.py", names)
+        self.assertIn(f"{PACKAGE_NAME}/quality.py", names)
+        self.assertIn(f"{PACKAGE_NAME}/quality_check.py", names)
         self.assertNotIn(f"{PACKAGE_NAME}/{PACKAGE_NAME}.desktop", names)
 
     def test_build_fails_when_a_required_file_is_missing(self) -> None:
@@ -522,6 +800,40 @@ class PluginBuildTests(unittest.TestCase):
 
 
 class OpenAICompatiblePlannerTests(unittest.TestCase):
+    def test_v2_stroke_program_response_compiles_with_request_contract(self) -> None:
+        response = {
+            "schema_version": 2,
+            "prompt": "model changed prompt",
+            "seed": 999,
+            "canvas": {"width": 10, "height": 10},
+            "operations": [
+                {
+                    "kind": "fill",
+                    "id": "background",
+                    "polygon": [[0, 0], [1, 0], [1, 1], [0, 1]],
+                    "brush": {"profile": "watercolor", "color": "#abcdef", "size": 0.08},
+                },
+                {
+                    "kind": "path",
+                    "id": "line",
+                    "points": [[0.1, 0.2, 0.1], [0.5, 0.4, 1.0], [0.9, 0.7, 0.1]],
+                    "brush": {"profile": "gpen", "size": 0.004},
+                },
+            ],
+        }
+        plan = _plan_from_response(response, prompt="requested", seed=7, width=800, height=600)
+        self.assertEqual(plan.prompt, "requested")
+        self.assertEqual(plan.seed, 7)
+        self.assertEqual((plan.canvas_width, plan.canvas_height), (800.0, 600.0))
+        self.assertEqual(plan.metadata["source_schema_version"], 2)
+        self.assertIn("Flats", plan.layers)
+        self.assertIn("Lineart", plan.layers)
+        self.assertTrue(all(0 <= point.x < 800 for stroke in plan.strokes for point in stroke.points))
+        self.assertTrue(all(0 <= point.y < 600 for stroke in plan.strokes for point in stroke.points))
+
+        fenced = f"analysis before output\n```json\n{json.dumps(response)}\n```"
+        self.assertIn("operations", _extract_json_object(fenced))
+
     def test_cross_origin_redirect_is_rejected_before_credentials_can_follow(self) -> None:
         from urllib.request import Request
 
@@ -770,7 +1082,10 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertIn("Shading", prompt_sakura)
         self.assertIn("Lineart", prompt_sakura)
         self.assertIn("Highlights", prompt_sakura)
-        self.assertIn("[[x, y], [x, y, pressure]]", prompt_sakura)
+        self.assertIn('"schema_version": 2', prompt_sakura)
+        self.assertIn('"operations"', prompt_sakura)
+        self.assertIn("fill/hatch/particles", prompt_sakura)
+        self.assertIn("[x, y, pressure]", prompt_sakura)
 
         prompt_anime = _system_instruction(
             iteration=1,
@@ -2040,6 +2355,219 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
 
 
 class CanvasAdapterTests(unittest.TestCase):
+    def test_active_layer_cancellation_restores_only_target_pixels(self) -> None:
+        target = _FakeNode("existing")
+        document = _FakeDocument(active=target)
+        plan = DrawingPlan(
+            "cancel active",
+            1,
+            [
+                Stroke(
+                    "long",
+                    [
+                        StrokePoint(0, 0, 1, 0),
+                        StrokePoint(10, 0, 1, 10),
+                        StrokePoint(20, 0, 1, 20),
+                        StrokePoint(30, 0, 1, 30),
+                    ],
+                )
+            ],
+        )
+        checks = 0
+
+        def cancelled() -> bool:
+            nonlocal checks
+            checks += 1
+            return checks >= 4
+
+        adapter = KritaCanvasAdapter(layer_mode="active_layer")
+        self.assertEqual(adapter.render(document, plan, cancelled=cancelled), 0)
+        self.assertTrue(target.lines)
+        self.assertEqual(target.pixels, b"initial pixels")
+        self.assertEqual(target.pixel_reads, 1)
+        self.assertEqual(target.pixel_writes, 1)
+        self.assertEqual(document.macros_ended, 1)
+
+        session_target = _FakeNode("existing")
+        session_document = _FakeDocument(active=session_target)
+        session_adapter = KritaCanvasAdapter(layer_mode="active_layer")
+        session_adapter.begin_render_session(session_document)
+        session_adapter.render(session_document, plan)
+        session_adapter.render(session_document, plan, cancelled=lambda: True)
+        self.assertEqual(session_target.pixels, b"painted pixels")
+        self.assertEqual(session_target.pixel_reads, 1)
+        session_adapter.end_render_session(commit=False)
+        self.assertEqual(session_document.macros_ended, 1)
+        self.assertEqual(session_target.pixels, b"initial pixels")
+        self.assertEqual(session_target.pixel_writes, 1)
+
+    def test_active_layer_rollback_uses_standard_node_api_without_macros(self) -> None:
+        class StandardApiDocument(_FakeDocument):
+            def __getattribute__(self, name: str) -> Any:
+                if name in {"createMacro", "endMacro"}:
+                    raise AttributeError(name)
+                return super().__getattribute__(name)
+
+        target = _FakeNode("existing")
+        document = StandardApiDocument(active=target)
+        plan = RuleBasedPlanner().plan("curve", 3, 1, 100, 100)
+        checks = 0
+
+        def cancelled() -> bool:
+            nonlocal checks
+            checks += 1
+            return checks >= 4
+
+        adapter = KritaCanvasAdapter(layer_mode="active_layer")
+        adapter.render(document, plan, cancelled=cancelled)
+        self.assertEqual(target.pixels, b"initial pixels")
+        self.assertEqual(target.pixel_writes, 1)
+
+    def test_native_bridge_receives_one_continuous_stroke_and_scaled_style(self) -> None:
+        received: list[Stroke] = []
+
+        class FakeBridge:
+            def submit_stroke(self, _document: Any, _target: Any, stroke: Stroke) -> int:
+                received.append(stroke)
+                return len(stroke.points)
+
+        target = _FakeNode("target")
+        document = _FakeDocument(active=target)
+        stroke = Stroke(
+            "continuous",
+            [
+                StrokePoint(0, 0, 0.1, 0),
+                StrokePoint(10, 5, 0.8, 10),
+                StrokePoint(20, 15, 0.6, 20),
+                StrokePoint(30, 20, 0.1, 30),
+            ],
+            size_px=4,
+            opacity=0.8,
+        )
+        plan = DrawingPlan("bridge", 1, [stroke], canvas_width=40, canvas_height=30)
+        adapter = KritaCanvasAdapter(native_bridge=cast(Any, FakeBridge()), layer_mode="active_layer")
+
+        self.assertEqual(adapter.render(document, plan, brush_size_multiplier=2.0, opacity_multiplier=0.5), 1)
+        self.assertEqual(target.lines, [])
+        self.assertEqual(len(received), 1)
+        self.assertEqual(received[0].points, stroke.points)
+        self.assertEqual(received[0].size_px, 8.0)
+        self.assertEqual(received[0].opacity, 0.4)
+
+    def test_native_bridge_unavailable_falls_back_but_protocol_errors_fail_closed(self) -> None:
+        class UnavailableBridge:
+            def submit_stroke(self, _document: Any, _target: Any, _stroke: Stroke) -> int:
+                raise NativeBridgeUnavailable
+
+        target = _FakeNode("target")
+        document = _FakeDocument(active=target)
+        plan = DrawingPlan(
+            "fallback",
+            1,
+            [
+                Stroke(
+                    "fallback-stroke",
+                    [StrokePoint(0, 0, 1, 0), StrokePoint(10, 10, 1, 10), StrokePoint(20, 10, 1, 20)],
+                )
+            ],
+        )
+        adapter = KritaCanvasAdapter(native_bridge=cast(Any, UnavailableBridge()), layer_mode="active_layer")
+        self.assertEqual(adapter.render(document, plan), 1)
+        self.assertEqual(len(target.lines), 2)
+
+        class InvalidBridge:
+            def submit_stroke(self, _document: Any, _target: Any, _stroke: Stroke) -> int:
+                raise NativeBridgeProtocolError("bad response")
+
+        with self.assertRaises(NativeBridgeProtocolError):
+            KritaCanvasAdapter(native_bridge=cast(Any, InvalidBridge()), layer_mode="active_layer").render(
+                document, plan
+            )
+
+    def test_eraser_without_active_view_fails_closed(self) -> None:
+        document = _FakeDocument()
+        eraser_plan = DrawingPlan(
+            "eraser",
+            1,
+            [
+                Stroke(
+                    "erase",
+                    [StrokePoint(0, 0, 1, 0), StrokePoint(10, 10, 1, 10)],
+                    brush_preset="Eraser Small",
+                    is_eraser=True,
+                )
+            ],
+        )
+        with self.assertRaises(RuntimeError):
+            KritaCanvasAdapter().render(document, eraser_plan, view=None)
+        self.assertEqual(document.rootNode().childNodes(), [])
+
+    def test_json_line_native_bridge_protocol_is_bounded_and_authenticated(self) -> None:
+        sent: list[bytes] = []
+
+        class FakeConnection:
+            def __enter__(self) -> FakeConnection:
+                return self
+
+            def __exit__(self, *_args: Any) -> None:
+                pass
+
+            def settimeout(self, _timeout: float) -> None:
+                pass
+
+            def sendall(self, value: bytes) -> None:
+                sent.append(value)
+
+            def recv(self, _count: int) -> bytes:
+                return b'{"ok":true,"accepted_point_count":2}\n'
+
+        stroke = Stroke("wire", [StrokePoint(0, 0, 1, 0), StrokePoint(1, 1, 0.5, 10)])
+        bridge = JsonLineNativeStrokeBridge(29345, "0123456789abcdef")
+        with patch("ai_stroke_painter.native_bridge.socket.create_connection", return_value=FakeConnection()):
+            self.assertEqual(bridge.submit_stroke(_FakeDocument(), _FakeNode("target"), stroke), 2)
+        payload = json.loads(sent[0])
+        self.assertEqual(payload["type"], "continuous_stroke")
+        self.assertEqual(payload["auth_token"], "0123456789abcdef")
+        self.assertEqual(len(payload["stroke"]["points"]), 2)
+        with (
+            patch(
+                "ai_stroke_painter.native_bridge.socket.create_connection",
+                side_effect=ConnectionRefusedError("not running"),
+            ),
+            self.assertRaises(NativeBridgeUnavailable),
+        ):
+            bridge.submit_stroke(_FakeDocument(), _FakeNode("target"), stroke)
+
+        class AmbiguousTimeoutConnection(FakeConnection):
+            def recv(self, _count: int) -> bytes:
+                raise TimeoutError("response lost after send")
+
+        with (
+            patch(
+                "ai_stroke_painter.native_bridge.socket.create_connection",
+                return_value=AmbiguousTimeoutConnection(),
+            ),
+            self.assertRaises(NativeBridgeProtocolError),
+        ):
+            bridge.submit_stroke(_FakeDocument(), _FakeNode("target"), stroke)
+        with (
+            patch.dict("os.environ", {"AI_STROKE_BRIDGE_PORT": "bad", "AI_STROKE_BRIDGE_TOKEN": "short"}),
+            self.assertRaises(ValueError),
+        ):
+            discover_native_bridge()
+
+    def test_render_session_clears_state_when_macro_close_fails(self) -> None:
+        class FailingMacroDocument(_FakeDocument):
+            def endMacro(self) -> None:
+                raise RuntimeError("end failed")
+
+        document = FailingMacroDocument()
+        adapter = KritaCanvasAdapter()
+        adapter.begin_render_session(document)
+        with self.assertRaises(RuntimeError):
+            adapter.end_render_session(commit=True)
+        self.assertIsNone(adapter._session_document)
+
     def test_render_session_reuses_output_and_rolls_back_all_iterations(self) -> None:
         committed_root = _FakeNode("root", "grouplayer")
         committed_document = _FakeDocument(root=committed_root)
@@ -2061,6 +2589,8 @@ class CanvasAdapterTests(unittest.TestCase):
         self.assertEqual(adapter.render(rollback_document, plan, cancelled=lambda: True), 0)
         self.assertEqual(rollback_root.childNodes(), [])
         adapter.end_render_session(commit=False)
+        self.assertEqual(rollback_document.macros_started, ["AI Stroke Painter Session"])
+        self.assertEqual(rollback_document.macros_ended, 1)
 
     def test_multi_layer_output_is_scoped_to_unique_group(self) -> None:
         root = _FakeNode("root", "grouplayer")
@@ -2094,6 +2624,41 @@ class CanvasAdapterTests(unittest.TestCase):
         self.assertEqual(adapter.render(document, empty_plan, layer_prefix="Empty"), 0)
         self.assertEqual(root.childNodes(), [])
 
+    def test_rollback_failures_are_reported_instead_of_silently_committed(self) -> None:
+        class FailingRoot(_FakeNode):
+            def removeChildNode(self, _child: Any) -> None:  # noqa: N802
+                raise RuntimeError("remove failed")
+
+        root = FailingRoot("root", "grouplayer")
+        document = _FakeDocument(root=root)
+        plan = RuleBasedPlanner().plan("curve", 1, 1, 100, 100)
+        with self.assertRaisesRegex(RuntimeError, "ノードを除去"):
+            KritaCanvasAdapter().render(document, plan, cancelled=lambda: True)
+
+        class RejectingRestoreNode(_FakeNode):
+            def setPixelData(  # noqa: N802
+                self, _pixels: bytes, _x: int, _y: int, _width: int, _height: int
+            ) -> bool:
+                return False
+
+        target = RejectingRestoreNode("existing")
+        active_document = _FakeDocument(active=target)
+        checks = 0
+
+        def cancel_after_one_segment() -> bool:
+            nonlocal checks
+            checks += 1
+            return checks >= 4
+
+        with self.assertRaisesRegex(RuntimeError, "画素復元"):
+            KritaCanvasAdapter(layer_mode="active_layer").render(
+                active_document,
+                plan,
+                cancelled=cancel_after_one_segment,
+            )
+        self.assertIs(document.activeNode(), root)
+        self.assertIs(active_document.activeNode(), target)
+
     def test_layer_setup_failure_rolls_back_created_group(self) -> None:
         root = _FakeNode("root", "grouplayer")
 
@@ -2109,6 +2674,18 @@ class CanvasAdapterTests(unittest.TestCase):
             KritaCanvasAdapter().render(document, plan, layer_prefix="Failed")
         self.assertEqual(root.childNodes(), [])
         self.assertIs(document.activeNode(), root)
+
+    def test_layer_add_false_return_is_treated_as_failure(self) -> None:
+        class RejectingRoot(_FakeNode):
+            def addChildNode(self, _child: Any, _above_this: Any = None) -> bool:  # noqa: N802
+                return False
+
+        root = RejectingRoot("root", "grouplayer")
+        document = _FakeDocument(root=root)
+        plan = RuleBasedPlanner().plan("curve", 3, 1, 100, 100)
+        with self.assertRaisesRegex(RuntimeError, "追加を拒否"):
+            KritaCanvasAdapter().render(document, plan)
+        self.assertEqual(root.childNodes(), [])
 
     def test_render_rejects_invalid_options(self) -> None:
         document = _FakeDocument()
@@ -2264,6 +2841,22 @@ class CanvasAdapterTests(unittest.TestCase):
         self.assertEqual(view.sizes, [3.0, 9.0])
         self.assertEqual(view.opacities[0], 0.4)
         self.assertAlmostEqual(view.opacities[1], 0.8 * (128 / 255))
+
+    def test_missing_non_eraser_brush_fails_instead_of_using_arbitrary_current_brush(self) -> None:
+        from types import SimpleNamespace
+
+        from ai_stroke_painter.krita_adapter import _apply_stroke_style
+
+        view = SimpleNamespace(setCurrentBrushPreset=lambda _preset: None)
+        app = SimpleNamespace(resources=lambda _resource_type: {})
+        fake_krita = SimpleNamespace(Krita=SimpleNamespace(instance=lambda: app))
+        stroke = Stroke(
+            "missing-preset",
+            [StrokePoint(0, 0, 1, 0), StrokePoint(1, 1, 1, 10)],
+            brush_preset="Definitely Missing",
+        )
+        with patch.dict("sys.modules", {"krita": fake_krita}), self.assertRaises(RuntimeError):
+            _apply_stroke_style(stroke, view=view)
 
     def test_qpoint_and_paintline_type_compatibility(self) -> None:
         from ai_stroke_painter.krita_adapter import _qpoint, _qpointf
@@ -3183,6 +3776,101 @@ class ExtendedCustomizationTests(unittest.TestCase):
             self.assertTrue(0.05 <= p_start <= 1.0, f"{prof} start pressure {p_start} out of bounds")
             self.assertTrue(0.05 <= p_mid <= 1.0, f"{prof} mid pressure {p_mid} out of bounds")
             self.assertTrue(0.05 <= p_end <= 1.0, f"{prof} end pressure {p_end} out of bounds")
+            self.assertGreater(
+                p_mid,
+                p_start,
+                f"{prof} must build pressure after the entry taper",
+            )
+            self.assertGreater(
+                p_mid,
+                p_end,
+                f"{prof} must release pressure before the stroke end",
+            )
+
+    def test_image_converter_auto_budget_respects_domain_limit(self) -> None:
+        """全面暗部の高密度ハッチングでも Auto が DrawingPlan 上限を超えない。"""
+        import random
+
+        from .image_converter import AUTO_STROKE_BUDGET
+
+        class BlackPixel:
+            def red(self) -> int:
+                return 0
+
+            def green(self) -> int:
+                return 0
+
+            def blue(self) -> int:
+                return 0
+
+            def alpha(self) -> int:
+                return 255
+
+        class BlackImage:
+            def width(self) -> int:
+                return 160
+
+            def height(self) -> int:
+                return 160
+
+            def scaled(self, _width: int, _height: int) -> BlackImage:
+                return self
+
+            def pixelColor(self, _x: int, _y: int) -> BlackPixel:  # noqa: N802
+                return BlackPixel()
+
+        converter = ImageStrokeConverter()
+        strokes = converter._process_qimage(
+            BlackImage(),
+            seed=1,
+            count=None,
+            target_width=1000,
+            target_height=1000,
+            rng=random.Random(1),
+            shading_density="high",
+        )
+        self.assertEqual(len(strokes), AUTO_STROKE_BUDGET)
+        DrawingPlan("black image", 1, strokes)
+
+    def test_missing_completion_score_is_not_treated_as_complete(self) -> None:
+        plan = DrawingPlan.from_dict(
+            {
+                "schema_version": 1,
+                "prompt": "unfinished",
+                "seed": 1,
+                "strokes": [
+                    {
+                        "id": "s1",
+                        "points": [[0, 0], [10, 10]],
+                    }
+                ],
+            }
+        )
+        self.assertFalse(plan.goal_reached)
+        self.assertEqual(plan.completion_score, 0.0)
+
+    def test_llm_count_budget_preserves_semantic_layers(self) -> None:
+        from .llm_planner import _validate_and_sanitize_plan
+
+        strokes = []
+        for layer_index, layer in enumerate(("Flats", "Shading", "Lineart", "Highlights")):
+            for item_index in range(2):
+                strokes.append(
+                    Stroke(
+                        id=f"{layer}_{item_index}",
+                        points=(
+                            StrokePoint(10 + layer_index * 5, 10 + item_index, 0.8, 0),
+                            StrokePoint(20 + layer_index * 5, 20 + item_index, 0.8, 10),
+                        ),
+                        layer_name=layer,
+                    )
+                )
+        raw_plan = DrawingPlan("layer budget", 1, strokes)
+        sanitized = _validate_and_sanitize_plan(raw_plan, "layer budget", 1, 3, 200, 200)
+        selected_layers = {stroke.layer_name for stroke in sanitized.strokes}
+        self.assertEqual(len(sanitized.strokes), 3)
+        self.assertIn("Lineart", selected_layers)
+        self.assertIn("Flats", selected_layers)
 
     def test_procedural_brush_profiles_applied(self) -> None:
         from .procedural import generate_procedural_plan
@@ -3192,6 +3880,9 @@ class ExtendedCustomizationTests(unittest.TestCase):
             "marupen": "Ink-1 Precision",
             "brush": "Wet-1 Water",
             "marker": "Marker-1 Broad",
+            "pencil": "Pencil-2",
+            "watercolor": "Wet Textured Soft",
+            "airbrush": "Airbrush Soft",
         }
         for prof, expected_preset in profile_map.items():
             plan = generate_procedural_plan(
@@ -3249,8 +3940,9 @@ class ExtendedCustomizationTests(unittest.TestCase):
         converter = ImageStrokeConverter()
         converter.qimage_cls = FakeImage
 
+        fake_png = b"\x89PNG\r\n\x1a\n" + (b"\x00" * 8) + (20).to_bytes(4, "big") + (10).to_bytes(4, "big")
         plan = converter.convert_image_to_plan(
-            image_bytes=b"fake-valid-image",
+            image_bytes=fake_png,
             prompt="landscape",
             seed=42,
             count=25,
@@ -3496,8 +4188,9 @@ class ExtendedCustomizationTests(unittest.TestCase):
             id="e1",
             points=pts,
             brush_preset="Basic-5 Size",
-            color="#ff0000",
+            color="#ff000080",
             size_px=10.0,
+            opacity=0.5,
             is_eraser=True,
         )
         normal_stroke = Stroke(
@@ -3533,6 +4226,13 @@ class ExtendedCustomizationTests(unittest.TestCase):
         # to_svg() での消しゴムストローク出力検証
         svg_content = plan.to_svg()
         self.assertIn('class="stroke eraser"', svg_content)
+        self.assertIn('<mask id="eraser_mask_0"', svg_content)
+        self.assertIn('mask="url(#eraser_mask_0)"', svg_content)
+        self.assertIn('class="stroke eraser" stroke-opacity="0.25"', svg_content)
+        self.assertNotIn('class="stroke eraser" stroke="#ffffff"', svg_content)
+        import xml.etree.ElementTree as ET
+
+        ET.fromstring(svg_content)
 
     def test_rule_based_planner_auto_count_and_goal(self) -> None:
         """RuleBasedPlanner での count=None (Auto) および Goal 判定テスト。"""
@@ -3547,7 +4247,7 @@ class ExtendedCustomizationTests(unittest.TestCase):
         self.assertGreater(len(plan_none.strokes), 0)
 
     def test_llm_planner_sanitize_auto_count_and_eraser(self) -> None:
-        """LLMPlanner のサニタイズ処理での count=None (無制限) と is_eraser 保持テスト。"""
+        """LLMPlanner の count=None 品質予算と is_eraser 保持テスト。"""
         from .llm_planner import _validate_and_sanitize_plan
 
         pts = [StrokePoint(10, 10, 0.5, 0), StrokePoint(20, 20, 0.8, 10)]
@@ -3620,6 +4320,11 @@ class ExtendedCustomizationTests(unittest.TestCase):
         self.assertGreaterEqual(flats_pts[0].pressure, 0.75)
         self.assertGreaterEqual(flats_pts[-1].pressure, 0.75)
 
+        shading_pts = _smooth_and_densify_points(raw_pts, 500, 500, layer_name="Shading", size_px=30.0)
+        self.assertLessEqual(len(shading_pts), 16)
+        self.assertGreaterEqual(shading_pts[0].pressure, 0.75)
+        self.assertGreaterEqual(shading_pts[-1].pressure, 0.75)
+
         # 2. Lineart (細いブラシ 8px)
         line_pts = _smooth_and_densify_points(raw_pts, 500, 500, layer_name="Lineart", size_px=8.0)
         self.assertGreaterEqual(len(line_pts), 8)
@@ -3688,6 +4393,22 @@ class ExtendedCustomizationTests(unittest.TestCase):
             )
             adapter.render(document, plan_ink, view=view)
             self.assertEqual(view.current_preset, p_ink)
+
+            # 消しゴムが解決できない環境では通常ブラシで上書きせず、安全側に失敗する。
+            plan_eraser = DrawingPlan(
+                prompt="test",
+                seed=1,
+                strokes=[
+                    Stroke(
+                        "s3",
+                        [StrokePoint(0, 0, 1, 0), StrokePoint(10, 10, 1, 10)],
+                        brush_preset="Ink-3 Gpen",
+                        is_eraser=True,
+                    )
+                ],
+            )
+            with self.assertRaisesRegex(RuntimeError, "消しゴムプリセット"):
+                adapter.render(document, plan_eraser, view=view)
 
     def test_ensure_layer_smart_blend_modes(self) -> None:
         """レイヤー名に応じた自動ブレンドモード設定のテスト。"""

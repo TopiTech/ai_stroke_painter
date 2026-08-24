@@ -12,6 +12,14 @@ from typing import Any
 SCHEMA_VERSION = 1
 MAX_PLAN_STROKES = 2_000
 MAX_STROKE_POINTS = 1_000
+LAYER_RENDER_ORDER: dict[str, int] = {
+    "Draft": 10,
+    "Flats": 20,
+    "Shading": 30,
+    "Lineart": 40,
+    "Highlights": 50,
+    "FX": 60,
+}
 _COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 
 
@@ -26,6 +34,28 @@ def split_color_alpha(color: str) -> tuple[str, float]:
     if len(color) == 9:
         return color[:7], int(color[7:9], 16) / 255.0
     return color, 1.0
+
+
+def _stroke_svg_lines(stroke: Stroke, *, mask: bool = False) -> list[str]:
+    lines: list[str] = []
+    for first, second in zip(stroke.points, stroke.points[1:], strict=False):
+        average_pressure = (first.pressure + second.pressure) * 0.5
+        stroke_width = max(0.5, stroke.size_px * average_pressure)
+        if mask:
+            color = "#000000"
+            _rgb_color, color_alpha = split_color_alpha(stroke.color)
+            combined_opacity = stroke.opacity * color_alpha
+            css_class = "stroke eraser"
+        else:
+            color, color_alpha = split_color_alpha(stroke.color)
+            combined_opacity = stroke.opacity * color_alpha
+            css_class = "stroke"
+        opacity = f' stroke-opacity="{combined_opacity:.2f}"' if combined_opacity < 1.0 else ""
+        lines.append(
+            f'<line x1="{first.x:.2f}" y1="{first.y:.2f}" x2="{second.x:.2f}" y2="{second.y:.2f}" '
+            f'stroke="{color}" stroke-width="{stroke_width:.2f}" class="{css_class}"{opacity} />'
+        )
+    return lines
 
 
 def _finite_number(value: Any, field_name: str) -> float:
@@ -234,9 +264,7 @@ class VisionCritique:
                 completion_score=value.get("completion_score", 0.0),
                 suggested_action=value.get("suggested_action", ""),
                 iteration=value.get("iteration", 1),
-                goal_reached=(
-                    value.get("goal_reached", False) is True or float(value.get("completion_score", 0.0)) >= 0.90
-                ),
+                goal_reached=value.get("goal_reached", False) is True,
             )
         except (TypeError, ValueError) as exc:
             raise PlanValidationError(f"VisionCritique の値が不正です: {exc}") from exc
@@ -255,7 +283,8 @@ class DrawingPlan:
     canvas_width: float | None = None
     canvas_height: float | None = None
     goal_reached: bool = False
-    completion_score: float = 1.0
+    # 未指定の外部計画を完成扱いしない。完成度は Planner/Critic が明示する。
+    completion_score: float = 0.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.prompt, str):
@@ -354,7 +383,7 @@ class DrawingPlan:
             completion_score_val = float(
                 value.get(
                     "completion_score",
-                    metadata_val.get("completion_score", 1.0),
+                    metadata_val.get("completion_score", 0.0),
                 )
             )
             return cls(
@@ -391,11 +420,12 @@ class DrawingPlan:
 
         # XML コメント内で "--" は禁止されているため置換する
         safe_prompt = html.escape(self.prompt).replace("--", "﹣﹣")
-        svg_parts: list[str] = [
+        svg_header: list[str] = [
             f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w:.1f} {h:.1f}" width="{w:.1f}" height="{h:.1f}">',
             f"  <!-- AI Stroke Painter: {safe_prompt} (Seed: {self.seed}) -->",
-            "  <defs><style>.stroke { stroke-linecap: round; stroke-linejoin: round; fill: none; } .eraser { stroke: #ffffff; }</style></defs>",
         ]
+        svg_definitions = ["    <style>.stroke { stroke-linecap: round; stroke-linejoin: round; fill: none; }</style>"]
+        svg_body: list[str] = []
 
         # レイヤーごとにグループ化
         by_layer: dict[str, list[Stroke]] = {}
@@ -406,34 +436,30 @@ class DrawingPlan:
         for layer in by_layer:
             if layer not in ordered_layers:
                 ordered_layers.append(layer)
+        original_order = {layer: index for index, layer in enumerate(ordered_layers)}
+        ordered_layers.sort(key=lambda layer: (LAYER_RENDER_ORDER.get(layer, 35), original_order[layer]))
 
+        mask_index = 0
         for layer_name in ordered_layers:
             strokes = by_layer.get(layer_name, [])
             if not strokes:
                 continue
-            svg_parts.append(f'  <g id="layer_{html.escape(layer_name)}">')
+            layer_content: list[str] = []
             for stroke in strokes:
-                pts = stroke.points
-                if len(pts) < 2:
+                if not stroke.is_eraser:
+                    layer_content.extend(_stroke_svg_lines(stroke))
                     continue
-                # 可変筆圧をセグメントのストローク幅に反映
-                for p0, p1 in zip(pts, pts[1:], strict=False):
-                    avg_pressure = (p0.pressure + p1.pressure) * 0.5
-                    stroke_w = max(0.5, stroke.size_px * avg_pressure)
-                    if stroke.is_eraser:
-                        stroke_color = "#ffffff"
-                        opacity_attr = ""
-                        extra_class = " eraser"
-                    else:
-                        stroke_color, color_alpha = split_color_alpha(stroke.color)
-                        combined_opacity = stroke.opacity * color_alpha
-                        opacity_attr = f' stroke-opacity="{combined_opacity:.2f}"' if combined_opacity < 1.0 else ""
-                        extra_class = ""
-                    svg_parts.append(
-                        f'    <line x1="{p0.x:.2f}" y1="{p0.y:.2f}" x2="{p1.x:.2f}" y2="{p1.y:.2f}" '
-                        f'stroke="{stroke_color}" stroke-width="{stroke_w:.2f}" class="stroke{extra_class}"{opacity_attr} />'
-                    )
-            svg_parts.append("  </g>")
+                mask_id = f"eraser_mask_{mask_index}"
+                mask_index += 1
+                svg_definitions.append(
+                    f'    <mask id="{mask_id}" maskUnits="userSpaceOnUse" x="0" y="0" width="{w:.1f}" height="{h:.1f}">'
+                )
+                svg_definitions.append(f'      <rect x="0" y="0" width="{w:.1f}" height="{h:.1f}" fill="#ffffff" />')
+                svg_definitions.extend(f"      {line}" for line in _stroke_svg_lines(stroke, mask=True))
+                svg_definitions.append("    </mask>")
+                layer_content = [f'<g mask="url(#{mask_id})">', *layer_content, "</g>"]
+            svg_body.append(f'  <g id="layer_{html.escape(layer_name)}">')
+            svg_body.extend(f"    {line}" for line in layer_content)
+            svg_body.append("  </g>")
 
-        svg_parts.append("</svg>")
-        return "\n".join(svg_parts)
+        return "\n".join([*svg_header, "  <defs>", *svg_definitions, "  </defs>", *svg_body, "</svg>"])

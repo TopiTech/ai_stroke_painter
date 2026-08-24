@@ -36,6 +36,11 @@ def main() -> int:
             [sys.executable, "-S", "-m", "unittest", "ai_stroke_painter.self_test"],
             parent_dir,
         ),
+        (
+            "Illustration Quality Gates",
+            [sys.executable, "-m", "ai_stroke_painter.quality_check"],
+            parent_dir,
+        ),
     ]
 
     failed: list[str] = []

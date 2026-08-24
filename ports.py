@@ -44,7 +44,7 @@ class CanvasPort(ABC):
 
 
 class NativeStrokeBridgePort(ABC):
-    """Future C++/Krita-fork seam. Implement this without changing UI or planner."""
+    """1本の全点列を単一の連続Kritaストロークとして処理する境界。"""
 
     @abstractmethod
-    def submit_stroke(self, stroke: Stroke) -> None: ...
+    def submit_stroke(self, document: Any, target: Any, stroke: Stroke) -> int: ...

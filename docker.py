@@ -53,6 +53,12 @@ from .storage import save_plan, save_svg
 MAX_REFERENCE_IMAGE_BYTES = MAX_ENCODED_IMAGE_BYTES
 RENDER_WAIT_TIMEOUT_SECONDS = 15 * 60
 
+
+def _is_plan_goal_reached(plan: DrawingPlan) -> bool:
+    """完成度スコアを参考値に留め、明示された完了判定だけを採用する。"""
+    return bool(plan.goal_reached or plan.metadata.get("goal_reached", False) is True)
+
+
 if TYPE_CHECKING:
 
     class DockWidget(QWidget):
@@ -210,6 +216,10 @@ class PreviewWidget(QWidget):
             for stroke in self._plan.strokes:
                 if stroke.is_eraser:
                     col = QColor("#1e1e24")
+                    _rgb_color, color_alpha = split_color_alpha(stroke.color)
+                    eff_op = max(0.0, min(1.0, stroke.opacity * self._opacity_multiplier * color_alpha))
+                    if eff_op < 1.0 and hasattr(col, "setAlphaF"):
+                        col.setAlphaF(eff_op)
                     pen_w = max(2.0, stroke.size_px * self._size_multiplier * scale * 0.8)
                 else:
                     rgb_color, color_alpha = split_color_alpha(stroke.color)
@@ -343,7 +353,7 @@ class PlanWorker(QObject):
 
     def run(self) -> None:
         try:
-            count_label = "Auto (無制限・AI自律)" if self.auto_count or self.count is None else str(self.count)
+            count_label = "Auto (品質予算・AI自律)" if self.auto_count or self.count is None else str(self.count)
             goal_label = f", GoalMode: {self.goal_mode}" if self.goal_mode else ""
             self.debug_log.emit(
                 f"[ワーカー開始] Total Iterations: {self.max_iterations}, Strokes: {count_label}{goal_label}, Target Size: {self.width:.0f}x{self.height:.0f}, Palette: {self.palette_name}, Profile: {self.brush_profile}"
@@ -408,11 +418,7 @@ class PlanWorker(QObject):
                     raise RuntimeError(self._render_error)
 
                 # Goal モード時の目標達成判定による早期自律完了
-                is_goal_met = bool(
-                    current_plan.goal_reached
-                    or current_plan.metadata.get("goal_reached", False) is True
-                    or current_plan.completion_score >= 0.90
-                )
+                is_goal_met = _is_plan_goal_reached(current_plan)
                 if self.goal_mode and is_goal_met and iter_idx >= 1:
                     self.completed_successfully = True
                     self.iteration_progress.emit(
@@ -631,8 +637,8 @@ class AIStrokePainterDocker(DockWidget):
         self.count.setValue(35)
         params_row1.addWidget(self.count)
 
-        self.auto_count = QCheckBox("Auto (無制限)")
-        self.auto_count.setToolTip("AIが指示を完遂するために必要なストローク本数を自由・自律的にいくらでも描写します")
+        self.auto_count = QCheckBox("Auto (品質予算)")
+        self.auto_count.setToolTip("AIが品質と処理時間の予算内で必要なストローク本数を自律的に決定します")
         self.auto_count.toggled.connect(lambda chk: self.count.setEnabled(not chk))
         params_row1.addWidget(self.auto_count)
         gen_layout.addLayout(params_row1)
@@ -1870,7 +1876,9 @@ class AIStrokePainterDocker(DockWidget):
         mode_w = _get_attr(self, "planner_mode")
         mode_str = mode_w.currentText() if mode_w is not None and hasattr(mode_w, "currentText") else ""
         count_mode_str = (
-            "Auto (無制限)" if auto_count else str(_get_attr(self, "count").value() if _get_attr(self, "count") else 35)
+            "Auto (品質予算)"
+            if auto_count
+            else str(_get_attr(self, "count").value() if _get_attr(self, "count") else 35)
         )
         goal_mode_str = ", Goal Mode: ON" if goal_mode else ""
         self._log_debug(
@@ -2057,9 +2065,7 @@ class AIStrokePainterDocker(DockWidget):
                 view=_get_attr(self, "_active_view"),
             )
             render_worker = _get_attr(self, "_worker")
-            is_goal_completion = bool(getattr(render_worker, "goal_mode", False)) and (
-                plan.goal_reached or plan.metadata.get("goal_reached", False) is True or plan.completion_score >= 0.90
-            )
+            is_goal_completion = bool(getattr(render_worker, "goal_mode", False)) and _is_plan_goal_reached(plan)
             is_final_iteration = (
                 plan.iteration >= int(getattr(render_worker, "max_iterations", plan.iteration)) or is_goal_completion
             )

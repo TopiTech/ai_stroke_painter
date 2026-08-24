@@ -1,4 +1,4 @@
-"""OpenAI Chat Completions 互換エンドポイント用のマルチモーダル・マルチレイヤー DrawingPlan Adapter。
+"""OpenAI Chat Completions 互換エンドポイント用のマルチモーダル StrokeProgram Adapter。
 
 思考モデル（OpenAI o1 / o3-mini、DeepSeek R1、Gemini Flash Thinking、Claude Extended Thinking、QwQ 等）
 におけるパラメータ非互換、思考タグ混入、トークン枯渇による途切れを堅牢に解決する。
@@ -9,14 +9,14 @@ from __future__ import annotations
 import base64
 from collections.abc import Callable, Mapping, Sequence
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import datetime
 import ipaddress
 import json
 import math
 import re
 import time
-from typing import Any
+from typing import Any, TypeGuard
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -25,6 +25,10 @@ from .domain import DrawingPlan, Stroke, StrokePoint
 from .image_converter import MAX_ENCODED_IMAGE_BYTES
 from .planner import validate_iterations, validate_plan_request
 from .ports import PlannerPort
+from .procedural.base import sample_strokes_by_priority
+from .stroke_program import StrokeProgram, compile_stroke_program
+
+AUTO_LLM_STROKE_BUDGET = 500
 
 
 class LLMPlannerError(RuntimeError):
@@ -336,7 +340,9 @@ class OpenAICompatiblePlanner(PlannerPort):
             self._conversation_history = []
 
         is_reasoning = _is_reasoning_model(self.settings.model)
-        count_display = f"{valid_count}" if valid_count is not None else "Auto (AI自律・無制限)"
+        count_display = (
+            f"{valid_count}" if valid_count is not None else f"Auto (品質予算: 最大{AUTO_LLM_STROKE_BUDGET}本)"
+        )
         self._log(
             f"--- 描画計画生成開始 (Step {iteration}/{max_iterations}) ---\n"
             f"Prompt: {valid_prompt!r}, Seed: {valid_seed}, Count: {count_display}, GoalMode: {goal_mode}, Canvas: {valid_width}x{valid_height}\n"
@@ -377,7 +383,7 @@ class OpenAICompatiblePlanner(PlannerPort):
         req_stroke_count: Any = (
             valid_count
             if valid_count is not None
-            else "auto (unconstrained - freely generate as many strokes as necessary to completely fulfill the prompt)"
+            else f"auto (quality budget up to {AUTO_LLM_STROKE_BUDGET} compiled strokes)"
         )
         req_dict: dict[str, Any] = {
             "prompt": valid_prompt,
@@ -391,11 +397,11 @@ class OpenAICompatiblePlanner(PlannerPort):
             "phase_goal": phase_goal or "Complete full professional illustration.",
             "instruction": (
                 (
-                    "Visually inspect the attached current canvas, identify what is missing or flawed, and fix/enrich it using strokes or eraser strokes (is_eraser: true). "
+                    'Visually inspect the attached current canvas, identify what is missing or flawed, and fix/enrich it using operations or an eraser brush ({"brush":{"is_eraser":true}}). '
                     if canvas_image
                     else ""
                 )
-                + f"Generate drawing strokes for {phase_goal or 'the artwork'} strictly in valid DrawingPlan JSON format. "
+                + f"Generate a compact StrokeProgram for {phase_goal or 'the artwork'} strictly in schema_version 2 JSON format. "
                 "Evaluate completion with 'goal_reached': boolean (true if finished, false if more work needed) and 'completion_score': float (0.0-1.0). "
                 "Keep request_canvas_image false; multi-step runs receive automatic canvas feedback."
             ),
@@ -510,8 +516,8 @@ class OpenAICompatiblePlanner(PlannerPort):
                     current_payload["temperature"] = 0.0
 
                 min_sys = (
-                    'You must output ONLY valid JSON matching DrawingPlan schema. Start output directly with {"schema_version": 1. '
-                    "Include request_canvas_image: false. No thoughts, no analysis."
+                    'You must output ONLY valid JSON matching StrokeProgram schema. Start directly with {"schema_version": 2. '
+                    "Use normalized coordinates and operations. No thoughts, no analysis."
                 )
                 r_messages_min: list[dict[str, Any]] = [{"role": "system", "content": min_sys}]
                 if self._conversation_history and iteration > 1:
@@ -550,7 +556,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                 # 会話履歴に記録（次ステップへの文脈継承）
                 if max_iterations > 1:
                     summary_dict = {
-                        "schema_version": 1,
+                        "schema_version": 2,
                         "iteration": iteration,
                         "completed_layers": list(sanitized_plan.layers),
                         "stroke_count": len(sanitized_plan.strokes),
@@ -762,7 +768,7 @@ class OpenAICompatiblePlanner(PlannerPort):
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": "AIStrokePainter/1.1.0",
+            "User-Agent": "AIStrokePainter/1.2.0",
         }
         if self.settings.api_key.strip():
             headers["Authorization"] = f"Bearer {self.settings.api_key.strip()}"
@@ -1089,7 +1095,7 @@ def _system_instruction(
         "  - 'Ink-3 Gpen': Razor-sharp lineart, expressive eyes, twisting branches, delicate facial features.\n"
         "  - 'Eraser Soft' / 'Eraser Small': Carving clean silhouette edges and light accents.\n\n"
         "=== PRESSURE SENSITIVITY & DYNAMICS (0.05 to 1.0) ===\n"
-        "Points support per-point pressure: `[x, y, pressure]` (e.g. `[[100, 150, 0.2], [120, 140, 0.95], [150, 130, 0.08]]`):\n"
+        "Path points support pressure as normalized `[x, y, pressure]` (e.g. `[[0.2, 0.3, 0.2], [0.4, 0.2, 0.95], [0.7, 0.4, 0.08]]`):\n"
         "  - Tapering & Flick Strokes (Eyelashes, Hair Tips, Branches): Use low entry (0.2), peak core (0.9-1.0), and razor-sharp exit (0.05-0.15).\n"
         "  - Feathering & Soft Blending (Blush, Skin Shadows, Glows): Use gentle low pressure (0.15 to 0.35) with 'Airbrush Soft'.\n"
         "  - Structural Occlusion: Use firm pressure (0.85 to 1.0) for depth accents.\n"
@@ -1103,56 +1109,40 @@ def _system_instruction(
         f"   - Use dynamic crisp brush sizes ({main_line_sz} for outer silhouettes, {detail_line_sz} for fine eyes/lashes/nose/mouth/hair tips, preset: 'Ink-3 Gpen').\n"
         f"4. Layer 'Highlights' & 'FX' (Specular Glints, Petal Swarms, Atmosphere):\n"
         f"   - Use accent brush sizes ({hl_glint_sz}) with luminous colors for falling petals, cloud rim light, sun flecks, and particle FX.\n"
-        "5. Eraser Strokes ('is_eraser': true):\n"
-        '   - You can add eraser strokes (`"is_eraser": true`) on any layer to cleanly sculpt contours, sharpen silhouette edges, fix color bleeds, or carve sharp light highlights.\n\n'
+        "5. Eraser Paths (`brush.is_eraser: true`):\n"
+        '   - Add path operations with `"brush":{"profile":"eraser","is_eraser":true,...}` to sculpt contours, fix color bleeds, or carve highlights.\n'
+        "   - Any size_px target in the art direction must be encoded as brush.size with brush.size_mode='px'; preset names map to brush.preset_hint. Prefer ratio sizes for resolution independence.\n\n"
         f"=== PALETTE DIRECTION: {palette_name.upper()} ===\n"
         f"Harmonize colors to match the '{palette_name}' aesthetic: prioritize cohesive color theory, distinct value contrast between shadow and light, and vibrant accent highlights.\n"
         f"{domain_guidance}"
         f"{progressive_section}"
         f"{visual_feedback_section}\n"
-        "=== OUTPUT SCHEMA & TOKEN-EFFICIENT POINT FORMAT ===\n"
-        "Return exactly one valid JSON object. Points use high-efficiency compact arrays [[x, y], [x, y, pressure]] or object format:\n"
+        "=== OUTPUT SCHEMA: STROKE PROGRAM V2 ===\n"
+        "Return one compact JSON object. Coordinates are normalized 0.0-1.0. Prefer fill/hatch/particles over hundreds of repeated paths:\n"
         "```json\n"
         "{\n"
-        '  "schema_version": 1,\n'
+        '  "schema_version": 2,\n'
         f'  "prompt": {json.dumps(prompt or "illustration")},\n'
         '  "seed": 42,\n'
         '  "title": "Artwork Title",\n'
         f'  "iteration": {iteration},\n'
-        '  "request_canvas_image": false,\n'
         '  "goal_reached": false,\n'
         '  "completion_score": 0.85,\n'
-        '  "layers": ["Flats", "Shading", "Lineart", "Highlights", "FX"],\n'
-        '  "strokes": [\n'
-        "    {\n"
-        '      "id": "s1",\n'
-        '      "brush_preset": "Airbrush Soft",\n'
-        '      "color": "#3a7bd5",\n'
-        f'      "size_px": {max(70, round(min_dim * 0.12))},\n'
-        '      "layer_name": "Flats",\n'
-        '      "opacity": 1.0,\n'
-        '      "is_eraser": false,\n'
-        f'      "points": [[0, {round(height * 0.15)}], [{round(width * 0.5)}, {round(height * 0.12)}], [{round(width)}, {round(height * 0.18)}]]\n'
-        "    },\n"
-        "    {\n"
-        '      "id": "s2",\n'
-        '      "brush_preset": "Ink-3 Gpen",\n'
-        '      "color": "#2c1810",\n'
-        f'      "size_px": {max(10, round(min_dim * 0.008))},\n'
-        '      "layer_name": "Lineart",\n'
-        '      "opacity": 1.0,\n'
-        '      "is_eraser": false,\n'
-        f'      "points": [[{round(width * 0.5)}, {round(height * 0.95)}, 0.95], [{round(width * 0.51)}, {round(height * 0.65)}, 0.85], [{round(width * 0.48)}, {round(height * 0.42)}, 0.7]]\n'
-        "    }\n"
+        f'  "canvas": {{"width": {width:.0f}, "height": {height:.0f}}},\n'
+        '  "operations": [\n'
+        '    {"kind":"fill","id":"base","layer":"Flats","polygon":[[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]],"brush":{"profile":"marker","color":"#3a7bd5","size":0.10}},\n'
+        '    {"kind":"hatch","id":"form-shadow","layer":"Shading","polygon":[[0.2,0.2],[0.8,0.2],[0.7,0.8],[0.25,0.75]],"angle_deg":30,"spacing":0.015,"brush":{"profile":"pencil","color":"#203050","size":0.003,"opacity":0.65}},\n'
+        '    {"kind":"path","id":"contour","layer":"Lineart","points":[[0.25,0.8,0.15],[0.5,0.2,0.95],[0.75,0.8,0.1]],"smooth":true,"brush":{"profile":"gpen","color":"#2c1810","size":0.005}},\n'
+        '    {"kind":"particles","id":"accents","layer":"FX","bounds":[0.05,0.05,0.95,0.95],"count":30,"length":0.012,"angle_deg":90,"angle_jitter":35,"brush":{"profile":"gpen","color":"#ffffff","size":0.002}}\n'
         "  ]\n"
         "}\n"
         "```\n"
         "=== CRITICAL RULES ===\n"
-        f"1. Coordinates (x, y): Must be within canvas dimensions (0 to {width:.0f} width, 0 to {height:.0f} height).\n"
-        "2. Stroke Points: Provide 2 to 6 key curve control points per stroke in compact format [[x, y], [x, y, pressure]]. The engine automatically interpolates smooth Catmull-Rom splines and natural pressure tapering.\n"
-        f"3. Brush Sizes & Coverage: Do NOT make all strokes tiny. Use dense wide strokes ({flats_sz}) to completely paint undercoats and backgrounds without empty gaps.\n"
-        "4. Stroke Count: When stroke_count is auto or unconstrained, freely generate as many strokes (e.g. 50-150+ strokes for complete detail) as needed to create a stunning finished artwork.\n"
-        "5. Goal Evaluation: Set 'goal_reached' to true only when the artwork is fully finished and meets all prompt requirements.\n"
+        "1. Operation kinds: path (2+ points), fill (3+ polygon points), hatch (polygon), particles (bounds/count). IDs must be unique.\n"
+        "2. Brush profiles: auto, gpen, marupen, brush, marker, pencil, watercolor, airbrush, eraser. Size defaults to a canvas ratio; use size_mode='px' only for deliberately fixed pixel sizes.\n"
+        "3. Composition: Establish large coherent silhouettes with fill, then form shadows with hatch/path, then tapered contour paths and sparse accents. Avoid disconnected random marks.\n"
+        "4. Curves: Give path 2-12 meaningful control points [x,y,pressure]; the compiler creates continuous smooth geometry.\n"
+        "5. Goal Evaluation: Set goal_reached true only when the artwork is fully finished and composition, values, edges, and requested details are complete.\n"
         "6. First character of output must be '{' or '```json'."
     )
 
@@ -1191,11 +1181,11 @@ def _clean_thinking_tokens(text: str) -> str:
 # タグなしプレーンテキスト思考の冒頭パターン（CoT: "The user wants...", "Let me plan...", "Thinking process:" 等）
 _PLAIN_THINKING_PATTERNS = [
     re.compile(
-        r"^(?:The user wants|I need to|Let me plan|Let's create|Thinking Process|Plan:|Step 1:|To draw|In this drawing)[\s\S]*?(?=(?:```|\{\s*\"(?:schema_version|prompt|seed|title|iteration|layers|strokes)\"))",
+        r"^(?:The user wants|I need to|Let me plan|Let's create|Thinking Process|Plan:|Step 1:|To draw|In this drawing)[\s\S]*?(?=(?:```|\{\s*\"(?:schema_version|prompt|seed|title|iteration|layers|strokes|operations)\"))",
         re.IGNORECASE,
     ),
     re.compile(
-        r"^[\s\S]*?(?=(?:```json\s*\{|```\s*\{|\{\s*\"(?:schema_version|prompt|strokes)\"))",
+        r"^[\s\S]*?(?=(?:```json\s*\{|```\s*\{|\{\s*\"(?:schema_version|prompt|strokes|operations)\"))",
         re.IGNORECASE,
     ),
 ]
@@ -1239,7 +1229,9 @@ def _find_best_json_start(text: str) -> int:
 
     # 優先順位 2: DrawingPlan 主要キーを含む `{`
     plan_key_m = re.search(
-        r"\{\s*\"(?:schema_version|prompt|seed|title|iteration|layers|strokes)\"", text, flags=re.IGNORECASE
+        r"\{\s*\"(?:schema_version|prompt|seed|title|iteration|layers|strokes|operations)\"",
+        text,
+        flags=re.IGNORECASE,
     )
     if plan_key_m:
         return plan_key_m.start()
@@ -1482,6 +1474,29 @@ def _extract_best_content_or_plan(
     return _extract_content_from_response(response, log_func=log_func, is_drawing_plan=is_drawing_plan)
 
 
+def _mapping_to_drawing_plan(
+    value: Mapping[str, Any],
+    *,
+    prompt: str,
+    seed: int,
+    width: float,
+    height: float,
+) -> DrawingPlan:
+    """v2 StrokeProgram を優先し、既存 v1 DrawingPlan も互換入力として受理する。"""
+    if value.get("schema_version") == 2 or "operations" in value:
+        program = StrokeProgram.from_dict(value)
+        # リクエスト契約を外部応答より優先する。粒子の決定性にも seed 補正をコンパイル前に反映する。
+        program = replace(
+            program,
+            prompt=prompt,
+            seed=seed,
+            canvas_width=width,
+            canvas_height=height,
+        )
+        return compile_stroke_program(program)
+    return DrawingPlan.from_dict(value)
+
+
 def _plan_from_response(
     response: Mapping[str, Any],
     prompt: str = "",
@@ -1499,10 +1514,18 @@ def _plan_from_response(
             raise LLMPlannerError(f"LLM API エラー: {err_msg}")
         raise LLMPlannerError(f"LLM API エラー: {err}")
 
-    # 2. 直接 DrawingPlan 辞書の場合
-    if "strokes" in response and isinstance(response["strokes"], list) and len(response["strokes"]) > 0:
+    # 2. 直接 StrokeProgram / DrawingPlan 辞書の場合
+    has_operations = isinstance(response.get("operations"), list) and bool(response["operations"])
+    has_strokes = isinstance(response.get("strokes"), list) and bool(response["strokes"])
+    if has_operations or has_strokes:
         try:
-            return DrawingPlan.from_dict(response)
+            return _mapping_to_drawing_plan(
+                response,
+                prompt=prompt,
+                seed=seed,
+                width=width,
+                height=height,
+            )
         except Exception as exc:
             if log_func is not None:
                 log_func(f"通知: トップレベル辞書からの復元を試行中に警告: {exc}")
@@ -1522,10 +1545,18 @@ def _plan_from_response(
             continue
         try:
             value = _extract_json_object(text, log_func=log_func)
-            if "strokes" in value and isinstance(value["strokes"], list) and len(value["strokes"]) > 0:
+            has_operations = isinstance(value.get("operations"), list) and bool(value["operations"])
+            has_strokes = isinstance(value.get("strokes"), list) and bool(value["strokes"])
+            if has_operations or has_strokes:
                 if log_func is not None and source_name != "message.content":
-                    log_func(f"通知: ソース [{source_name}] から DrawingPlan JSON オブジェクトを救出しました")
-                return DrawingPlan.from_dict(value)
+                    log_func(f"通知: ソース [{source_name}] から描画 JSON オブジェクトを救出しました")
+                return _mapping_to_drawing_plan(
+                    value,
+                    prompt=prompt,
+                    seed=seed,
+                    width=width,
+                    height=height,
+                )
         except Exception as exc:
             last_error = exc
             continue
@@ -1553,9 +1584,13 @@ def _plan_from_response(
 
     try:
         value = _extract_json_object(first_text, log_func=log_func)
-        return DrawingPlan.from_dict(value)
+        return _mapping_to_drawing_plan(value, prompt=prompt, seed=seed, width=width, height=height)
     except Exception as exc:
         raise LLMPlannerError(f"LLM が有効な DrawingPlan JSON を返しませんでした: {exc}") from (last_error or exc)
+
+
+def _looks_like_drawing_json(value: Any) -> TypeGuard[Mapping[str, Any]]:
+    return isinstance(value, Mapping) and any(key in value for key in ("operations", "strokes", "prompt"))
 
 
 def _extract_json_object(content: str, log_func: Callable[[str], None] | None = None) -> Mapping[str, Any]:
@@ -1585,11 +1620,11 @@ def _extract_json_object(content: str, log_func: Callable[[str], None] | None = 
             candidate = _sanitize_json_text(match.group(1).strip())
             try:
                 value = json.loads(candidate)
-                if isinstance(value, Mapping) and ("strokes" in value or "prompt" in value):
+                if _looks_like_drawing_json(value):
                     return value
             except json.JSONDecodeError:
                 repaired = _attempt_json_repair(candidate)
-                if repaired is not None and isinstance(repaired, Mapping) and "strokes" in repaired:
+                if _looks_like_drawing_json(repaired):
                     if log_func is not None:
                         log_func("通知: コードブロック内の途切れた JSON を自動修復しました")
                     return repaired
@@ -1602,7 +1637,7 @@ def _extract_json_object(content: str, log_func: Callable[[str], None] | None = 
         if unclosed_m:
             candidate = _sanitize_json_text(unclosed_m.group(1).strip())
             repaired = _attempt_json_repair(candidate)
-            if repaired is not None and isinstance(repaired, Mapping) and "strokes" in repaired:
+            if _looks_like_drawing_json(repaired):
                 if log_func is not None:
                     log_func("通知: 閉じられていないコードブロックから途切れ JSON を自動修復しました")
                 return repaired
@@ -1613,7 +1648,7 @@ def _extract_json_object(content: str, log_func: Callable[[str], None] | None = 
             continue
         try:
             value = json.loads(target)
-            if isinstance(value, Mapping) and ("strokes" in value or "prompt" in value):
+            if _looks_like_drawing_json(value):
                 return value
         except json.JSONDecodeError:
             pass
@@ -1622,7 +1657,7 @@ def _extract_json_object(content: str, log_func: Callable[[str], None] | None = 
         if start_idx >= 0:
             try:
                 value, _ = json.JSONDecoder().raw_decode(target[start_idx:])
-                if isinstance(value, Mapping) and ("strokes" in value or "prompt" in value):
+                if _looks_like_drawing_json(value):
                     return value
             except json.JSONDecodeError:
                 pass
@@ -1632,7 +1667,7 @@ def _extract_json_object(content: str, log_func: Callable[[str], None] | None = 
         if not target.strip():
             continue
         repaired = _attempt_json_repair(target)
-        if repaired is not None and isinstance(repaired, Mapping) and "strokes" in repaired:
+        if _looks_like_drawing_json(repaired):
             if log_func is not None:
                 log_func("警告: トークン上限等で途切れた JSON を自動修復して読み込みました")
             return repaired
@@ -1927,7 +1962,9 @@ def _smooth_and_densify_points(
         ]
 
     layer_lower = layer_name.lower().strip()
-    is_flat_or_shading = "flat" in layer_lower or "back" in layer_lower or "draft" in layer_lower
+    is_flat_or_shading = (
+        "flat" in layer_lower or "back" in layer_lower or "draft" in layer_lower or "shad" in layer_lower
+    )
 
     # 点数がすでに十分多い場合 (>= 35点) はそのままバウンディングのみ
     if len(raw_points) >= 35:
@@ -2049,7 +2086,7 @@ def _validate_and_sanitize_plan(
     """LLM の応答を堅牢にサニタイズし、Catmull-Rom スプライン平滑化・筆圧テーパリング・解像度適応を実行する。"""
     # 1. prompt, seed の補正
     safe_prompt = prompt if not plan.prompt.strip() or plan.prompt != prompt else plan.prompt
-    safe_seed = seed if plan.seed == 0 and seed != 0 else plan.seed
+    safe_seed = seed
 
     if not plan.strokes:
         raise LLMPlannerError("LLM からストロークが 1 本も返されませんでした")
@@ -2071,7 +2108,8 @@ def _validate_and_sanitize_plan(
 
     sanitized_strokes: list[Stroke] = []
     stroke_id_set: set[str] = set()
-    strokes_source = plan.strokes[:count] if count is not None and count > 0 else plan.strokes
+    effective_count = count if count is not None and count > 0 else AUTO_LLM_STROKE_BUDGET
+    strokes_source = sample_strokes_by_priority(list(plan.strokes), effective_count)
 
     for idx, stroke in enumerate(strokes_source, start=1):
         st_id = stroke.id if stroke.id and stroke.id not in stroke_id_set else f"stroke_{idx}"
@@ -2136,10 +2174,16 @@ def _validate_and_sanitize_plan(
 
     metadata_val = dict(plan.metadata) if isinstance(plan.metadata, Mapping) else {}
     goal_reached = bool(getattr(plan, "goal_reached", False) or metadata_val.get("goal_reached", False) is True)
-    completion_score = float(
-        getattr(plan, "completion_score", 1.0)
-        if getattr(plan, "completion_score", None) is not None
-        else metadata_val.get("completion_score", 1.0)
+    completion_score = max(
+        0.0,
+        min(
+            1.0,
+            float(
+                getattr(plan, "completion_score", 0.0)
+                if getattr(plan, "completion_score", None) is not None
+                else metadata_val.get("completion_score", 0.0)
+            ),
+        ),
     )
     metadata_val["goal_reached"] = goal_reached
     metadata_val["completion_score"] = completion_score

@@ -8,22 +8,30 @@ import random
 from typing import Any
 import uuid
 
-from .domain import DrawingPlan, Stroke
+from .domain import MAX_PLAN_STROKES, DrawingPlan, Stroke
 from .procedural.base import catmull_rom_spline, color_palette, create_stroke, sample_strokes_by_priority
 from .qt_compat import QImage, argb32_image_format
+from .stroke_program import compile_stroke_program, drawing_plan_to_stroke_program
 
 MAX_DECODED_IMAGE_PIXELS = 50_000_000
 MAX_ENCODED_IMAGE_BYTES = 25 * 1024 * 1024
+# Auto は、描画時間と DrawingPlan 上限を守る品質予算として扱う。
+# 手動指定の上限と揃えることで、暗部が多い画像でも予測可能な処理量に収める。
+AUTO_STROKE_BUDGET = min(500, MAX_PLAN_STROKES)
+MAX_ANALYSIS_DIMENSION = 512
+MAX_ANALYSIS_PIXELS = 120_000
 
 
 def _image_dimensions_from_header(data: bytes) -> tuple[int, int] | None:
-    """Decode dimensions without allocating the image (PNG/JPEG/BMP/WebP)."""
+    """Decode dimensions without allocating the image (PNG/JPEG/GIF/BMP/WebP)."""
     if data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24:
         return int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")
     if data.startswith(b"BM") and len(data) >= 26:
         width = abs(int.from_bytes(data[18:22], "little", signed=True))
         height = abs(int.from_bytes(data[22:26], "little", signed=True))
         return width, height
+    if data.startswith((b"GIF87a", b"GIF89a")) and len(data) >= 10:
+        return int.from_bytes(data[6:8], "little"), int.from_bytes(data[8:10], "little")
     if data.startswith(b"RIFF") and len(data) >= 30 and data[8:12] == b"WEBP":
         chunk_type = data[12:16]
         if chunk_type == b"VP8X":
@@ -227,12 +235,13 @@ class ImageStrokeConverter:
         if self.qimage_cls is None:
             raise RuntimeError("この環境では参照画像をデコードできません")
         header_dimensions = _image_dimensions_from_header(image_bytes)
-        if header_dimensions is not None:
-            header_width, header_height = header_dimensions
-            if header_width <= 0 or header_height <= 0:
-                raise ValueError("参照画像の寸法が不正です")
-            if header_width * header_height > MAX_DECODED_IMAGE_PIXELS:
-                raise ValueError("参照画像の画素数が上限を超えています")
+        if header_dimensions is None:
+            raise ValueError("対応画像形式のヘッダーを確認できませんでした")
+        header_width, header_height = header_dimensions
+        if header_width <= 0 or header_height <= 0:
+            raise ValueError("参照画像の寸法が不正です")
+        if header_width * header_height > MAX_DECODED_IMAGE_PIXELS:
+            raise ValueError("参照画像の画素数が上限を超えています")
         qimg = self.qimage_cls()
         if not qimg.loadFromData(image_bytes):
             raise ValueError("参照画像をデコードできませんでした")
@@ -256,16 +265,18 @@ class ImageStrokeConverter:
         if not strokes:
             raise ValueError("参照画像から有効なストロークを抽出できませんでした")
 
-        return DrawingPlan(
+        legacy_plan = DrawingPlan(
             prompt=f"Image2Stroke: {prompt}" if prompt else "Image to Stroke Art",
             seed=seed,
             strokes=strokes,
             title="Image Reference Art",
             iteration=1,
             layers=["Flats", "Shading", "Lineart", "Highlights"],
+            metadata={"generator": "image_to_stroke"},
             canvas_width=target_width,
             canvas_height=target_height,
         )
+        return compile_stroke_program(drawing_plan_to_stroke_program(legacy_plan))
 
     def _process_qimage(
         self,
@@ -282,12 +293,18 @@ class ImageStrokeConverter:
         palette_name: str = "anime",
         brush_profile: str = "auto",
     ) -> list[Stroke]:
-        # 長辺を最大160pxに抑えつつ、入力画像の縦横比を維持する。
+        # 細部を固定160pxへ潰さず、長辺と総画素の二重予算で解析解像度を適応させる。
         source_w = qimg.width()
         source_h = qimg.height()
         if source_w <= 0 or source_h <= 0:
             return []
-        downscale = min(1.0, 160.0 / source_w, 160.0 / source_h)
+        pixel_scale = math.sqrt(MAX_ANALYSIS_PIXELS / float(source_w * source_h))
+        downscale = min(
+            1.0,
+            MAX_ANALYSIS_DIMENSION / source_w,
+            MAX_ANALYSIS_DIMENSION / source_h,
+            pixel_scale,
+        )
         grid_w = max(1, round(source_w * downscale))
         grid_h = max(1, round(source_h * downscale))
         if grid_w <= 0 or grid_h <= 0:
@@ -473,4 +490,5 @@ class ImageStrokeConverter:
                         )
                     )
 
-        return sample_strokes_by_priority(strokes, count)
+        effective_budget = count if count is not None else AUTO_STROKE_BUDGET
+        return sample_strokes_by_priority(strokes, effective_budget)

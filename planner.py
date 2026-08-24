@@ -26,7 +26,7 @@ def validate_plan_request(
     *,
     auto_count: bool = False,
 ) -> tuple[str, int, int | None, float, float]:
-    """Planner 実装で共通の入力契約を検証して正規化する。auto_count または count=None 時は本数無制限。"""
+    """Planner 実装で共通の入力契約を検証する。count=None は各実装の品質予算へ委ねる。"""
     if not isinstance(prompt, str):
         raise ValueError("prompt は文字列である必要があります")
     if len(prompt) > 20_000:

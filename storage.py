@@ -8,6 +8,12 @@ from pathlib import Path
 import time
 
 from .domain import DrawingPlan
+from .stroke_program import (
+    PROGRAM_SCHEMA_VERSION,
+    StrokeProgram,
+    compile_stroke_program,
+    drawing_plan_to_stroke_program,
+)
 
 MAX_PLAN_FILE_BYTES = 50 * 1024 * 1024
 
@@ -61,7 +67,7 @@ def save_svg(plan: DrawingPlan, directory: str | Path | None = None) -> Path:
 
 
 def load_plan(path: str | Path) -> DrawingPlan:
-    """保存済み JSON を検証して DrawingPlan として返す。"""
+    """保存済み v1 DrawingPlan / v2 StrokeProgram を検証して描画可能な計画として返す。"""
     source = Path(path)
     if source.stat().st_size > MAX_PLAN_FILE_BYTES:
         raise ValueError(f"計画 JSON は {MAX_PLAN_FILE_BYTES // (1024 * 1024)}MB 以下である必要があります")
@@ -69,4 +75,44 @@ def load_plan(path: str | Path) -> DrawingPlan:
         contents = json.loads(source.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"計画 JSON の形式が不正です: {source}") from exc
+    if isinstance(contents, dict) and (
+        contents.get("schema_version") == PROGRAM_SCHEMA_VERSION or "operations" in contents
+    ):
+        return compile_stroke_program(StrokeProgram.from_dict(contents))
     return DrawingPlan.from_dict(contents)
+
+
+def save_program(program: StrokeProgram, directory: str | Path | None = None) -> Path:
+    """編集可能な高水準 StrokeProgram を上書きせず JSON 保存する。"""
+    if not isinstance(program, StrokeProgram):
+        raise TypeError("program は StrokeProgram である必要があります")
+    output = Path(directory) if directory is not None else app_data_dir()
+    output.mkdir(parents=True, exist_ok=True)
+    contents = json.dumps(program.as_dict(), ensure_ascii=False, indent=2) + "\n"
+    timestamp = time.time_ns()
+    for suffix in range(1000):
+        name = f"program_{timestamp}{'' if suffix == 0 else f'_{suffix}'}.json"
+        path = output / name
+        try:
+            with path.open("x", encoding="utf-8") as handle:
+                handle.write(contents)
+            return path
+        except FileExistsError:
+            continue
+    raise RuntimeError("StrokeProgram JSON の一意な保存先を確保できませんでした")
+
+
+def load_program(path: str | Path) -> StrokeProgram:
+    """v2 JSON を読込み、v1 DrawingPlan は path operation 群へ移行する。"""
+    source = Path(path)
+    if source.stat().st_size > MAX_PLAN_FILE_BYTES:
+        raise ValueError(f"計画 JSON は {MAX_PLAN_FILE_BYTES // (1024 * 1024)}MB 以下である必要があります")
+    try:
+        contents = json.loads(source.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"計画 JSON の形式が不正です: {source}") from exc
+    if isinstance(contents, dict) and (
+        contents.get("schema_version") == PROGRAM_SCHEMA_VERSION or "operations" in contents
+    ):
+        return StrokeProgram.from_dict(contents)
+    return drawing_plan_to_stroke_program(DrawingPlan.from_dict(contents))

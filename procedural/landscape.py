@@ -7,7 +7,14 @@ import random
 import uuid
 
 from ..domain import Stroke
-from .base import bezier_cubic, catmull_rom_spline, color_palette, create_stroke, sample_strokes_by_priority
+from .base import (
+    bezier_cubic,
+    catmull_rom_spline,
+    color_palette,
+    create_stroke,
+    recolor_strokes_to_palette,
+    sample_strokes_by_priority,
+)
 
 
 def generate_landscape_strokes(
@@ -371,4 +378,4 @@ def generate_landscape_strokes(
                 )
             )
 
-    return sample_strokes_by_priority(strokes, count)
+    return sample_strokes_by_priority(recolor_strokes_to_palette(strokes, palette_name), count)

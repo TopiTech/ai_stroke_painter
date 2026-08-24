@@ -18,7 +18,7 @@
     </style>
 </head>
 <body>
-    <h1>AI Stroke Painter Pro <span class="badge">v1.1.0 Enhanced</span></h1>
+    <h1>AI Stroke Painter Pro <span class="badge">v1.2.0</span></h1>
     <p>Krita 上で、プロフェッショナルな本格イラスト・アニメ線画・風景・エフェクト・幾何学アートの描画計画を生成し、マルチレイヤーへ自動分割して筆圧付きストロークを描画する AI ペイントプラグインです。</p>
 
     <h2>🌟 主な機能とカスタマイズ性</h2>
@@ -44,9 +44,9 @@
     </div>
 
     <div class="feature-card">
-        <h3>3. 🖌️ ブラシ・描画 & レイヤー・アンドゥ統合</h3>
+        <h3>3. 🖌️ ブラシ・描画 & レイヤートランザクション</h3>
         <ul>
-            <li><strong>Krita アンドゥ（Undo/Redo）マクロ統合:</strong> 1回の描画セッション全体を 1 つのアンドゥ単位として記録。<code>Ctrl+Z</code> 1回で全レイヤーの描画を一括アンドゥ/リドゥ可能。</li>
+            <li><strong>安全な自動ロールバック:</strong> 生成専用レイヤー/グループだけを除去し、アクティブレイヤー直接描画は描画前の画素スナップショットを同じレイヤーへ復元します。</li>
             <li><strong>太さ倍率:</strong> 0.1x 〜 5.0x / <strong>不透明度:</strong> 10% 〜 100%</li>
             <li><strong>レイヤー出力:</strong> 実行ごとの一意なマルチレイヤーグループ / アクティブレイヤー直接描画 / 単一新規レイヤー</li>
             <li><strong>出力グループ / レイヤー名:</strong> 自由設定</li>
@@ -58,7 +58,7 @@
         <h3>4. 🤖 OpenAI 互換 LLM / Vision & 自律反復改善 (Auto-Refine)</h3>
         <p>Claude 3.7 / GPT-4o / Gemini 2.0 / DeepSeek-R1 等の Chat Completions 互換 API と連携。各中間ステップのキャンバスを視覚評価しながら下塗り→陰影→主線→消しゴム彫刻→仕上げと段階的に描き進めます。</p>
         <ul>
-            <li><strong>消しゴム彫刻 ('is_eraser': true):</strong> 輪郭の修正やハイライト彫刻の自律指示に対応</li>
+            <li><strong>消しゴム彫刻 (<code>brush.is_eraser: true</code>):</strong> 輪郭の修正やハイライト彫刻の自律指示に対応（従来v1形式も読込可能）</li>
             <li><strong>Temperature & Top-P:</strong> サンプリング調整</li>
             <li><strong>Reasoning Effort:</strong> 思考モデルの思考強度制御</li>
             <li><strong>Vision 解像度:</strong> 256, 512, 768, 1024 px</li>
@@ -84,6 +84,12 @@
         <li>Docker 上部の<strong>クイック・プリセット</strong>からモチーフを選択（例: 「👤 美少女アニメ顔」「🌸 透明水彩の野花」）。</li>
         <li><strong>🎨 AIストロークを描画</strong> をクリックします。</li>
     </ol>
-    <p>通常は「マルチレイヤー分割」または「単一新規レイヤー」を推奨します。これらは停止・描画失敗時に今回の生成物を除去します。「アクティブレイヤー直接描画」は既存レイヤーを変更するため、自動ロールバックできません。</p>
+    <p>マルチレイヤー/単一新規レイヤーは停止・失敗時にその実行で作ったコンテナだけを除去します。アクティブレイヤー直接描画は、最初の変更前に標準Krita Node APIで画素を保存し、停止・失敗時に同じレイヤーだけを復元します。環境固有のUndoマクロは利用可能な場合だけ履歴整理に使い、安全性はそれに依存しません。</p>
+
+    <div class="feature-card">
+        <h3>6. StrokeProgram v2 と連続ストローク拡張</h3>
+        <p>下塗り、ハッチング、粒子、滑らかなパスを解像度非依存の命令として構成し、共通コンパイラで検証してから描画します。従来の計画JSONも読み込み可能です。</p>
+        <p>任意のNative Bridge helperを利用すると、1本の全点列を一括送信して筆圧とストローク連続性を維持できます。未導入時はKrita標準描画へ自動的に戻ります。</p>
+    </div>
 </body>
 </html>

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import math
 import random
 import uuid
 
+from ..brushes import brush_preset_for_profile, canonical_brush_profile
 from ..domain import Stroke, StrokePoint
 
 
@@ -69,7 +71,12 @@ def bezier_cubic(
 
 def _smoothstep(edge0: float, edge1: float, x: float) -> float:
     """エルミート補間によるなめらかな 0.0〜1.0 遷移関数。"""
-    t = max(0.0, min(1.0, (x - edge0) / max(1e-6, edge1 - edge0)))
+    delta = edge1 - edge0
+    if abs(delta) < 1e-9:
+        return 0.0 if x < edge0 else 1.0
+    # 抜き側では ``smoothstep(1.0, 0.84, t)`` のような降順区間を使う。
+    # 分母を正数へ丸めると全区間が 0 になってしまうため、向きを保ったまま正規化する。
+    t = max(0.0, min(1.0, (x - edge0) / delta))
     return t * t * (3.0 - 2.0 * t)
 
 
@@ -125,7 +132,7 @@ def create_stroke(
     size_px: float = 6.0,
     layer_name: str = "Lineart",
     opacity: float = 1.0,
-    brush_preset: str = "Basic-5 Size",
+    brush_preset: str | None = None,
     rng: random.Random | None = None,
     width: float = 1000.0,
     height: float = 1000.0,
@@ -133,7 +140,9 @@ def create_stroke(
     preferred_profile: str | None = None,
 ) -> Stroke:
     """2D座標点列から筆圧付き Stroke を構築する。"""
-    actual_profile = preferred_profile if (preferred_profile and preferred_profile != "auto") else profile_type
+    actual_profile = canonical_brush_profile(
+        preferred_profile if (preferred_profile and preferred_profile != "auto") else profile_type
+    )
     if len(points_2d) < 2:
         if len(points_2d) == 1:
             p_single = points_2d[0]
@@ -154,7 +163,7 @@ def create_stroke(
     return Stroke(
         id=sid,
         points=pts,
-        brush_preset=brush_preset,
+        brush_preset=brush_preset or brush_preset_for_profile(actual_profile),
         color=color,
         size_px=size_px,
         layer_name=layer_name,
@@ -348,6 +357,43 @@ def color_palette(name: str) -> dict[str, str]:
     }
     key = name.lower().strip()
     return palettes.get(key, palettes["anime"])
+
+
+def recolor_strokes_to_palette(strokes: list[Stroke], palette_name: str) -> list[Stroke]:
+    """既存モチーフの明暗・色相関係を保ちながら、選択パレット内の色へ量子化する。"""
+
+    def rgb(value: str) -> tuple[int, int, int] | None:
+        raw = value.lstrip("#")
+        if len(raw) in {3, 4}:
+            raw = "".join(character * 2 for character in raw)
+        if len(raw) not in {6, 8}:
+            return None
+        try:
+            return int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+        except ValueError:
+            return None
+
+    candidates = tuple(dict.fromkeys(color_palette(palette_name).values()))
+    candidate_rgb = tuple((candidate, rgb(candidate)) for candidate in candidates)
+    recolored: list[Stroke] = []
+    for stroke in strokes:
+        source_rgb = rgb(stroke.color)
+        if source_rgb is None:
+            recolored.append(stroke)
+            continue
+        red, green, blue = source_rgb
+        nearest = min(
+            candidate_rgb,
+            key=lambda item: (
+                float("inf")
+                if item[1] is None
+                else 0.30 * (red - item[1][0]) ** 2 + 0.59 * (green - item[1][1]) ** 2 + 0.11 * (blue - item[1][2]) ** 2
+            ),
+        )[0]
+        raw_source = stroke.color.lstrip("#")
+        alpha = raw_source[-2:] if len(raw_source) == 8 else (raw_source[-1] * 2 if len(raw_source) == 4 else "")
+        recolored.append(replace(stroke, color=nearest + alpha))
+    return recolored
 
 
 def sample_strokes_by_priority(strokes: list[Stroke], target_count: int | None) -> list[Stroke]:

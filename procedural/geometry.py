@@ -25,7 +25,9 @@ def generate_geometry_strokes(
     def uid(name: str, idx: int = 0) -> str:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/geom/{seed}/{name}/{idx}"))
 
-    is_city = any(k in prompt_l for k in ["city", "都市", "building", "ビル", "cyber", "cyberpunk", "スカイライン"])
+    is_city = any(
+        k in prompt_l for k in ["city", "都市", "building", "ビル", "cathedral", "cyber", "cyberpunk", "スカイライン"]
+    )
 
     cx = width * 0.5
     cy = height * 0.5
