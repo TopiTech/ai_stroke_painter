@@ -97,6 +97,7 @@ class Stroke:
     size_px: float = 8.0
     layer_name: str = "Lineart"
     opacity: float = 1.0
+    is_eraser: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.id, str) or not self.id.strip():
@@ -129,6 +130,9 @@ class Stroke:
         if not 0.0 <= opacity <= 1.0:
             raise PlanValidationError("opacity は 0.0 から 1.0 の範囲である必要があります")
         object.__setattr__(self, "opacity", opacity)
+        if not isinstance(self.is_eraser, bool):
+            raise PlanValidationError("is_eraser は真偽値である必要があります")
+        object.__setattr__(self, "is_eraser", self.is_eraser)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -140,6 +144,7 @@ class Stroke:
             "size_px": self.size_px,
             "layer_name": self.layer_name,
             "opacity": self.opacity,
+            "is_eraser": self.is_eraser,
         }
 
     @classmethod
@@ -164,14 +169,21 @@ class Stroke:
                     t = curr_time + 10
                 curr_time = t
                 points_list.append(StrokePoint(x=sp.x, y=sp.y, pressure=sp.pressure, time_ms=curr_time))
+            preset_name = str(value.get("brush_preset", "Basic-5 Size"))
+            is_eraser_val = bool(
+                value.get("is_eraser", False)
+                or "eraser" in preset_name.lower()
+                or str(value.get("layer_name", "")).lower() == "eraser"
+            )
             return cls(
                 id=value["id"],
                 points=tuple(points_list),
-                brush_preset=value.get("brush_preset", "Basic-5 Size"),
+                brush_preset=preset_name,
                 color=value.get("color", "#232323"),
                 size_px=value.get("size_px", 8.0),
                 layer_name=value.get("layer_name", "Lineart"),
                 opacity=value.get("opacity", 1.0),
+                is_eraser=is_eraser_val,
             )
         except KeyError as exc:
             raise PlanValidationError(f"stroke に必須項目 {exc.args[0]} がありません") from exc
@@ -189,6 +201,7 @@ class VisionCritique:
     completion_score: float  # 0.0 - 1.0
     suggested_action: str
     iteration: int
+    goal_reached: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.evaluation, str) or not isinstance(self.suggested_action, str):
@@ -196,6 +209,9 @@ class VisionCritique:
         score = _finite_number(self.completion_score, "completion_score")
         object.__setattr__(self, "completion_score", max(0.0, min(1.0, score)))
         object.__setattr__(self, "iteration", _positive_int(self.iteration, "iteration"))
+        if not isinstance(self.goal_reached, bool):
+            raise PlanValidationError("goal_reached は真偽値である必要があります")
+        object.__setattr__(self, "goal_reached", self.goal_reached)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -203,6 +219,7 @@ class VisionCritique:
             "completion_score": self.completion_score,
             "suggested_action": self.suggested_action,
             "iteration": self.iteration,
+            "goal_reached": self.goal_reached,
         }
 
     @classmethod
@@ -215,6 +232,9 @@ class VisionCritique:
                 completion_score=value.get("completion_score", 0.0),
                 suggested_action=value.get("suggested_action", ""),
                 iteration=value.get("iteration", 1),
+                goal_reached=bool(
+                    value.get("goal_reached", False) or float(value.get("completion_score", 0.0)) >= 0.90
+                ),
             )
         except (TypeError, ValueError) as exc:
             raise PlanValidationError(f"VisionCritique の値が不正です: {exc}") from exc
@@ -232,6 +252,8 @@ class DrawingPlan:
     metadata: Mapping[str, Any] = field(default_factory=dict)
     canvas_width: float | None = None
     canvas_height: float | None = None
+    goal_reached: bool = False
+    completion_score: float = 1.0
 
     def __post_init__(self) -> None:
         if not isinstance(self.prompt, str):
@@ -253,6 +275,10 @@ class DrawingPlan:
         object.__setattr__(self, "iteration", _positive_int(self.iteration, "iteration"))
         if not isinstance(self.request_canvas_image, bool):
             raise PlanValidationError("request_canvas_image は真偽値である必要があります")
+        if not isinstance(self.goal_reached, bool):
+            raise PlanValidationError("goal_reached は真偽値である必要があります")
+        comp_score = _finite_number(self.completion_score, "completion_score")
+        object.__setattr__(self, "completion_score", max(0.0, min(1.0, comp_score)))
         for field_name in ("canvas_width", "canvas_height"):
             value = getattr(self, field_name)
             if value is None:
@@ -294,6 +320,8 @@ class DrawingPlan:
             "iteration": self.iteration,
             "layers": list(self.layers),
             "request_canvas_image": self.request_canvas_image,
+            "goal_reached": self.goal_reached,
+            "completion_score": self.completion_score,
         }
         if self.canvas_width is not None:
             result["canvas_width"] = self.canvas_width
@@ -317,6 +345,14 @@ class DrawingPlan:
             if len(raw_strokes) > MAX_PLAN_STROKES:
                 raise PlanValidationError(f"strokes は {MAX_PLAN_STROKES} 本以下である必要があります")
             strokes = tuple(Stroke.from_dict(stroke) for stroke in raw_strokes)
+            metadata_val = dict(value.get("metadata", {})) if isinstance(value.get("metadata"), Mapping) else {}
+            goal_reached_val = bool(value.get("goal_reached", False) or metadata_val.get("goal_reached", False))
+            completion_score_val = float(
+                value.get(
+                    "completion_score",
+                    metadata_val.get("completion_score", 1.0),
+                )
+            )
             return cls(
                 prompt=value.get("prompt", ""),
                 seed=value.get("seed", 0),
@@ -325,9 +361,11 @@ class DrawingPlan:
                 iteration=value.get("iteration", 1),
                 layers=value.get("layers", ()),
                 request_canvas_image=value.get("request_canvas_image", False),
-                metadata=value.get("metadata", {}),
+                metadata=metadata_val,
                 canvas_width=value.get("canvas_width"),
                 canvas_height=value.get("canvas_height"),
+                goal_reached=goal_reached_val,
+                completion_score=completion_score_val,
             )
         except KeyError as exc:
             raise PlanValidationError(f"drawing plan に必須項目 {exc.args[0]} がありません") from exc
@@ -352,7 +390,7 @@ class DrawingPlan:
         svg_parts: list[str] = [
             f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w:.1f} {h:.1f}" width="{w:.1f}" height="{h:.1f}">',
             f"  <!-- AI Stroke Painter: {safe_prompt} (Seed: {self.seed}) -->",
-            "  <defs><style>.stroke { stroke-linecap: round; stroke-linejoin: round; fill: none; }</style></defs>",
+            "  <defs><style>.stroke { stroke-linecap: round; stroke-linejoin: round; fill: none; } .eraser { stroke: #ffffff; }</style></defs>",
         ]
 
         # レイヤーごとにグループ化
@@ -378,12 +416,18 @@ class DrawingPlan:
                 for p0, p1 in zip(pts, pts[1:], strict=False):
                     avg_pressure = (p0.pressure + p1.pressure) * 0.5
                     stroke_w = max(0.5, stroke.size_px * avg_pressure)
-                    stroke_color, color_alpha = split_color_alpha(stroke.color)
-                    combined_opacity = stroke.opacity * color_alpha
-                    opacity_attr = f' stroke-opacity="{combined_opacity:.2f}"' if combined_opacity < 1.0 else ""
+                    if stroke.is_eraser:
+                        stroke_color = "#ffffff"
+                        opacity_attr = ""
+                        extra_class = " eraser"
+                    else:
+                        stroke_color, color_alpha = split_color_alpha(stroke.color)
+                        combined_opacity = stroke.opacity * color_alpha
+                        opacity_attr = f' stroke-opacity="{combined_opacity:.2f}"' if combined_opacity < 1.0 else ""
+                        extra_class = ""
                     svg_parts.append(
                         f'    <line x1="{p0.x:.2f}" y1="{p0.y:.2f}" x2="{p1.x:.2f}" y2="{p1.y:.2f}" '
-                        f'stroke="{stroke_color}" stroke-width="{stroke_w:.2f}" class="stroke"{opacity_attr} />'
+                        f'stroke="{stroke_color}" stroke-width="{stroke_w:.2f}" class="stroke{extra_class}"{opacity_attr} />'
                     )
             svg_parts.append("  </g>")
 

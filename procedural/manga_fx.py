@@ -13,7 +13,7 @@ from .base import create_stroke, sample_strokes_by_priority
 def generate_manga_fx_strokes(
     prompt: str,
     seed: int,
-    count: int,
+    count: int | None,
     width: float,
     height: float,
 ) -> list[Stroke]:
@@ -113,7 +113,7 @@ def generate_manga_fx_strokes(
         # =====================================================================
         # 流線・スピード線 (Speed Lines)
         # =====================================================================
-        line_count = min(count, 40)
+        line_count = min(count if count is not None else 35, 40)
         for i in range(line_count):
             y_base = (i / max(1, line_count - 1)) * height
             x_start = rng.uniform(0.0, width * 0.25)
@@ -186,7 +186,7 @@ def generate_manga_fx_strokes(
         # =====================================================================
         # 迫力の集中線 (Focus / Radial Speed Lines - 中心抜け)
         # =====================================================================
-        line_count = min(count, 50)
+        line_count = min(count if count is not None else 40, 50)
         hole_r = scale * 0.20  # 中心部の抜け（キャラクターを配置するスペース）
         outer_r = scale * 0.72
 

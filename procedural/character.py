@@ -14,7 +14,7 @@ from .base import catmull_rom_spline, color_palette, create_stroke, sample_strok
 def generate_character_strokes(
     prompt: str,
     seed: int,
-    count: int,
+    count: int | None,
     width: float,
     height: float,
     palette_name: str = "anime",

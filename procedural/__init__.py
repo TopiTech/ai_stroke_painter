@@ -23,7 +23,7 @@ __all__ = [
 def generate_procedural_plan(
     prompt: str,
     seed: int,
-    count: int,
+    count: int | None,
     width: float,
     height: float,
     palette_name: str = "anime",

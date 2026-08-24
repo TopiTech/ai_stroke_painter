@@ -24,7 +24,7 @@ jobs:
           cache: pip
           cache-dependency-path: ai_stroke_painter/pyproject.toml
       - name: Install quality tools
-        run: python -m pip install "ruff>=0.1.0" "mypy>=1.0.0"
+        run: python -m pip install "ruff>=0.1.0" "mypy>=1.0.0" "pyrefly>=1.0.0"
       - name: Run checks
         working-directory: ai_stroke_painter
         run: python check.py

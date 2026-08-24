@@ -183,7 +183,7 @@ class ImageStrokeConverter:
         image_bytes: bytes,
         prompt: str,
         seed: int,
-        count: int,
+        count: int | None,
         target_width: float,
         target_height: float,
         edge_threshold: float = 0.18,
@@ -202,8 +202,8 @@ class ImageStrokeConverter:
             raise ValueError("prompt は文字列である必要があります")
         if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
             raise ValueError("seed は 0 以上の整数である必要があります")
-        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 500:
-            raise ValueError("count は 1 から 500 の整数である必要があります")
+        if count is not None and (isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 500):
+            raise ValueError("count は 1 から 500 の整数または None である必要があります")
         if any(
             isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 2
             for value in (target_width, target_height)
@@ -271,7 +271,7 @@ class ImageStrokeConverter:
         self,
         qimg: Any,
         seed: int,
-        count: int,
+        count: int | None,
         target_width: float,
         target_height: float,
         rng: random.Random,
@@ -355,7 +355,8 @@ class ImageStrokeConverter:
                     edge_mask[y][x] = True
 
         # エッジを連結し、輪郭に沿う連続ストロークを構築する。
-        edge_paths = _trace_edge_paths(edge_mask, max_paths=min(max(20, count * 3), 500))
+        max_paths = min(max(20, (count * 3) if count is not None else 150), 500)
+        edge_paths = _trace_edge_paths(edge_mask, max_paths=max_paths)
         for i, pixel_path in enumerate(edge_paths):
             sample_step = max(1, math.ceil(len(pixel_path) / 24))
             control_pixels = pixel_path[::sample_step]

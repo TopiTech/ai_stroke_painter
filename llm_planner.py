@@ -305,18 +305,20 @@ class OpenAICompatiblePlanner(PlannerPort):
         self,
         prompt: str,
         seed: int,
-        count: int,
-        width: float,
-        height: float,
+        count: int | None = None,
+        width: float = 1000.0,
+        height: float = 1000.0,
         image_data: bytes | None = None,
         canvas_image: bytes | None = None,
         iteration: int = 1,
         max_iterations: int = 1,
         palette_name: str = "anime",
+        auto_count: bool = False,
+        goal_mode: bool = False,
         **kwargs: Any,
     ) -> DrawingPlan:
         valid_prompt, valid_seed, valid_count, valid_width, valid_height = validate_plan_request(
-            prompt, seed, count, width, height
+            prompt, seed, count, width, height, auto_count=auto_count
         )
         iteration, max_iterations = validate_iterations(iteration, max_iterations)
         for image_name, image_value in (("image_data", image_data), ("canvas_image", canvas_image)):
@@ -334,15 +336,16 @@ class OpenAICompatiblePlanner(PlannerPort):
             self._conversation_history = []
 
         is_reasoning = _is_reasoning_model(self.settings.model)
+        count_display = f"{valid_count}" if valid_count is not None else "Auto (AI自律・無制限)"
         self._log(
             f"--- 描画計画生成開始 (Step {iteration}/{max_iterations}) ---\n"
-            f"Prompt: {valid_prompt!r}, Seed: {valid_seed}, Count: {valid_count}, Canvas: {valid_width}x{valid_height}\n"
+            f"Prompt: {valid_prompt!r}, Seed: {valid_seed}, Count: {count_display}, GoalMode: {goal_mode}, Canvas: {valid_width}x{valid_height}\n"
             f"Endpoint: {_endpoint_origin_label(self.settings.endpoint_url)}, Model: {self.settings.model} (思考モデル最適化: {is_reasoning}, ReasoningEffort: {self.settings.reasoning_effort}), Timeout: {self.settings.timeout_seconds}s"
         )
 
         # 段階的ステップ描画時のフェーズ目標の導出
         phase_goal = ""
-        if max_iterations > 1:
+        if max_iterations > 1 or goal_mode:
             if max_iterations == 2:
                 phase_goal = (
                     "Phase 1/2: Base Color Blocking, Environment & Initial Shadows (Flats/Shading layer)"
@@ -364,29 +367,36 @@ class OpenAICompatiblePlanner(PlannerPort):
                 elif iteration == 2:
                     phase_goal = f"Phase {iteration}/{max_iterations}: 3D Volume Sculpting & Secondary Masses (Flats/Shading layer)"
                 elif iteration < max_iterations:
-                    phase_goal = f"Phase {iteration}/{max_iterations}: Shadow Crevices & Structural Contours (Shading/Lineart layer)"
+                    phase_goal = f"Phase {iteration}/{max_iterations}: Shadow Crevices, Eraser Refinements & Structural Contours (Shading/Lineart layer)"
                 else:
-                    phase_goal = f"Phase {iteration}/{max_iterations} [FINAL]: Fine Lineart, Highlights, Petals & Polish (Lineart/Highlights/FX)"
+                    phase_goal = f"Phase {iteration}/{max_iterations} [FINAL]: Fine Lineart, Eraser Carving, Highlights, Petals & Polish (Lineart/Highlights/FX)"
 
         user_content_parts: list[dict[str, Any]] = []
 
         # 構造化テキスト指示
-        req_dict = {
+        req_stroke_count: Any = (
+            valid_count
+            if valid_count is not None
+            else "auto (unconstrained - freely generate as many strokes as necessary to completely fulfill the prompt)"
+        )
+        req_dict: dict[str, Any] = {
             "prompt": valid_prompt,
             "seed": valid_seed,
-            "stroke_count": valid_count,
+            "stroke_count": req_stroke_count,
             "canvas": {"width": valid_width, "height": valid_height},
             "palette": palette_name,
             "iteration": iteration,
             "max_iterations": max_iterations,
+            "goal_mode": goal_mode,
             "phase_goal": phase_goal or "Complete full professional illustration.",
             "instruction": (
                 (
-                    "Visually inspect the attached current canvas, identify the most important incompleteness, and correct it. "
+                    "Visually inspect the attached current canvas, identify what is missing or flawed, and fix/enrich it using strokes or eraser strokes (is_eraser: true). "
                     if canvas_image
                     else ""
                 )
                 + f"Generate drawing strokes for {phase_goal or 'the artwork'} strictly in valid DrawingPlan JSON format. "
+                "Evaluate completion with 'goal_reached': boolean (true if finished, false if more work needed) and 'completion_score': float (0.0-1.0). "
                 "Keep request_canvas_image false; multi-step runs receive automatic canvas feedback."
             ),
         }
@@ -867,10 +877,10 @@ def _system_instruction(
     min_dim = min(width, height)
 
     # 推奨ブラシサイズ（キャンバス解像度連動）
-    flats_sz = f"{max(30, round(min_dim * 0.06))} to {max(80, round(min_dim * 0.16))} px"
-    shading_sz = f"{max(15, round(min_dim * 0.02))} to {max(40, round(min_dim * 0.06))} px"
-    lineart_sz = f"{max(4, round(min_dim * 0.004))} to {max(12, round(min_dim * 0.012))} px"
-    hl_sz = f"{max(6, round(min_dim * 0.005))} to {max(20, round(min_dim * 0.02))} px"
+    flats_sz = f"{max(40, round(min_dim * 0.08))} to {max(120, round(min_dim * 0.20))} px"
+    shading_sz = f"{max(20, round(min_dim * 0.03))} to {max(60, round(min_dim * 0.08))} px"
+    lineart_sz = f"{max(4, round(min_dim * 0.005))} to {max(14, round(min_dim * 0.015))} px"
+    hl_sz = f"{max(5, round(min_dim * 0.006))} to {max(24, round(min_dim * 0.025))} px"
 
     # ドメイン別作画ガイダンス
     prompt_lower = prompt.lower()
@@ -898,20 +908,26 @@ def _system_instruction(
         ]
     ):
         domain_guidance = (
-            "\n[DOMAIN ART DIRECTION: Landscape, Mountains, Clouds & Sakura]\n"
-            "1. Layer 'Flats':\n"
-            f"   - Paint sweeping sky wash & horizon strokes (size_px: {flats_sz}).\n"
-            f"   - Paint solid mountain silhouette blocks (size_px: {flats_sz}) across midground.\n"
-            f"   - Paint lush sakura blossom canopy clusters / clouds of pink foliage (size_px: {flats_sz}, colors: #ffb7c5, #ffccd7, #f78da7).\n"
-            "2. Layer 'Shading':\n"
-            f"   - Carve shadow ridges & crags on mountains (size_px: {shading_sz}, opacity: 0.5-0.7, colors: #2d3748, #3b4252).\n"
-            f"   - Paint darker underside shadows for clouds and cherry blossom canopy masses (size_px: {shading_sz}, colors: #b85d7f, #8a9bb8).\n"
-            "3. Layer 'Lineart':\n"
-            f"   - Draw organic, twisting tree trunk and branching boughs (size_px: {lineart_sz}, colors: #3e2723, #2c1810).\n"
-            f"   - Outline sharp mountain peak ridges and cloud crests (size_px: {lineart_sz}).\n"
-            "4. Layer 'Highlights' & 'FX':\n"
-            f"   - Scatter bright falling sakura petal strokes (size_px: {hl_sz}, 2-3 points per petal, colors: #ffffff, #ffe4ec).\n"
-            f"   - Add glowing cloud rim lights and sun glints (size_px: {hl_sz}, colors: #fff9db, #ffffff).\n"
+            "\n[DOMAIN ART DIRECTION: Landscape, Mountains, Clouds & Sakura Trees]\n"
+            "1. Layer 'Flats' (Complete Seamless Coverage & Base Volumes):\n"
+            f"   - Sky Gradient: Paint multiple dense overlapping horizontal sweep strokes (size_px: {flats_sz}, brush: 'Airbrush Soft' or 'Basic-5 Size') "
+            "from deep blue zenith (#2b5c8f) down to clear sky (#5c93cf), horizon haze (#b8d8f8), and soft white (#eef6ff). Leave NO white canvas gaps.\n"
+            f"   - Distant & Midground Mountains: Paint sweeping mountain silhouettes (size_px: {flats_sz}, brush: 'Basic-5 Size'). "
+            "Use atmospheric perspective (distant peaks in soft blue-gray #6f829d, nearer peaks in deep pine/slate #283e50).\n"
+            f"   - Rolling Hills & Ground: Dense green terrain wash (#4e7d58, #72a37c, #9ec4a5) with organic curving strokes.\n"
+            f"   - Sakura Blossom Canopy Clumps: Paint rich, billowing clouds of pink foliage masses (size_px: {flats_sz}, brush: 'Wet Textured Soft' or 'Basic-5 Size') "
+            "arranged above and around the branches (colors: #ff9ebb, #ffb8cd, #ffd6e5). Overlap multiple puffy clusters to create huge 3D volume.\n"
+            "2. Layer 'Shading' (3D Depth, Occlusion & Mountain Crags):\n"
+            f"   - Mountain Ridges & Shadow Facets: Carve dramatic shadow slopes along mountain ridge lines (size_px: {shading_sz}, opacity: 0.6-0.8, brush: 'Dry Bristles' or 'Basic-5 Size', colors: #1a2733, #223445).\n"
+            f"   - Cloud Undersides: Paint soft purplish shadow bulges under cloud masses (size_px: {shading_sz}, opacity: 0.5-0.7, colors: #92a4bc, #7b8ea7).\n"
+            f"   - Blossom Canopy Deep Shadows: Paint deep magenta/purple-pink core shadows underneath blossom clusters (size_px: {shading_sz}, colors: #a3436a, #842f53).\n"
+            "3. Layer 'Lineart' (Organic Tree Anatomy & Crisp Ridge Contours):\n"
+            f"   - Majestic Sakura Tree Trunk & Branches: Draw powerful, organic twisting tree trunks with S-curves and wide root flares (size_px: {lineart_sz}, brush: 'Ink-3 Gpen' or 'Basic-5 Size', colors: #342017, #24140d). "
+            "Crucial: Branch hierarchically! Main thick trunk -> major bending limbs -> tapering secondary branches threading through the pink blossom canopy.\n"
+            f"   - Mountain Crests & Sharp Contours: Outline sharp jagged crags and crisp cloud rim curves (size_px: {lineart_sz}, brush: 'Ink-3 Gpen').\n"
+            "4. Layer 'Highlights' & 'FX' (Light Accents & Falling Petal Blizzard):\n"
+            f"   - Falling Petal Blizzard: Scatter 30 to 60+ individual falling petal strokes and petals drifting on wind (size_px: {hl_sz}, 2-3 curve points each, colors: #ffffff, #ffe6f0, #ffd0e2) across foreground and midground.\n"
+            f"   - Luminous Rim Lighting & Cloud Edges: Pure glowing white/pale-gold rim highlights on sunny mountain peaks and top cloud rims (size_px: {hl_sz}, colors: #ffffff, #fffde6).\n"
         )
     elif any(
         k in prompt_lower
@@ -933,16 +949,16 @@ def _system_instruction(
         domain_guidance = (
             "\n[DOMAIN ART DIRECTION: Anime / Manga Character Portrait]\n"
             "1. Layer 'Flats':\n"
-            f"   - Paint skin base mass (size_px: {flats_sz}, color: #ffebe0 / #fef0e6).\n"
-            f"   - Paint solid hair volume silhouette & clothing base (size_px: {flats_sz}).\n"
+            f"   - Paint skin base mass (size_px: {flats_sz}, brush: 'Basic-5 Size', color: #ffebe0 / #fef0e6).\n"
+            f"   - Paint solid hair volume silhouette & clothing base (size_px: {flats_sz}, brush: 'Basic-5 Size').\n"
             "2. Layer 'Shading':\n"
-            f"   - Paint soft cast shadows under chin, nose, hairline, eye sockets (size_px: {shading_sz}, opacity: 0.4-0.7, color: #f2b5a5).\n"
-            f"   - Sculpt hair depth and clothing folds (size_px: {shading_sz}).\n"
+            f"   - Paint soft cast shadows under chin, nose, hairline, eye sockets (size_px: {shading_sz}, opacity: 0.4-0.7, brush: 'Airbrush Soft' or 'Wet Textured Soft', color: #f2b5a5).\n"
+            f"   - Sculpt hair depth and clothing folds (size_px: {shading_sz}, brush: 'Basic-5 Size').\n"
             "3. Layer 'Lineart':\n"
-            f"   - Draw crisp expressive eyes (upper lash, double eyelid, lower lash, iris outline) (size_px: {lineart_sz}, color: #281820).\n"
-            f"   - Draw jawline, nose tip, lips, eyebrows, and flowing hair locks (size_px: {lineart_sz}).\n"
+            f"   - Draw crisp expressive eyes (upper lash, double eyelid, lower lash, iris outline) (size_px: {lineart_sz}, brush: 'Ink-3 Gpen', color: #281820).\n"
+            f"   - Draw jawline, nose tip, lips, eyebrows, and flowing hair locks (size_px: {lineart_sz}, brush: 'Ink-3 Gpen').\n"
             "4. Layer 'Highlights':\n"
-            f"   - Draw luminous hair ring highlight (angel halo) and eye specular sparkles (size_px: {hl_sz}, color: #ffffff).\n"
+            f"   - Draw luminous hair ring highlight (angel halo) and eye specular sparkles (size_px: {hl_sz}, brush: 'Basic-5 Size', color: #ffffff).\n"
         )
     elif any(
         k in prompt_lower
@@ -950,10 +966,10 @@ def _system_instruction(
     ):
         domain_guidance = (
             "\n[DOMAIN ART DIRECTION: Animal / Creature Art]\n"
-            f"1. Layer 'Flats': Base body volume & fur base masses (size_px: {flats_sz}).\n"
-            f"2. Layer 'Shading': Musculature shadows & fur tone gradations (size_px: {shading_sz}, opacity: 0.6).\n"
-            f"3. Layer 'Lineart': Facial contours, ears, paws, expressive eyes & whiskers (size_px: {lineart_sz}).\n"
-            f"4. Layer 'Highlights': Glowing eyes, rim light on fur & whiskers (size_px: {hl_sz}, color: #ffffff).\n"
+            f"1. Layer 'Flats': Base body volume & fur base masses (size_px: {flats_sz}, brush: 'Basic-5 Size').\n"
+            f"2. Layer 'Shading': Musculature shadows & fur tone gradations (size_px: {shading_sz}, opacity: 0.6, brush: 'Dry Bristles').\n"
+            f"3. Layer 'Lineart': Facial contours, ears, paws, expressive eyes & whiskers (size_px: {lineart_sz}, brush: 'Ink-3 Gpen').\n"
+            f"4. Layer 'Highlights': Glowing eyes, rim light on fur & whiskers (size_px: {hl_sz}, brush: 'Basic-5 Size', color: #ffffff).\n"
         )
     elif any(
         k in prompt_lower
@@ -962,17 +978,17 @@ def _system_instruction(
         domain_guidance = (
             "\n[DOMAIN ART DIRECTION: Cyberpunk City & Sci-Fi]\n"
             f"1. Layer 'Flats': Dark atmospheric background & skyscraper building silhouettes (size_px: {flats_sz}, colors: #0a0e17, #131b2e).\n"
-            f"2. Layer 'Shading': Deep occlusion between buildings and foggy street glow (size_px: {shading_sz}).\n"
-            f"3. Layer 'Lineart': Sharp structural edges, perspective grid, antenna spires (size_px: {lineart_sz}).\n"
+            f"2. Layer 'Shading': Deep occlusion between buildings and foggy street glow (size_px: {shading_sz}, brush: 'Airbrush Soft').\n"
+            f"3. Layer 'Lineart': Sharp structural edges, perspective grid, antenna spires (size_px: {lineart_sz}, brush: 'Ink-3 Gpen').\n"
             f"4. Layer 'Highlights' & 'FX': Vibrant neon signs, window grids, laser light beams (size_px: {hl_sz}, colors: #00f0ff, #ff007f, #ffe600).\n"
         )
     elif any(k in prompt_lower for k in ["flower", "rose", "bouquet", "petal", "花", "バラ", "薔薇"]):
         domain_guidance = (
             "\n[DOMAIN ART DIRECTION: Blooming Flowers & Botanical]\n"
-            f"1. Layer 'Flats': Petal base color blocks & leaf masses (size_px: {flats_sz}).\n"
-            f"2. Layer 'Shading': Petal inner spiral crevice shadows (size_px: {shading_sz}, opacity: 0.6).\n"
-            f"3. Layer 'Lineart': Organic petal edges, curving stem, leaf vein contours (size_px: {lineart_sz}).\n"
-            f"4. Layer 'Highlights': Dewdrops, petal edge rim highlights (size_px: {hl_sz}, color: #ffffff).\n"
+            f"1. Layer 'Flats': Petal base color blocks & leaf masses (size_px: {flats_sz}, brush: 'Basic-5 Size').\n"
+            f"2. Layer 'Shading': Petal inner spiral crevice shadows (size_px: {shading_sz}, opacity: 0.6, brush: 'Wet Textured Soft').\n"
+            f"3. Layer 'Lineart': Organic petal edges, curving stem, leaf vein contours (size_px: {lineart_sz}, brush: 'Ink-3 Gpen').\n"
+            f"4. Layer 'Highlights': Dewdrops, petal edge rim highlights (size_px: {hl_sz}, brush: 'Basic-5 Size', color: #ffffff).\n"
         )
 
     progressive_section = ""
@@ -981,7 +997,7 @@ def _system_instruction(
             if iteration == 1:
                 phase_title = "Step 1/2: Foundation, Backdrop & Base Color Blocking (Flats/Shading layer)"
                 phase_task = (
-                    "Focus strictly on painting broad base colors (Flats): sky, terrain/ground, mountain silhouettes, "
+                    "Focus strictly on painting complete, gapless broad base colors (Flats): sky gradient, terrain/ground, mountain silhouettes, "
                     "skin/hair masses, or foliage clumps with large brush sizes. Do not draw lineart or fine details yet."
                 )
             else:
@@ -995,9 +1011,7 @@ def _system_instruction(
         elif max_iterations == 3:
             if iteration == 1:
                 phase_title = "Step 1/3: Foundation, Backdrop & Base Color Masses (Flats layer)"
-                phase_task = (
-                    "Paint ONLY the broad foundation and base color silhouettes (Flats layer) with large brush sizes."
-                )
+                phase_task = "Paint ONLY the broad foundation and seamless base color silhouettes (Flats layer) with large brush sizes."
             elif iteration == 2:
                 phase_title = "Step 2/3: 3D Form Sculpting, Ambient Occlusion & Shadows (Shading layer)"
                 phase_task = (
@@ -1051,15 +1065,25 @@ def _system_instruction(
         "You are an elite master digital painter directing layer-by-layer drawing plans for Krita. "
         "Create a rich, complete, painterly illustration by generating multi-layered strokes from back to front.\n"
         f"{reasoning_guide}\n\n"
-        "=== DIGITAL PAINTING METHODOLOGY (BACK-TO-FRONT LAYERS) ===\n"
-        f"1. Layer 'Flats' (Backdrop & Color Blocking):\n"
-        f"   - Must use LARGE brush sizes (size_px: {flats_sz}) to paint broad masses: sky, ground, mountain silhouettes, tree canopy foliage, skin/body base.\n"
-        f"2. Layer 'Shading' (Volume, Shadow & Depth):\n"
-        f"   - Use medium brush sizes (size_px: {shading_sz}, opacity: 0.4-0.8) with darker/cooler tones to sculpt form, cast shadows, and crevices.\n"
-        f"3. Layer 'Lineart' (Contours & Details):\n"
-        f"   - Use crisp dynamic brush sizes (size_px: {lineart_sz}, opacity: 0.9-1.0) for expressive outlines, tree trunks/branches, facial features, petal contours.\n"
-        f"4. Layer 'Highlights' & 'FX' (Light, Petals, Particle Atmosphere):\n"
-        f"   - Use accent brush sizes (size_px: {hl_sz}) with bright/luminous colors for falling petals, cloud rims, sparkles, and rim lighting.\n"
+        "=== DIGITAL PAINTING METHODOLOGY & BRUSH PRESETS ===\n"
+        "Available Brush Presets:\n"
+        "  - 'Airbrush Soft': Smooth sky gradients, soft atmosphere, and ambient shading.\n"
+        "  - 'Wet Textured Soft': Puffy clouds, water reflections, painterly blossom clusters.\n"
+        "  - 'Dry Bristles': Rough tree bark, rocky mountain crags, textured foliage.\n"
+        "  - 'Basic-5 Size' / 'Basic-1': Solid silhouette blocking, undercoats, general painting.\n"
+        "  - 'Ink-3 Gpen': Razor-sharp lineart, twisting branches, facial contours, petal outlines.\n"
+        "  - 'Eraser Soft' / 'Eraser Small': Carving clean silhouette edges and light accents.\n\n"
+        "Layer Hierarchy (Back to Front):\n"
+        f"1. Layer 'Flats' (Backdrop, Gradients & Seamless Color Blocking):\n"
+        f"   - Must use LARGE brush sizes (size_px: {flats_sz}) with dense overlapping strokes to fully cover backgrounds (sky, mountains, foliage masses, ground). Leave no unpainted gaps!\n"
+        f"2. Layer 'Shading' (3D Volume, Cast Shadows & Occlusion):\n"
+        f"   - Use medium brush sizes (size_px: {shading_sz}, opacity: 0.4-0.8) with darker/cooler tones along ridges, undersides of clouds/foliage, and crevices.\n"
+        f"3. Layer 'Lineart' (Contours, Tree Anatomy & Structure):\n"
+        f"   - Use crisp brush sizes (size_px: {lineart_sz}, opacity: 0.9-1.0, preset: 'Ink-3 Gpen') for expressive outlines, branching limbs, and structural silhouettes.\n"
+        f"4. Layer 'Highlights' & 'FX' (Specular Glints, Petal Swarms, Atmosphere):\n"
+        f"   - Use accent brush sizes (size_px: {hl_sz}) with luminous colors for falling petals, cloud rim light, sun flecks, and particle FX.\n"
+        "5. Eraser Strokes ('is_eraser': true):\n"
+        '   - You can add eraser strokes (`"is_eraser": true`) on any layer to cleanly shape silhouettes, remove rough overlap, or carve sharp light edges.\n'
         f"{domain_guidance}"
         f"{progressive_section}"
         f"{visual_feedback_section}\n"
@@ -1073,24 +1097,28 @@ def _system_instruction(
         '  "title": "Artwork Title",\n'
         f'  "iteration": {iteration},\n'
         '  "request_canvas_image": false,\n'
+        '  "goal_reached": false,\n'
+        '  "completion_score": 0.85,\n'
         '  "layers": ["Flats", "Shading", "Lineart", "Highlights", "FX"],\n'
         '  "strokes": [\n'
         "    {\n"
         '      "id": "s1",\n'
-        '      "brush_preset": "Basic-5 Size",\n'
-        '      "color": "#7ea0c4",\n'
-        f'      "size_px": {max(60, round(min_dim * 0.10))},\n'
+        '      "brush_preset": "Airbrush Soft",\n'
+        '      "color": "#3a7bd5",\n'
+        f'      "size_px": {max(70, round(min_dim * 0.12))},\n'
         '      "layer_name": "Flats",\n'
         '      "opacity": 1.0,\n'
-        f'      "points": [[0, {round(height * 0.3)}], [{round(width * 0.5)}, {round(height * 0.25)}], [{round(width)}, {round(height * 0.35)}]]\n'
+        '      "is_eraser": false,\n'
+        f'      "points": [[0, {round(height * 0.15)}], [{round(width * 0.5)}, {round(height * 0.12)}], [{round(width)}, {round(height * 0.18)}]]\n'
         "    },\n"
         "    {\n"
         '      "id": "s2",\n'
-        '      "brush_preset": "Basic-5 Size",\n'
+        '      "brush_preset": "Ink-3 Gpen",\n'
         '      "color": "#2c1810",\n'
         f'      "size_px": {max(10, round(min_dim * 0.008))},\n'
         '      "layer_name": "Lineart",\n'
         '      "opacity": 1.0,\n'
+        '      "is_eraser": false,\n'
         f'      "points": [[{round(width * 0.5)}, {round(height * 0.95)}, 0.95], [{round(width * 0.51)}, {round(height * 0.65)}, 0.85], [{round(width * 0.48)}, {round(height * 0.42)}, 0.7]]\n'
         "    }\n"
         "  ]\n"
@@ -1099,8 +1127,10 @@ def _system_instruction(
         "=== CRITICAL RULES ===\n"
         f"1. Coordinates (x, y): Must be within canvas dimensions (0 to {width:.0f} width, 0 to {height:.0f} height).\n"
         "2. Stroke Points: Provide 2 to 6 key curve control points per stroke in compact format [[x, y], [x, y, pressure]]. The engine automatically interpolates smooth Catmull-Rom splines and natural pressure tapering.\n"
-        f"3. Brush Sizes: Do NOT make all strokes tiny. Follow the recommended sizes ({flats_sz} for Flats, {shading_sz} for Shading, {lineart_sz} for Lineart).\n"
-        "4. First character of output must be '{' or '```json'."
+        f"3. Brush Sizes & Coverage: Do NOT make all strokes tiny. Use dense wide strokes ({flats_sz}) to completely paint undercoats and backgrounds without empty gaps.\n"
+        "4. Stroke Count: When stroke_count is auto or unconstrained, freely generate as many strokes (e.g. 50-150+ strokes for complete detail) as needed to create a stunning finished artwork.\n"
+        "5. Goal Evaluation: Set 'goal_reached' to true only when the artwork is fully finished and meets all prompt requirements.\n"
+        "6. First character of output must be '{' or '```json'."
     )
 
 
@@ -1851,9 +1881,14 @@ def _smooth_and_densify_points(
     width: float,
     height: float,
     layer_name: str = "Lineart",
+    size_px: float = 10.0,
     max_dense_points: int = 40,
 ) -> list[StrokePoint]:
-    """大まかな制御点列を Catmull-Rom スプライン補間および自然な筆圧テーパリングで滑らかな手描きストロークへ変換する。"""
+    """大まかな制御点列を Catmull-Rom スプライン補間および自然な筆圧テーパリングで滑らかな手描きストロークへ変換する。
+
+    ブラシサイズが大きい場合（下塗り・背景）は Krita の paintLine での Dab 重複（ビーズ状アーティファクト）
+    を防ぐため、ステップ間隔を適応的に間引き、均一な面塗りを維持する。
+    """
     if not raw_points:
         return []
     if len(raw_points) == 1:
@@ -1867,6 +1902,9 @@ def _smooth_and_densify_points(
                 time_ms=p0.time_ms + 10,
             ),
         ]
+
+    layer_lower = layer_name.lower().strip()
+    is_flat_or_shading = "flat" in layer_lower or "back" in layer_lower or "draft" in layer_lower
 
     # 点数がすでに十分多い場合 (>= 35点) はそのままバウンディングのみ
     if len(raw_points) >= 35:
@@ -1882,12 +1920,32 @@ def _smooth_and_densify_points(
 
     ctrl = [(pt.x, pt.y, pt.pressure) for pt in raw_points]
     num_segs = max(1, len(ctrl) - 1)
-    samples_per_seg = max(3, min(8, max_dense_points // num_segs))
+
+    # ブラシサイズに応じた適応的サンプリング上限（太いブラシほど過剰サンプリングを抑えて Dab 重複を防ぐ）
+    if is_flat_or_shading or size_px >= 40.0:
+        effective_max_points = max(6, min(16, max_dense_points // 2))
+        samples_per_seg = max(2, min(5, effective_max_points // num_segs))
+    else:
+        effective_max_points = max_dense_points
+        samples_per_seg = max(3, min(8, effective_max_points // num_segs))
 
     spline_pts = _catmull_rom_points(ctrl, samples_per_segment=samples_per_seg)
-    if len(spline_pts) > max_dense_points:
-        step = len(spline_pts) / max_dense_points
-        spline_pts = [spline_pts[int(i * step)] for i in range(max_dense_points)]
+
+    # 距離ベースの間引き: 太いブラシで近すぎる連続点を排除
+    if len(spline_pts) > 2 and size_px >= 20.0:
+        min_dist_sq = max(16.0, (size_px * 0.25) ** 2)
+        filtered_spline: list[tuple[float, float, float]] = [spline_pts[0]]
+        for pt in spline_pts[1:-1]:
+            last_pt = filtered_spline[-1]
+            d_sq = (pt[0] - last_pt[0]) ** 2 + (pt[1] - last_pt[1]) ** 2
+            if d_sq >= min_dist_sq:
+                filtered_spline.append(pt)
+        filtered_spline.append(spline_pts[-1])
+        spline_pts = filtered_spline
+
+    if len(spline_pts) > effective_max_points:
+        step = len(spline_pts) / effective_max_points
+        spline_pts = [spline_pts[int(i * step)] for i in range(effective_max_points)]
 
     smoothed: list[StrokePoint] = []
     total_n = len(spline_pts) - 1
@@ -1895,11 +1953,18 @@ def _smooth_and_densify_points(
 
     for idx, (sx, sy, sp) in enumerate(spline_pts):
         t = idx / max(1, total_n)
-        # テーパー関数: 先頭 10% と末尾 12% を細くして入り抜きを表現
-        taper_in = min(1.0, t / 0.10) if total_n > 2 else 1.0
-        taper_out = min(1.0, (1.0 - t) / 0.12) if total_n > 2 else 1.0
-        taper_factor = 0.3 + 0.7 * (taper_in * taper_out)
-        final_pressure = max(0.05, min(1.0, sp * taper_factor))
+        if is_flat_or_shading:
+            # 下塗り・背景: 両端が細くならずに均一な面塗りを維持するフラットテーパー
+            taper_in = min(1.0, 0.8 + 0.2 * (t / 0.15)) if total_n > 2 else 1.0
+            taper_out = min(1.0, 0.8 + 0.2 * ((1.0 - t) / 0.15)) if total_n > 2 else 1.0
+            taper_factor = taper_in * taper_out
+            final_pressure = max(0.2, min(1.0, sp * taper_factor))
+        else:
+            # 線画・ハイライト: 手描き感を際立たせるシャープな入り抜き
+            taper_in = min(1.0, t / 0.12) if total_n > 2 else 1.0
+            taper_out = min(1.0, (1.0 - t) / 0.14) if total_n > 2 else 1.0
+            taper_factor = 0.15 + 0.85 * (taper_in * taper_out)
+            final_pressure = max(0.05, min(1.0, sp * taper_factor))
 
         bx = min(max(0.0, sx), width - 0.5)
         by = min(max(0.0, sy), height - 0.5)
@@ -1940,7 +2005,7 @@ def _validate_and_sanitize_plan(
     plan: DrawingPlan,
     prompt: str,
     seed: int,
-    count: int,
+    count: int | None,
     width: float,
     height: float,
     iteration: int | None = None,
@@ -1971,8 +2036,9 @@ def _validate_and_sanitize_plan(
 
     sanitized_strokes: list[Stroke] = []
     stroke_id_set: set[str] = set()
+    strokes_source = plan.strokes[:count] if count is not None and count > 0 else plan.strokes
 
-    for idx, stroke in enumerate(plan.strokes[:count], start=1):
+    for idx, stroke in enumerate(strokes_source, start=1):
         st_id = stroke.id if stroke.id and stroke.id not in stroke_id_set else f"stroke_{idx}"
         stroke_id_set.add(st_id)
 
@@ -1991,13 +2057,15 @@ def _validate_and_sanitize_plan(
             continue
 
         layer = stroke.layer_name.strip() if stroke.layer_name and stroke.layer_name.strip() else "Lineart"
+        size_px = _adaptive_stroke_size(stroke.size_px, layer, width, height)
 
-        # Catmull-Rom スプライン平滑化 & 筆圧テーパリング
+        # Catmull-Rom スプライン平滑化 & 筆圧テーパリング & 適応的サンプリング
         smoothed_pts = _smooth_and_densify_points(
             raw_points=raw_pts,
             width=width,
             height=height,
             layer_name=layer,
+            size_px=size_px,
         )
 
         if len(smoothed_pts) < 2:
@@ -2009,23 +2077,37 @@ def _validate_and_sanitize_plan(
             if re.match(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$", stroke.color)
             else "#232323"
         )
-        size_px = _adaptive_stroke_size(stroke.size_px, layer, width, height)
         opacity = min(max(0.05, stroke.opacity), 1.0)
+        preset_name = stroke.brush_preset or "Basic-5 Size"
+        is_eraser = bool(
+            getattr(stroke, "is_eraser", False) or "eraser" in preset_name.lower() or layer.lower() == "eraser"
+        )
 
         sanitized_strokes.append(
             Stroke(
                 id=st_id,
                 points=smoothed_pts,
-                brush_preset=stroke.brush_preset or "Basic-5 Size",
+                brush_preset=preset_name,
                 color=color,
                 size_px=size_px,
                 layer_name=layer,
                 opacity=opacity,
+                is_eraser=is_eraser,
             )
         )
 
     if not sanitized_strokes:
         raise LLMPlannerError("有効なストロークを構築できませんでした")
+
+    metadata_val = dict(plan.metadata) if isinstance(plan.metadata, Mapping) else {}
+    goal_reached = bool(getattr(plan, "goal_reached", False) or metadata_val.get("goal_reached", False))
+    completion_score = float(
+        getattr(plan, "completion_score", 1.0)
+        if getattr(plan, "completion_score", None) is not None
+        else metadata_val.get("completion_score", 1.0)
+    )
+    metadata_val["goal_reached"] = goal_reached
+    metadata_val["completion_score"] = completion_score
 
     return DrawingPlan(
         prompt=safe_prompt,
@@ -2035,9 +2117,11 @@ def _validate_and_sanitize_plan(
         iteration=plan.iteration if iteration is None else iteration,
         layers=plan.layers,
         request_canvas_image=getattr(plan, "request_canvas_image", False),
-        metadata=plan.metadata,
+        metadata=metadata_val,
         canvas_width=width,
         canvas_height=height,
+        goal_reached=goal_reached,
+        completion_score=completion_score,
     )
 
 

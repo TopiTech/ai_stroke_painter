@@ -130,9 +130,17 @@ class KritaCanvasAdapter(CanvasPort):
 
         # レイヤーの新規作成
         node = document.createNode(layer_name, "paintlayer")
-        if hasattr(node, "setBlendingMode") and blend_mode != "normal":
+        effective_blend = blend_mode
+        if effective_blend == "normal":
+            lname_lower = layer_name.lower()
+            if "shading" in lname_lower or "shadow" in lname_lower:
+                effective_blend = "multiply"
+            elif "highlight" in lname_lower or "fx" in lname_lower or "glow" in lname_lower:
+                effective_blend = "addition"
+
+        if hasattr(node, "setBlendingMode") and effective_blend != "normal":
             with contextlib.suppress(Exception):
-                node.setBlendingMode(blend_mode)
+                node.setBlendingMode(effective_blend)
         if hasattr(node, "setOpacity") and opacity < 1.0:
             with contextlib.suppress(Exception):
                 node.setOpacity(int(opacity * 255))
@@ -532,18 +540,78 @@ def _apply_stroke_style(
         if target_view is None:
             return
 
+        is_eraser = bool(getattr(stroke, "is_eraser", False))
         preset_name = str(stroke.brush_preset).strip()
         presets: Any = getattr(app, "resources", lambda _kind: {})("preset")
-        preset: Any = presets.get(preset_name) if hasattr(presets, "get") else None
+        preset: Any = None
+
+        if is_eraser:
+            # 消しゴム用プリセットの優先探索
+            eraser_candidates = ["Eraser Small", "Eraser Soft", "Eraser Circle", "Eraser"]
+            if hasattr(presets, "values"):
+                all_presets = list(presets.values())
+                for cand in eraser_candidates:
+                    match = next(
+                        (p for p in all_presets if getattr(p, "name", lambda: "")().lower() == cand.lower()),
+                        None,
+                    )
+                    if match is not None:
+                        preset = match
+                        break
+                if preset is None:
+                    # 名前に "eraser" を含むプリセットを部分一致で検索
+                    preset = next(
+                        (p for p in all_presets if "eraser" in getattr(p, "name", lambda: "")().lower()),
+                        None,
+                    )
+
+        if preset is None and hasattr(presets, "get"):
+            preset = presets.get(preset_name)
+
         if preset is None and hasattr(presets, "values"):
-            preset = next(
-                (
-                    candidate
-                    for candidate in presets.values()
-                    if getattr(candidate, "name", lambda: "")() == preset_name
-                ),
-                None,
-            )
+            all_presets = list(presets.values())
+            # 1. 大文字小文字を無視した完全一致
+            p_low = preset_name.lower()
+            for p in all_presets:
+                p_name = getattr(p, "name", None)
+                p_name_str: str = str(p_name()) if callable(p_name) else (str(p_name) if p_name is not None else "")
+                if p_name_str.lower() == p_low:
+                    preset = p
+                    break
+
+            # 2. プリセット名キーワードによるカテゴリ柔軟マッチング
+            if preset is None:
+                cat_keywords: list[str] = []
+                if "airbrush" in p_low or "spray" in p_low or "soft" in p_low:
+                    cat_keywords = ["airbrush", "soft", "spray"]
+                elif "ink" in p_low or "gpen" in p_low or "pen" in p_low:
+                    cat_keywords = ["ink", "gpen", "pen"]
+                elif "bristle" in p_low or "dry" in p_low or "chalk" in p_low or "pencil" in p_low:
+                    cat_keywords = ["bristle", "dry", "chalk", "pencil", "texture"]
+                elif "wet" in p_low or "water" in p_low or "acrylic" in p_low or "oil" in p_low:
+                    cat_keywords = ["wet", "water", "acrylic", "oil", "paint"]
+                elif "basic" in p_low or "fill" in p_low or "block" in p_low:
+                    cat_keywords = ["basic", "fill", "block"]
+
+                for kw in cat_keywords:
+                    for p in all_presets:
+                        p_name = getattr(p, "name", None)
+                        p_name_str = str(p_name()) if callable(p_name) else (str(p_name) if p_name is not None else "")
+                        if kw in p_name_str.lower():
+                            preset = p
+                            break
+                    if preset is not None:
+                        break
+
+            # 3. 汎用フォールバック
+            if preset is None:
+                for p in all_presets:
+                    p_name = getattr(p, "name", None)
+                    p_name_str = str(p_name()) if callable(p_name) else (str(p_name) if p_name is not None else "")
+                    if "basic" in p_name_str.lower():
+                        preset = p
+                        break
+
         if preset is not None and hasattr(target_view, "setCurrentBrushPreset"):
             target_view.setCurrentBrushPreset(preset)
 

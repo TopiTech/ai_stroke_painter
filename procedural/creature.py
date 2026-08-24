@@ -13,7 +13,7 @@ from .base import catmull_rom_spline, create_stroke, sample_strokes_by_priority
 def generate_creature_strokes(
     prompt: str,
     seed: int,
-    count: int,
+    count: int | None,
     width: float,
     height: float,
 ) -> list[Stroke]:
@@ -261,7 +261,7 @@ def generate_creature_strokes(
     return sample_strokes_by_priority(strokes, count)
 
 
-def _generate_dog_strokes(seed: int, count: int, width: float, height: float) -> list[Stroke]:
+def _generate_dog_strokes(seed: int, count: int | None, width: float, height: float) -> list[Stroke]:
     rng = random.Random(seed)
     strokes: list[Stroke] = []
     cx, cy = width * 0.5, height * 0.52
@@ -335,7 +335,7 @@ def _generate_dog_strokes(seed: int, count: int, width: float, height: float) ->
     return sample_strokes_by_priority(strokes, count)
 
 
-def _generate_bird_strokes(seed: int, count: int, width: float, height: float) -> list[Stroke]:
+def _generate_bird_strokes(seed: int, count: int | None, width: float, height: float) -> list[Stroke]:
     rng = random.Random(seed)
     strokes: list[Stroke] = []
     cx, cy = width * 0.5, height * 0.54
@@ -395,7 +395,7 @@ def _generate_bird_strokes(seed: int, count: int, width: float, height: float) -
     return sample_strokes_by_priority(strokes, count)
 
 
-def _generate_dragon_strokes(seed: int, count: int, width: float, height: float) -> list[Stroke]:
+def _generate_dragon_strokes(seed: int, count: int | None, width: float, height: float) -> list[Stroke]:
     rng = random.Random(seed)
     strokes: list[Stroke] = []
     cx, cy = width * 0.5, height * 0.53

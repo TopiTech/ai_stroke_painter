@@ -286,12 +286,17 @@ def color_palette(name: str) -> dict[str, str]:
     return palettes.get(key, palettes["anime"])
 
 
-def sample_strokes_by_priority(strokes: list[Stroke], target_count: int) -> list[Stroke]:
-    """指定本数に収まるよう、重要レイヤー（主線・顔等）を優先保護しながらバランスよくサンプリングする。"""
-    if len(strokes) <= target_count:
-        return list(strokes)
-    if target_count <= 0:
+def sample_strokes_by_priority(strokes: list[Stroke], target_count: int | None) -> list[Stroke]:
+    """優先度階層（下書き→輪郭→詳細→ハイライト）を維持しながら指定本数までダウンサンプリングする。
+    target_count が None の場合はダウンサンプリングを行わず全ストロークを返す。
+    target_count が 0 以下の場合は空リストを返す。
+    """
+    if not strokes:
         return []
+    if target_count is not None and target_count <= 0:
+        return []
+    if target_count is None or target_count >= len(strokes):
+        return list(strokes)
 
     # レイヤーごとの目標配分比率 (合計 1.0)
     layer_weights: dict[str, float] = {

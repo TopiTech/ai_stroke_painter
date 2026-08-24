@@ -25,6 +25,7 @@ def main() -> int:
         ("Ruff Check", [sys.executable, "-m", "ruff", "check", "."], project_dir),
         ("Ruff Format Check", [sys.executable, "-m", "ruff", "format", "--check", "."], project_dir),
         ("Mypy Type Check", [sys.executable, "-m", "mypy", "."], project_dir),
+        ("Pyrefly Type Check", [sys.executable, "-m", "pyrefly", "check"], project_dir),
         (
             "Regression Self-Tests",
             [sys.executable, "-m", "unittest", "ai_stroke_painter.self_test", "-v"],

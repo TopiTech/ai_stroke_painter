@@ -61,6 +61,7 @@ class _FakeNode:
         self._name = name
         self._type = node_type
         self._paint_ability = paint_ability
+        self._blending_mode = "normal"
         self._children: list[Any] = []
         self.lines: list[tuple[Any, Any, float, float]] = []
 
@@ -86,6 +87,12 @@ class _FakeNode:
 
     def paintAbility(self) -> str:
         return self._paint_ability
+
+    def setBlendingMode(self, mode: str) -> None:  # noqa: N802
+        self._blending_mode = mode
+
+    def blendingMode(self) -> str:  # noqa: N802
+        return getattr(self, "_blending_mode", "normal")
 
     def paintLine(self, start: Any, end: Any, start_pressure: float, end_pressure: float) -> None:
         # Krita の Node.paintLine は QPoint を要求するため、QPointF が渡されると TypeError となる
@@ -2354,9 +2361,9 @@ class WorkerAndDockerTests(unittest.TestCase):
     def test_destructive_confirmation_requires_explicit_yes(self) -> None:
         from .docker import QMessageBox
 
-        buttons = getattr(QMessageBox, "StandardButton", QMessageBox)
-        yes = buttons.Yes
-        no = buttons.No
+        buttons: Any = getattr(QMessageBox, "StandardButton", QMessageBox)
+        yes = getattr(buttons, "Yes", 16384)
+        no = getattr(buttons, "No", 65536)
         with patch("ai_stroke_painter.docker.QMessageBox.question", return_value=no):
             self.assertFalse(_confirm(None, "Confirm", "Proceed?"))
         with patch("ai_stroke_painter.docker.QMessageBox.question", return_value=yes):
@@ -3325,6 +3332,251 @@ class ExtendedCustomizationTests(unittest.TestCase):
         prev.update_multipliers(size_multiplier=1.5, opacity_multiplier=0.9)
         self.assertEqual(prev._size_multiplier, 1.5)
         self.assertEqual(prev._opacity_multiplier, 0.9)
+
+    def test_stroke_is_eraser_support(self) -> None:
+        """消しゴムストロークの作成、辞書変換、復元、および自動判定テスト。"""
+        pts = [StrokePoint(10, 10, 0.5, 0), StrokePoint(20, 20, 0.8, 10)]
+        eraser_stroke = Stroke(
+            id="e1",
+            points=pts,
+            brush_preset="Eraser Small",
+            color="#000000",
+            size_px=15.0,
+            layer_name="Lineart",
+            opacity=1.0,
+            is_eraser=True,
+        )
+        self.assertTrue(eraser_stroke.is_eraser)
+        d = eraser_stroke.as_dict()
+        self.assertTrue(d.get("is_eraser"))
+
+        # from_dict での復元
+        restored = Stroke.from_dict(d)
+        self.assertTrue(restored.is_eraser)
+
+        # プリセット名に "eraser" が含まれる場合の自動判定
+        auto_inferred = Stroke.from_dict(
+            {
+                "id": "e2",
+                "points": [[10, 10], [20, 20]],
+                "brush_preset": "Eraser Soft",
+            }
+        )
+        self.assertTrue(auto_inferred.is_eraser)
+
+    def test_drawing_plan_goal_and_svg_support(self) -> None:
+        """DrawingPlan の goal_reached, completion_score, および SVG 出力テスト。"""
+        pts = [StrokePoint(10, 10, 0.5, 0), StrokePoint(20, 20, 0.8, 10)]
+        eraser_stroke = Stroke(
+            id="e1",
+            points=pts,
+            brush_preset="Basic-5 Size",
+            color="#ff0000",
+            size_px=10.0,
+            is_eraser=True,
+        )
+        normal_stroke = Stroke(
+            id="s1",
+            points=pts,
+            brush_preset="Basic-5 Size",
+            color="#0000ff",
+            size_px=10.0,
+            is_eraser=False,
+        )
+        plan = DrawingPlan(
+            prompt="cyber girl",
+            seed=42,
+            strokes=[normal_stroke, eraser_stroke],
+            goal_reached=True,
+            completion_score=0.95,
+            canvas_width=1000.0,
+            canvas_height=1000.0,
+        )
+        self.assertTrue(plan.goal_reached)
+        self.assertEqual(plan.completion_score, 0.95)
+
+        d = plan.as_dict()
+        self.assertTrue(d["goal_reached"])
+        self.assertEqual(d["completion_score"], 0.95)
+
+        # from_dict での復元
+        restored_plan = DrawingPlan.from_dict(d)
+        self.assertTrue(restored_plan.goal_reached)
+        self.assertEqual(restored_plan.completion_score, 0.95)
+        self.assertTrue(restored_plan.strokes[1].is_eraser)
+
+        # to_svg() での消しゴムストローク出力検証
+        svg_content = plan.to_svg()
+        self.assertIn('class="stroke eraser"', svg_content)
+
+    def test_rule_based_planner_auto_count_and_goal(self) -> None:
+        """RuleBasedPlanner での count=None (Auto) および Goal 判定テスト。"""
+        planner = RuleBasedPlanner()
+        # auto_count = True
+        plan_auto = planner.plan("cute anime girl", seed=100, auto_count=True, width=1000, height=1000)
+        self.assertGreater(len(plan_auto.strokes), 0)
+        self.assertTrue(plan_auto.goal_reached)
+
+        # count=None
+        plan_none = planner.plan("cyberpunk city landscape", seed=200, count=None, width=1000, height=1000)
+        self.assertGreater(len(plan_none.strokes), 0)
+
+    def test_llm_planner_sanitize_auto_count_and_eraser(self) -> None:
+        """LLMPlanner のサニタイズ処理での count=None (無制限) と is_eraser 保持テスト。"""
+        from .llm_planner import _validate_and_sanitize_plan
+
+        pts = [StrokePoint(10, 10, 0.5, 0), StrokePoint(20, 20, 0.8, 10)]
+        strokes = [Stroke(f"s_{i}", pts, size_px=10.0, is_eraser=(i % 2 == 1)) for i in range(10)]
+        raw_plan = DrawingPlan(
+            prompt="test",
+            seed=123,
+            strokes=strokes,
+            goal_reached=True,
+            completion_score=0.92,
+        )
+
+        # count=None (Autoモード: 切り詰めずに全10本保持)
+        sanitized = _validate_and_sanitize_plan(
+            raw_plan,
+            prompt="test",
+            seed=123,
+            count=None,
+            width=1000.0,
+            height=1000.0,
+        )
+        self.assertEqual(len(sanitized.strokes), 10)
+        self.assertTrue(sanitized.goal_reached)
+        self.assertEqual(sanitized.completion_score, 0.92)
+        self.assertTrue(sanitized.strokes[1].is_eraser)
+        self.assertFalse(sanitized.strokes[0].is_eraser)
+
+    def test_plan_worker_goal_mode_early_exit(self) -> None:
+        """PlanWorker の Goal モード自律早期終了テスト。"""
+
+        class _GoalPlanner(RuleBasedPlanner):
+            def plan(self, *args: Any, **kwargs: Any) -> DrawingPlan:
+                p = super().plan(*args, **kwargs)
+                return DrawingPlan(
+                    prompt=p.prompt,
+                    seed=p.seed,
+                    strokes=p.strokes,
+                    goal_reached=True,
+                    completion_score=1.0,
+                )
+
+        worker = PlanWorker(
+            planner=_GoalPlanner(),
+            prompt="test girl",
+            seed=42,
+            count=None,
+            width=500.0,
+            height=500.0,
+            auto_count=True,
+            goal_mode=True,
+        )
+        self.assertEqual(worker.max_iterations, 10)
+        self.assertTrue(worker.auto_count)
+        self.assertTrue(worker.goal_mode)
+
+    def test_adaptive_sampling_and_tapering_by_layer(self) -> None:
+        """Flats の面抜け防止フラットテーパーおよび Lineart のシャープな入り抜きテスト。"""
+        from ai_stroke_painter.llm_planner import _smooth_and_densify_points
+
+        raw_pts = [
+            StrokePoint(10.0, 10.0, 1.0, 0),
+            StrokePoint(50.0, 50.0, 1.0, 10),
+            StrokePoint(100.0, 100.0, 1.0, 20),
+        ]
+
+        # 1. Flats (太いブラシ 80px)
+        flats_pts = _smooth_and_densify_points(raw_pts, 500, 500, layer_name="Flats", size_px=80.0)
+        self.assertLessEqual(len(flats_pts), 16)
+        # Flats の両端は 0.8 以上の高い筆圧を維持して隙間を防ぐ
+        self.assertGreaterEqual(flats_pts[0].pressure, 0.75)
+        self.assertGreaterEqual(flats_pts[-1].pressure, 0.75)
+
+        # 2. Lineart (細いブラシ 8px)
+        line_pts = _smooth_and_densify_points(raw_pts, 500, 500, layer_name="Lineart", size_px=8.0)
+        self.assertGreaterEqual(len(line_pts), 8)
+        # Lineart の両端はシャープな入り抜き（低い筆圧）
+        self.assertLess(line_pts[0].pressure, 0.4)
+        self.assertLess(line_pts[-1].pressure, 0.4)
+
+    def test_brush_preset_category_resolution(self) -> None:
+        """プリセット名がカテゴリキーワードから柔軟に解決されるテスト。"""
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        class FakePreset:
+            def __init__(self, name: str) -> None:
+                self._name = name
+
+            def name(self) -> str:
+                return self._name
+
+        p_airbrush = FakePreset("Airbrush Static")
+        p_ink = FakePreset("Ink-2 Fineliner")
+        p_dry = FakePreset("Dry Bristles Rough")
+        p_basic = FakePreset("Basic-5 Size")
+
+        class FakeView:
+            def __init__(self) -> None:
+                self.current_preset: Any = None
+
+            def setCurrentBrushPreset(self, p: Any) -> None:  # noqa: N802
+                self.current_preset = p
+
+        view = FakeView()
+        app = SimpleNamespace(
+            activeWindow=lambda: SimpleNamespace(activeView=lambda: view),
+            resources=lambda _k: {
+                "p1": p_airbrush,
+                "p2": p_ink,
+                "p3": p_dry,
+                "p4": p_basic,
+            },
+        )
+        fake_krita = SimpleNamespace(Krita=SimpleNamespace(instance=lambda: app))
+
+        adapter = KritaCanvasAdapter()
+        document = _FakeDocument(active=_FakeNode("Flats"))
+
+        with patch.dict("sys.modules", {"krita": fake_krita}):
+            # Airbrush Soft -> Airbrush Static に解決
+            plan_air = DrawingPlan(
+                prompt="test",
+                seed=1,
+                strokes=[
+                    Stroke("s1", [StrokePoint(0, 0, 1, 0), StrokePoint(10, 10, 1, 10)], brush_preset="Airbrush Soft")
+                ],
+            )
+            adapter.render(document, plan_air, view=view)
+            self.assertEqual(view.current_preset, p_airbrush)
+
+            # Ink-3 Gpen -> Ink-2 Fineliner に解決
+            plan_ink = DrawingPlan(
+                prompt="test",
+                seed=1,
+                strokes=[
+                    Stroke("s2", [StrokePoint(0, 0, 1, 0), StrokePoint(10, 10, 1, 10)], brush_preset="Ink-3 Gpen")
+                ],
+            )
+            adapter.render(document, plan_ink, view=view)
+            self.assertEqual(view.current_preset, p_ink)
+
+    def test_ensure_layer_smart_blend_modes(self) -> None:
+        """レイヤー名に応じた自動ブレンドモード設定のテスト。"""
+        document = _FakeDocument()
+        adapter = KritaCanvasAdapter()
+
+        node_shading = adapter.ensure_layer(document, "Shading")
+        self.assertEqual(node_shading._blending_mode, "multiply")
+
+        node_hl = adapter.ensure_layer(document, "Highlights")
+        self.assertEqual(node_hl._blending_mode, "addition")
+
+        node_line = adapter.ensure_layer(document, "Lineart")
+        self.assertEqual(node_line._blending_mode, "normal")
 
 
 def run() -> bool:

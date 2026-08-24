@@ -7,6 +7,7 @@ import datetime
 import json
 import os
 from pathlib import Path
+import random
 import threading
 import time
 import traceback
@@ -183,12 +184,16 @@ class PreviewWidget(QWidget):
             oy = (h - canvas_h * scale) * 0.5
 
             for stroke in self._plan.strokes:
-                rgb_color, color_alpha = split_color_alpha(stroke.color)
-                col = QColor(rgb_color)
-                eff_op = max(0.0, min(1.0, stroke.opacity * self._opacity_multiplier * color_alpha))
-                if eff_op < 1.0 and hasattr(col, "setAlphaF"):
-                    col.setAlphaF(eff_op)
-                pen_w = max(1.0, stroke.size_px * self._size_multiplier * scale * 0.6)
+                if stroke.is_eraser:
+                    col = QColor("#1e1e24")
+                    pen_w = max(2.0, stroke.size_px * self._size_multiplier * scale * 0.8)
+                else:
+                    rgb_color, color_alpha = split_color_alpha(stroke.color)
+                    col = QColor(rgb_color)
+                    eff_op = max(0.0, min(1.0, stroke.opacity * self._opacity_multiplier * color_alpha))
+                    if eff_op < 1.0 and hasattr(col, "setAlphaF"):
+                        col.setAlphaF(eff_op)
+                    pen_w = max(1.0, stroke.size_px * self._size_multiplier * scale * 0.6)
                 pen = QPen(col, pen_w)
                 painter.setPen(pen)
                 pts = stroke.points
@@ -217,9 +222,9 @@ class PlanWorker(QObject):
         planner: PlannerPort,
         prompt: str,
         seed: int,
-        count: int,
-        width: float,
-        height: float,
+        count: int | None = None,
+        width: float = 1000.0,
+        height: float = 1000.0,
         image_data: bytes | None = None,
         max_iterations: int = 1,
         palette_name: str = "anime",
@@ -228,12 +233,19 @@ class PlanWorker(QObject):
         shading_density: str = "medium",
         enable_flats: bool = True,
         color_mode: str = "original",
+        auto_count: bool = False,
+        goal_mode: bool = False,
         parent: Any | None = None,
         canvas_port: Any | None = None,
         document: Any | None = None,
     ) -> None:
         super().__init__(parent)
-        if isinstance(max_iterations, bool) or not isinstance(max_iterations, int) or not 1 <= max_iterations <= 10:
+        effective_max_iterations = 10 if goal_mode else max_iterations
+        if (
+            isinstance(effective_max_iterations, bool)
+            or not isinstance(effective_max_iterations, int)
+            or not 1 <= effective_max_iterations <= 10
+        ):
             raise ValueError("max_iterations は 1 から 10 の整数である必要があります")
         self.planner = planner
         self.prompt = prompt
@@ -242,13 +254,15 @@ class PlanWorker(QObject):
         self.width = width
         self.height = height
         self.image_data = image_data
-        self.max_iterations = max_iterations
+        self.max_iterations = effective_max_iterations
         self.palette_name = palette_name
         self.brush_profile = brush_profile
         self.edge_threshold = edge_threshold
         self.shading_density = shading_density
         self.enable_flats = enable_flats
         self.color_mode = color_mode
+        self.auto_count = auto_count
+        self.goal_mode = goal_mode
         self._is_cancelled = False
         self._render_done_event = threading.Event()
         self._next_canvas_image: bytes | None = None
@@ -305,8 +319,10 @@ class PlanWorker(QObject):
 
     def run(self) -> None:
         try:
+            count_label = "Auto (無制限・AI自律)" if self.auto_count or self.count is None else str(self.count)
+            goal_label = f", GoalMode: {self.goal_mode}" if self.goal_mode else ""
             self.debug_log.emit(
-                f"[ワーカー開始] Total Iterations: {self.max_iterations}, Target Size: {self.width:.0f}x{self.height:.0f}, Palette: {self.palette_name}, Profile: {self.brush_profile}"
+                f"[ワーカー開始] Total Iterations: {self.max_iterations}, Strokes: {count_label}{goal_label}, Target Size: {self.width:.0f}x{self.height:.0f}, Palette: {self.palette_name}, Profile: {self.brush_profile}"
             )
 
             for iter_idx in range(1, self.max_iterations + 1):
@@ -314,7 +330,8 @@ class PlanWorker(QObject):
                     self.debug_log.emit("[ワーカー] 処理が中断されました")
                     return
 
-                msg = f"ステップ {iter_idx}/{self.max_iterations}: 計画を生成中..."
+                mode_text = " (Goal判定中)" if self.goal_mode else ""
+                msg = f"ステップ {iter_idx}/{self.max_iterations}{mode_text}: 計画を生成中..."
                 self.iteration_progress.emit(iter_idx, self.max_iterations, msg)
                 self.debug_log.emit(f"[ステップ {iter_idx}/{self.max_iterations}] 計画生成処理を開始")
 
@@ -336,6 +353,8 @@ class PlanWorker(QObject):
                     shading_density=self.shading_density,
                     enable_flats=self.enable_flats,
                     color_mode=self.color_mode,
+                    auto_count=self.auto_count,
+                    goal_mode=self.goal_mode,
                     cancelled=self.is_cancelled,
                 )
 
@@ -344,7 +363,7 @@ class PlanWorker(QObject):
                     return
 
                 self.debug_log.emit(
-                    f"[ステップ {iter_idx}] 計画生成完了。メインスレッドへ描画を要求します (ストローク数: {len(current_plan.strokes)})"
+                    f"[ステップ {iter_idx}] 計画生成完了。メインスレッドへ描画を要求します (ストローク数: {len(current_plan.strokes)}, 完成度: {current_plan.completion_score * 100:.0f}%, Goal達成: {current_plan.goal_reached})"
                 )
 
                 self._render_done_event.clear()
@@ -364,7 +383,25 @@ class PlanWorker(QObject):
                 if self._render_error is not None:
                     raise RuntimeError(self._render_error)
 
-            if not self.is_cancelled():
+                # Goal モード時の目標達成判定による早期自律完了
+                is_goal_met = bool(
+                    current_plan.goal_reached
+                    or current_plan.metadata.get("goal_reached", False)
+                    or current_plan.completion_score >= 0.90
+                )
+                if self.goal_mode and is_goal_met and iter_idx >= 1:
+                    self.completed_successfully = True
+                    self.iteration_progress.emit(
+                        iter_idx,
+                        iter_idx,
+                        f"目標達成！(完成度: {current_plan.completion_score * 100:.0f}%) 全ステップの描画が完了しました",
+                    )
+                    self.debug_log.emit(
+                        f"[Goal達成] ステップ {iter_idx} で目標達成判定を受信しました (完成度: {current_plan.completion_score * 100:.0f}%)"
+                    )
+                    break
+
+            if not self.is_cancelled() and not self.completed_successfully:
                 self.completed_successfully = True
                 self.iteration_progress.emit(self.max_iterations, self.max_iterations, "全ステップの描画が完了しました")
                 self.debug_log.emit("[ワーカー完了] 全ての処理が正常に完了しました")
@@ -553,11 +590,21 @@ class AIStrokePainterDocker(DockWidget):
         self.seed.setValue(42)
         params_row1.addWidget(self.seed)
 
+        self.auto_seed = QCheckBox("Auto")
+        self.auto_seed.setToolTip("描画実行時にランダムなシード値を自動生成して適用します")
+        self.auto_seed.toggled.connect(lambda chk: self.seed.setEnabled(not chk))
+        params_row1.addWidget(self.auto_seed)
+
         params_row1.addWidget(QLabel("本数"))
         self.count = QSpinBox()
         self.count.setRange(1, 500)
         self.count.setValue(35)
         params_row1.addWidget(self.count)
+
+        self.auto_count = QCheckBox("Auto (無制限)")
+        self.auto_count.setToolTip("AIが指示を完遂するために必要なストローク本数を自由・自律的にいくらでも描写します")
+        self.auto_count.toggled.connect(lambda chk: self.count.setEnabled(not chk))
+        params_row1.addWidget(self.auto_count)
         gen_layout.addLayout(params_row1)
 
         style_row = QHBoxLayout()
@@ -591,6 +638,14 @@ class AIStrokePainterDocker(DockWidget):
         )
         self.auto_refine.setChecked(False)
         refine_layout.addWidget(self.auto_refine)
+
+        self.goal_mode = QCheckBox("目標達成まで継続 (Goal Mode)")
+        self.goal_mode.setToolTip(
+            "AIが目標達成・完成（goal_reached）を判定するまでステップ描画を自動継続します（安全上限10回 / いつでも停止可能）"
+        )
+        self.goal_mode.setChecked(False)
+        refine_layout.addWidget(self.goal_mode)
+
         refine_layout.addWidget(QLabel("反復数"))
         self.iterations = QSpinBox()
         self.iterations.setRange(1, 10)
@@ -854,7 +909,7 @@ class AIStrokePainterDocker(DockWidget):
         # カスタムプリセットの読み込み
         if callable(QSettings):
             with contextlib.suppress(Exception):
-                settings = QSettings("AIStrokePainter", "CustomPresets")
+                settings: Any = QSettings("AIStrokePainter", "CustomPresets")
                 raw_json = settings.value("presets_json")
                 if raw_json:
                     custom_map: dict[str, Any] = json.loads(str(raw_json))
@@ -896,7 +951,7 @@ class AIStrokePainterDocker(DockWidget):
 
         if callable(QSettings):
             try:
-                settings = QSettings("AIStrokePainter", "CustomPresets")
+                settings: Any = QSettings("AIStrokePainter", "CustomPresets")
                 raw_json = settings.value("presets_json")
                 loaded = json.loads(str(raw_json)) if raw_json else {}
                 if not isinstance(loaded, dict):
@@ -937,7 +992,7 @@ class AIStrokePainterDocker(DockWidget):
             return
         if callable(QSettings):
             try:
-                settings = QSettings("AIStrokePainter", "CustomPresets")
+                settings: Any = QSettings("AIStrokePainter", "CustomPresets")
                 raw_json = settings.value("presets_json")
                 if raw_json:
                     loaded = json.loads(str(raw_json))
@@ -1011,6 +1066,15 @@ class AIStrokePainterDocker(DockWidget):
         w = _get_attr(self, "image_color_mode")
         if w is not None and hasattr(w, "setCurrentIndex"):
             w.setCurrentIndex(0)
+        w = _get_attr(self, "auto_seed")
+        if w is not None and hasattr(w, "setChecked"):
+            w.setChecked(False)
+        w = _get_attr(self, "auto_count")
+        if w is not None and hasattr(w, "setChecked"):
+            w.setChecked(False)
+        w = _get_attr(self, "goal_mode")
+        if w is not None and hasattr(w, "setChecked"):
+            w.setChecked(False)
         w = _get_attr(self, "base_url")
         if w is not None and hasattr(w, "setText"):
             w.setText("https://api.openai.com/v1")
@@ -1108,9 +1172,15 @@ class AIStrokePainterDocker(DockWidget):
             w = _get_attr(self, "seed")
             if w is not None and settings.value("seed") is not None:
                 w.setValue(int(settings.value("seed")))
+            w = _get_attr(self, "auto_seed")
+            if w is not None and settings.value("auto_seed") is not None:
+                w.setChecked(str(settings.value("auto_seed")).lower() in ("true", "1"))
             w = _get_attr(self, "count")
             if w is not None and settings.value("count") is not None:
                 w.setValue(int(settings.value("count")))
+            w = _get_attr(self, "auto_count")
+            if w is not None and settings.value("auto_count") is not None:
+                w.setChecked(str(settings.value("auto_count")).lower() in ("true", "1"))
             w = _get_attr(self, "palette_combo")
             if w is not None and settings.value("palette") is not None:
                 pal_val = str(settings.value("palette"))
@@ -1133,6 +1203,9 @@ class AIStrokePainterDocker(DockWidget):
             w = _get_attr(self, "auto_refine")
             if w is not None and settings.value("auto_refine") is not None:
                 w.setChecked(str(settings.value("auto_refine")).lower() in ("true", "1"))
+            w = _get_attr(self, "goal_mode")
+            if w is not None and settings.value("goal_mode") is not None:
+                w.setChecked(str(settings.value("goal_mode")).lower() in ("true", "1"))
             w = _get_attr(self, "brush_size_multiplier")
             if w is not None and settings.value("brush_size_multiplier") is not None:
                 w.setValue(float(settings.value("brush_size_multiplier")))
@@ -1227,9 +1300,15 @@ class AIStrokePainterDocker(DockWidget):
             w = _get_attr(self, "seed")
             if w is not None and hasattr(w, "value"):
                 settings.setValue("seed", w.value())
+            w = _get_attr(self, "auto_seed")
+            if w is not None and hasattr(w, "isChecked"):
+                settings.setValue("auto_seed", w.isChecked())
             w = _get_attr(self, "count")
             if w is not None and hasattr(w, "value"):
                 settings.setValue("count", w.value())
+            w = _get_attr(self, "auto_count")
+            if w is not None and hasattr(w, "isChecked"):
+                settings.setValue("auto_count", w.isChecked())
             w = _get_attr(self, "palette_combo")
             if w is not None and hasattr(w, "currentData"):
                 settings.setValue("palette", w.currentData() or "anime")
@@ -1242,6 +1321,9 @@ class AIStrokePainterDocker(DockWidget):
             w = _get_attr(self, "auto_refine")
             if w is not None and hasattr(w, "isChecked"):
                 settings.setValue("auto_refine", w.isChecked())
+            w = _get_attr(self, "goal_mode")
+            if w is not None and hasattr(w, "isChecked"):
+                settings.setValue("goal_mode", w.isChecked())
             w = _get_attr(self, "brush_size_multiplier")
             if w is not None and hasattr(w, "value"):
                 settings.setValue("brush_size_multiplier", w.value())
@@ -1508,6 +1590,11 @@ class AIStrokePainterDocker(DockWidget):
             ref.setEnabled(is_openai)
             if not is_openai and hasattr(ref, "setChecked"):
                 ref.setChecked(False)
+        goal = _get_attr(self, "goal_mode")
+        if goal is not None and hasattr(goal, "setEnabled"):
+            goal.setEnabled(is_openai)
+            if not is_openai and hasattr(goal, "setChecked"):
+                goal.setChecked(False)
         iters = _get_attr(self, "iterations")
         if iters is not None and hasattr(iters, "setEnabled"):
             iters.setEnabled(is_openai)
@@ -1622,6 +1709,9 @@ class AIStrokePainterDocker(DockWidget):
 
         iter_w = _get_attr(self, "iterations")
         ref_w = _get_attr(self, "auto_refine")
+        goal_w = _get_attr(self, "goal_mode")
+        auto_seed_w = _get_attr(self, "auto_seed")
+        auto_count_w = _get_attr(self, "auto_count")
         pal_w = _get_attr(self, "palette_combo")
         prof_w = _get_attr(self, "brush_profile")
         bs_w = _get_attr(self, "brush_size_multiplier")
@@ -1632,10 +1722,21 @@ class AIStrokePainterDocker(DockWidget):
         sj_w = _get_attr(self, "save_json")
         ss_w = _get_attr(self, "save_svg_chk")
 
+        is_openai = self._is_openai_compatible_mode()
+        auto_seed = (
+            bool(auto_seed_w.isChecked()) if auto_seed_w is not None and hasattr(auto_seed_w, "isChecked") else False
+        )
+        auto_count = (
+            bool(auto_count_w.isChecked()) if auto_count_w is not None and hasattr(auto_count_w, "isChecked") else False
+        )
+        goal_mode = (
+            bool(goal_w.isChecked()) if goal_w is not None and hasattr(goal_w, "isChecked") and is_openai else False
+        )
+
         max_iters = (
-            iter_w.value()
-            if iter_w is not None and ref_w is not None and self._is_openai_compatible_mode() and ref_w.isChecked()
-            else 1
+            10
+            if goal_mode
+            else (iter_w.value() if iter_w is not None and ref_w is not None and is_openai and ref_w.isChecked() else 1)
         )
         palette = (pal_w.currentData() or "anime") if pal_w is not None and hasattr(pal_w, "currentData") else "anime"
         profile = (prof_w.currentData() or "auto") if prof_w is not None and hasattr(prof_w, "currentData") else "auto"
@@ -1661,8 +1762,12 @@ class AIStrokePainterDocker(DockWidget):
         self._log_debug(f"\n========== 描画タスク開始 [{now_str}] ==========")
         mode_w = _get_attr(self, "planner_mode")
         mode_str = mode_w.currentText() if mode_w is not None and hasattr(mode_w, "currentText") else ""
+        count_mode_str = (
+            "Auto (無制限)" if auto_count else str(_get_attr(self, "count").value() if _get_attr(self, "count") else 35)
+        )
+        goal_mode_str = ", Goal Mode: ON" if goal_mode else ""
         self._log_debug(
-            f"選択モード: {mode_str}, 反復数: {max_iters}, パレット: {palette}, プロファイル: {profile}, 太さ倍率: {size_val}x, 不透明度: {op_val}%"
+            f"選択モード: {mode_str}, 反復数: {max_iters}{goal_mode_str}, ストローク本数: {count_mode_str}, パレット: {palette}, プロファイル: {profile}, 太さ倍率: {size_val}x, 不透明度: {op_val}%"
         )
         st = _get_attr(self, "status")
         if st is not None and hasattr(st, "setText"):
@@ -1685,8 +1790,19 @@ class AIStrokePainterDocker(DockWidget):
             prompt_val = (
                 prompt_w.toPlainText().strip() if prompt_w is not None and hasattr(prompt_w, "toPlainText") else ""
             )
-            seed_val = seed_w.value() if seed_w is not None and hasattr(seed_w, "value") else 42
-            count_val = count_w.value() if count_w is not None and hasattr(count_w, "value") else 35
+
+            # Auto Seed: 実行時にランダムシードを生成してスピンボックスに反映
+            if auto_seed:
+                seed_val = random.randint(0, 2147483647)
+                if seed_w is not None and hasattr(seed_w, "setValue"):
+                    seed_w.setValue(seed_val)
+                self._log_debug(f"[Auto Seed] ランダムシード {seed_val} を生成しました")
+            else:
+                seed_val = seed_w.value() if seed_w is not None and hasattr(seed_w, "value") else 42
+
+            count_val = (
+                None if auto_count else (count_w.value() if count_w is not None and hasattr(count_w, "value") else 35)
+            )
             e_thresh = float(ethresh_w.value()) if ethresh_w is not None and hasattr(ethresh_w, "value") else 0.18
             s_dens = (
                 str(sdens_w.currentData() or "medium")
@@ -1715,6 +1831,8 @@ class AIStrokePainterDocker(DockWidget):
                 shading_density=s_dens,
                 enable_flats=flats_val,
                 color_mode=c_mode,
+                auto_count=auto_count,
+                goal_mode=goal_mode,
             )
             self._worker = worker
             worker.debug_log.connect(self._log_debug)

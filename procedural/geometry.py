@@ -13,7 +13,7 @@ from .base import catmull_rom_spline, create_stroke, sample_strokes_by_priority
 def generate_geometry_strokes(
     prompt: str,
     seed: int,
-    count: int,
+    count: int | None,
     width: float,
     height: float,
 ) -> list[Stroke]:
@@ -35,7 +35,7 @@ def generate_geometry_strokes(
         # =====================================================================
         # サイバーパンク・都市スカイライン (Cyberpunk Skyline & Perspective)
         # =====================================================================
-        building_count = min(max(1, count // 2), 20)
+        building_count = min(max(1, (count // 2) if count is not None else 15), 20)
         base_y = height * 0.85
         # 1. ビル群のアウトライン
         for b_i in range(building_count):

@@ -9,6 +9,7 @@ dependencies = []
 [project.optional-dependencies]
 dev = [
     "mypy>=1.0.0",
+    "pyrefly>=1.0.0",
     "ruff>=0.1.0",
     "pytest>=7.0.0",
 ]
