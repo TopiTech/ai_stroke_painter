@@ -386,7 +386,7 @@ class PlanWorker(QObject):
                 # Goal モード時の目標達成判定による早期自律完了
                 is_goal_met = bool(
                     current_plan.goal_reached
-                    or current_plan.metadata.get("goal_reached", False)
+                    or current_plan.metadata.get("goal_reached", False) is True
                     or current_plan.completion_score >= 0.90
                 )
                 if self.goal_mode and is_goal_met and iter_idx >= 1:
@@ -1950,7 +1950,12 @@ class AIStrokePainterDocker(DockWidget):
                 view=_get_attr(self, "_active_view"),
             )
             render_worker = _get_attr(self, "_worker")
-            is_final_iteration = plan.iteration >= int(getattr(render_worker, "max_iterations", plan.iteration))
+            is_goal_completion = bool(getattr(render_worker, "goal_mode", False)) and (
+                plan.goal_reached or plan.metadata.get("goal_reached", False) is True or plan.completion_score >= 0.90
+            )
+            is_final_iteration = (
+                plan.iteration >= int(getattr(render_worker, "max_iterations", plan.iteration)) or is_goal_completion
+            )
             if not self.is_cancelled() and is_final_iteration:
                 if save_json_enabled:
                     saved_json_path = save_plan(plan)

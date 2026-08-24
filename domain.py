@@ -170,8 +170,10 @@ class Stroke:
                 curr_time = t
                 points_list.append(StrokePoint(x=sp.x, y=sp.y, pressure=sp.pressure, time_ms=curr_time))
             preset_name = str(value.get("brush_preset", "Basic-5 Size"))
-            is_eraser_val = bool(
-                value.get("is_eraser", False)
+            # 外部 JSON の "false" のような非真偽値を truthy と解釈すると、
+            # 通常ストロークを意図せず消しゴムとして描画してしまう。
+            is_eraser_val = (
+                value.get("is_eraser", False) is True
                 or "eraser" in preset_name.lower()
                 or str(value.get("layer_name", "")).lower() == "eraser"
             )
@@ -232,8 +234,8 @@ class VisionCritique:
                 completion_score=value.get("completion_score", 0.0),
                 suggested_action=value.get("suggested_action", ""),
                 iteration=value.get("iteration", 1),
-                goal_reached=bool(
-                    value.get("goal_reached", False) or float(value.get("completion_score", 0.0)) >= 0.90
+                goal_reached=(
+                    value.get("goal_reached", False) is True or float(value.get("completion_score", 0.0)) >= 0.90
                 ),
             )
         except (TypeError, ValueError) as exc:
@@ -346,7 +348,9 @@ class DrawingPlan:
                 raise PlanValidationError(f"strokes は {MAX_PLAN_STROKES} 本以下である必要があります")
             strokes = tuple(Stroke.from_dict(stroke) for stroke in raw_strokes)
             metadata_val = dict(value.get("metadata", {})) if isinstance(value.get("metadata"), Mapping) else {}
-            goal_reached_val = bool(value.get("goal_reached", False) or metadata_val.get("goal_reached", False))
+            goal_reached_val = (
+                value.get("goal_reached", False) is True or metadata_val.get("goal_reached", False) is True
+            )
             completion_score_val = float(
                 value.get(
                     "completion_score",

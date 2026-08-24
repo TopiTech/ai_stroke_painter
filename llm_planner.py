@@ -2100,7 +2100,7 @@ def _validate_and_sanitize_plan(
         raise LLMPlannerError("有効なストロークを構築できませんでした")
 
     metadata_val = dict(plan.metadata) if isinstance(plan.metadata, Mapping) else {}
-    goal_reached = bool(getattr(plan, "goal_reached", False) or metadata_val.get("goal_reached", False))
+    goal_reached = bool(getattr(plan, "goal_reached", False) or metadata_val.get("goal_reached", False) is True)
     completion_score = float(
         getattr(plan, "completion_score", 1.0)
         if getattr(plan, "completion_score", None) is not None

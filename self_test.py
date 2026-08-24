@@ -3049,6 +3049,62 @@ class WorkerAndDockerTests(unittest.TestCase):
         docker._on_plan_ready(plan_no_req)
         self.assertEqual(worker4.provided_captures, [b""])
 
+    def test_docker_saves_goal_mode_early_completion(self) -> None:
+        """Goal モードの早期達成結果も、選択されたエクスポート対象として保存する。"""
+
+        class FakeCanvasPort:
+            def render(self, *args: Any, **kwargs: Any) -> int:
+                return 1
+
+        class FakeWorker:
+            max_iterations = 10
+            goal_mode = True
+
+            def notify_render_done(self) -> None:
+                pass
+
+            def isRunning(self) -> bool:  # noqa: N802
+                return True
+
+        docker = AIStrokePainterDocker.__new__(AIStrokePainterDocker)
+        docker.canvas_port = cast(Any, FakeCanvasPort())
+        docker._active_doc = object()
+        docker._active_view = None
+        docker._cancel = False
+        docker._worker = cast(Any, FakeWorker())
+        docker._run_render_options = {
+            "save_json": True,
+            "save_svg": True,
+            "layer_mode": "multi_layer",
+            "layer_prefix": "AI Artwork",
+            "event_interval": 1,
+        }
+        plan = DrawingPlan(
+            prompt="test",
+            seed=1,
+            strokes=[Stroke("s1", [StrokePoint(0, 0, 0.5, 0), StrokePoint(10, 10, 0.8, 10)])],
+            iteration=1,
+            goal_reached=True,
+            completion_score=1.0,
+        )
+        saved: list[str] = []
+
+        def fake_save_plan(_plan: DrawingPlan) -> Path:
+            saved.append("json")
+            return Path("plan.json")
+
+        def fake_save_svg(_plan: DrawingPlan) -> Path:
+            saved.append("svg")
+            return Path("plan.svg")
+
+        with (
+            patch("ai_stroke_painter.docker.save_plan", side_effect=fake_save_plan),
+            patch("ai_stroke_painter.docker.save_svg", side_effect=fake_save_svg),
+        ):
+            docker._on_plan_ready(plan)
+
+        self.assertEqual(saved, ["json", "svg"])
+
 
 class ExtendedCustomizationTests(unittest.TestCase):
     """拡張設定項目・パレット・ブラシプロファイル・レイヤーモード・画像変換・カスタムプリセットの検証。"""
@@ -3363,6 +3419,26 @@ class ExtendedCustomizationTests(unittest.TestCase):
             }
         )
         self.assertTrue(auto_inferred.is_eraser)
+
+    def test_string_false_does_not_enable_eraser_or_goal_completion(self) -> None:
+        """外部 JSON の文字列 false を truthy なフラグとして扱わない。"""
+        plan = DrawingPlan.from_dict(
+            {
+                "prompt": "test",
+                "seed": 1,
+                "goal_reached": "false",
+                "metadata": {"goal_reached": "false"},
+                "strokes": [
+                    {
+                        "id": "s1",
+                        "points": [[0, 0], [10, 10]],
+                        "is_eraser": "false",
+                    }
+                ],
+            }
+        )
+        self.assertFalse(plan.goal_reached)
+        self.assertFalse(plan.strokes[0].is_eraser)
 
     def test_drawing_plan_goal_and_svg_support(self) -> None:
         """DrawingPlan の goal_reached, completion_score, および SVG 出力テスト。"""
