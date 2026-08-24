@@ -13,7 +13,7 @@ Procedural, Image-to-Stroke, and LLM planners all cross the same compiler bounda
 
 ## Transaction boundary
 
-Generated layer/group modes roll back by removing only their run-owned container. Active-layer mode captures the target paint layer with `Node.pixelData()` before its first mutation and restores that exact layer with `Node.setPixelData()` on cancellation or failure. A multi-pass session retains one original snapshot until commit, so later passes cannot turn a partial result into the rollback baseline.
+Generated layer/group modes roll back by removing only their run-owned container. Active-layer mode captures the target paint layer with `Node.pixelData()` before its first mutation and restores that exact layer with `Node.setPixelData()` on cancellation or failure. Direct canvas input is guarded while a synchronous active-layer render pumps Qt events, and the session records a digest of each completed target state. If an external change is detected before another pass or rollback, it fails closed rather than overwriting that change. A multi-pass session retains one original snapshot until commit, so later passes cannot turn a partial result into the rollback baseline.
 
 Some Krita forks expose `createMacro()` / `endMacro()` and those are used opportunistically for nicer history grouping, but correctness never depends on them. The standard Python compatibility path guarantees rollback isolation, not a single `Ctrl+Z` history entry.
 

@@ -24,7 +24,7 @@ from .docker import (
 )
 from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint, VisionCritique
 from .image_converter import ImageStrokeConverter, _image_dimensions_from_header, _trace_edge_paths
-from .krita_adapter import KritaCanvasAdapter
+from .krita_adapter import ActiveLayerSessionConflict, KritaCanvasAdapter
 from .llm_planner import (
     LLMPlannerError,
     OpenAICompatiblePlanner,
@@ -2545,11 +2545,94 @@ class CanvasAdapterTests(unittest.TestCase):
         session_adapter.render(session_document, plan)
         session_adapter.render(session_document, plan, cancelled=lambda: True)
         self.assertEqual(session_target.pixels, b"painted pixels")
-        self.assertEqual(session_target.pixel_reads, 1)
+        # One original snapshot plus state checks before the second render.
+        self.assertEqual(session_target.pixel_reads, 3)
         session_adapter.end_render_session(commit=False)
         self.assertEqual(session_document.macros_ended, 1)
         self.assertEqual(session_target.pixels, b"initial pixels")
         self.assertEqual(session_target.pixel_writes, 1)
+
+    def test_active_layer_session_preserves_external_edit_on_rollback_conflict(self) -> None:
+        target = _FakeNode("existing")
+        document = _FakeDocument(active=target)
+        plan = RuleBasedPlanner().plan("curve", 1, 1, 100, 100)
+        adapter = KritaCanvasAdapter(layer_mode="active_layer")
+
+        adapter.begin_render_session(document)
+        adapter.render(document, plan, layer_mode="active_layer")
+        target.pixels = b"user edit after plugin render"
+
+        with self.assertRaises(ActiveLayerSessionConflict):
+            adapter.end_render_session(commit=False)
+
+        self.assertEqual(target.pixels, b"user edit after plugin render")
+        self.assertEqual(document.macros_ended, 1)
+
+    def test_created_active_layer_is_not_removed_after_external_edit(self) -> None:
+        root = _FakeNode("root", "grouplayer")
+        document = _FakeDocument(active=None, root=root)
+        plan = RuleBasedPlanner().plan("curve", 1, 1, 100, 100)
+        adapter = KritaCanvasAdapter(layer_mode="active_layer")
+
+        adapter.begin_render_session(document)
+        adapter.render(document, plan, layer_mode="active_layer")
+        self.assertEqual(len(root.childNodes()), 1)
+        created = root.childNodes()[0]
+        created.pixels = b"user edit on newly-created active layer"
+
+        with self.assertRaises(ActiveLayerSessionConflict):
+            adapter.end_render_session(commit=False)
+
+        self.assertIn(created, root.childNodes())
+        self.assertEqual(created.pixels, b"user edit on newly-created active layer")
+
+    def test_active_layer_session_guards_canvas_input_while_processing_events(self) -> None:
+        from .krita_adapter import _CANVAS_INPUT_EVENT_TYPES
+
+        class Canvas:
+            def __init__(self) -> None:
+                self.installed: list[Any] = []
+                self.removed: list[Any] = []
+
+            def installEventFilter(self, guard: Any) -> None:  # noqa: N802
+                self.installed.append(guard)
+
+            def removeEventFilter(self, guard: Any) -> None:  # noqa: N802
+                self.removed.append(guard)
+
+        class View:
+            def __init__(self, canvas: Canvas) -> None:
+                self._canvas = canvas
+
+            def canvas(self) -> Canvas:
+                return self._canvas
+
+        class Event:
+            def __init__(self, event_type: Any) -> None:
+                self._event_type = event_type
+
+            def type(self) -> Any:
+                return self._event_type
+
+        target = _FakeNode("existing")
+        document = _FakeDocument(active=target)
+        canvas = Canvas()
+        adapter = KritaCanvasAdapter(layer_mode="active_layer", event_interval=1)
+        plan = RuleBasedPlanner().plan("curve", 1, 1, 100, 100)
+
+        adapter.begin_render_session(document)
+        with (
+            patch("ai_stroke_painter.krita_adapter._apply_stroke_style"),
+            patch("ai_stroke_painter.krita_adapter._apply_color_to_krita"),
+            patch("ai_stroke_painter.krita_adapter._process_events") as process_events,
+        ):
+            adapter.render(document, plan, layer_mode="active_layer", view=View(canvas), event_interval=1)
+
+        self.assertTrue(process_events.called)
+        self.assertEqual(len(canvas.installed), 1)
+        self.assertEqual(canvas.removed, canvas.installed)
+        self.assertTrue(canvas.installed[0].eventFilter(canvas, Event(next(iter(_CANVAS_INPUT_EVENT_TYPES)))))
+        self.assertFalse(canvas.installed[0].eventFilter(canvas, Event(object())))
 
     def test_active_layer_rollback_uses_standard_node_api_without_macros(self) -> None:
         class StandardApiDocument(_FakeDocument):
@@ -3249,6 +3332,29 @@ class WorkerAndDockerTests(unittest.TestCase):
         worker.run()
         self.assertEqual(len(received_plans), 0)
 
+    def test_goal_completion_does_not_win_over_stop_requested_after_render(self) -> None:
+        class GoalPlanner:
+            def plan(self, **_kwargs: Any) -> DrawingPlan:
+                return DrawingPlan(
+                    "goal",
+                    1,
+                    [Stroke("stroke", [StrokePoint(0, 0, 1, 0), StrokePoint(1, 1, 1, 1)])],
+                    goal_reached=True,
+                    completion_score=1.0,
+                )
+
+        worker = PlanWorker(cast(Any, GoalPlanner()), "goal", 1, 1, 100, 100, goal_mode=True)
+
+        def render_then_stop(_plan: DrawingPlan) -> None:
+            worker.notify_render_done()
+            worker.cancel()
+
+        worker.plan_ready.connect(render_then_stop)
+        worker.run()
+
+        self.assertTrue(worker.is_cancelled())
+        self.assertFalse(worker.completed_successfully)
+
     def test_plan_worker_stops_after_render_failure(self) -> None:
         planner_calls: list[int] = []
 
@@ -3719,6 +3825,61 @@ class WorkerAndDockerTests(unittest.TestCase):
         docker._canvas_session_open = True
         docker._reset_run_state()
         self.assertEqual(session_port.commits, [True, False])
+
+    def test_docker_rolls_back_when_a_completed_worker_was_cancelled(self) -> None:
+        class SessionCanvasPort:
+            def __init__(self) -> None:
+                self.commits: list[bool] = []
+
+            def end_render_session(self, *, commit: bool) -> None:
+                self.commits.append(commit)
+
+        class CancelledCompletedWorker:
+            completed_successfully = True
+
+            def is_cancelled(self) -> bool:
+                return True
+
+        docker = AIStrokePainterDocker()
+        session_port = SessionCanvasPort()
+        docker.canvas_port = cast(Any, session_port)
+        docker._canvas_session_open = True
+        docker._worker = cast(Any, CancelledCompletedWorker())
+        docker._on_worker_finished()
+
+        self.assertEqual(session_port.commits, [False])
+
+    def test_docker_surfaces_canvas_session_finalization_failure(self) -> None:
+        class FailingCanvasPort:
+            def end_render_session(self, *, commit: bool) -> None:
+                raise RuntimeError("restore failed")
+
+        class Status:
+            def __init__(self) -> None:
+                self.text = ""
+
+            def setText(self, value: str) -> None:  # noqa: N802
+                self.text = value
+
+        messages: list[tuple[str, str]] = []
+
+        class MessageBox:
+            @staticmethod
+            def critical(_parent: Any, title: str, message: str) -> None:
+                messages.append((title, message))
+
+        docker = AIStrokePainterDocker.__new__(AIStrokePainterDocker)
+        docker.canvas_port = cast(Any, FailingCanvasPort())
+        docker._canvas_session_open = True
+        docker.status = Status()
+
+        with patch("ai_stroke_painter.docker.QMessageBox", MessageBox):
+            self.assertFalse(docker._finish_canvas_session(False))
+
+        self.assertFalse(docker._canvas_session_open)
+        self.assertIn("ロールバックに失敗", docker.status.text)
+        self.assertEqual(len(messages), 1)
+        self.assertIn("restore failed", messages[0][1])
 
     def test_docker_on_plan_ready_captures_each_auto_refine_iteration(self) -> None:
         class _TestWidget:

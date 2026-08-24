@@ -297,6 +297,7 @@ class PlanWorker(QObject):
         self.color_mode = color_mode
         self.auto_count = auto_count
         self.goal_mode = goal_mode
+        self._state_lock = threading.Lock()
         self._is_cancelled = False
         self._render_done_event = threading.Event()
         self._next_canvas_image: bytes | None = None
@@ -326,12 +327,24 @@ class PlanWorker(QObject):
         self._render_done_event.set()
 
     def cancel(self) -> None:
-        self._is_cancelled = True
+        with self._state_lock:
+            self._is_cancelled = True
+            # A stop request wins over a completion observed by the worker thread.
+            self.completed_successfully = False
         self._render_done_event.set()
         self.debug_log.emit("[ワーカー] キャンセル要求を受信しました")
 
     def is_cancelled(self) -> bool:
-        return self._is_cancelled
+        with self._state_lock:
+            return self._is_cancelled
+
+    def _mark_completed_successfully(self) -> bool:
+        """Atomically mark success only while cancellation has not been requested."""
+        with self._state_lock:
+            if self._is_cancelled:
+                return False
+            self.completed_successfully = True
+            return True
 
     def isRunning(self) -> bool:  # noqa: N802
         return self._is_running or (self._thread is not None and self._thread.is_alive())
@@ -339,7 +352,8 @@ class PlanWorker(QObject):
     def start(self) -> None:
         if self.isRunning():
             return
-        self.completed_successfully = False
+        with self._state_lock:
+            self.completed_successfully = False
         self._is_running = True
         self._thread = threading.Thread(target=self._run_wrapper, daemon=True)
         self._thread.start()
@@ -420,7 +434,8 @@ class PlanWorker(QObject):
                 # Goal モード時の目標達成判定による早期自律完了
                 is_goal_met = _is_plan_goal_reached(current_plan)
                 if self.goal_mode and is_goal_met and iter_idx >= 1:
-                    self.completed_successfully = True
+                    if not self._mark_completed_successfully():
+                        return
                     self.iteration_progress.emit(
                         iter_idx,
                         iter_idx,
@@ -431,15 +446,14 @@ class PlanWorker(QObject):
                     )
                     break
 
-            if not self.is_cancelled() and not self.completed_successfully:
-                self.completed_successfully = True
+            if not self.completed_successfully and self._mark_completed_successfully():
                 self.iteration_progress.emit(self.max_iterations, self.max_iterations, "全ステップの描画が完了しました")
                 self.debug_log.emit("[ワーカー完了] 全ての処理が正常に完了しました")
 
         except Exception as exc:
             tb = traceback.format_exc()
             self.debug_log.emit(f"[例外発生] {exc}\nスタックトレース:\n{tb}")
-            if not self._is_cancelled:
+            if not self.is_cancelled():
                 self.plan_failed.emit(str(exc))
 
 
@@ -2147,12 +2161,23 @@ class AIStrokePainterDocker(DockWidget):
 
     def _on_worker_finished(self) -> None:
         worker = _get_attr(self, "_worker")
-        succeeded = bool(worker is not None and getattr(worker, "completed_successfully", False))
+        worker_is_cancelled = False
+        if worker is not None:
+            cancelled_getter = getattr(worker, "is_cancelled", None)
+            if callable(cancelled_getter):
+                with contextlib.suppress(Exception):
+                    worker_is_cancelled = bool(cancelled_getter())
+        succeeded = bool(
+            worker is not None
+            and getattr(worker, "completed_successfully", False)
+            and not worker_is_cancelled
+            and not self.is_cancelled()
+        )
         self._reset_run_state(commit_session=succeeded)
 
-    def _finish_canvas_session(self, commit: bool) -> None:
+    def _finish_canvas_session(self, commit: bool) -> bool:
         if not bool(_get_attr(self, "_canvas_session_open", False)):
-            return
+            return True
         canvas_port = _get_attr(self, "canvas_port")
         try:
             if canvas_port is not None and hasattr(canvas_port, "end_render_session"):
@@ -2164,8 +2189,17 @@ class AIStrokePainterDocker(DockWidget):
             )
         except Exception as exc:
             self._log_debug(f"[描画セッション終了失敗] {exc}")
+            action = "確定" if commit else "ロールバック"
+            message = f"描画セッションの{action}に失敗しました。キャンバスを確認し、必要に応じて手動で元に戻してください。\n\n{exc}"
+            st = _get_attr(self, "status")
+            if st is not None and hasattr(st, "setText"):
+                st.setText(f"エラー: 描画セッションの{action}に失敗しました。キャンバスを確認してください。")
+            if QMessageBox is not None and hasattr(QMessageBox, "critical"):
+                QMessageBox.critical(self, "AI Stroke Painter 描画セッションエラー", message)
+            return False
         finally:
             self._canvas_session_open = False
+        return True
 
     def _reset_run_state(self, commit_session: bool = False) -> None:
         self._finish_canvas_session(commit_session)

@@ -12,6 +12,7 @@ QT_BINDING: str | None = None
 # 各種 Qt クラスの初期値
 QObject: Any = None
 pyqtSignal: Any = None
+QEvent: Any = None
 QWidget: Any = None
 QLabel: Any = None
 QPushButton: Any = None
@@ -102,6 +103,7 @@ for binding in _binding_order:
 
         QObject = getattr(_core, "QObject", None)
         pyqtSignal = getattr(_core, "pyqtSignal", None)
+        QEvent = getattr(_core, "QEvent", None)
         QPoint = getattr(_core, "QPoint", None)
         QPointF = getattr(_core, "QPointF", None)
         QByteArray = getattr(_core, "QByteArray", None)
@@ -178,6 +180,23 @@ if not HAS_QT:
     class QObject:  # type: ignore[no-redef]
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
+
+    class QEvent:  # type: ignore[no-redef]
+        class Type:
+            MouseButtonPress = 2
+            MouseButtonRelease = 3
+            MouseButtonDblClick = 4
+            MouseMove = 5
+            KeyPress = 6
+            KeyRelease = 7
+            Wheel = 31
+            TabletMove = 87
+            TabletPress = 92
+            TabletRelease = 93
+            TouchBegin = 194
+            TouchUpdate = 195
+            TouchEnd = 196
+            ShortcutOverride = 51
 
     class QWidget(QObject):  # type: ignore[no-redef]
         def __init__(self, *args: Any, **kwargs: Any) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 import contextlib
 from dataclasses import dataclass
+import hashlib
 import math
 from typing import TYPE_CHECKING, Any
 
@@ -17,7 +18,9 @@ from .qt_compat import (
     QBuffer,
     QByteArray,
     QColor,
+    QEvent,
     QIODevice,
+    QObject,
     QPoint,
     QPointF,
     write_only_open_mode,
@@ -42,6 +45,84 @@ class _LayerSnapshot:
     pixels: Any
     width: int
     height: int
+
+
+@dataclass(frozen=True)
+class _LayerFingerprint:
+    """Full-pixel state identifier retained without another full image copy."""
+
+    node: Any
+    width: int
+    height: int
+    digest: bytes
+
+
+class ActiveLayerSessionConflict(RuntimeError):
+    """A direct target changed outside this render session, so rollback is unsafe."""
+
+
+def _canvas_input_event_types() -> frozenset[Any]:
+    event_type = getattr(QEvent, "Type", QEvent)
+    return frozenset(
+        value
+        for name in (
+            "MouseButtonPress",
+            "MouseButtonRelease",
+            "MouseButtonDblClick",
+            "MouseMove",
+            "KeyPress",
+            "KeyRelease",
+            "ShortcutOverride",
+            "TabletMove",
+            "TabletPress",
+            "TabletRelease",
+            "TouchBegin",
+            "TouchUpdate",
+            "TouchEnd",
+        )
+        if (value := getattr(event_type, name, getattr(QEvent, name, None))) is not None
+    )
+
+
+_CANVAS_INPUT_EVENT_TYPES = _canvas_input_event_types()
+
+
+class _CanvasInputGuard(QObject):
+    """Keep direct-layer pixels stable while a synchronous render pumps Qt events."""
+
+    def eventFilter(self, _watched: Any, event: Any) -> bool:  # noqa: N802
+        event_type = getattr(event, "type", None)
+        value = event_type() if callable(event_type) else None
+        return value in _CANVAS_INPUT_EVENT_TYPES
+
+
+def _install_canvas_input_guard(view: Any | None) -> tuple[Any, _CanvasInputGuard] | None:
+    canvas_getter = getattr(view, "canvas", None)
+    if not callable(canvas_getter):
+        return None
+    try:
+        canvas = canvas_getter()
+    except Exception:
+        return None
+    install = getattr(canvas, "installEventFilter", None)
+    if not callable(install):
+        return None
+    guard = _CanvasInputGuard()
+    try:
+        install(guard)
+    except Exception:
+        return None
+    return canvas, guard
+
+
+def _remove_canvas_input_guard(guard_state: tuple[Any, _CanvasInputGuard] | None) -> None:
+    if guard_state is None:
+        return
+    canvas, guard = guard_state
+    remove = getattr(canvas, "removeEventFilter", None)
+    if callable(remove):
+        with contextlib.suppress(Exception):
+            remove(guard)
 
 
 class KritaCanvasAdapter(CanvasPort):
@@ -69,6 +150,8 @@ class KritaCanvasAdapter(CanvasPort):
         self._session_container: Any | None = None
         self._session_active_target: Any | None = None
         self._session_active_snapshot: _LayerSnapshot | None = None
+        self._session_active_expected: _LayerFingerprint | None = None
+        self._session_active_conflict: str | None = None
         self._session_active_created: bool = False
         self._session_layer_cache: dict[str, Any] = {}
         self._session_macro_open: bool = False
@@ -86,6 +169,8 @@ class KritaCanvasAdapter(CanvasPort):
         self._session_container = None
         self._session_active_target = None
         self._session_active_snapshot = None
+        self._session_active_expected = None
+        self._session_active_conflict = None
         self._session_active_created = False
         self._session_layer_cache = {}
         self._session_has_changes = False
@@ -105,9 +190,12 @@ class KritaCanvasAdapter(CanvasPort):
                     with contextlib.suppress(Exception):
                         session_document.waitForDone()
                 if self._session_mode == "active_layer":
+                    active_target = self._session_active_target
                     if self._session_active_created and container is not None:
+                        self._assert_active_session_rollback_safe(session_document, active_target)
                         self._remove_node(session_document.rootNode(), container)
                     elif self._session_active_snapshot is not None:
+                        self._assert_active_session_rollback_safe(session_document, active_target)
                         _restore_layer_snapshot(self._session_active_snapshot)
                 elif container is not None:
                     self._remove_node(session_document.rootNode(), container)
@@ -127,10 +215,45 @@ class KritaCanvasAdapter(CanvasPort):
         self._session_container = None
         self._session_active_target = None
         self._session_active_snapshot = None
+        self._session_active_expected = None
+        self._session_active_conflict = None
         self._session_active_created = False
         self._session_layer_cache = {}
         self._session_macro_open = False
         self._session_has_changes = False
+
+    def _record_active_session_state(self, document: Any, node: Any) -> None:
+        try:
+            self._session_active_expected = _fingerprint_layer(document, node)
+        except Exception as exc:
+            self._session_active_conflict = "描画後のアクティブレイヤー状態を検証できませんでした"
+            raise ActiveLayerSessionConflict(
+                "アクティブレイヤーの描画後状態を検証できないため、安全な自動ロールバックを継続できません"
+            ) from exc
+
+    def _assert_active_session_rollback_safe(self, document: Any, node: Any | None) -> None:
+        if self._session_active_conflict is not None:
+            raise ActiveLayerSessionConflict(
+                f"{self._session_active_conflict}。アクティブレイヤーを上書きしないため、自動ロールバックを中止しました"
+            )
+        expected = self._session_active_expected
+        if node is None or expected is None or node is not expected.node:
+            self._session_active_conflict = "アクティブレイヤーの復元対象を確認できませんでした"
+            raise ActiveLayerSessionConflict(
+                "アクティブレイヤーの復元対象を確認できないため、自動ロールバックを中止しました"
+            )
+        try:
+            actual = _fingerprint_layer(document, node)
+        except Exception as exc:
+            self._session_active_conflict = "アクティブレイヤーの現在状態を検証できませんでした"
+            raise ActiveLayerSessionConflict(
+                "アクティブレイヤーの現在状態を検証できないため、自動ロールバックを中止しました"
+            ) from exc
+        if not _fingerprints_match(expected, actual):
+            self._session_active_conflict = "アクティブレイヤーが描画セッション中に外部変更されました"
+            raise ActiveLayerSessionConflict(
+                "アクティブレイヤーが描画セッション中に外部変更されたため、変更を上書きしないよう自動ロールバックを中止しました"
+            )
 
     def ensure_target(self, document: Any) -> Any:
         return self.ensure_layer(document, self.DEFAULT_LAYER_NAME)
@@ -330,6 +453,8 @@ class KritaCanvasAdapter(CanvasPort):
         active_snapshot: _LayerSnapshot | None = None
         active_target_created = False
         native_bridge = self.native_bridge
+        active_input_guard: tuple[Any, _CanvasInputGuard] | None = None
+        process_events_during_render = True
 
         if not session_active:
             standalone_macro_open = _start_macro(document, "AI Stroke Paint")
@@ -351,6 +476,8 @@ class KritaCanvasAdapter(CanvasPort):
                 if session_active:
                     if not self._session_active_created and self._session_active_snapshot is None:
                         self._session_active_snapshot = _capture_layer_snapshot(document, current_node)
+                    if self._session_active_expected is not None:
+                        self._assert_active_session_rollback_safe(document, current_node)
                 elif rollback_on_cancel and not active_target_created:
                     active_snapshot = _capture_layer_snapshot(document, current_node)
                 current_layer_name = getattr(current_node, "name", lambda: self.DEFAULT_LAYER_NAME)()
@@ -380,6 +507,10 @@ class KritaCanvasAdapter(CanvasPort):
                 self._session_mode = mode
                 if generated_container is not None:
                     self._session_container = generated_container
+                if mode == "active_layer":
+                    active_input_guard = _install_canvas_input_guard(target_view)
+                    # Do not pump user events into an unguarded direct target.
+                    process_events_during_render = active_input_guard is not None
 
             if cancelled():
                 return 0
@@ -432,7 +563,8 @@ class KritaCanvasAdapter(CanvasPort):
                         segment_count += max(1, len(stroke.points) - 1)
                         if segment_count >= evt_interval:
                             segment_count = 0
-                            _process_events()
+                            if process_events_during_render:
+                                _process_events()
                         continue
 
                 if not hasattr(current_node, "paintLine"):
@@ -473,7 +605,8 @@ class KritaCanvasAdapter(CanvasPort):
                     segment_count += 1
                     if segment_count >= evt_interval:
                         segment_count = 0
-                        _process_events()
+                        if process_events_during_render:
+                            _process_events()
 
                 rendered += 1
             completed = not cancelled()
@@ -486,6 +619,11 @@ class KritaCanvasAdapter(CanvasPort):
             if hasattr(document, "waitForDone"):
                 with contextlib.suppress(Exception):
                     document.waitForDone()
+            if session_active and mode == "active_layer" and mutated and current_node is not None:
+                try:
+                    self._record_active_session_state(document, current_node)
+                except Exception as exc:
+                    rollback_error = exc
             if generated_container is not None and rollback_on_cancel and not completed:
                 try:
                     self._remove_node(document.rootNode(), generated_container)
@@ -526,6 +664,7 @@ class KritaCanvasAdapter(CanvasPort):
                     _end_macro(document)
                 except Exception as exc:
                     macro_error = exc
+            _remove_canvas_input_guard(active_input_guard)
             _restore_view_state(target_view, view_state)
             if rollback_error is not None:
                 raise rollback_error
@@ -607,6 +746,30 @@ def _capture_layer_snapshot(document: Any, node: Any) -> _LayerSnapshot:
     if pixels is None:
         raise RuntimeError("アクティブレイヤーのロールバック用スナップショットが空です")
     return _LayerSnapshot(node=node, pixels=pixels, width=width, height=height)
+
+
+def _fingerprint_layer(document: Any, node: Any) -> _LayerFingerprint:
+    """Identify a layer's full pixel state without retaining another full snapshot."""
+    snapshot = _capture_layer_snapshot(document, node)
+    try:
+        digest = hashlib.blake2b(bytes(snapshot.pixels), digest_size=32).digest()
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("アクティブレイヤーの画素状態を検証できません") from exc
+    return _LayerFingerprint(
+        node=snapshot.node,
+        width=snapshot.width,
+        height=snapshot.height,
+        digest=digest,
+    )
+
+
+def _fingerprints_match(expected: _LayerFingerprint, actual: _LayerFingerprint) -> bool:
+    return (
+        expected.node is actual.node
+        and expected.width == actual.width
+        and expected.height == actual.height
+        and expected.digest == actual.digest
+    )
 
 
 def _restore_layer_snapshot(snapshot: _LayerSnapshot) -> None:
