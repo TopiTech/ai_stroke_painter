@@ -1303,7 +1303,8 @@ def _collect_candidate_texts_from_response(
                 else:
                     log_func(f"[Gemini 応答状態] finishReason: {g_finish}")
 
-            parts = first_cand.get("content", {}).get("parts", [])
+            content = first_cand.get("content")
+            parts = content.get("parts") if isinstance(content, Mapping) else []
             if isinstance(parts, list):
                 # 通常テキストパート
                 normal_parts = [p.get("text", "") for p in parts if isinstance(p, Mapping) and not p.get("thought")]

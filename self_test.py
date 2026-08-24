@@ -1562,6 +1562,22 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         plan4 = DrawingPlan.from_dict(_extract_json_object(raw4))
         self.assertEqual(plan4.prompt, "tag test 4")
 
+    def test_gemini_null_content_is_handled_as_extraction_failure(self) -> None:
+        # Gemini 形式で candidates[0].content が明示的 null (SAFETY ブロック等) の場合、
+        # AttributeError ではなく抽出失敗として扱われること
+        resp_null_content = {"candidates": [{"content": None, "finishReason": "SAFETY"}]}
+        with self.assertRaises(LLMPlannerError):
+            _plan_from_response(resp_null_content)
+        with self.assertRaises(LLMPlannerError):
+            _extract_content_from_response(resp_null_content)
+
+        # content 自体が欠落している場合も同様に安全であること
+        resp_missing_content = {"candidates": [{"finishReason": "STOP"}]}
+        with self.assertRaises(LLMPlannerError):
+            _plan_from_response(resp_missing_content)
+        with self.assertRaises(LLMPlannerError):
+            _extract_content_from_response(resp_missing_content)
+
     def test_gemini_thinking_parts_extraction(self) -> None:
         valid_plan = {
             "schema_version": 1,

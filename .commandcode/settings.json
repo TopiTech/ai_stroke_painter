@@ -46,7 +46,12 @@
       "Shell(python -X utf8 \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\4a1a9e0a-3580-4401-ac04-ca19c116440c\\scratchpad\\list_sip.py\" 2>&1)",
       "Shell(python -m unittest ai_stroke_painter.self_test.WorkerAndDockerTests.test_plan_worker_forwards_palette_name_to_planner -v 2>&1)",
       "Shell(python -X utf8 -m unittest ai_stroke_painter.self_test.WorkerAndDockerTests.test_plan_worker_forwards_palette_name_to_planner -v 2>&1)",
-      "Shell(python -c \"import sys; sys.path.insert(0, '..'); import ai_stroke_painter.self_test as st; print(st.__file__)\" 2>&1)"
+      "Shell(python -c \"import sys; sys.path.insert(0, '..'); import ai_stroke_painter.self_test as st; print(st.__file__)\" 2>&1)",
+      "Shell(python --version)",
+      "Shell(python -c import sys; print(sys.executable))",
+      "Shell(python \"C:\\Users\\mibu0\\AppData\\Local\\Temp\\commandcode\\C--Users-mibu0-Documents-develop-AI-Stroke-Painter-MVP-ZIP-ai-stroke-painter\\66f6cdc6-b8f1-459c-a3ff-2ba5ebc3f087\\scratchpad\\repro_r1.py\")",
+      "Shell(python -m unittest ai_stroke_painter.self_test.OpenAICompatiblePlannerTests.test_gemini_null_content_is_handled_as_extraction_failure -v)",
+      "Shell(python -m unittest ai_stroke_painter.self_test.OpenAICompatiblePlannerTests.test_gemini_thinking_parts_extraction ai_stroke_painter.self_test.OpenAICompatiblePlannerTests.test_extract_content_various_api_formats -v)"
     ],
     "deny": [],
     "defaultMode": "default"
