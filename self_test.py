@@ -68,7 +68,13 @@ from .qt_compat import (
 )
 from .quality import evaluate_plan_quality
 from .storage import load_plan, load_program, save_plan, save_program, save_svg
-from .stroke_program import StrokeProgram, compile_stroke_program, drawing_plan_to_stroke_program
+from .stroke_program import (
+    PathOperation,
+    ProgramPoint,
+    StrokeProgram,
+    compile_stroke_program,
+    drawing_plan_to_stroke_program,
+)
 
 
 class _FakeNode:
@@ -243,6 +249,32 @@ class PlannerAndStorageTests(unittest.TestCase):
         limited = compile_stroke_program(program, count=20)
         self.assertEqual(len(limited.strokes), 20)
         self.assertIn("Lineart", limited.layers)
+
+    def test_stroke_program_dense_path_compilation_respects_point_limit(self) -> None:
+        dense_points = [ProgramPoint(i / 250.0, i / 250.0, 0.8) for i in range(250)]
+        dense_program = StrokeProgram(
+            prompt="dense smooth path",
+            seed=1,
+            canvas_width=1000,
+            canvas_height=1000,
+            operations=[PathOperation(id="dense-path", points=dense_points, smooth=True)],
+        )
+        plan = compile_stroke_program(dense_program)
+        self.assertEqual(len(plan.strokes), 1)
+        self.assertLessEqual(len(plan.strokes[0].points), 1000)
+        self.assertEqual(len(plan.strokes[0].points), 1000)
+
+        closed_points = [ProgramPoint(i / 1000.0, i / 1000.0, 0.8) for i in range(1000)]
+        closed_program = StrokeProgram(
+            prompt="closed dense path",
+            seed=2,
+            canvas_width=1000,
+            canvas_height=1000,
+            operations=[PathOperation(id="closed-path", points=closed_points, closed=True, smooth=False)],
+        )
+        closed_plan = compile_stroke_program(closed_program)
+        self.assertEqual(len(closed_plan.strokes), 1)
+        self.assertLessEqual(len(closed_plan.strokes[0].points), 1000)
 
     def test_stroke_program_validates_external_values_and_defaults(self) -> None:
         fill = StrokeProgram.from_dict(

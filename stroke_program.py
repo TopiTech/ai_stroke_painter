@@ -547,6 +547,9 @@ def _compile_path(program: StrokeProgram, operation: PathOperation) -> list[Stro
             dense.append((x, y, pressure))
     else:
         dense = controls
+    if len(dense) > MAX_OPERATION_POINTS:
+        step = (len(dense) - 1) / float(MAX_OPERATION_POINTS - 1)
+        dense = [dense[int(round(i * step))] for i in range(MAX_OPERATION_POINTS - 1)] + [dense[-1]]
     return [_make_stroke(program, operation, 0, dense)]
 
 
