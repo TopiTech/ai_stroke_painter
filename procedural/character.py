@@ -884,7 +884,28 @@ def generate_character_strokes(
             )
         )
 
-        # 瞳のハイライト (Highlights Layer - メイン＆サブグリント)
+        # 瞳のハイライト (Highlights Layer - メイン＆サブグリント＆虹彩三日月光)
+        crescent_pts = catmull_rom_spline(
+            [
+                (ecx - eye_w * 0.28, eye_y + eye_h * 0.12),
+                (ecx, eye_y + eye_h * 0.32),
+                (ecx + eye_w * 0.28, eye_y + eye_h * 0.12),
+            ],
+            samples_per_segment=6,
+        )
+        strokes.append(
+            generate_highlight_stroke(
+                crescent_pts,
+                color=colors.get("eye_crescent", colors["highlight"]),
+                size_px=2.8,
+                opacity=0.75,
+                profile_type="marupen",
+                stroke_id=uid(f"eye_crescent_{side_name}"),
+                width=width,
+                height=height,
+                rng=rng,
+            )
+        )
         strokes.append(
             generate_highlight_stroke(
                 [(ecx - side * eye_w * 0.20, eye_y - eye_h * 0.22), (ecx - side * eye_w * 0.14, eye_y - eye_h * 0.10)],
@@ -1493,6 +1514,32 @@ def generate_character_strokes(
                 color=colors["hair_highlight"],
                 size_px=4.8,
                 stroke_id=uid("hair_ring_hl", h_i),
+                width=width,
+                height=height,
+                rng=rng,
+            )
+        )
+
+    # (E) シルエット・環境リムライト (Silhouette Rim Light - 逆光・輪郭発光)
+    rim_color = colors.get("rim_light", colors["highlight"])
+    for r_side, r_name in [(-1.0, "l"), (1.0, "r")]:
+        rim_pts = catmull_rom_spline(
+            [
+                (cx + r_side * scale * 0.32, cy - scale * 0.15),
+                (cx + r_side * scale * 0.35, cy + scale * 0.05),
+                (cx + r_side * scale * 0.33, cy + scale * 0.25),
+                (cx + r_side * scale * 0.38, cy + scale * 0.45),
+            ],
+            samples_per_segment=6,
+        )
+        strokes.append(
+            generate_highlight_stroke(
+                rim_pts,
+                color=rim_color,
+                size_px=3.8,
+                opacity=0.70,
+                profile_type="gpen",
+                stroke_id=uid(f"rim_light_{r_name}"),
                 width=width,
                 height=height,
                 rng=rng,

@@ -238,7 +238,32 @@ def generate_landscape_strokes(
         # =====================================================================
         # 山岳・樹木・雲・丘陵のフル風景 (Mountains, Trees, Clouds)
         # =====================================================================
-        # 1. 遠景の山並み (Distant Mountains)
+        # 0. 空のグラデーション (Flats Layer - Sky Gradient)
+        sky_colors = [
+            colors.get("sky_zenith", "#2b5c8f"),
+            "#457cb8",
+            "#7cb0e8",
+            colors.get("sky_horizon", "#eef6ff"),
+        ]
+        for s_idx, s_col in enumerate(sky_colors):
+            s_y = (s_idx / max(1, len(sky_colors) - 1)) * height * 0.48
+            strokes.append(
+                create_stroke(
+                    [(0.0, s_y), (width * 0.5, s_y), (width, s_y)],
+                    profile_type="airbrush",
+                    base_pressure=0.8,
+                    color=s_col,
+                    size_px=max(40.0, height * 0.16),
+                    layer_name="Flats",
+                    opacity=0.75,
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid("sky_grad", s_idx),
+                )
+            )
+
+        # 1. 遠景の山並み (Distant & Midground Mountains)
         for m_layer in range(3):
             m_pts: list[tuple[float, float]] = []
             steps = 8
@@ -251,12 +276,29 @@ def generate_landscape_strokes(
             m_pts.append((width, base_y))
 
             m_spline = catmull_rom_spline(m_pts, 8)
+            # 山肌のベース塗り (Flats)
+            strokes.append(
+                create_stroke(
+                    m_spline,
+                    profile_type="brush",
+                    base_pressure=0.9,
+                    color=["#4a5568", "#2d3748", "#1a202c"][m_layer],
+                    size_px=max(20.0, height * 0.08),
+                    layer_name="Flats",
+                    opacity=0.85,
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid("mountain_base", m_layer),
+                )
+            )
+            # 山稜線の輪郭 (Lineart)
             strokes.append(
                 create_stroke(
                     m_spline,
                     profile_type="gpen",
                     base_pressure=0.75,
-                    color=["#4a5568", "#2d3748", "#1a202c"][m_layer],
+                    color=["#374151", "#1f2937", "#111827"][m_layer],
                     size_px=4.5 - m_layer * 0.8,
                     layer_name="Lineart",
                     rng=rng,
@@ -287,7 +329,7 @@ def generate_landscape_strokes(
                     )
                 )
 
-        # 2. 前景の樹木 (Foreground Tree)
+        # 2. 前景の樹木 (Foreground Tree - 有機的トランク＆多層ボリューム)
         tree_x = width * 0.78
         tree_y = height * 0.88
         tree_h = height * 0.45
@@ -308,7 +350,7 @@ def generate_landscape_strokes(
                 profile_type="brush",
                 base_pressure=1.0,
                 color="#3d2b1f",
-                size_px=9.0,
+                size_px=11.0,
                 layer_name="Lineart",
                 rng=rng,
                 width=width,
@@ -345,7 +387,7 @@ def generate_landscape_strokes(
                 )
             )
 
-        # 3. 雲 (Clouds)
+        # 3. 雲 (Clouds - 立体フォーム＆光彩エッジ)
         for c_i in range(3):
             cx_cloud = width * (0.2 + c_i * 0.3)
             cy_cloud = height * (0.12 + c_i * 0.05)
@@ -375,6 +417,22 @@ def generate_landscape_strokes(
                     width=width,
                     height=height,
                     stroke_id=uid("cloud", c_i),
+                )
+            )
+            # 雲上面のハイライト (Highlights)
+            strokes.append(
+                create_stroke(
+                    cloud_pts[1:4],
+                    profile_type="airbrush",
+                    base_pressure=0.8,
+                    color="#ffffff",
+                    size_px=6.0,
+                    layer_name="Highlights",
+                    opacity=0.85,
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid("cloud_hl", c_i),
                 )
             )
 

@@ -340,6 +340,7 @@ class FillOperation:
     layer: str = "Flats"
     spacing: float = 0.72
     style: str = "wash"
+    angle_deg: float = 0.0
     kind: Literal["fill"] = "fill"
 
     def __post_init__(self) -> None:
@@ -359,9 +360,14 @@ class FillOperation:
             "scanline",
             "feathered",
             "contour",
+            "radial",
+            "directional",
         }:
-            raise PlanValidationError("fill style は wash, scanline, feathered, contour のいずれかである必要があります")
+            raise PlanValidationError(
+                "fill style は wash, scanline, feathered, contour, radial, directional のいずれかである必要があります"
+            )
         object.__setattr__(self, "style", self.style.strip().lower())
+        object.__setattr__(self, "angle_deg", _finite(self.angle_deg, "fill angle_deg") % 360.0)
 
 
 @dataclass(frozen=True)
@@ -490,7 +496,19 @@ def operation_from_dict(
     if kind == "fill":
         _reject_unknown_keys(
             value,
-            {"kind", "id", "polygon", "points", "brush", "layer", "layer_name", "spacing", "style"},
+            {
+                "kind",
+                "id",
+                "polygon",
+                "points",
+                "brush",
+                "layer",
+                "layer_name",
+                "spacing",
+                "style",
+                "angle_deg",
+                "angle",
+            },
             "fill operation",
         )
         return FillOperation(
@@ -509,6 +527,7 @@ def operation_from_dict(
             layer=value.get("layer", value.get("layer_name", "Flats")),
             spacing=value.get("spacing", 0.72),
             style=value.get("style", "wash"),
+            angle_deg=value.get("angle_deg", value.get("angle", 0.0)),
         )
     if kind == "hatch":
         _reject_unknown_keys(
@@ -681,6 +700,8 @@ class StrokeProgram:
                 item["spacing"] = operation.spacing
                 if isinstance(operation, FillOperation):
                     item["style"] = operation.style
+                    if abs(operation.angle_deg) > 1e-3:
+                        item["angle_deg"] = operation.angle_deg
                 elif isinstance(operation, HatchOperation):
                     item["angle_deg"] = operation.angle_deg
                     item["cross"] = operation.cross
@@ -773,6 +794,38 @@ def _compile_path(program: StrokeProgram, operation: PathOperation) -> list[Stro
     if len(dense) > MAX_OPERATION_POINTS:
         step = (len(dense) - 1) / float(MAX_OPERATION_POINTS - 1)
         dense = [dense[int(round(i * step))] for i in range(MAX_OPERATION_POINTS - 1)] + [dense[-1]]
+
+    # インテリジェント線画ダイナミクス（スマートテーパリング & 曲率連動インク溜まり）
+    n_pts = len(dense)
+    if not operation.closed and n_pts >= 3:
+        modulated_dense: list[tuple[float, float, float]] = []
+        for i, (px, py, p_press) in enumerate(dense):
+            t_norm = i / max(1, n_pts - 1)
+            taper_factor = 1.0
+            if t_norm < 0.15:
+                taper_factor = 0.40 + 0.60 * (t_norm / 0.15)
+            elif t_norm > 0.85:
+                taper_factor = 0.40 + 0.60 * ((1.0 - t_norm) / 0.15)
+
+            curvature_factor = 1.0
+            span = max(1, min(6, n_pts // 5))
+            if span <= i <= n_pts - 1 - span:
+                p_prev = dense[i - span]
+                p_next = dense[i + span]
+                v1_x, v1_y = px - p_prev[0], py - p_prev[1]
+                v2_x, v2_y = p_next[0] - px, p_next[1] - py
+                len1 = math.hypot(v1_x, v1_y)
+                len2 = math.hypot(v2_x, v2_y)
+                if len1 > 1e-4 and len2 > 1e-4:
+                    dot = (v1_x * v2_x + v1_y * v2_y) / (len1 * len2)
+                    dot = max(-1.0, min(1.0, dot))
+                    if dot < 0.85:
+                        curvature_factor = 1.0 + 0.35 * (0.85 - dot)
+
+            final_press = max(0.05, min(1.0, p_press * taper_factor * curvature_factor))
+            modulated_dense.append((px, py, final_press))
+        dense = modulated_dense
+
     return [_make_stroke(program, operation, 0, dense)]
 
 
@@ -792,8 +845,141 @@ def _scanline_segments(polygon: Sequence[tuple[float, float]], y: float) -> list
     ]
 
 
+def _compile_fill_contour(
+    program: StrokeProgram,
+    operation: FillOperation,
+    polygon: Sequence[tuple[float, float]],
+    limit: int,
+) -> list[Stroke]:
+    """面の曲率に沿った輪郭追従（コンター）多重オフセット塗り。"""
+    cx = sum(p[0] for p in polygon) / len(polygon)
+    cy = sum(p[1] for p in polygon) / len(polygon)
+    max_radius = max(math.hypot(p[0] - cx, p[1] - cy) for p in polygon)
+    if max_radius < 1.0:
+        return []
+
+    brush_px = operation.brush.size_px(program.canvas_width, program.canvas_height)
+    step_r = max(0.8, brush_px * 0.65)
+    steps = max(1, min(limit, int(max_radius / step_r)))
+
+    strokes: list[Stroke] = []
+    poly_pts = list(polygon)
+    if poly_pts[0] != poly_pts[-1]:
+        poly_pts.append(poly_pts[0])
+
+    for step_i in range(steps):
+        if len(strokes) >= limit:
+            break
+        scale = max(0.02, 1.0 - (step_i / steps))
+        scaled_ring = [(cx + (px - cx) * scale, cy + (py - cy) * scale) for px, py in poly_pts]
+        if len(scaled_ring) >= 3:
+            spline_pts = _catmull_rom_spline(scaled_ring, samples_per_segment=6)
+            pts_with_p = [(sx, sy, 0.85) for sx, sy in spline_pts]
+        else:
+            pts_with_p = [(sx, sy, 0.85) for sx, sy in scaled_ring]
+        strokes.append(_make_stroke(program, operation, len(strokes), pts_with_p))
+
+    return strokes
+
+
+def _compile_fill_radial(
+    program: StrokeProgram,
+    operation: FillOperation,
+    polygon: Sequence[tuple[float, float]],
+    limit: int,
+) -> list[Stroke]:
+    """中心から外周へ向かう放射状グラデーション塗り。"""
+    cx = sum(p[0] for p in polygon) / len(polygon)
+    cy = sum(p[1] for p in polygon) / len(polygon)
+    max_radius = max(math.hypot(p[0] - cx, p[1] - cy) for p in polygon)
+    if max_radius < 1.0:
+        return []
+
+    brush_px = operation.brush.size_px(program.canvas_width, program.canvas_height)
+    ray_count = max(8, min(limit, int(2.0 * math.pi * max_radius / max(1.0, brush_px * 0.8))))
+
+    strokes: list[Stroke] = []
+    for ray_i in range(ray_count):
+        if len(strokes) >= limit:
+            break
+        ang = (ray_i / ray_count) * 2.0 * math.pi
+        dir_x = math.cos(ang)
+        dir_y = math.sin(ang)
+
+        outer_x = cx + dir_x * max_radius
+        outer_y = cy + dir_y * max_radius
+        mid_x = cx + dir_x * max_radius * 0.5
+        mid_y = cy + dir_y * max_radius * 0.5
+        pts = [
+            (cx, cy, 0.95),
+            (mid_x, mid_y, 0.80),
+            (outer_x, outer_y, 0.20),
+        ]
+        strokes.append(_make_stroke(program, operation, len(strokes), pts))
+
+    return strokes
+
+
+def _compile_fill_directional(
+    program: StrokeProgram,
+    operation: FillOperation,
+    polygon: Sequence[tuple[float, float]],
+    angle_deg: float,
+    limit: int,
+) -> list[Stroke]:
+    """指定角度に沿ったスキャンライン塗り。"""
+    center = (
+        sum(p[0] for p in polygon) / len(polygon),
+        sum(p[1] for p in polygon) / len(polygon),
+    )
+    angle = math.radians(angle_deg)
+    rotated = [_rotate(p, center, -angle) for p in polygon]
+    min_y = min(p[1] for p in rotated)
+    max_y = max(p[1] for p in rotated)
+    spacing_scale = 0.55 if operation.style in {"wash", "feathered"} else operation.spacing
+    spacing = max(0.5, operation.brush.size_px(program.canvas_width, program.canvas_height) * spacing_scale)
+    strokes: list[Stroke] = []
+    row = 0
+    y = min_y + spacing * 0.5
+    while y < max_y and len(strokes) < limit:
+        segments = _scanline_segments(rotated, y)
+        if row % 2:
+            segments.reverse()
+        for start_x, end_x in segments:
+            if len(strokes) >= limit:
+                break
+            first_x, second_x = (end_x, start_x) if row % 2 else (start_x, end_x)
+            first_rot = _rotate((first_x, y), center, angle)
+            second_rot = _rotate((second_x, y), center, angle)
+            seg_len = math.hypot(second_rot[0] - first_rot[0], second_rot[1] - first_rot[1])
+            if operation.style in {"wash", "feathered", "directional"} and seg_len > 4.0:
+                p1_x = first_rot[0] + (second_rot[0] - first_rot[0]) * 0.12
+                p1_y = first_rot[1] + (second_rot[1] - first_rot[1]) * 0.12
+                p2_x = second_rot[0] - (second_rot[0] - first_rot[0]) * 0.12
+                p2_y = second_rot[1] - (second_rot[1] - first_rot[1]) * 0.12
+                pts = [
+                    (first_rot[0], first_rot[1], 0.45),
+                    (p1_x, p1_y, 0.95),
+                    (p2_x, p2_y, 0.95),
+                    (second_rot[0], second_rot[1], 0.45),
+                ]
+            else:
+                pts = [(first_rot[0], first_rot[1], 1.0), (second_rot[0], second_rot[1], 1.0)]
+            strokes.append(_make_stroke(program, operation, len(strokes), pts))
+        row += 1
+        y += spacing
+    return strokes
+
+
 def _compile_fill(program: StrokeProgram, operation: FillOperation, limit: int) -> list[Stroke]:
     polygon = [(point.x * program.canvas_width, point.y * program.canvas_height) for point in operation.polygon]
+    if operation.style == "contour":
+        return _compile_fill_contour(program, operation, polygon, limit)
+    if operation.style == "radial":
+        return _compile_fill_radial(program, operation, polygon, limit)
+    if operation.style == "directional" or abs(operation.angle_deg) > 1e-3:
+        return _compile_fill_directional(program, operation, polygon, operation.angle_deg, limit)
+
     min_y = min(point[1] for point in polygon)
     max_y = max(point[1] for point in polygon)
     spacing_scale = 0.55 if operation.style in {"wash", "feathered"} else operation.spacing

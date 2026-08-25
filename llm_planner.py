@@ -1031,10 +1031,9 @@ def _system_instruction(
     prompt: str = "",
     palette_name: str = "anime",
 ) -> str:
-    """プロフェッショナルなデジタルイラスト作画戦略・レイヤー階層・キャンバス連動ブラシサイズ・筆圧ダイナミクスを含む高品質プロンプト。"""
+    """プロフェッショナルなデジタルイラスト作画戦略・レイヤー階層・空間アンカー・4層ライティングを含む高品質プロンプト。"""
     min_dim = min(width, height)
 
-    # 推奨ブラシサイズ（大面積塗り用から極細ディテール用まで多層定義）
     flats_sz = f"{max(40, round(min_dim * 0.08))} to {max(150, round(min_dim * 0.20))} px"
     form_shad_sz = f"{max(25, round(min_dim * 0.03))} to {max(60, round(min_dim * 0.06))} px"
     detail_shad_sz = "8 to 22 px"
@@ -1042,7 +1041,6 @@ def _system_instruction(
     detail_line_sz = "1.5 to 3.0 px (CRITICAL for eyes, lashes, double eyelids, nose tip, lips, hair tips)"
     hl_glint_sz = "2.0 to 3.5 px (eye specular glints) / 6 to 16 px (hair halo & rim light)"
 
-    # ドメイン別作画ガイダンス
     prompt_lower = prompt.lower()
     domain_guidance = ""
 
@@ -1069,22 +1067,27 @@ def _system_instruction(
     ):
         domain_guidance = (
             "\n[DOMAIN ART DIRECTION: Landscape, Mountains, Clouds & Sakura Trees]\n"
+            "=== SPATIAL COMPOSITION ANCHORS (Rule of Thirds & 3-Tier Depth) ===\n"
+            "  - Zenith Sky: y=0.00 to 0.35 (Deep blue/sunset orange wash)\n"
+            "  - Distant Horizon & Peaks: y=0.45 to 0.62 (Atmospheric blue-gray silhouettes)\n"
+            "  - Main Hero Element (Sakura Tree / Lake): Trunk base at x=0.30 to 0.45, y=0.45 to 0.85; Canopy at y=0.20 to 0.55\n"
+            "  - Foreground Ground / Petal Swarm: y=0.75 to 1.00 (Vibrant green/earth tones with scattered drifting petals)\n\n"
             "1. Layer 'Flats' (Complete Seamless Coverage & Base Volumes):\n"
             f"   - Sky Gradient: Paint multiple dense overlapping horizontal sweep strokes (size_px: {flats_sz}, brush: 'Airbrush Soft' or 'Basic-5 Size') "
             "from deep blue zenith (#2b5c8f) down to clear sky (#5c93cf), horizon haze (#b8d8f8), and soft white (#eef6ff). Leave NO white canvas gaps.\n"
-            f"   - Distant & Midground Mountains: Paint sweeping mountain silhouettes (size_px: {flats_sz}, brush: 'Basic-5 Size'). "
+            f"   - Distant & Midground Mountains: Paint sweeping mountain silhouettes with fill (style: 'directional', angle_deg: 25) or (size_px: {flats_sz}, brush: 'Basic-5 Size'). "
             "Use atmospheric perspective (distant peaks in soft blue-gray #6f829d, nearer peaks in deep pine/slate #283e50).\n"
             f"   - Rolling Hills & Ground: Dense green terrain wash (#4e7d58, #72a37c, #9ec4a5) with organic curving strokes. NEVER use orthogonal wireframe grid hatching on ground.\n"
-            f"   - Sakura Blossom Canopy Clumps: Paint rich, billowing clouds of pink foliage masses (size_px: {flats_sz}, brush: 'Wet Textured Soft' or 'Basic-5 Size') "
-            "arranged above and around the branches (colors: #ff9ebb, #ffb8cd, #ffd6e5). Overlap multiple puffy clusters to create huge 3D volume rather than flat umbrella tiers.\n"
+            f"   - Sakura Blossom Canopy Clumps: Use fill (style: 'contour') for puffy, billowing clouds of pink foliage masses (size_px: {flats_sz}, brush: 'Wet Textured Soft' or 'Basic-5 Size') "
+            "arranged above and around branches (colors: #ff9ebb, #ffb8cd, #ffd6e5). Overlap multiple puffy clusters to create huge 3D volume.\n"
             "2. Layer 'Shading' (3D Depth, Occlusion & Mountain Crags):\n"
-            f"   - Mountain Ridges & Shadow Facets: Carve dramatic shadow slopes along mountain ridge lines (size_px: {form_shad_sz}, opacity: 0.6-0.8, brush: 'Dry Bristles' or 'Basic-5 Size', colors: #1a2733, #223445).\n"
-            f"   - Cloud Undersides: Paint soft purplish shadow bulges under cloud masses (size_px: {form_shad_sz}, opacity: 0.5-0.7, colors: #92a4bc, #7b8ea7).\n"
-            f"   - Blossom Canopy Deep Shadows: Paint deep magenta/purple-pink core shadows underneath blossom clusters (size_px: {detail_shad_sz}, colors: #a3436a, #842f53).\n"
+            f"   - Mountain Ridges & Shadow Facets: Carve dramatic shadow slopes along mountain ridge lines (size_px: {form_shad_sz}, opacity: 0.6-0.8, brush: 'Dry Bristles', colors: #1a2733, #223445).\n"
+            f"   - Cloud Undersides: Paint soft purplish shadow bulges under cloud masses with fill (style: 'contour', size_px: {form_shad_sz}, opacity: 0.5-0.7, colors: #92a4bc, #7b8ea7).\n"
+            f"   - Blossom Canopy Deep Shadows: Paint deep magenta/purple-pink core shadows underneath blossom clusters with fill (style: 'contour', size_px: {detail_shad_sz}, colors: #a3436a, #842f53).\n"
             "3. Layer 'Lineart' (Organic Tree Anatomy & Crisp Ridge Contours):\n"
-            f"   - Majestic Sakura Tree Trunk & Branches: Draw powerful, organic twisting tree trunks with S-curves and wide root flares (size_px: {main_line_sz}, brush: 'Ink-3 Gpen' or 'Basic-5 Size', colors: #342017, #24140d). "
-            f"Crucial: Branch hierarchically! Main thick trunk -> major bending limbs -> tapering fine secondary branches (size_px: {detail_line_sz}, pressure: 0.2->0.8->0.1) threading through the pink blossom canopy.\n"
-            f"   - Mountain Crests & Sharp Contours: Outline sharp jagged crags and crisp cloud rim curves (size_px: {main_line_sz}, brush: 'Ink-3 Gpen'). NEVER draw arbitrary geometric parabolic arcs across mountains or foliage.\n"
+            f"   - Majestic Sakura Tree Trunk & Branches: Draw powerful, organic twisting tree trunks with S-curves and wide root flares (size_px: {main_line_sz}, brush: 'Ink-3 Gpen', colors: #342017, #24140d). "
+            f"Branch hierarchically! Main thick trunk -> major bending limbs -> tapering fine secondary branches (size_px: {detail_line_sz}, pressure: 0.2->0.8->0.1) threading through the pink blossom canopy.\n"
+            f"   - Mountain Crests & Sharp Contours: Outline sharp jagged crags and crisp cloud rim curves (size_px: {main_line_sz}, brush: 'Ink-3 Gpen').\n"
             "4. Layer 'Highlights' & 'FX' (Light Accents & Falling Petal Blizzard):\n"
             f"   - Falling Petal Blizzard: Use particle operations with 'shape': 'petal' or scatter individual curved petal strokes drifting on wind (size_px: {detail_line_sz}, colors: #ffffff, #ffe6f0, #ffd0e2) across foreground and midground.\n"
             f"   - Luminous Rim Lighting & Cloud Edges: Pure glowing white/pale-gold rim highlights on sunny mountain peaks and top cloud rims (size_px: {hl_glint_sz}, colors: #ffffff, #fffde6).\n"
@@ -1108,23 +1111,32 @@ def _system_instruction(
     ):
         domain_guidance = (
             "\n[DOMAIN ART DIRECTION: Anime / Manga Character Portrait (Exquisite 3D Anatomy & Facial Planes)]\n"
+            "=== STRICT SPATIAL FACIAL ANCHORS (Proportions & Golden Coordinates) ===\n"
+            "  - Face Center X: 0.50 (Symmetric and well-centered)\n"
+            "  - Head Crown & Hair Top: y = 0.12 to 0.18\n"
+            "  - Eyebrows: y = 0.38 to 0.42 (Left Brow x=0.34-0.45, Right Brow x=0.55-0.66)\n"
+            "  - Eyes & Lashes (CRITICAL): y = 0.44 to 0.49 (Left Eye Center x=0.38, Right Eye Center x=0.62, Width=0.12)\n"
+            "  - Nose Tip: y = 0.56 to 0.59, x = 0.50 (Tiny subtle dot or hook, NEVER a heavy vertical black bar)\n"
+            "  - Lips / Mouth: y = 0.64 to 0.67, x = 0.46 to 0.54 (Delicate curved upper lip line with corner nodes)\n"
+            "  - Chin V-Curve: y = 0.74 to 0.78, x = 0.50\n"
+            "  - Ears: y = 0.44 to 0.58 (Aligned between eye line and nose tip)\n"
+            "  - Neck & Clavicles: Neck y=0.74 to 0.85; Collarbones y=0.85 to 0.89; Shoulders x=0.20 to 0.80\n\n"
             "1. Layer 'Flats' (Flawless Base Volumes & 3-Layer Hair):\n"
-            f"   - Skin Base: Smooth complete coverage of face, ears, neck, and shoulders (size_px: {flats_sz}, brush: 'Basic-5 Size', color: #fff0e6 / #fef2ea).\n"
+            f"   - Skin Base: Smooth complete coverage of face, ears, neck, and shoulders with fill (style: 'wash', size_px: {flats_sz}, color: #fff0e6 / #fef2ea).\n"
             f"   - Inner/Back Hair Mass: Deep darker hair silhouette behind neck and shoulders (size_px: {flats_sz}, brush: 'Basic-5 Size').\n"
             f"   - Main Hair Silhouette: Volumetric hair masses framing head with distinct clump volumes (size_px: {flats_sz}, brush: 'Basic-5 Size').\n"
             "   - Sclera (Whites of eyes): Clean bright base (#f8f9fa, size_px: 12-20px) under eye sockets.\n"
-            "   - Iris Base: Expressive oval color discs for irises (#e84a75 / #3b82f6 / #8b5cf6, size_px: 15-28px).\n"
-            "2. Layer 'Shading' (3D Facial Planes, 5-Point Lighting & Ambient Occlusion):\n"
-            "   - Forehead & Temples Shading: Soft form shadow on forehead edges and temples to create spherical head depth (Airbrush Soft, size_px: 30-60px, opacity: 0.35).\n"
+            "   - Iris Base: Expressive oval discs for irises with fill (style: 'radial', size_px: 15-28px, colors: #e84a75 / #3b82f6 / #8b5cf6).\n"
+            "2. Layer 'Shading' (3D Facial Planes, 4-Tier Lighting & Ambient Occlusion):\n"
+            "   - Forehead & Temples Shading: Soft form shadow on forehead edges and temples (Airbrush Soft, size_px: 30-60px, opacity: 0.35).\n"
             "   - Bangs Cast Shadow: Soft cast shadow directly beneath front hair strands onto the forehead (color: #e09f90, size_px: 8-16px, opacity: 0.50).\n"
-            "   - Eye Socket Depths & Sclera Top Shadow: Airbrush shadow under brow bone and across top half of eyeballs to convey spherical eyeball depth (size_px: 8-15px, opacity: 0.55).\n"
-            "   - Soft Facial Blush & Cheekbone Form: Airbrush Soft, color: #ff9fb2, size_px: 35-70px, opacity: 0.25-0.35 across cheek apples and nose bridge.\n"
+            "   - Eye Socket Depths & Sclera Top Shadow: Airbrush shadow under brow bone and across top half of eyeballs to convey spherical depth (size_px: 8-15px, opacity: 0.55).\n"
+            "   - Soft Facial Blush & Cheekbone Form: Use fill (style: 'contour', color: #ff9fb2, size_px: 35-70px, opacity: 0.25-0.35) across cheek apples and nose bridge.\n"
             "   - Nose Bridge & Subnasal Shadow: Subtle side contour for nose bridge + small soft cast shadow right beneath nose tip (#d88c7d, size_px: 4-8px, opacity: 0.60).\n"
             "   - Upper Lip Tone & Lower Lip Groove AO: Soft shaded upper lip + dark ambient occlusion in groove under bottom lip (size_px: 4-8px, opacity: 0.65).\n"
-            "   - Ear Concha Shadow: Shading inside the ear depression and behind earlobes (size_px: 6-12px, opacity: 0.55).\n"
-            "   - Submandibular AO & Neck Gradient: Darkest contact shadow right under jawline (AO, size_px: 8-16px, opacity: 0.80) grading softly down the neck, plus diagonal Sternocleidomastoid muscle shadows.\n"
+            "   - Submandibular AO & Neck Gradient: Darkest contact shadow right under jawline (AO, size_px: 8-16px, opacity: 0.80) grading softly down the neck.\n"
             "   - Clavicle (Collarbone) Hollows: Delicate hollow shadows above and below collarbone ridges (#e09f90, size_px: 6-12px, opacity: 0.50).\n"
-            f"   - Hair Under-Lock Shadows & Clothing Folds: Deep shadow crevices separating hair strands and drapery tension folds (size_px: {detail_shad_sz}, opacity: 0.55-0.75).\n"
+            f"   - Hair Under-Lock Shadows: Use fill (style: 'directional', angle_deg: 45) for deep shadow crevices between hair strands (size_px: {detail_shad_sz}, opacity: 0.55-0.75).\n"
             "3. Layer 'Lineart' (EXQUISITE MICRO-DETAILS - Must use 1.5 to 3.0 px for facial features!):\n"
             "   - Upper Eyelashes (CRUCIAL): Bold sweeping arch with sharp tapered outer flick (preset: 'Ink-3 Gpen', size_px: 3.0 to 4.8 px, color: #1c1018, pressure: [[x,y,0.3], [x,y,0.98], [x,y,0.12]]).\n"
             "   - Double Eyelid Crease: Delicate thin curve just above upper lash (preset: 'Ink-3 Gpen', size_px: 1.5 to 2.2 px, color: #7a5850, pressure: 0.35).\n"
@@ -1136,9 +1148,9 @@ def _system_instruction(
             "   - Ear Anatomy Contours: Outer helix curve, inner antihelix, and tragus lines (size_px: 2.2 to 3.5 px, color: #321c22).\n"
             f"   - Jawline, Chin & Neck: Elegant, smooth V/U-curve chin, slender neck lines, and sharp clavicle contours (size_px: {main_line_sz}, color: #321c22).\n"
             "   - Flowing Hair Strands: Primary hair clump contours with fine secondary tapering sub-strands (size_px: 1.8 to 3.5 px, pressure: 0.15 -> 0.85 -> 0.08) and playful ahoge / flyaways.\n"
-            "   - Clothing & Collar Lines: Crisp collar edges, shoulder seams, and dynamic drapery fold curves (size_px: 3.5 to 5.5 px).\n"
             "4. Layer 'Highlights' (5-Point Specular Accents & Angel Halo):\n"
             "   - Eye Specular Glints: 1 crisp bright glint on top-left of each iris + 1 secondary reflective glint on bottom-right (size_px: 2.0 to 3.5 px, color: #ffffff, pressure: 1.0, preset: 'Ink-3 Gpen').\n"
+            "   - Iris Crescent Light: Luminous light arc on bottom half of iris (#8bc34a / #64b5f6 / #f48fb1, size_px: 2.0 to 3.0 px, opacity: 0.85).\n"
             "   - Nose Tip Specular Glint: Tiny bright glint right above nose tip (size_px: 1.8 to 2.5 px, color: #ffffff, opacity: 0.9).\n"
             "   - Lip Gloss Glint: Lustrous specular sheen dot/dash on lower lip curve (size_px: 2.0 to 2.8 px, color: #ffffff).\n"
             "   - Clavicle Ridge Highlight: Subtle luminous line along top of collarbone ridges (size_px: 2.0 to 3.0 px, color: #ffffff, opacity: 0.75).\n"
@@ -1151,8 +1163,8 @@ def _system_instruction(
     ):
         domain_guidance = (
             "\n[DOMAIN ART DIRECTION: Animal / Creature Art]\n"
-            f"1. Layer 'Flats': Base body volume & fur base masses (size_px: {flats_sz}, brush: 'Basic-5 Size').\n"
-            f"2. Layer 'Shading': Musculature shadows & fur tone gradations (size_px: {form_shad_sz}, opacity: 0.6, brush: 'Dry Bristles').\n"
+            f"1. Layer 'Flats': Base body volume & fur base masses with fill (style: 'wash' / 'contour', size_px: {flats_sz}, brush: 'Basic-5 Size').\n"
+            f"2. Layer 'Shading': Musculature shadows & fur tone gradations with fill (style: 'directional', size_px: {form_shad_sz}, opacity: 0.6, brush: 'Dry Bristles').\n"
             f"3. Layer 'Lineart': Facial contours, ears, paws, expressive eyes & whiskers (size_px: {detail_line_sz}, brush: 'Ink-3 Gpen', pressure: 0.2 -> 0.8 -> 0.1).\n"
             f"4. Layer 'Highlights': Glowing eyes, rim light on fur & whiskers (size_px: {hl_glint_sz}, brush: 'Basic-5 Size', color: #ffffff).\n"
         )
@@ -1163,15 +1175,15 @@ def _system_instruction(
         domain_guidance = (
             "\n[DOMAIN ART DIRECTION: Cyberpunk City & Sci-Fi]\n"
             f"1. Layer 'Flats': Dark atmospheric background & skyscraper building silhouettes (size_px: {flats_sz}, colors: #0a0e17, #131b2e).\n"
-            f"2. Layer 'Shading': Deep occlusion between buildings and foggy street glow (size_px: {form_shad_sz}, brush: 'Airbrush Soft').\n"
+            f"2. Layer 'Shading': Deep occlusion between buildings and foggy street glow with fill (style: 'wash', size_px: {form_shad_sz}, brush: 'Airbrush Soft').\n"
             f"3. Layer 'Lineart': Sharp structural edges, perspective grid, antenna spires (size_px: {main_line_sz}, brush: 'Ink-3 Gpen').\n"
-            f"4. Layer 'Highlights' & 'FX': Vibrant neon signs, window grids, laser light beams (size_px: {hl_glint_sz}, colors: #00f0ff, #ff007f, #ffe600).\n"
+            f"4. Layer 'Highlights' & 'FX': Vibrant neon signs, window grids, laser light beams with fill (style: 'radial') and particles (size_px: {hl_glint_sz}, colors: #00f0ff, #ff007f, #ffe600).\n"
         )
     elif any(k in prompt_lower for k in ["flower", "rose", "bouquet", "petal", "花", "バラ", "薔薇"]):
         domain_guidance = (
             "\n[DOMAIN ART DIRECTION: Blooming Flowers & Botanical]\n"
-            f"1. Layer 'Flats': Petal base color blocks & leaf masses (size_px: {flats_sz}, brush: 'Basic-5 Size').\n"
-            f"2. Layer 'Shading': Petal inner spiral crevice shadows (size_px: {detail_shad_sz}, opacity: 0.6, brush: 'Wet Textured Soft').\n"
+            f"1. Layer 'Flats': Petal base color blocks & leaf masses with fill (style: 'contour', size_px: {flats_sz}, brush: 'Basic-5 Size').\n"
+            f"2. Layer 'Shading': Petal inner spiral crevice shadows with fill (style: 'contour', size_px: {detail_shad_sz}, opacity: 0.6, brush: 'Wet Textured Soft').\n"
             f"3. Layer 'Lineart': Organic petal edges, curving stem, leaf vein contours (size_px: {detail_line_sz}, brush: 'Ink-3 Gpen', pressure: 0.2 -> 0.8 -> 0.1).\n"
             f"4. Layer 'Highlights': Dewdrops, petal edge rim highlights (size_px: {hl_glint_sz}, brush: 'Basic-5 Size', color: #ffffff).\n"
         )
@@ -1183,11 +1195,11 @@ def _system_instruction(
                 phase_title = "Step 1/2: Foundation, Backdrop & Base Color Blocking (Flats/Shading layer)"
                 phase_task = (
                     "Focus strictly on painting complete, gapless broad base colors (Flats): sky gradient, terrain/ground, mountain silhouettes, "
-                    "skin/hair masses, or foliage clumps with large brush sizes. Do not draw lineart or fine details yet."
+                    "skin/hair masses, or foliage clumps with large brush sizes and fill operations. Do not draw lineart or fine details yet."
                 )
             else:
                 phase_title = (
-                    "Step 2/2 [FINAL]: Shading, Structural Lineart, Highlights & Details (Lineart/Highlights/FX)"
+                    "Step 2/2 [FINAL]: 3D Shading, Structural Lineart, Highlights & Polish (Lineart/Highlights/FX)"
                 )
                 phase_task = (
                     "Complete the artwork by layering shadow depths (Shading), drawing crisp expressive contours (Lineart), "
@@ -1196,12 +1208,10 @@ def _system_instruction(
         elif max_iterations == 3:
             if iteration == 1:
                 phase_title = "Step 1/3: Foundation, Backdrop & Base Color Masses (Flats layer)"
-                phase_task = "Paint ONLY the broad foundation and seamless base color silhouettes (Flats layer) with large brush sizes."
+                phase_task = "Paint ONLY the broad foundation and seamless base color silhouettes (Flats layer) with large brush sizes and fill."
             elif iteration == 2:
                 phase_title = "Step 2/3: 3D Form Sculpting, Ambient Occlusion & Shadows (Shading layer)"
-                phase_task = (
-                    "Paint shadow crevices, cloud depth, muscle/cloth shading, and midtones over the base colors."
-                )
+                phase_task = "Paint shadow crevices, cloud depth, muscle/cloth shading, and ambient occlusion over the base colors."
             else:
                 phase_title = (
                     "Step 3/3 [FINAL]: Expressive Lineart, Highlights, Petal Scatter & Polish (Lineart/Highlights/FX)"
@@ -1231,13 +1241,16 @@ def _system_instruction(
             f"\n=== MULTI-STEP PROGRESSIVE DRAWING MODE ===\n"
             f"Current Execution: {phase_title}\n"
             f"Goal for this step: {phase_task}\n"
-            "Draw ONLY the strokes appropriate for THIS step. Do not try to rush and draw everything at once; build coherently upon previous steps.\n"
+            "Draw ONLY the strokes appropriate for THIS step. Build coherently upon previous steps.\n"
         )
 
     visual_feedback_section = (
-        "\n=== AUTOMATIC VISUAL FEEDBACK ===\n"
-        "In multi-step mode, the current rendered canvas is captured automatically after each intermediate step and attached to the next request. "
-        "Inspect that image before adding corrections. Keep `request_canvas_image` false; the field remains only for schema compatibility.\n"
+        "\n=== AUTOMATIC VISUAL FEEDBACK & CRITIQUE ===\n"
+        "In multi-step mode, inspect the attached canvas capture image. Check for:\n"
+        "  1. White canvas gaps or unpainted regions -> fill them in Flats/Shading.\n"
+        "  2. Low contrast or flat lighting -> add deep Ambient Occlusion (AO) on Shading.\n"
+        "  3. Missing facial landmarks or contour clarity -> reinforce with precision Lineart.\n"
+        "Keep `request_canvas_image` false; the field remains only for schema compatibility.\n"
     )
 
     reasoning_guide = (
@@ -1264,20 +1277,20 @@ def _system_instruction(
         "  - Feathering & Soft Blending (Blush, Skin Shadows, Glows): Use gentle low pressure (0.15 to 0.35) with 'Airbrush Soft'.\n"
         "  - Structural Occlusion: Use firm pressure (0.85 to 1.0) for depth accents.\n"
         "  - Eye Highlights: Use pressure 1.0 on tiny strokes (size_px: 2.0 to 3.0) for crisp sparkling dots.\n\n"
-        "Layer Hierarchy (Back to Front):\n"
+        "=== LAYER HIERARCHY & 4-TIER LIGHTING (Back to Front) ===\n"
         f"1. Layer 'Flats' (Backdrop, Gradients & Seamless Color Blocking):\n"
-        f"   - Must use LARGE brush sizes (size_px: {flats_sz}) with dense overlapping strokes or fill (style: 'wash') to fully cover backgrounds (sky, mountains, foliage masses, skin, ground). Leave no unpainted gaps!\n"
+        f"   - Must use LARGE brush sizes (size_px: {flats_sz}) with dense overlapping strokes or fill (style: 'wash' / 'contour') to fully cover backgrounds. Leave no unpainted gaps!\n"
         f"2. Layer 'Shading' (3D Volume, Cast Shadows & Occlusion - Blended with Multiply):\n"
-        f"   - Use fill (style: 'wash' / 'feathered') with 'watercolor' / 'airbrush' for rich smooth volume, or medium/fine brush sizes ({form_shad_sz} for general volume, {detail_shad_sz} for crevices) with darker/cooler tones.\n"
+        f"   - Use fill (style: 'contour' / 'wash' / 'directional') with 'watercolor' / 'airbrush' for rich smooth volume, or medium/fine brush sizes ({form_shad_sz} for general volume, {detail_shad_sz} for crevices) with darker/cooler tones.\n"
         f"3. Layer 'Lineart' (Contours, Tree Anatomy & Fine Features):\n"
         f"   - Use dynamic crisp brush sizes ({main_line_sz} for outer silhouettes, {detail_line_sz} for fine eyes/lashes/nose/mouth/hair tips, preset: 'Ink-3 Gpen').\n"
         f"4. Layer 'Highlights' & 'FX' (Specular Glints, Petal Swarms, Atmosphere - Blended with Addition):\n"
-        f"   - Use accent brush sizes ({hl_glint_sz}) with luminous colors for falling petals, cloud rim light, sun flecks, and particle FX.\n"
+        f"   - Use accent brush sizes ({hl_glint_sz}) with luminous colors for falling petals, cloud rim light, sun flecks, iris crescent light, and particle FX.\n"
         "5. Eraser Paths (`brush.is_eraser: true`):\n"
         '   - Add path operations with `"brush":{"profile":"eraser","is_eraser":true,...}` to sculpt contours, fix color bleeds, or carve highlights.\n'
         "   - Any size_px target in the art direction must be encoded as brush.size with brush.size_mode='px'; preset names map to brush.preset_hint. Prefer ratio sizes for resolution independence.\n\n"
         f"=== PALETTE DIRECTION: {palette_name.upper()} ===\n"
-        f"Harmonize colors to match the '{palette_name}' aesthetic: prioritize cohesive color theory, distinct value contrast between shadow and light, and vibrant accent highlights.\n"
+        f"Harmonize colors to match the '{palette_name}' aesthetic: prioritize cohesive color theory (warm lights, cool shadows, vibrant SSS accents), distinct value contrast, and radiant specular highlights.\n"
         f"{domain_guidance}"
         f"{progressive_section}"
         f"{visual_feedback_section}\n"
@@ -1295,23 +1308,27 @@ def _system_instruction(
         f'  "canvas": {{"width": {width:.0f}, "height": {height:.0f}}},\n'
         '  "operations": [\n'
         '    {"kind":"fill","id":"base","layer":"Flats","style":"wash","polygon":[[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]],"brush":{"profile":"marker","color":"#3a7bd5","size":0.10}},\n'
-        '    {"kind":"fill","id":"form-shadow","layer":"Shading","style":"wash","polygon":[[0.2,0.2],[0.8,0.2],[0.7,0.8],[0.25,0.75]],"brush":{"profile":"watercolor","color":"#203050","size":0.04,"opacity":0.55}},\n'
+        '    {"kind":"fill","id":"form-shadow","layer":"Shading","style":"contour","polygon":[[0.2,0.2],[0.8,0.2],[0.7,0.8],[0.25,0.75]],"brush":{"profile":"watercolor","color":"#203050","size":0.04,"opacity":0.55}},\n'
         '    {"kind":"path","id":"contour","layer":"Lineart","points":[[0.25,0.8,0.15],[0.5,0.2,0.95],[0.75,0.8,0.1]],"smooth":true,"brush":{"profile":"gpen","color":"#2c1810","size":0.005}},\n'
         '    {"kind":"particles","id":"accents","layer":"FX","shape":"petal","bounds":[0.05,0.05,0.95,0.95],"count":30,"length":0.012,"angle_deg":90,"angle_jitter":35,"brush":{"profile":"gpen","color":"#ffffff","size":0.002}}\n'
         "  ]\n"
         "}\n"
         "```\n"
         "=== CRITICAL RULES & ANTI-PATTERNS ===\n"
-        "1. Operation kinds: path (2+ points), fill (3+ polygon points, style: 'wash'/'feathered'/'scanline'), hatch (polygon, only for manga screen-tones), particles (bounds/count, shape: 'petal'/'sparkle'/'drift'/'line'). IDs must be unique.\n"
+        "1. Operation kinds:\n"
+        "   - path: (2+ points, control points with pressure)\n"
+        "   - fill: (3+ polygon points, styles: 'wash' (smooth gradient), 'contour' (form-following concentric curves), 'radial' (center rays for eyes/bursts), 'directional' (angle-aligned sweeps), 'scanline' (crisp flats))\n"
+        "   - hatch: (polygon, angle_deg, spacing, only for manga screen-tones)\n"
+        "   - particles: (bounds/count, shape: 'petal'/'sparkle'/'drift'/'bokeh'/'line')\n"
         "2. Brush profiles: auto, gpen, marupen, brush, marker, pencil, watercolor, airbrush, eraser. Size defaults to a canvas ratio; use size_mode='px' only for deliberately fixed pixel sizes.\n"
         "3. Anti-Patterns (STRICTLY FORBIDDEN):\n"
-        "   - NEVER use hatch for smooth 3D shading, foliage, clouds, or landscape (causes artificial wireframe/coarse zebra stripes). Use fill with style 'wash' and 'watercolor' / 'airbrush' instead.\n"
+        "   - NEVER use hatch for smooth 3D shading, foliage, clouds, or landscape (causes artificial wireframe/coarse zebra stripes). Use fill with style 'wash' / 'contour' and 'watercolor' / 'airbrush' instead.\n"
         "   - NEVER use cross: true on ground, terrain, grass, or natural foliage.\n"
         "   - NEVER draw isolated mathematical parabolic/bezier arc paths across foliage clumps or mountain peaks as fake highlights.\n"
         "   - NEVER draw flat rectangular fog/mist bars cutting across the scenery; use soft curved wash strokes on Flats/Shading.\n"
         "   - NEVER draw solid white (#ffffff) normal brush strokes on Shading layer (which multiplies). For highlights, use Highlights/FX layers; for erasing, set is_eraser: true.\n"
-        "4. Composition: Establish large coherent silhouettes with fill, then soft form shadows on Shading with fill/wash, then tapered contour paths on Lineart and sparse particle accents on FX.\n"
-        "5. Curves: Give path 2-12 meaningful control points [x,y,pressure]; the compiler creates continuous smooth geometry.\n"
+        "4. Composition: Establish large coherent silhouettes with fill, then soft form shadows on Shading with fill/contour, then tapered contour paths on Lineart and sparse particle accents on FX.\n"
+        "5. Curves: Give path 2-12 meaningful control points [x,y,pressure]; the compiler creates continuous smooth geometry with ink pooling at corners.\n"
         "6. Goal Evaluation: Set goal_reached true only when the artwork is fully finished and composition, values, edges, and requested details are complete.\n"
         "7. First character of output must be '{' or '```json'."
     )

@@ -5758,6 +5758,99 @@ class ExtendedCustomizationTests(unittest.TestCase):
         self.assertEqual(len(plan.strokes), 1)
         self.assertTrue(plan.strokes[0].is_eraser)
 
+    def test_fill_operation_new_styles_and_angle_compilation(self) -> None:
+        """FillOperation の contour, radial, directional スタイルおよび angle_deg が正常にコンパイルされることを検証。"""
+        # 1. contour (同心円輪郭塗り)
+        p_contour = StrokeProgram.from_dict(
+            {
+                "schema_version": 2,
+                "prompt": "contour fill test",
+                "canvas": {"width": 1000, "height": 1000},
+                "operations": [
+                    {
+                        "kind": "fill",
+                        "id": "f_contour",
+                        "style": "contour",
+                        "polygon": [[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]],
+                        "brush": {"profile": "watercolor", "size": 0.05, "color": "#e08090"},
+                    }
+                ],
+            }
+        )
+        plan_contour = compile_stroke_program(p_contour)
+        self.assertGreater(len(plan_contour.strokes), 3)
+
+        # 2. radial (放射状塗り)
+        p_radial = StrokeProgram.from_dict(
+            {
+                "schema_version": 2,
+                "prompt": "radial fill test",
+                "canvas": {"width": 1000, "height": 1000},
+                "operations": [
+                    {
+                        "kind": "fill",
+                        "id": "f_radial",
+                        "style": "radial",
+                        "polygon": [[0.3, 0.3], [0.7, 0.3], [0.7, 0.7], [0.3, 0.7]],
+                        "brush": {"profile": "watercolor", "size": 0.04, "color": "#3366cc"},
+                    }
+                ],
+            }
+        )
+        plan_radial = compile_stroke_program(p_radial)
+        self.assertGreaterEqual(len(plan_radial.strokes), 8)
+
+        # 3. directional (角度指定スキャンライン塗り)
+        p_dir = StrokeProgram.from_dict(
+            {
+                "schema_version": 2,
+                "prompt": "directional fill test",
+                "canvas": {"width": 1000, "height": 1000},
+                "operations": [
+                    {
+                        "kind": "fill",
+                        "id": "f_dir",
+                        "style": "directional",
+                        "angle_deg": 45.0,
+                        "polygon": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]],
+                        "brush": {"profile": "airbrush", "size": 0.08, "color": "#204060"},
+                    }
+                ],
+            }
+        )
+        plan_dir = compile_stroke_program(p_dir)
+        self.assertGreater(len(plan_dir.strokes), 4)
+
+    def test_curvature_pressure_boost_and_smart_tapering(self) -> None:
+        """急カーブ（角）での曲率連動筆圧インク溜まりと端点スマートテーパリングを検証。"""
+        # 90度直角に曲がる3点パス
+        prog = StrokeProgram.from_dict(
+            {
+                "schema_version": 2,
+                "prompt": "curvature test",
+                "canvas": {"width": 1000, "height": 1000},
+                "operations": [
+                    {
+                        "kind": "path",
+                        "id": "corner_path",
+                        "layer": "Lineart",
+                        "points": [[0.1, 0.1], [0.5, 0.1], [0.5, 0.9]],
+                        "brush": {"profile": "gpen", "size": 0.005, "color": "#000000"},
+                    }
+                ],
+            }
+        )
+        plan = compile_stroke_program(prog)
+        self.assertEqual(len(plan.strokes), 1)
+        pts = plan.strokes[0].points
+        self.assertGreater(len(pts), 5)
+        # 端点はテーパリングされている（開始点・終了点の筆圧が低い）
+        self.assertLess(pts[0].pressure, 0.5)
+        self.assertLess(pts[-1].pressure, 0.5)
+        # 中間の曲がり角付近で筆圧がブーストされている
+        max_p = max(pt.pressure for pt in pts)
+        self.assertGreaterEqual(max_p, 0.90)
+
 
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))
