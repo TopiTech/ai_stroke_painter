@@ -4423,9 +4423,14 @@ class ExtendedCustomizationTests(unittest.TestCase):
 
         prev = PreviewWidget.__new__(PreviewWidget)
         prev._plan = None
+        prev._accumulated_strokes = []
+        prev._canvas_width = 1000.0
+        prev._canvas_height = 1000.0
         prev._size_multiplier = 1.0
         prev._opacity_multiplier = 1.0
         prev.update = lambda: None
+        prev.width = lambda: 200
+        prev.height = lambda: 160
 
         plan = DrawingPlan(
             prompt="test",
@@ -4433,14 +4438,98 @@ class ExtendedCustomizationTests(unittest.TestCase):
             strokes=[
                 Stroke("s1", [StrokePoint(0, 0, 0.5, 0), StrokePoint(100, 100, 0.8, 10)], size_px=10.0, opacity=1.0)
             ],
+            canvas_width=800.0,
+            canvas_height=600.0,
         )
         prev.set_plan(plan, size_multiplier=2.0, opacity_multiplier=0.5)
         self.assertEqual(prev._size_multiplier, 2.0)
         self.assertEqual(prev._opacity_multiplier, 0.5)
+        self.assertEqual(len(prev._accumulated_strokes), 1)
+        self.assertEqual(prev._canvas_width, 800.0)
+        self.assertEqual(prev._canvas_height, 600.0)
+
+        # マルチステップ累積描画テスト
+        plan2 = DrawingPlan(
+            prompt="test2",
+            seed=2,
+            strokes=[
+                Stroke("s2", [StrokePoint(50, 50, 1.0, 0), StrokePoint(50, 50, 1.0, 0)], size_px=5.0, opacity=0.8),
+                Stroke("s3", [StrokePoint(10, 10, 0.2, 0), StrokePoint(20, 20, 0.9, 5)], size_px=8.0, is_eraser=True),
+            ],
+        )
+        prev.set_plan(plan2, accumulate=True)
+        self.assertEqual(len(prev._accumulated_strokes), 3)
+
+        # paintEvent および paint_to_painter が例外なく正常に完了すること
+        prev.paintEvent(None)
+
+        class _MockPainter:
+            def __init__(self) -> None:
+                self.lines: list[Any] = []
+                self.rects: list[Any] = []
+                self.ellipses: list[Any] = []
+
+            def fillRect(self, *args: Any) -> None:
+                self.rects.append(args)
+
+            def drawRect(self, *args: Any) -> None:
+                self.rects.append(args)
+
+            def setPen(self, *args: Any) -> None:
+                pass
+
+            def setBrush(self, *args: Any) -> None:
+                pass
+
+            def drawLine(self, *args: Any) -> None:
+                self.lines.append(args)
+
+            def drawEllipse(self, *args: Any) -> None:
+                self.ellipses.append(args)
+
+        mock_painter = _MockPainter()
+        prev.paint_to_painter(mock_painter, 200, 160)
+        self.assertGreater(len(mock_painter.rects), 0)
+        self.assertGreater(len(mock_painter.lines) + len(mock_painter.ellipses), 0)
+
+        # クリアテスト
+        prev.clear_plan()
+        self.assertEqual(len(prev._accumulated_strokes), 0)
+        self.assertIsNone(prev._plan)
 
         prev.update_multipliers(size_multiplier=1.5, opacity_multiplier=0.9)
         self.assertEqual(prev._size_multiplier, 1.5)
         self.assertEqual(prev._opacity_multiplier, 0.9)
+
+    def test_salvage_brush_size_px_mode(self) -> None:
+        """LLM が size: 45 のようなピクセル値を出力した際、pxモードとして救済されるテスト。"""
+        from .llm_planner import _sanitize_and_rescue_program_dict
+
+        raw = {
+            "schema_version": 2,
+            "canvas": {"width": 2480, "height": 3508},
+            "operations": [
+                {
+                    "kind": "path",
+                    "points": [[0.1, 0.1], [0.9, 0.9]],
+                    "brush": {"size": 45, "color": "#123456"},
+                },
+                {
+                    "kind": "fill",
+                    "polygon": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]],
+                    "brush": {"size": 0.05, "color": "#abcdef"},
+                },
+            ],
+        }
+        salvaged = _sanitize_and_rescue_program_dict(raw, canvas_w=2480, canvas_h=3508)
+        ops = salvaged.get("operations", [])
+        self.assertEqual(len(ops), 2)
+        # size: 45 は > 1.0 のため size_mode='px' で救済
+        self.assertEqual(ops[0]["brush"]["size_mode"], "px")
+        self.assertEqual(ops[0]["brush"]["size"], 45.0)
+        # size: 0.05 は <= 1.0 のため size_mode='ratio'
+        self.assertEqual(ops[1]["brush"]["size_mode"], "ratio")
+        self.assertEqual(ops[1]["brush"]["size"], 0.05)
 
     def test_stroke_is_eraser_support(self) -> None:
         """消しゴムストロークの作成、辞書変換、復元、および自動判定テスト。"""

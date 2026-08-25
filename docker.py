@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import contextlib
 import datetime
 import json
@@ -14,7 +15,7 @@ import traceback
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
-from .domain import DrawingPlan, split_color_alpha
+from .domain import DrawingPlan, Stroke, split_color_alpha
 from .image_converter import MAX_ENCODED_IMAGE_BYTES
 from .krita_adapter import KritaCanvasAdapter
 from .llm_planner import OpenAICompatiblePlanner, OpenAICompatibleSettings
@@ -22,6 +23,7 @@ from .planner import RuleBasedPlanner
 from .ports import PlannerPort
 from .qt_compat import (
     QApplication,
+    QBrush,
     QCheckBox,
     QColor,
     QComboBox,
@@ -38,6 +40,7 @@ from .qt_compat import (
     QPainter,
     QPen,
     QPlainTextEdit,
+    QPointF,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -45,8 +48,11 @@ from .qt_compat import (
     QSpinBox,
     QVBoxLayout,
     QWidget,
+    antialiasing_render_hint,
     password_echo_mode,
     pyqtSignal,
+    round_cap_style,
+    round_join_style,
 )
 from .storage import save_plan, save_svg
 
@@ -168,20 +174,42 @@ class PreviewWidget(QWidget):
     def __init__(self, parent: Any | None = None) -> None:
         super().__init__(parent)
         self._plan: DrawingPlan | None = None
+        self._accumulated_strokes: list[Stroke] = []
+        self._canvas_width: float = 1000.0
+        self._canvas_height: float = 1000.0
         self._size_multiplier: float = 1.0
         self._opacity_multiplier: float = 1.0
         self.setMinimumHeight(160)
         self.setMaximumHeight(200)
+
+    def clear_plan(self) -> None:
+        """プレビュー表示と累積ストロークを初期化する。"""
+        self._plan = None
+        self._accumulated_strokes.clear()
+        self.update()
 
     def set_plan(
         self,
         plan: DrawingPlan | None,
         size_multiplier: float = 1.0,
         opacity_multiplier: float = 1.0,
+        accumulate: bool = False,
     ) -> None:
         self._plan = plan
         self._size_multiplier = float(size_multiplier)
         self._opacity_multiplier = float(opacity_multiplier)
+        if plan is None:
+            self._accumulated_strokes.clear()
+        elif accumulate:
+            self._accumulated_strokes.extend(plan.strokes)
+        else:
+            self._accumulated_strokes = list(plan.strokes)
+
+        if plan is not None:
+            if plan.canvas_width is not None and plan.canvas_width > 0:
+                self._canvas_width = float(plan.canvas_width)
+            if plan.canvas_height is not None and plan.canvas_height > 0:
+                self._canvas_height = float(plan.canvas_height)
         self.update()
 
     def update_multipliers(self, size_multiplier: float, opacity_multiplier: float) -> None:
@@ -189,55 +217,128 @@ class PreviewWidget(QWidget):
         self._opacity_multiplier = float(opacity_multiplier)
         self.update()
 
+    def paint_to_painter(self, painter: Any, width: float, height: float) -> None:
+        """指定された QPainter インスタンスへストロークを描画する（テストおよびオフスクリーン出力共用）。"""
+        if hasattr(painter, "setRenderHint"):
+            with contextlib.suppress(Exception):
+                painter.setRenderHint(antialiasing_render_hint())
+
+        w = float(width)
+        h = float(height)
+
+        painter.fillRect(0, 0, int(w), int(h), QColor("#1e1e24"))
+
+        strokes: Sequence[Stroke] = self._accumulated_strokes
+        if not strokes and (self._plan is None or not self._plan.strokes):
+            painter.setPen(QColor("#777788"))
+            painter.drawText(int(w * 0.2), int(h * 0.5), "ストローク プレビュー")
+            return
+
+        if not strokes and self._plan is not None:
+            strokes = self._plan.strokes
+
+        max_x = max((p.x for s in strokes for p in s.points), default=w)
+        max_y = max((p.y for s in strokes for p in s.points), default=h)
+        canvas_w = (
+            (self._plan.canvas_width if self._plan and self._plan.canvas_width else None) or self._canvas_width or max_x
+        )
+        canvas_h = (
+            (self._plan.canvas_height if self._plan and self._plan.canvas_height else None)
+            or self._canvas_height
+            or max_y
+        )
+        canvas_w = max(1.0, float(canvas_w))
+        canvas_h = max(1.0, float(canvas_h))
+
+        scale = min(w / canvas_w, h / canvas_h) * 0.92
+        cw_px = canvas_w * scale
+        ch_px = canvas_h * scale
+        ox = (w - cw_px) * 0.5
+        oy = (h - ch_px) * 0.5
+
+        # 1. 白地キャンバス用紙領域の描画（Krita の白地キャンバス再現）
+        rx, ry, rw, rh = int(ox), int(oy), int(cw_px), int(ch_px)
+        painter.fillRect(rx, ry, rw, rh, QColor("#ffffff"))
+
+        # 2. キャンバス用紙境界線
+        pen_border = QPen(QColor("#555566"), 1.0)
+        painter.setPen(pen_border)
+        if hasattr(painter, "drawRect"):
+            painter.drawRect(rx, ry, rw, rh)
+
+        # 3. ストロークの精密描画（RoundCap, RoundJoin, 筆圧ダイナミクス、単一ポイント描画、正確な1.0xスケール）
+        cap_round = round_cap_style()
+        join_round = round_join_style()
+
+        for stroke in strokes:
+            pts = stroke.points
+            if not pts:
+                continue
+
+            base_size = max(0.5, float(stroke.size_px) * self._size_multiplier)
+            pen_w = max(1.0, base_size * scale)
+
+            if stroke.is_eraser:
+                col = QColor("#ffffff")
+            else:
+                rgb_color, color_alpha = split_color_alpha(stroke.color)
+                col = QColor(rgb_color)
+                eff_op = max(0.0, min(1.0, float(stroke.opacity) * self._opacity_multiplier * color_alpha))
+                if eff_op < 1.0 and hasattr(col, "setAlphaF"):
+                    col.setAlphaF(eff_op)
+
+            pen = QPen(col, pen_w)
+            if hasattr(pen, "setCapStyle"):
+                pen.setCapStyle(cap_round)
+            if hasattr(pen, "setJoinStyle"):
+                pen.setJoinStyle(join_round)
+
+            is_dot = len(pts) == 1 or (len(pts) == 2 and pts[0].x == pts[1].x and pts[0].y == pts[1].y)
+            if is_dot:
+                p0 = pts[0]
+                px = ox + p0.x * scale
+                py = oy + p0.y * scale
+                eff_pt_w = max(1.0, pen_w * max(0.2, p0.pressure))
+                radius = eff_pt_w * 0.5
+                painter.setPen(pen)
+                if hasattr(painter, "drawEllipse"):
+                    if hasattr(painter, "setBrush") and QBrush is not None and callable(QBrush):
+                        painter.setBrush(QBrush(col))
+                    if QPointF is not None and callable(QPointF):
+                        painter.drawEllipse(QPointF(px, py), radius, radius)
+                    else:
+                        painter.drawEllipse(int(px - radius), int(py - radius), int(radius * 2), int(radius * 2))
+                else:
+                    painter.drawLine(int(px), int(py), int(px), int(py))
+            else:
+                for p0, p1 in zip(pts, pts[1:], strict=False):
+                    avg_press = (p0.pressure + p1.pressure) * 0.5
+                    eff_line_w = max(1.0, pen_w * avg_press)
+                    if hasattr(pen, "setWidthF"):
+                        pen.setWidthF(eff_line_w)
+                    elif hasattr(pen, "setWidth"):
+                        pen.setWidth(max(1, int(round(eff_line_w))))
+                    painter.setPen(pen)
+                    painter.drawLine(
+                        int(round(ox + p0.x * scale)),
+                        int(round(oy + p0.y * scale)),
+                        int(round(ox + p1.x * scale)),
+                        int(round(oy + p1.y * scale)),
+                    )
+
     def paintEvent(self, event: Any) -> None:  # noqa: N802
         if QPainter is None or QColor is None or QPen is None or not callable(QPainter):
             return
 
-        painter: Any = QPainter(self)
+        w = float(self.width()) if hasattr(self, "width") else 200.0
+        h = float(self.height()) if hasattr(self, "height") else 160.0
         try:
-            w = float(self.width()) if hasattr(self, "width") else 200.0
-            h = float(self.height()) if hasattr(self, "height") else 160.0
+            painter: Any = QPainter(self)
+        except Exception:
+            return
 
-            painter.fillRect(0, 0, int(w), int(h), QColor("#1e1e24"))
-
-            if self._plan is None or not self._plan.strokes:
-                painter.setPen(QColor("#777788"))
-                painter.drawText(int(w * 0.2), int(h * 0.5), "ストローク プレビュー")
-                return
-
-            max_x = max((p.x for s in self._plan.strokes for p in s.points), default=w)
-            max_y = max((p.y for s in self._plan.strokes for p in s.points), default=h)
-            canvas_w = self._plan.canvas_width or max_x
-            canvas_h = self._plan.canvas_height or max_y
-            scale = min(w / max(1.0, canvas_w), h / max(1.0, canvas_h)) * 0.92
-            ox = (w - canvas_w * scale) * 0.5
-            oy = (h - canvas_h * scale) * 0.5
-
-            for stroke in self._plan.strokes:
-                if stroke.is_eraser:
-                    col = QColor("#1e1e24")
-                    _rgb_color, color_alpha = split_color_alpha(stroke.color)
-                    eff_op = max(0.0, min(1.0, stroke.opacity * self._opacity_multiplier * color_alpha))
-                    if eff_op < 1.0 and hasattr(col, "setAlphaF"):
-                        col.setAlphaF(eff_op)
-                    pen_w = max(2.0, stroke.size_px * self._size_multiplier * scale * 0.8)
-                else:
-                    rgb_color, color_alpha = split_color_alpha(stroke.color)
-                    col = QColor(rgb_color)
-                    eff_op = max(0.0, min(1.0, stroke.opacity * self._opacity_multiplier * color_alpha))
-                    if eff_op < 1.0 and hasattr(col, "setAlphaF"):
-                        col.setAlphaF(eff_op)
-                    pen_w = max(1.0, stroke.size_px * self._size_multiplier * scale * 0.6)
-                pen = QPen(col, pen_w)
-                painter.setPen(pen)
-                pts = stroke.points
-                for p0, p1 in zip(pts, pts[1:], strict=False):
-                    painter.drawLine(
-                        int(ox + p0.x * scale),
-                        int(oy + p0.y * scale),
-                        int(ox + p1.x * scale),
-                        int(oy + p1.y * scale),
-                    )
+        try:
+            self.paint_to_painter(painter, w, h)
         finally:
             painter.end()
 
@@ -1902,6 +2003,10 @@ class AIStrokePainterDocker(DockWidget):
         if st is not None and hasattr(st, "setText"):
             st.setText("描画計画を生成中… 停止できます。")
 
+        prev_w_initial = _get_attr(self, "preview")
+        if prev_w_initial is not None and hasattr(prev_w_initial, "clear_plan"):
+            prev_w_initial.clear_plan()
+
         try:
             canvas_port = _get_attr(self, "canvas_port")
             if canvas_port is not None and hasattr(canvas_port, "begin_render_session"):
@@ -2005,12 +2110,15 @@ class AIStrokePainterDocker(DockWidget):
 
         if prev_w is not None and hasattr(prev_w, "set_plan"):
             try:
-                prev_w.set_plan(plan, size_multiplier=size_mult, opacity_multiplier=op_mult)
+                prev_w.set_plan(plan, size_multiplier=size_mult, opacity_multiplier=op_mult, accumulate=True)
             except TypeError:
                 try:
-                    prev_w.set_plan(plan)
-                except Exception as exc:
-                    self._log_debug(f"[プレビュー更新失敗] {exc}")
+                    prev_w.set_plan(plan, size_multiplier=size_mult, opacity_multiplier=op_mult)
+                except TypeError:
+                    try:
+                        prev_w.set_plan(plan)
+                    except Exception as exc:
+                        self._log_debug(f"[プレビュー更新失敗] {exc}")
             except Exception as exc:
                 self._log_debug(f"[プレビュー更新失敗] {exc}")
 

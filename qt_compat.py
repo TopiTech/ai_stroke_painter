@@ -10,6 +10,7 @@ HAS_QT: bool = False
 QT_BINDING: str | None = None
 
 # 各種 Qt クラスの初期値
+Qt: Any = None
 QObject: Any = None
 pyqtSignal: Any = None
 QEvent: Any = None
@@ -37,6 +38,7 @@ QApplication: Any = None
 QPainter: Any = None
 QColor: Any = None
 QPen: Any = None
+QBrush: Any = None
 QImage: Any = None
 QPoint: Any = None
 QPointF: Any = None
@@ -89,6 +91,51 @@ def argb32_image_format(image_cls: Any | None = None) -> Any:
     return getattr(cls, "Format_ARGB32", None)
 
 
+def round_cap_style(qt_cls: Any | None = None) -> Any:
+    """Return Qt.RoundCap / Qt.PenCapStyle.RoundCap for Qt 5 or Qt 6."""
+    target_qt = Qt if qt_cls is None else qt_cls
+    if target_qt is None:
+        return 0x20  # Qt.RoundCap default enum value
+    scoped = getattr(target_qt, "PenCapStyle", None)
+    scoped_val = getattr(scoped, "RoundCap", None)
+    if scoped_val is not None:
+        return scoped_val
+    legacy_val = getattr(target_qt, "RoundCap", None)
+    if legacy_val is not None:
+        return legacy_val
+    return 0x20
+
+
+def round_join_style(qt_cls: Any | None = None) -> Any:
+    """Return Qt.RoundJoin / Qt.PenJoinStyle.RoundJoin for Qt 5 or Qt 6."""
+    target_qt = Qt if qt_cls is None else qt_cls
+    if target_qt is None:
+        return 0x40  # Qt.RoundJoin default enum value
+    scoped = getattr(target_qt, "PenJoinStyle", None)
+    scoped_val = getattr(scoped, "RoundJoin", None)
+    if scoped_val is not None:
+        return scoped_val
+    legacy_val = getattr(target_qt, "RoundJoin", None)
+    if legacy_val is not None:
+        return legacy_val
+    return 0x40
+
+
+def antialiasing_render_hint(painter_cls: Any | None = None) -> Any:
+    """Return QPainter.Antialiasing / QPainter.RenderHint.Antialiasing for Qt 5 or Qt 6."""
+    target_painter = QPainter if painter_cls is None else painter_cls
+    if target_painter is None:
+        return 0x01  # QPainter.Antialiasing default enum value
+    scoped = getattr(target_painter, "RenderHint", None)
+    scoped_val = getattr(scoped, "Antialiasing", None)
+    if scoped_val is not None:
+        return scoped_val
+    legacy_val = getattr(target_painter, "Antialiasing", None)
+    if legacy_val is not None:
+        return legacy_val
+    return 0x01
+
+
 # Krita が既に読み込んだ Qt バインディングを最優先し、未確定時は Krita 6 の PyQt6 を先に試す。
 if any(name == "PyQt5" or name.startswith("PyQt5.") for name in sys.modules):
     _binding_order = ("PyQt5", "PyQt6")
@@ -101,6 +148,7 @@ for binding in _binding_order:
         _widgets = importlib.import_module(f"{binding}.QtWidgets")
         _gui = importlib.import_module(f"{binding}.QtGui")
 
+        Qt = getattr(_core, "Qt", None)
         QObject = getattr(_core, "QObject", None)
         pyqtSignal = getattr(_core, "pyqtSignal", None)
         QEvent = getattr(_core, "QEvent", None)
@@ -136,6 +184,7 @@ for binding in _binding_order:
         QPainter = getattr(_gui, "QPainter", None)
         QColor = getattr(_gui, "QColor", None)
         QPen = getattr(_gui, "QPen", None)
+        QBrush = getattr(_gui, "QBrush", None)
         QImage = getattr(_gui, "QImage", None)
 
         if QObject is not None and QWidget is not None:
@@ -570,6 +619,24 @@ if not HAS_QT:
             self.x = x
             self.y = y
 
+    class Qt:  # type: ignore[no-redef]
+        RoundCap = 0x20
+        RoundJoin = 0x40
+
+        class PenCapStyle:
+            RoundCap = 0x20
+            SquareCap = 0x10
+            FlatCap = 0x00
+
+        class PenJoinStyle:
+            RoundJoin = 0x40
+            MiterJoin = 0x00
+            BevelJoin = 0x80
+
+    class QBrush:  # type: ignore[no-redef]
+        def __init__(self, *args: Any) -> None:
+            pass
+
     class QColor:  # type: ignore[no-redef]
         def __init__(self, *args: Any) -> None:
             pass
@@ -585,20 +652,49 @@ if not HAS_QT:
         def __init__(self, *args: Any) -> None:
             pass
 
+        def setCapStyle(self, *args: Any) -> None:
+            pass
+
+        def setJoinStyle(self, *args: Any) -> None:
+            pass
+
+        def setWidthF(self, *args: Any) -> None:
+            pass
+
+        def setWidth(self, *args: Any) -> None:
+            pass
+
     class QPainter:  # type: ignore[no-redef]
+        Antialiasing = 0x01
+
+        class RenderHint:
+            Antialiasing = 0x01
+
         def __init__(self, *args: Any) -> None:
+            pass
+
+        def setRenderHint(self, *args: Any) -> None:
             pass
 
         def fillRect(self, *args: Any) -> None:
             pass
 
+        def drawRect(self, *args: Any) -> None:
+            pass
+
         def setPen(self, *args: Any) -> None:
+            pass
+
+        def setBrush(self, *args: Any) -> None:
             pass
 
         def drawText(self, *args: Any) -> None:
             pass
 
         def drawLine(self, *args: Any) -> None:
+            pass
+
+        def drawEllipse(self, *args: Any) -> None:
             pass
 
         def end(self) -> None:

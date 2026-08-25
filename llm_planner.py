@@ -1750,16 +1750,21 @@ def _sanitize_and_rescue_program_dict(
         c_val = normalize_hex_color(b_dict.get("color") or item_d.get("color") or "#232323", fallback="#232323")
 
         sz_val = b_dict.get("size") or b_dict.get("size_ratio") or item_d.get("size") or item_d.get("size_ratio")
+        sz_mode_raw = str(b_dict.get("size_mode") or item_d.get("size_mode") or "").strip().lower()
         if sz_val is None and ("size_px" in b_dict or "size_px" in item_d):
             px_val = float(b_dict.get("size_px") or item_d.get("size_px") or 8.0)
             sz_val = max(0.5, px_val)
             sz_mode = "px"
+        elif sz_val is not None:
+            f_sz = float(sz_val)
+            if sz_mode_raw == "px" or (sz_mode_raw != "ratio" and f_sz > 1.0):
+                sz_val = max(0.5, f_sz)
+                sz_mode = "px"
+            else:
+                sz_val = max(0.0001, min(1.0, f_sz))
+                sz_mode = "ratio"
         else:
-            sz_val = (
-                float(sz_val)
-                if sz_val is not None
-                else (0.035 if kind == "fill" else 0.0025 if kind == "hatch" else 0.006)
-            )
+            sz_val = 0.035 if kind == "fill" else 0.0025 if kind == "hatch" else 0.006
             sz_mode = "ratio"
 
         op_opacity = float(b_dict.get("opacity") or item_d.get("opacity") or 1.0)
