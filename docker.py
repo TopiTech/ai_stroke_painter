@@ -160,7 +160,7 @@ def _safe_endpoint_label(url: str) -> str:
             return "[invalid URL]"
         host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
         port = f":{parsed.port}" if parsed.port is not None else ""
-        return f"{parsed.scheme}://{host}{port}{parsed.path.rstrip('/')}"
+        return f"{parsed.scheme.lower()}://{host}{port}"
     except (TypeError, ValueError):
         return "[invalid URL]"
 

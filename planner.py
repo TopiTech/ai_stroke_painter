@@ -119,9 +119,10 @@ class RuleBasedPlanner(PlannerPort):
             )
 
         # 自律反復改善（イテレーション）時のプロシージャル描画計画
+        generation_seed = valid_seed + (iteration - 1) * 1000
         plan = generate_procedural_plan(
             prompt=valid_prompt,
-            seed=valid_seed + (iteration - 1) * 1000,
+            seed=generation_seed,
             count=valid_count,
             width=valid_width,
             height=valid_height,
@@ -132,7 +133,9 @@ class RuleBasedPlanner(PlannerPort):
         # イテレーション番号とゴール達成度をセット
         return DrawingPlan(
             prompt=plan.prompt,
-            seed=plan.seed,
+            # 反復間で累積計画へ統合できるよう、公開シードは要求値を維持する。
+            # 反復ごとの多様性は上の generation_seed で内部生成へだけ適用する。
+            seed=valid_seed,
             strokes=plan.strokes,
             title=plan.title,
             iteration=iteration,

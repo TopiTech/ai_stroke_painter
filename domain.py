@@ -27,6 +27,18 @@ class PlanValidationError(ValueError):
     """外部入力または保存済み計画が描画契約を満たさない場合の例外。"""
 
 
+def _xml_safe_text(value: str) -> str:
+    """XML 1.0 で許可される文字だけを残す。"""
+    return "".join(
+        character
+        for character in value
+        if character in "\t\n\r"
+        or 0x20 <= ord(character) <= 0xD7FF
+        or 0xE000 <= ord(character) <= 0xFFFD
+        or ord(character) >= 0x10000
+    )
+
+
 def split_color_alpha(color: str) -> tuple[str, float]:
     """Validated CSS-style hex colorを RGB 部分と独立した alpha に分ける。"""
     if len(color) == 5:
@@ -419,7 +431,7 @@ class DrawingPlan:
             raise PlanValidationError("SVG の幅と高さは正の有限数値である必要があります")
 
         # XML コメント内で "--" は禁止されているため置換する
-        safe_prompt = html.escape(self.prompt).replace("--", "﹣﹣")
+        safe_prompt = html.escape(_xml_safe_text(self.prompt)).replace("--", "﹣﹣")
         svg_header: list[str] = [
             f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w:.1f} {h:.1f}" width="{w:.1f}" height="{h:.1f}">',
             f"  <!-- AI Stroke Painter: {safe_prompt} (Seed: {self.seed}) -->",
@@ -475,7 +487,8 @@ class DrawingPlan:
             elif layer_mode == "multi_layer" and any(token in lowered_layer for token in ("highlight", "fx", "glow")):
                 # SVGにKritaの線形加算と同一の標準指定はないため、近似screenと元モード名を併記する。
                 blend_attributes = ' style="mix-blend-mode:screen" data-krita-blend-mode="addition"'
-            svg_body.append(f'  <g id="layer_{html.escape(layer_name)}"{blend_attributes}>')
+            safe_layer_name = html.escape(_xml_safe_text(layer_name), quote=True)
+            svg_body.append(f'  <g id="layer_{safe_layer_name}"{blend_attributes}>')
             svg_body.extend(f"    {line}" for line in layer_content)
             svg_body.append("  </g>")
 

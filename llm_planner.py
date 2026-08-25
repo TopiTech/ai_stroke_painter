@@ -452,10 +452,15 @@ class OpenAICompatiblePlanner(PlannerPort):
 
         try:
             plan_or_content = _extract_best_content_or_plan(response, log_func=self._log, is_drawing_plan=False)
-            preview = str(plan_or_content)[:60].replace("\n", " ")
-            if not preview.strip():
+            if isinstance(plan_or_content, str):
+                response_kind = "text"
+                has_content = bool(plan_or_content.strip())
+            else:
+                response_kind = "JSON object"
+                has_content = True
+            if not has_content:
                 raise LLMPlannerError("モデル応答が空でした")
-            msg = f"接続成功: モデルが正常に応答しました ({elapsed:.2f}s, 応答: {preview!r})"
+            msg = f"接続成功: モデルが正常に応答しました ({elapsed:.2f}s, 応答形式: {response_kind})"
             self._log(msg)
             return msg
         except Exception as exc:
@@ -1089,10 +1094,6 @@ class OpenAICompatiblePlanner(PlannerPort):
                             break
                         chunks.append(chunk)
                         received_bytes += len(chunk)
-                        # Buffered HTTP responses return a short read at EOF. This also keeps
-                        # simple OpenAI-compatible transports that do not model EOF usable.
-                        if len(chunk) < read_size:
-                            break
                     raw = b"".join(chunks)
         except _CrossOriginRedirectError as exc:
             self._log("エラー: 別オリジンへのリダイレクト拒否")

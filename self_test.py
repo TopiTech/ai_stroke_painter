@@ -543,6 +543,16 @@ class PlannerAndStorageTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             planner.plan("invalid iteration", 1, 1, 100, 100, iteration=2, max_iterations=1)
 
+    def test_planner_keeps_requested_seed_across_iterations_for_combination(self) -> None:
+        planner = RuleBasedPlanner()
+        first = planner.plan("cat", 42, 2, 200, 200, iteration=1, max_iterations=2)
+        second = planner.plan("cat", 42, 2, 200, 200, iteration=2, max_iterations=2)
+
+        self.assertEqual(first.seed, 42)
+        self.assertEqual(second.seed, 42)
+        combined = combine_drawing_plans([first, second])
+        self.assertEqual(combined.seed, 42)
+
     def test_procedural_all_domains_generate_valid_strokes(self) -> None:
         # Character
         char_strokes = generate_character_strokes("girl", 42, 20, 800, 600)
@@ -820,6 +830,21 @@ class PlannerAndStorageTests(unittest.TestCase):
 
         plan = RuleBasedPlanner().plan("attack -- defense", 7, 3, 100, 100)
         svg_content = plan.to_svg(100, 100)
+        ET.fromstring(svg_content)
+
+    def test_svg_removes_xml_forbidden_control_characters(self) -> None:
+        import xml.etree.ElementTree as ET
+
+        points = [StrokePoint(0, 0, 1, 0), StrokePoint(10, 10, 1, 10)]
+        plan = DrawingPlan(
+            "prompt\x00 with\x0b controls",
+            7,
+            [Stroke("xml-safe", points, layer_name="Line\x01art")],
+        )
+        svg_content = plan.to_svg(100, 100)
+        self.assertNotIn("\x00", svg_content)
+        self.assertNotIn("\x01", svg_content)
+        self.assertNotIn("\x0b", svg_content)
         ET.fromstring(svg_content)
 
     def test_plan_canvas_dimensions_round_trip_and_drive_svg(self) -> None:
@@ -1224,6 +1249,30 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         handler = _SameOriginRedirectHandler()
         with self.assertRaises(_CrossOriginRedirectError):
             handler.redirect_request(request, None, 302, "redirect", {}, "https://attacker.test/collect")
+
+    def test_post_reads_short_chunks_until_eof(self) -> None:
+        raw = json.dumps({"ok": True, "message": "chunked"}).encode("utf-8")
+
+        class ChunkedResponse:
+            headers = {"Content-Type": "application/json"}
+
+            def __init__(self) -> None:
+                self._chunks = [raw[:3], raw[3:8], raw[8:]]
+
+            def read(self, _size: int) -> bytes:
+                return self._chunks.pop(0) if self._chunks else b""
+
+            def __enter__(self) -> ChunkedResponse:
+                return self
+
+            def __exit__(self, *_args: Any) -> None:
+                pass
+
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "model"),
+            opener=lambda *_args, **_kwargs: ChunkedResponse(),
+        )
+        self.assertEqual(planner._post({"model": "model"}), {"ok": True, "message": "chunked"})
 
     def test_calls_chat_completions_and_validates_plan(self) -> None:
         expected_plan = {
@@ -1958,7 +2007,14 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
                 class MockResponse:
                     def read(self, _size: int) -> bytes:
                         return json.dumps(
-                            {"choices": [{"finish_reason": "stop", "message": {"content": "OK"}}]}
+                            {
+                                "choices": [
+                                    {
+                                        "finish_reason": "stop",
+                                        "message": {"content": "SENSITIVE_PROVIDER_RESPONSE"},
+                                    }
+                                ]
+                            }
                         ).encode("utf-8")
 
                     def __enter__(self) -> Any:
@@ -1976,6 +2032,8 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         )
         msg = planner.test_connection()
         self.assertIn("接続成功", msg)
+        self.assertNotIn("SENSITIVE_PROVIDER_RESPONSE", msg)
+        self.assertNotIn("SENSITIVE_PROVIDER_RESPONSE", "\n".join(logs))
         self.assertEqual(len(attempts), 1)
         # 接続確認に過大な生成枠を使わず、十分な上限 2048 へ制限すること
         self.assertEqual(attempts[0]["max_completion_tokens"], 2048)
@@ -3583,10 +3641,11 @@ class WorkerAndDockerTests(unittest.TestCase):
             self.assertTrue(_confirm(None, "Confirm", "Proceed?"))
 
     def test_debug_endpoint_label_never_exposes_url_credentials(self) -> None:
-        label = _safe_endpoint_label("https://alice:secret@example.test:8443/v1/")
-        self.assertEqual(label, "https://example.test:8443/v1")
+        label = _safe_endpoint_label("https://alice:secret@example.test:8443/v1/secret-token")
+        self.assertEqual(label, "https://example.test:8443")
         self.assertNotIn("alice", label)
         self.assertNotIn("secret", label)
+        self.assertNotIn("secret-token", label)
 
     def test_offline_mode_disables_auto_refine(self) -> None:
         docker = AIStrokePainterDocker()
@@ -5740,6 +5799,8 @@ class ExtendedCustomizationTests(unittest.TestCase):
             ).encode("utf-8")
             mock_resp = MagicMock()
             mock_resp.read.return_value = resp_content
+            # headers が未設定の単純 transport は _post の1回 read 契約を使用する。
+            mock_resp.headers = None
             mock_resp.getcode.return_value = 200
             mock_resp.__enter__.return_value = mock_resp
             return mock_resp
