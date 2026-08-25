@@ -169,6 +169,12 @@ def _finite(value: Any, name: str) -> float:
     return float(value)
 
 
+def _coordinate_canvas_dimension(value: Any) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value > 1.0:
+        return float(value)
+    return 1000.0
+
+
 def _unit(value: Any, name: str) -> float:
     result = _finite(value, name)
     # 0.0〜1.0 に自動クランプして微小なはみ出しや丸め誤差を許容
@@ -434,15 +440,26 @@ def _validate_operation_common(operation_id: str, layer: str, brush: ProgramBrus
         raise PlanValidationError("operation brush は ProgramBrush である必要があります")
 
 
-def _points_from(value: Any, name: str) -> tuple[ProgramPoint, ...]:
+def _points_from(
+    value: Any,
+    name: str,
+    *,
+    canvas_w: float = 1000.0,
+    canvas_h: float = 1000.0,
+) -> tuple[ProgramPoint, ...]:
     if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
         raise PlanValidationError(f"{name} は点配列である必要があります")
     if len(value) > MAX_OPERATION_POINTS:
         raise PlanValidationError(f"{name} は {MAX_OPERATION_POINTS} 点以下である必要があります")
-    return tuple(ProgramPoint.from_value(point) for point in value)
+    return tuple(ProgramPoint.from_value(point, canvas_w=canvas_w, canvas_h=canvas_h) for point in value)
 
 
-def operation_from_dict(value: Any) -> ProgramOperation:
+def operation_from_dict(
+    value: Any,
+    *,
+    canvas_w: float = 1000.0,
+    canvas_h: float = 1000.0,
+) -> ProgramOperation:
     if not isinstance(value, Mapping):
         raise PlanValidationError("operation はオブジェクトである必要があります")
     kind = str(value.get("kind", "path")).strip().lower()
@@ -455,7 +472,7 @@ def operation_from_dict(value: Any) -> ProgramOperation:
         )
         return PathOperation(
             id=operation_id,
-            points=_points_from(value.get("points", ()), "path points"),
+            points=_points_from(value.get("points", ()), "path points", canvas_w=canvas_w, canvas_h=canvas_h),
             brush=ProgramBrush.from_dict(value.get("brush")),
             layer=value.get("layer", value.get("layer_name", "Lineart")),
             closed=value.get("closed", False),
@@ -469,7 +486,12 @@ def operation_from_dict(value: Any) -> ProgramOperation:
         )
         return FillOperation(
             id=operation_id,
-            polygon=_points_from(value.get("polygon", value.get("points", ())), "fill polygon"),
+            polygon=_points_from(
+                value.get("polygon", value.get("points", ())),
+                "fill polygon",
+                canvas_w=canvas_w,
+                canvas_h=canvas_h,
+            ),
             brush=(
                 ProgramBrush.from_dict(value["brush"])
                 if "brush" in value
@@ -498,7 +520,12 @@ def operation_from_dict(value: Any) -> ProgramOperation:
         )
         return HatchOperation(
             id=operation_id,
-            polygon=_points_from(value.get("polygon", value.get("points", ())), "hatch polygon"),
+            polygon=_points_from(
+                value.get("polygon", value.get("points", ())),
+                "hatch polygon",
+                canvas_w=canvas_w,
+                canvas_h=canvas_h,
+            ),
             brush=(
                 ProgramBrush.from_dict(value["brush"])
                 if "brush" in value
@@ -601,12 +628,23 @@ class StrokeProgram:
             raise PlanValidationError(f"operations は{MAX_PROGRAM_OPERATIONS}件以下である必要があります")
         canvas = value.get("canvas", {})
         canvas_mapping = canvas if isinstance(canvas, Mapping) else {}
+        raw_canvas_width = value.get("canvas_width", canvas_mapping.get("width", 1000.0))
+        raw_canvas_height = value.get("canvas_height", canvas_mapping.get("height", 1000.0))
+        coordinate_canvas_width = _coordinate_canvas_dimension(raw_canvas_width)
+        coordinate_canvas_height = _coordinate_canvas_dimension(raw_canvas_height)
         return cls(
             prompt=value.get("prompt", ""),
             seed=value.get("seed", 0),
-            operations=tuple(operation_from_dict(operation) for operation in raw_operations),
-            canvas_width=value.get("canvas_width", canvas_mapping.get("width", 1000.0)),
-            canvas_height=value.get("canvas_height", canvas_mapping.get("height", 1000.0)),
+            operations=tuple(
+                operation_from_dict(
+                    operation,
+                    canvas_w=coordinate_canvas_width,
+                    canvas_h=coordinate_canvas_height,
+                )
+                for operation in raw_operations
+            ),
+            canvas_width=raw_canvas_width,
+            canvas_height=raw_canvas_height,
             title=value.get("title", ""),
             iteration=value.get("iteration", 1),
             metadata=value.get("metadata", {}),

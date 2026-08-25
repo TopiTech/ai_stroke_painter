@@ -2270,7 +2270,7 @@ def _sanitize_and_rescue_program_dict(
         "canvas": {"width": w, "height": h},
         "operations": clean_ops,
         "metadata": dict(d.get("metadata", {})) if isinstance(d.get("metadata"), Mapping) else {},
-        "goal_reached": bool(d.get("goal_reached", False)),
+        "goal_reached": d.get("goal_reached", False) is True,
         "completion_score": max(
             0.0,
             min(
@@ -3096,7 +3096,7 @@ def _validate_and_sanitize_plan(
         raise LLMPlannerError("有効なストロークを構築できませんでした")
 
     metadata_val = dict(plan.metadata) if isinstance(plan.metadata, Mapping) else {}
-    goal_reached = bool(getattr(plan, "goal_reached", False) or metadata_val.get("goal_reached", False) is True)
+    goal_reached = bool(getattr(plan, "goal_reached", False) is True or metadata_val.get("goal_reached", False) is True)
     completion_score = max(
         0.0,
         min(

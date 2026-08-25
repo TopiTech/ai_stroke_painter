@@ -1018,6 +1018,50 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         fenced = f"analysis before output\n```json\n{json.dumps(response)}\n```"
         self.assertIn("operations", _extract_json_object(fenced))
 
+    def test_v2_pixel_coordinates_use_declared_canvas_dimensions(self) -> None:
+        response = {
+            "schema_version": 2,
+            "prompt": "pixel coordinates",
+            "canvas": {"width": 800, "height": 600},
+            "operations": [
+                {
+                    "kind": "path",
+                    "id": "pixel-line",
+                    "points": [[400, 300], [799, 599]],
+                    "brush": {"profile": "gpen", "size": 0.01},
+                }
+            ],
+        }
+
+        plan = _plan_from_response(response, prompt="pixel coordinates", seed=1, width=800, height=600)
+
+        self.assertEqual(
+            [(point.x, point.y) for point in plan.strokes[0].points],
+            [(400.0, 300.0), (799.0, 599.0)],
+        )
+
+    def test_v2_string_false_does_not_enable_goal_completion_after_rescue(self) -> None:
+        response = {
+            "schema_version": 2,
+            "prompt": "incomplete",
+            "canvas": {"width": 800, "height": 600},
+            "goal_reached": "false",
+            "completion_score": 0.2,
+            "operations": [
+                {
+                    "kind": "path",
+                    "id": "line",
+                    "points": [[0.1, 0.1], [0.9, 0.9]],
+                    "brush": {"profile": "gpen", "size": 0.01},
+                }
+            ],
+        }
+
+        plan = _plan_from_response(response, prompt="incomplete", seed=1, width=800, height=600)
+
+        self.assertFalse(plan.goal_reached)
+        self.assertFalse(_is_plan_goal_reached(plan))
+
     def test_cross_origin_redirect_is_rejected_before_credentials_can_follow(self) -> None:
         from urllib.request import Request
 
