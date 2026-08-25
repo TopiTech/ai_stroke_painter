@@ -57,6 +57,7 @@ from .llm_planner import (
     _plan_from_response,
     _redact_sensitive_text,
     _SameOriginRedirectHandler,
+    _sanitize_and_rescue_program_dict,
 )
 from .native_bridge import (
     JsonLineNativeStrokeBridge,
@@ -6654,6 +6655,149 @@ class ExtendedCustomizationTests(unittest.TestCase):
         # 中間の曲がり角付近で筆圧がブーストされている
         max_p = max(pt.pressure for pt in pts)
         self.assertGreaterEqual(max_p, 0.90)
+
+    def test_thin_polygon_fill_and_hatch_midline_fallback(self) -> None:
+        """薄い・微小ポリゴンの fill および hatch が走査線で欠落せず中心断面フォールバックでストロークを生成することを検証。"""
+        # 1. 縦方向に非常に薄い fill ポリゴン (y0=0.500, y1=0.501)
+        prog_fill = StrokeProgram.from_dict(
+            {
+                "schema_version": 2,
+                "prompt": "thin fill",
+                "canvas": {"width": 1000, "height": 1000},
+                "operations": [
+                    {
+                        "kind": "fill",
+                        "id": "thin_fill_op",
+                        "polygon": [[0.1, 0.5], [0.9, 0.5], [0.9, 0.501], [0.1, 0.501]],
+                        "brush": {"profile": "marker", "size": 0.05, "color": "#ff0000"},
+                    }
+                ],
+            }
+        )
+        plan_fill = compile_stroke_program(prog_fill)
+        self.assertGreaterEqual(len(plan_fill.strokes), 1)
+
+        # 2. 角度付き directional fill で薄いポリゴン
+        prog_dir = StrokeProgram.from_dict(
+            {
+                "schema_version": 2,
+                "prompt": "thin directional fill",
+                "canvas": {"width": 1000, "height": 1000},
+                "operations": [
+                    {
+                        "kind": "fill",
+                        "id": "thin_dir_op",
+                        "style": "directional",
+                        "angle_deg": 35.0,
+                        "polygon": [[0.1, 0.5], [0.9, 0.5], [0.9, 0.501], [0.1, 0.501]],
+                        "brush": {"profile": "marker", "size": 0.05, "color": "#00ff00"},
+                    }
+                ],
+            }
+        )
+        plan_dir = compile_stroke_program(prog_dir)
+        self.assertGreaterEqual(len(plan_dir.strokes), 1)
+
+        # 3. 薄い hatch ポリゴン
+        prog_hatch = StrokeProgram.from_dict(
+            {
+                "schema_version": 2,
+                "prompt": "thin hatch",
+                "canvas": {"width": 1000, "height": 1000},
+                "operations": [
+                    {
+                        "kind": "hatch",
+                        "id": "thin_hatch_op",
+                        "angle_deg": 45.0,
+                        "spacing": 0.05,
+                        "polygon": [[0.2, 0.4], [0.8, 0.4], [0.8, 0.401], [0.2, 0.401]],
+                        "brush": {"profile": "pencil", "size": 0.005, "color": "#000000"},
+                    }
+                ],
+            }
+        )
+        plan_hatch = compile_stroke_program(prog_hatch)
+        self.assertGreaterEqual(len(plan_hatch.strokes), 1)
+
+    def test_llm_planner_corrupted_token_rescue_resilience(self) -> None:
+        """LLM の非数値トークン・欠落パラメータが混入した JSON 辞書から安全に救済できることを検証。"""
+        corrupted_dict = {
+            "schema_version": 2,
+            "prompt": "corrupted test",
+            "canvas": {"width": 1000, "height": 1000},
+            "operations": [
+                {
+                    "kind": "path",
+                    "id": "bad_pts_op",
+                    "points": [
+                        [0.1, 0.2],
+                        ["invalid", "NaN"],  # 不正な点
+                        {"x": "auto", "y": None},  # 不正な辞書点
+                        [0.5, 0.6],
+                    ],
+                    "brush": {"size": "auto", "opacity": "null"},
+                },
+                {
+                    "kind": "fill",
+                    "id": "bad_fill_op",
+                    "polygon": [[0.1, 0.1], [0.5, 0.1], [0.5, 0.5]],
+                    "angle_deg": "invalid_angle",
+                    "spacing": "bad_spacing",
+                },
+                {
+                    "kind": "particles",
+                    "id": "bad_particles_op",
+                    "bounds": ["a", "b", "c", "d"],
+                    "count": "twenty",
+                    "length": "short",
+                },
+            ],
+        }
+        rescued = _sanitize_and_rescue_program_dict(corrupted_dict, canvas_w=1000.0, canvas_h=1000.0)
+        self.assertIn("operations", rescued)
+        self.assertGreaterEqual(len(rescued["operations"]), 1)
+        prog = StrokeProgram.from_dict(rescued)
+        plan = compile_stroke_program(prog)
+        self.assertGreaterEqual(len(plan.strokes), 1)
+
+    def test_krita_adapter_paint_path_attribute_error_fallback(self) -> None:
+        """Node の paintPath が AttributeError や NotImplementedError を送出した場合も segment 描画へ安全にフォールバックすることを検証。"""
+
+        class FailingNode(_FakeNode):
+            def paintPath(self, _path: Any) -> None:
+                raise AttributeError("paintPath is not implemented on this build")
+
+        doc = _FakeDocument()
+        node = FailingNode("Lineart")
+        adapter = KritaCanvasAdapter()
+        plan = DrawingPlan(
+            prompt="test",
+            seed=1,
+            strokes=[
+                Stroke(
+                    id="s1",
+                    points=[
+                        StrokePoint(10.0, 10.0, 0.8, 0),
+                        StrokePoint(50.0, 50.0, 0.8, 10),
+                        StrokePoint(100.0, 100.0, 0.8, 20),
+                    ],
+                    brush_preset="Basic-5 Size",
+                    color="#111111",
+                    size_px=5.0,
+                    layer_name="Lineart",
+                )
+            ],
+        )
+        rendered = adapter.render(doc, plan, lambda: False, active_node=node)
+        self.assertEqual(rendered, 1)
+
+    def test_storage_load_plan_and_program_file_not_found(self) -> None:
+        """存在しないパスを指定した load_plan および load_program が FileNotFoundError を送出することを検証。"""
+        non_existent = Path("non_existent_file_path_12345.json")
+        with self.assertRaises(FileNotFoundError):
+            load_plan(non_existent)
+        with self.assertRaises(FileNotFoundError):
+            load_program(non_existent)
 
 
 def run() -> bool:

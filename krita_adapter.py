@@ -596,7 +596,7 @@ class KritaCanvasAdapter(CanvasPort):
                     path = _make_continuous_path(stroke)
                     try:
                         current_node.paintPath(path)
-                    except TypeError:
+                    except (TypeError, AttributeError, NotImplementedError):
                         # 一部ビルドで paintPath のPython bindingが欠ける場合だけ区間描画へ戻す。
                         _apply_stroke_style(
                             stroke,

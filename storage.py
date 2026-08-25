@@ -69,6 +69,8 @@ def save_svg(plan: DrawingPlan, directory: str | Path | None = None) -> Path:
 def load_plan(path: str | Path) -> DrawingPlan:
     """保存済み v1 DrawingPlan / v2 StrokeProgram を検証して描画可能な計画として返す。"""
     source = Path(path)
+    if not source.is_file():
+        raise FileNotFoundError(f"計画ファイルが見つかりません: {source}")
     if source.stat().st_size > MAX_PLAN_FILE_BYTES:
         raise ValueError(f"計画 JSON は {MAX_PLAN_FILE_BYTES // (1024 * 1024)}MB 以下である必要があります")
     try:
@@ -105,6 +107,8 @@ def save_program(program: StrokeProgram, directory: str | Path | None = None) ->
 def load_program(path: str | Path) -> StrokeProgram:
     """v2 JSON を読込み、v1 DrawingPlan は path operation 群へ移行する。"""
     source = Path(path)
+    if not source.is_file():
+        raise FileNotFoundError(f"プログラムファイルが見つかりません: {source}")
     if source.stat().st_size > MAX_PLAN_FILE_BYTES:
         raise ValueError(f"計画 JSON は {MAX_PLAN_FILE_BYTES // (1024 * 1024)}MB 以下である必要があります")
     try:

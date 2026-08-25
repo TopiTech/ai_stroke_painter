@@ -993,17 +993,49 @@ def _compile_fill_directional(
             strokes.append(_make_stroke(program, operation, len(strokes), pts))
         row += 1
         y += spacing
+
+    # フォールバック: polygon が薄く走査線間隔内に収まらなかった場合、中心断面をサンプリング
+    if not strokes and limit > 0:
+        mid_y = (min_y + max_y) * 0.5
+        segments = _scanline_segments(rotated, mid_y)
+        if not segments:
+            min_x = min(p[0] for p in rotated)
+            max_x = max(p[0] for p in rotated)
+            if max_x - min_x >= 0.25:
+                segments = [(min_x, max_x)]
+            else:
+                segments = [(min_x, max_x + 0.5)]
+        for start_x, end_x in segments:
+            if len(strokes) >= limit:
+                break
+            first_rot = _rotate((start_x, mid_y), center, angle)
+            second_rot = _rotate((end_x, mid_y), center, angle)
+            strokes.append(
+                _make_stroke(
+                    program,
+                    operation,
+                    len(strokes),
+                    [(first_rot[0], first_rot[1], 1.0), (second_rot[0], second_rot[1], 1.0)],
+                )
+            )
+
     return strokes
 
 
 def _compile_fill(program: StrokeProgram, operation: FillOperation, limit: int) -> list[Stroke]:
     polygon = [(point.x * program.canvas_width, point.y * program.canvas_height) for point in operation.polygon]
     if operation.style == "contour":
-        return _compile_fill_contour(program, operation, polygon, limit)
+        res = _compile_fill_contour(program, operation, polygon, limit)
+        if res:
+            return res
     if operation.style == "radial":
-        return _compile_fill_radial(program, operation, polygon, limit)
+        res = _compile_fill_radial(program, operation, polygon, limit)
+        if res:
+            return res
     if operation.style == "directional" or abs(operation.angle_deg) > 1e-3:
-        return _compile_fill_directional(program, operation, polygon, operation.angle_deg, limit)
+        res = _compile_fill_directional(program, operation, polygon, operation.angle_deg, limit)
+        if res:
+            return res
 
     min_y = min(point[1] for point in polygon)
     max_y = max(point[1] for point in polygon)
@@ -1035,6 +1067,30 @@ def _compile_fill(program: StrokeProgram, operation: FillOperation, limit: int) 
             strokes.append(_make_stroke(program, operation, len(strokes), pts))
         row += 1
         y += spacing
+
+    # フォールバック: polygon が薄く走査線間隔内に収まらなかった場合、中心断面をサンプリング
+    if not strokes and limit > 0:
+        mid_y = (min_y + max_y) * 0.5
+        segments = _scanline_segments(polygon, mid_y)
+        if not segments:
+            min_x = min(p[0] for p in polygon)
+            max_x = max(p[0] for p in polygon)
+            if max_x - min_x >= 0.25:
+                segments = [(min_x, max_x)]
+            else:
+                segments = [(min_x, max_x + 0.5)]
+        for start_x, end_x in segments:
+            if len(strokes) >= limit:
+                break
+            strokes.append(
+                _make_stroke(
+                    program,
+                    operation,
+                    len(strokes),
+                    [(start_x, mid_y, 1.0), (end_x, mid_y, 1.0)],
+                )
+            )
+
     return strokes
 
 
@@ -1094,6 +1150,32 @@ def _compile_hatch_angle(
                 )
             )
         y += spacing
+
+    # フォールバック: polygon が薄く走査線間隔内に収まらなかった場合、中心断面をサンプリング
+    if not strokes and start_index < limit:
+        mid_y = (min_y + max_y) * 0.5
+        segments = _scanline_segments(rotated, mid_y)
+        if not segments:
+            min_x = min(p[0] for p in rotated)
+            max_x = max(p[0] for p in rotated)
+            if max_x - min_x >= 0.25:
+                segments = [(min_x, max_x)]
+            else:
+                segments = [(min_x, max_x + 0.5)]
+        for start_x, end_x in segments:
+            if start_index + len(strokes) >= limit:
+                break
+            first = _rotate((start_x, mid_y), center, angle)
+            second = _rotate((end_x, mid_y), center, angle)
+            strokes.append(
+                _make_stroke(
+                    program,
+                    operation,
+                    start_index + len(strokes),
+                    [(first[0], first[1], 0.65), (second[0], second[1], 0.65)],
+                )
+            )
+
     return strokes
 
 

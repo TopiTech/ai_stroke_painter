@@ -2145,24 +2145,27 @@ def _sanitize_and_rescue_program_dict(
             if not isinstance(raw_point_list, Sequence) or isinstance(raw_point_list, (str, bytes)):
                 return res
             for pt in raw_point_list:
-                if isinstance(pt, Sequence) and not isinstance(pt, (str, bytes)) and len(pt) >= 2:
-                    px = float(pt[0])
-                    py = float(pt[1])
-                    if px > 1.0 and w > 1.0:
-                        px = px / w
-                    if py > 1.0 and h > 1.0:
-                        py = py / h
-                    pp = float(pt[2]) if len(pt) >= 3 else 0.8
-                    res.append([max(0.0, min(1.0, px)), max(0.0, min(1.0, py)), max(0.0, min(1.0, pp))])
-                elif isinstance(pt, Mapping) and "x" in pt and "y" in pt:
-                    px = float(pt["x"])
-                    py = float(pt["y"])
-                    if px > 1.0 and w > 1.0:
-                        px = px / w
-                    if py > 1.0 and h > 1.0:
-                        py = py / h
-                    pp = float(pt.get("pressure", 0.8))
-                    res.append([max(0.0, min(1.0, px)), max(0.0, min(1.0, py)), max(0.0, min(1.0, pp))])
+                try:
+                    if isinstance(pt, Sequence) and not isinstance(pt, (str, bytes)) and len(pt) >= 2:
+                        px = float(pt[0])
+                        py = float(pt[1])
+                        if px > 1.0 and w > 1.0:
+                            px = px / w
+                        if py > 1.0 and h > 1.0:
+                            py = py / h
+                        pp = float(pt[2]) if len(pt) >= 3 else 0.8
+                        res.append([max(0.0, min(1.0, px)), max(0.0, min(1.0, py)), max(0.0, min(1.0, pp))])
+                    elif isinstance(pt, Mapping) and "x" in pt and "y" in pt:
+                        px = float(pt["x"])
+                        py = float(pt["y"])
+                        if px > 1.0 and w > 1.0:
+                            px = px / w
+                        if py > 1.0 and h > 1.0:
+                            py = py / h
+                        pp = float(pt.get("pressure", 0.8))
+                        res.append([max(0.0, min(1.0, px)), max(0.0, min(1.0, py)), max(0.0, min(1.0, pp))])
+                except (ValueError, TypeError):
+                    continue
             return res
 
         # 簡易図形の自動変換 (rect, box, circle, ellipse 等)
@@ -2171,41 +2174,47 @@ def _sanitize_and_rescue_program_dict(
             # rect: [x, y, w, h] または bounds: [x0, y0, x1, y1]
             raw_rect = item_d.get("rect") or item_d.get("bounds") or item_d.get("box")
             if isinstance(raw_rect, Sequence) and len(raw_rect) >= 4:
-                rx0, ry0, rx1, ry1 = float(raw_rect[0]), float(raw_rect[1]), float(raw_rect[2]), float(raw_rect[3])
-                if (
-                    raw_kind in ("rect", "rectangle")
-                    and "bounds" not in item_d
-                    and rx1 <= 1.0
-                    and ry1 <= 1.0
-                    and rx0 + rx1 <= 1.01
-                ):
-                    # [x, y, width, height] 形式
-                    rx1, ry1 = rx0 + rx1, ry0 + ry1
-                if rx0 > 1.0 and w > 1.0:
-                    rx0, rx1 = rx0 / w, rx1 / w
-                if ry0 > 1.0 and h > 1.0:
-                    ry0, ry1 = ry0 / h, ry1 / h
-                item_d["polygon"] = [[rx0, ry0], [rx1, ry0], [rx1, ry1], [rx0, ry1]]
+                try:
+                    rx0, ry0, rx1, ry1 = float(raw_rect[0]), float(raw_rect[1]), float(raw_rect[2]), float(raw_rect[3])
+                    if (
+                        raw_kind in ("rect", "rectangle")
+                        and "bounds" not in item_d
+                        and rx1 <= 1.0
+                        and ry1 <= 1.0
+                        and rx0 + rx1 <= 1.01
+                    ):
+                        # [x, y, width, height] 形式
+                        rx1, ry1 = rx0 + rx1, ry0 + ry1
+                    if rx0 > 1.0 and w > 1.0:
+                        rx0, rx1 = rx0 / w, rx1 / w
+                    if ry0 > 1.0 and h > 1.0:
+                        ry0, ry1 = ry0 / h, ry1 / h
+                    item_d["polygon"] = [[rx0, ry0], [rx1, ry0], [rx1, ry1], [rx0, ry1]]
+                except (ValueError, TypeError):
+                    pass
         elif raw_kind in ("circle", "ellipse", "disc"):
             kind = "fill"
             raw_center = item_d.get("center") or (item_d.get("cx", 0.5), item_d.get("cy", 0.5))
-            cx = float(raw_center[0]) if isinstance(raw_center, Sequence) and len(raw_center) >= 2 else 0.5
-            cy = float(raw_center[1]) if isinstance(raw_center, Sequence) and len(raw_center) >= 2 else 0.5
-            if cx > 1.0 and w > 1.0:
-                cx = cx / w
-            if cy > 1.0 and h > 1.0:
-                cy = cy / h
-            r_val = float(item_d.get("radius") or item_d.get("r") or 0.05)
-            if r_val > 1.0 and min(w, h) > 1.0:
-                r_val = r_val / min(w, h)
-            # 16頂点の近似円ポリゴン
-            circle_poly: list[list[float]] = []
-            for deg_idx in range(16):
-                ang = (deg_idx / 16.0) * 2.0 * math.pi
-                circle_poly.append(
-                    [max(0.0, min(1.0, cx + r_val * math.cos(ang))), max(0.0, min(1.0, cy + r_val * math.sin(ang)))]
-                )
-            item_d["polygon"] = circle_poly
+            try:
+                cx = float(raw_center[0]) if isinstance(raw_center, Sequence) and len(raw_center) >= 2 else 0.5
+                cy = float(raw_center[1]) if isinstance(raw_center, Sequence) and len(raw_center) >= 2 else 0.5
+                if cx > 1.0 and w > 1.0:
+                    cx = cx / w
+                if cy > 1.0 and h > 1.0:
+                    cy = cy / h
+                r_val = float(item_d.get("radius") or item_d.get("r") or 0.05)
+                if r_val > 1.0 and min(w, h) > 1.0:
+                    r_val = r_val / min(w, h)
+                # 16頂点の近似円ポリゴン
+                circle_poly: list[list[float]] = []
+                for deg_idx in range(16):
+                    ang = (deg_idx / 16.0) * 2.0 * math.pi
+                    circle_poly.append(
+                        [max(0.0, min(1.0, cx + r_val * math.cos(ang))), max(0.0, min(1.0, cy + r_val * math.sin(ang)))]
+                    )
+                item_d["polygon"] = circle_poly
+            except (ValueError, TypeError):
+                pass
         elif raw_kind in ("fill", "wash", "area", "region", "polygon", "background", "base"):
             kind = "fill"
         elif raw_kind in ("hatch", "crosshatch", "shading", "shading_hatch"):
@@ -2279,23 +2288,34 @@ def _sanitize_and_rescue_program_dict(
             or item_d.get("width")
         )
         sz_mode_raw = str(b_dict.get("size_mode") or item_d.get("size_mode") or "").strip().lower()
-        if sz_val is None and ("size_px" in b_dict or "size_px" in item_d):
-            px_val = float(b_dict.get("size_px") or item_d.get("size_px") or 8.0)
-            sz_val = max(0.5, px_val)
-            sz_mode = "px"
-        elif sz_val is not None:
-            f_sz = float(sz_val)
+        try:
+            f_sz = float(sz_val) if sz_val is not None else None
+        except (ValueError, TypeError):
+            f_sz = None
+
+        if sz_val is None or f_sz is None:
+            if "size_px" in b_dict or "size_px" in item_d:
+                try:
+                    px_val = float(b_dict.get("size_px") or item_d.get("size_px") or 8.0)
+                except (ValueError, TypeError):
+                    px_val = 8.0
+                sz_val = max(0.5, px_val)
+                sz_mode = "px"
+            else:
+                sz_val = 0.035 if kind == "fill" else 0.0025 if kind == "hatch" else 0.006
+                sz_mode = "ratio"
+        else:
             if sz_mode_raw == "px" or (sz_mode_raw != "ratio" and f_sz > 1.0):
                 sz_val = max(0.5, f_sz)
                 sz_mode = "px"
             else:
                 sz_val = max(0.0001, min(1.0, f_sz))
                 sz_mode = "ratio"
-        else:
-            sz_val = 0.035 if kind == "fill" else 0.0025 if kind == "hatch" else 0.006
-            sz_mode = "ratio"
 
-        op_opacity = float(b_dict.get("opacity") or item_d.get("opacity") or 1.0)
+        try:
+            op_opacity = float(b_dict.get("opacity") or item_d.get("opacity") or 1.0)
+        except (ValueError, TypeError):
+            op_opacity = 1.0
         op_opacity = max(0.0, min(1.0, op_opacity))
 
         raw_eraser = b_dict.get("is_eraser", item_d.get("is_eraser"))
@@ -2368,7 +2388,15 @@ def _sanitize_and_rescue_program_dict(
             if style_str not in {"wash", "scanline", "feathered", "contour", "radial", "directional"}:
                 style_str = "wash"
             angle_value = item_d.get("angle_deg", item_d.get("angle", 0.0))
-            angle_deg = float(angle_value) if isinstance(angle_value, (int, float, str)) else 0.0
+            try:
+                angle_deg = float(angle_value) if angle_value is not None else 0.0
+            except (ValueError, TypeError):
+                angle_deg = 0.0
+            try:
+                raw_sp = item_d.get("spacing", 0.72)
+                spacing_val = max(0.2, min(1.0, float(raw_sp) if raw_sp is not None else 0.72))
+            except (ValueError, TypeError):
+                spacing_val = 0.72
             clean_ops.append(
                 {
                     "kind": "fill",
@@ -2376,7 +2404,7 @@ def _sanitize_and_rescue_program_dict(
                     "layer": layer_val,
                     "polygon": poly,
                     "brush": clean_brush,
-                    "spacing": max(0.2, min(1.0, float(item_d.get("spacing", 0.72)))),
+                    "spacing": spacing_val,
                     "style": style_str,
                     "angle_deg": angle_deg % 360.0,
                 }
@@ -2394,6 +2422,16 @@ def _sanitize_and_rescue_program_dict(
             if len(poly) < 3:
                 continue
             raw_cross = item_d.get("cross", False)
+            try:
+                raw_ha = item_d.get("angle_deg", 30.0)
+                h_angle = float(raw_ha) if raw_ha is not None else 30.0
+            except (ValueError, TypeError):
+                h_angle = 30.0
+            try:
+                raw_hs = item_d.get("spacing", 0.012)
+                h_spacing = max(0.001, min(0.5, float(raw_hs) if raw_hs is not None else 0.012))
+            except (ValueError, TypeError):
+                h_spacing = 0.012
             clean_ops.append(
                 {
                     "kind": "hatch",
@@ -2401,15 +2439,20 @@ def _sanitize_and_rescue_program_dict(
                     "layer": layer_val,
                     "polygon": poly,
                     "brush": clean_brush,
-                    "angle_deg": float(item_d.get("angle_deg", 30.0)) % 180.0,
-                    "spacing": max(0.001, min(0.5, float(item_d.get("spacing", 0.012)))),
+                    "angle_deg": h_angle % 180.0,
+                    "spacing": h_spacing,
                     "cross": raw_cross in (True, "true", "True", 1),
                 }
             )
         elif kind == "particles":
             raw_b = item_d.get("bounds", (0.0, 0.0, 1.0, 1.0))
             if isinstance(raw_b, Sequence) and not isinstance(raw_b, (str, bytes)) and len(raw_b) == 4:
-                b_floats = [max(0.0, min(1.0, float(v))) for v in raw_b]
+                try:
+                    b_floats = [max(0.0, min(1.0, float(v))) for v in raw_b if v is not None]
+                    if len(b_floats) != 4:
+                        b_floats = [0.0, 0.0, 1.0, 1.0]
+                except (ValueError, TypeError):
+                    b_floats = [0.0, 0.0, 1.0, 1.0]
                 if b_floats[2] <= b_floats[0] or b_floats[3] <= b_floats[1]:
                     b_floats = [0.0, 0.0, 1.0, 1.0]
             else:
@@ -2417,17 +2460,37 @@ def _sanitize_and_rescue_program_dict(
             shape_str = str(item_d.get("shape", "petal")).strip().lower()
             if shape_str not in {"petal", "line", "sparkle", "drift", "bokeh"}:
                 shape_str = "petal"
+            try:
+                raw_cnt = item_d.get("count", 20)
+                p_count = max(1, min(500, int(raw_cnt) if raw_cnt is not None else 20))
+            except (ValueError, TypeError):
+                p_count = 20
+            try:
+                raw_len = item_d.get("length", 0.015)
+                p_length = max(0.0005, min(0.5, float(raw_len) if raw_len is not None else 0.015))
+            except (ValueError, TypeError):
+                p_length = 0.015
+            try:
+                raw_pa = item_d.get("angle_deg", 90.0)
+                p_angle = float(raw_pa) if raw_pa is not None else 90.0
+            except (ValueError, TypeError):
+                p_angle = 90.0
+            try:
+                raw_jit = item_d.get("angle_jitter", 35.0)
+                p_jitter = max(0.0, min(180.0, float(raw_jit) if raw_jit is not None else 35.0))
+            except (ValueError, TypeError):
+                p_jitter = 35.0
             clean_ops.append(
                 {
                     "kind": "particles",
                     "id": op_id,
                     "layer": layer_val,
                     "bounds": b_floats,
-                    "count": max(1, min(500, int(item_d.get("count", 20)))),
+                    "count": p_count,
                     "brush": clean_brush,
-                    "length": max(0.0005, min(0.5, float(item_d.get("length", 0.015)))),
-                    "angle_deg": float(item_d.get("angle_deg", 90.0)),
-                    "angle_jitter": max(0.0, min(180.0, float(item_d.get("angle_jitter", 35.0)))),
+                    "length": p_length,
+                    "angle_deg": p_angle,
+                    "angle_jitter": p_jitter,
                     "shape": shape_str,
                 }
             )
