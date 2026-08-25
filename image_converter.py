@@ -404,7 +404,7 @@ class ImageStrokeConverter:
                 )
             )
 
-        # 2. 暗部領域の立体感ハッチング（深さに応じたクロスハッチング対応） -> Shading
+        # 2. 暗部領域の立体感ハッチング（法線勾配適応 & クロスハッチング） -> Shading
         if shading_density != "off":
             if shading_density == "low":
                 dark_step = max(3, int(grid_w / 18))
@@ -425,17 +425,32 @@ class ImageStrokeConverter:
                         hx = offset_x + x * fit_scale
                         hy = offset_y + y * fit_scale
                         h_len = fit_scale * dark_step * 1.5
-                        # 第1方向ハッチング
-                        h_stroke = [(hx, hy), (hx + h_len, hy + h_len * 0.5)]
+
+                        # 局所輝度勾配（Sobel法線推定）から面の接線（等高線）方向を算出
+                        if 1 <= x < grid_w - 1 and 1 <= y < grid_h - 1:
+                            gx = (luminance_map[y][x + 1] - luminance_map[y][x - 1]) * 0.5
+                            gy = (luminance_map[y + 1][x] - luminance_map[y - 1][x]) * 0.5
+                            grad_mag = math.hypot(gx, gy)
+                            if grad_mag > 0.04:
+                                # 勾配に垂直な等高線方向（面の丸みに沿う方向）
+                                dir_x = -gy / grad_mag
+                                dir_y = gx / grad_mag
+                            else:
+                                dir_x, dir_y = 0.866, 0.5  # 30度標準
+                        else:
+                            dir_x, dir_y = 0.866, 0.5
+
+                        # 第1方向ハッチング（曲面に沿った立体ハッチング）
+                        h_stroke = [(hx, hy), (hx + dir_x * h_len, hy + dir_y * h_len)]
                         strokes.append(
                             create_stroke(
                                 h_stroke,
                                 profile_type="marupen",
-                                base_pressure=0.6,
+                                base_pressure=0.65,
                                 color=color_map[y][x],
                                 size_px=3.0,
                                 layer_name="Shading",
-                                opacity=0.7,
+                                opacity=0.75,
                                 rng=rng,
                                 width=target_width,
                                 height=target_height,
@@ -445,16 +460,16 @@ class ImageStrokeConverter:
                         )
                         # 最暗部（lum < 0.20）ではクロスハッチングを追加して深みを表現
                         if lum < 0.20 and shading_density in {"medium", "high"}:
-                            cross_stroke = [(hx + h_len, hy), (hx, hy + h_len * 0.5)]
+                            cross_stroke = [(hx + dir_y * h_len, hy - dir_x * h_len * 0.5), (hx, hy + dir_y * h_len)]
                             strokes.append(
                                 create_stroke(
                                     cross_stroke,
                                     profile_type="marupen",
-                                    base_pressure=0.5,
+                                    base_pressure=0.55,
                                     color=color_map[y][x],
                                     size_px=2.5,
                                     layer_name="Shading",
-                                    opacity=0.55,
+                                    opacity=0.60,
                                     rng=rng,
                                     width=target_width,
                                     height=target_height,
@@ -486,6 +501,32 @@ class ImageStrokeConverter:
                             width=target_width,
                             height=target_height,
                             stroke_id=uid("flat", len(strokes)),
+                            preferred_profile=brush_profile,
+                        )
+                    )
+
+        # 4. 高輝度ハイライトストロークの自動抽出 -> Highlights
+        hl_step = max(4, int(grid_w / 20))
+        for y in range(0, grid_h, hl_step):
+            for x in range(0, grid_w, hl_step):
+                lum = luminance_map[y][x]
+                if lum > 0.90 and alpha_map[y][x] > 0.5:
+                    hlx = offset_x + x * fit_scale
+                    hly = offset_y + y * fit_scale
+                    hl_stroke = [(hlx, hly), (hlx + fit_scale * 2.0, hly + fit_scale * 1.0)]
+                    strokes.append(
+                        create_stroke(
+                            hl_stroke,
+                            profile_type="gpen",
+                            base_pressure=0.90,
+                            color="#ffffff",
+                            size_px=3.2,
+                            layer_name="Highlights",
+                            opacity=0.85,
+                            rng=rng,
+                            width=target_width,
+                            height=target_height,
+                            stroke_id=uid("hl", len(strokes)),
                             preferred_profile=brush_profile,
                         )
                     )

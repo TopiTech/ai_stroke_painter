@@ -11,6 +11,7 @@ from threading import Thread
 from typing import Any, cast
 import unittest
 from unittest.mock import patch
+import uuid
 from zipfile import ZipFile
 
 from .build_plugin import PACKAGE_NAME, build
@@ -634,6 +635,38 @@ class PlannerAndStorageTests(unittest.TestCase):
 
         self.assertEqual(len(sample_strokes_by_priority(raw_strokes[:5], 10)), 5)
         self.assertEqual(sample_strokes_by_priority(raw_strokes, 0), [])
+
+    def test_character_3d_anatomy_and_lighting_structures(self) -> None:
+        strokes = generate_character_strokes("anime girl with blue hair", 42, None, 800, 600)
+        layer_names = {s.layer_name for s in strokes}
+        self.assertTrue({"Draft", "Flats", "Shading", "Lineart", "Highlights"}.issubset(layer_names))
+
+        def uid(name: str, idx: int = 0, seed: int = 42) -> str:
+            return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/char/{seed}/{name}/{idx}"))
+
+        stroke_ids = {s.id for s in strokes}
+        self.assertIn(uid("ear_outer_l"), stroke_ids)
+        self.assertIn(uid("ear_outer_r"), stroke_ids)
+        self.assertIn(uid("ear_inner_l"), stroke_ids)
+        self.assertIn(uid("temple_shade_l"), stroke_ids)
+        self.assertIn(uid("bangs_cast_shadow"), stroke_ids)
+        self.assertIn(uid("neck_ao_top"), stroke_ids)
+        self.assertIn(uid("clavicle_line_l"), stroke_ids)
+        self.assertIn(uid("nose_highlight"), stroke_ids)
+        self.assertIn(uid("lip_highlight"), stroke_ids)
+
+        boy_strokes = generate_character_strokes("anime boy hero", 42, None, 800, 600)
+        boy_ids = {s.id for s in boy_strokes}
+        self.assertIn(uid("adams_apple"), boy_ids)
+        self.assertIn(uid("shirt_collar_l"), boy_ids)
+        self.assertIn(uid("short_hair", 0), boy_ids)
+
+        plan = generate_procedural_plan("anime girl with blue hair and green eyes", 42, None, 800, 600)
+        report = evaluate_plan_quality(plan)
+        self.assertGreaterEqual(report.score, 0.85)
+        self.assertGreaterEqual(report.coverage, 0.50)
+        self.assertEqual(report.out_of_bounds_points, 0)
+        self.assertFalse(report.issues)
 
     def test_plan_json_round_trip_and_collision_free_save(self) -> None:
         plan = RuleBasedPlanner().plan("curve", 9, 2, 300, 200)

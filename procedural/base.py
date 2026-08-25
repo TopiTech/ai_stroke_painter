@@ -498,3 +498,92 @@ def sample_strokes_by_priority(strokes: list[Stroke], target_count: int | None) 
     orig_index = {s.id: idx for idx, s in enumerate(strokes)}
     selected_strokes.sort(key=lambda s: orig_index.get(s.id, 0))
     return selected_strokes[:target_count]
+
+
+def generate_ambient_occlusion_stroke(
+    points: list[tuple[float, float]],
+    color: str,
+    *,
+    size_px: float = 3.0,
+    opacity: float = 0.85,
+    layer_name: str = "Shading",
+    stroke_id: str | None = None,
+    width: float = 1000.0,
+    height: float = 1000.0,
+    rng: random.Random | None = None,
+) -> Stroke:
+    """接触面・隙間などの最も光が遮られるアンビエントオクルージョン（AO最暗部）ストロークを生成。"""
+    spline = catmull_rom_spline(points, samples_per_segment=6) if len(points) >= 3 else points
+    return create_stroke(
+        spline,
+        profile_type="marupen",
+        base_pressure=0.85,
+        color=color,
+        size_px=size_px,
+        layer_name=layer_name,
+        opacity=opacity,
+        rng=rng,
+        width=width,
+        height=height,
+        stroke_id=stroke_id,
+    )
+
+
+def generate_cast_shadow_stroke(
+    points: list[tuple[float, float]],
+    color: str,
+    *,
+    size_px: float = 8.0,
+    opacity: float = 0.45,
+    layer_name: str = "Shading",
+    profile_type: str = "airbrush",
+    stroke_id: str | None = None,
+    width: float = 1000.0,
+    height: float = 1000.0,
+    rng: random.Random | None = None,
+) -> Stroke:
+    """前髪や襟、衣服の重なりから下地へ落ちるソフトなキャストシャドウ（落ち影）ストロークを生成。"""
+    spline = catmull_rom_spline(points, samples_per_segment=8) if len(points) >= 3 else points
+    return create_stroke(
+        spline,
+        profile_type=profile_type,
+        base_pressure=0.6,
+        color=color,
+        size_px=size_px,
+        layer_name=layer_name,
+        opacity=opacity,
+        rng=rng,
+        width=width,
+        height=height,
+        stroke_id=stroke_id,
+    )
+
+
+def generate_highlight_stroke(
+    points: list[tuple[float, float]],
+    color: str = "#ffffff",
+    *,
+    size_px: float = 3.5,
+    opacity: float = 0.95,
+    profile_type: str = "gpen",
+    layer_name: str = "Highlights",
+    stroke_id: str | None = None,
+    width: float = 1000.0,
+    height: float = 1000.0,
+    rng: random.Random | None = None,
+) -> Stroke:
+    """鼻先、下唇、瞳、髪の稜線などのスペキュラハイライトストロークを生成。"""
+    spline = catmull_rom_spline(points, samples_per_segment=6) if len(points) >= 3 else points
+    return create_stroke(
+        spline,
+        profile_type=profile_type,
+        base_pressure=0.9,
+        color=color,
+        size_px=size_px,
+        layer_name=layer_name,
+        opacity=opacity,
+        rng=rng,
+        width=width,
+        height=height,
+        stroke_id=stroke_id,
+    )
