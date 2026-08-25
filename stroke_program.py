@@ -19,6 +19,57 @@ MAX_OPERATION_POINTS = 1_000
 _COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 
 
+_NAMED_COLORS: dict[str, str] = {
+    "black": "#000000",
+    "white": "#ffffff",
+    "red": "#ff0000",
+    "green": "#00ff00",
+    "blue": "#0000ff",
+    "yellow": "#ffff00",
+    "cyan": "#00ffff",
+    "magenta": "#ff00ff",
+    "gray": "#808080",
+    "grey": "#808080",
+    "brown": "#8b4513",
+    "orange": "#ffa500",
+    "pink": "#ffc0cb",
+    "purple": "#800080",
+    "violet": "#ee82ee",
+    "beige": "#f5f5dc",
+    "sky": "#87ceeb",
+    "navy": "#000080",
+    "gold": "#ffd700",
+}
+
+
+def normalize_hex_color(color_val: Any, fallback: str = "#232323") -> str:
+    """様々な色表現（#RGB, #RRGGBB, #なしHEX, 名前付き色, rgb() 等）を安全に標準16進カラーコードに変換する。"""
+    if not isinstance(color_val, str):
+        return fallback
+    c = color_val.strip()
+    if not c:
+        return fallback
+    if _COLOR_RE.match(c):
+        return c
+    # '#' 抜けの 3, 4, 6, 8 桁 hex
+    if re.match(r"^[0-9a-fA-F]{3,8}$", c):
+        cand = f"#{c}"
+        if _COLOR_RE.match(cand):
+            return cand
+    # 名前付きカラー
+    low = c.lower()
+    if low in _NAMED_COLORS:
+        return _NAMED_COLORS[low]
+    # rgb(r, g, b) または rgba(r, g, b, a)
+    rgb_m = re.match(r"rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", c, re.I)
+    if rgb_m:
+        r = max(0, min(255, int(rgb_m.group(1))))
+        g = max(0, min(255, int(rgb_m.group(2))))
+        b = max(0, min(255, int(rgb_m.group(3))))
+        return f"#{r:02x}{g:02x}{b:02x}"
+    return fallback
+
+
 def _catmull_rom_spline(
     control_points: list[tuple[float, float]], samples_per_segment: int
 ) -> list[tuple[float, float]]:
@@ -42,9 +93,8 @@ def _finite(value: Any, name: str) -> float:
 
 def _unit(value: Any, name: str) -> float:
     result = _finite(value, name)
-    if not 0.0 <= result <= 1.0:
-        raise PlanValidationError(f"{name} は 0.0 から 1.0 の範囲である必要があります")
-    return result
+    # 0.0〜1.0 に自動クランプして微小なはみ出しや丸め誤差を許容
+    return max(0.0, min(1.0, result))
 
 
 def _reject_unknown_keys(value: Mapping[Any, Any], allowed: set[str], name: str) -> None:
@@ -67,16 +117,31 @@ class ProgramPoint:
         object.__setattr__(self, "pressure", _unit(self.pressure, "point.pressure"))
 
     @classmethod
-    def from_value(cls, value: Any) -> ProgramPoint:
+    def from_value(cls, value: Any, canvas_w: float = 1000.0, canvas_h: float = 1000.0) -> ProgramPoint:
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
             if len(value) < 2:
                 raise PlanValidationError("program point 配列には x, y が必要です")
-            return cls(value[0], value[1], value[2] if len(value) >= 3 else 0.8)
+            raw_x = float(value[0])
+            raw_y = float(value[1])
+            # ピクセル座標（> 1.0）が渡された場合の自動比率正規化
+            if raw_x > 1.0 and canvas_w > 1.0:
+                raw_x = raw_x / canvas_w
+            if raw_y > 1.0 and canvas_h > 1.0:
+                raw_y = raw_y / canvas_h
+            pressure = float(value[2]) if len(value) >= 3 else 0.8
+            return cls(raw_x, raw_y, pressure)
         if isinstance(value, Mapping):
             try:
-                return cls(value["x"], value["y"], value.get("pressure", 0.8))
-            except KeyError as exc:
-                raise PlanValidationError(f"program point に {exc.args[0]} がありません") from exc
+                raw_x = float(value["x"])
+                raw_y = float(value["y"])
+                if raw_x > 1.0 and canvas_w > 1.0:
+                    raw_x = raw_x / canvas_w
+                if raw_y > 1.0 and canvas_h > 1.0:
+                    raw_y = raw_y / canvas_h
+                pressure = float(value.get("pressure", 0.8))
+                return cls(raw_x, raw_y, pressure)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise PlanValidationError(f"program point の値が不正です: {exc}") from exc
         raise PlanValidationError("program point は配列またはオブジェクトである必要があります")
 
     def as_list(self) -> list[float]:
@@ -128,7 +193,7 @@ class ProgramBrush:
         return cls(
             profile=value.get("profile", "auto"),
             preset_hint=value.get("preset_hint"),
-            color=value.get("color", "#232323"),
+            color=normalize_hex_color(value.get("color", "#232323"), fallback="#232323"),
             size=value.get("size", value.get("size_ratio", 0.006)),
             size_mode=value.get("size_mode", "ratio"),
             opacity=value.get("opacity", 1.0),

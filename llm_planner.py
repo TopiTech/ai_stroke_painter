@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import ast
 import base64
 from collections.abc import Callable, Mapping, Sequence
 import contextlib
@@ -20,13 +21,15 @@ from typing import Any, TypeGuard
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+import uuid
 
+from .brushes import canonical_brush_profile, infer_brush_profile
 from .domain import DrawingPlan, Stroke, StrokePoint
 from .image_converter import MAX_ENCODED_IMAGE_BYTES
 from .planner import validate_iterations, validate_plan_request
 from .ports import PlannerPort
 from .procedural.base import sample_strokes_by_priority
-from .stroke_program import StrokeProgram, compile_stroke_program
+from .stroke_program import StrokeProgram, compile_stroke_program, normalize_hex_color
 
 AUTO_LLM_STROKE_BUDGET = 500
 
@@ -553,22 +556,32 @@ class OpenAICompatiblePlanner(PlannerPort):
                     f"互換フィールド(request_canvas_image)={sanitized_plan.request_canvas_image}"
                 )
 
-                # 会話履歴に記録（次ステップへの文脈継承）
+                # 会話履歴に記録（次ステップへの文脈継承・Few-shot手本として標準 StrokeProgram 形式を保持）
                 if max_iterations > 1:
-                    summary_dict = {
+                    history_program_dict = {
                         "schema_version": 2,
+                        "prompt": valid_prompt,
+                        "seed": valid_seed,
                         "iteration": iteration,
-                        "completed_layers": list(sanitized_plan.layers),
-                        "stroke_count": len(sanitized_plan.strokes),
-                        "request_canvas_image": sanitized_plan.request_canvas_image,
-                        "strokes_summary": [
+                        "goal_reached": sanitized_plan.goal_reached,
+                        "completion_score": sanitized_plan.completion_score,
+                        "canvas": {"width": int(valid_width), "height": int(valid_height)},
+                        "operations": [
                             {
+                                "kind": "path",
                                 "id": s.id,
                                 "layer": s.layer_name,
-                                "color": s.color,
-                                "size_px": s.size_px,
-                                "start_xy": [round(s.points[0].x, 1), round(s.points[0].y, 1)],
-                                "end_xy": [round(s.points[-1].x, 1), round(s.points[-1].y, 1)],
+                                "points": [
+                                    [round(s.points[0].x / valid_width, 3), round(s.points[0].y / valid_height, 3)],
+                                    [round(s.points[-1].x / valid_width, 3), round(s.points[-1].y / valid_height, 3)],
+                                ],
+                                "brush": {
+                                    "profile": infer_brush_profile(s.brush_preset, is_eraser=s.is_eraser),
+                                    "color": s.color,
+                                    "size": round(s.size_px / min(valid_width, valid_height), 4),
+                                    "opacity": s.opacity,
+                                    "is_eraser": s.is_eraser,
+                                },
                             }
                             for s in sanitized_plan.strokes[:15]
                         ],
@@ -577,7 +590,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                     # 次のキャンバス画像は常に最新リクエストへ個別添付し、履歴はテキスト要約だけ保持する。
                     self._conversation_history.append({"role": "user", "content": req_json})
                     self._conversation_history.append(
-                        {"role": "assistant", "content": json.dumps(summary_dict, ensure_ascii=False)}
+                        {"role": "assistant", "content": json.dumps(history_program_dict, ensure_ascii=False)}
                     )
                     if len(self._conversation_history) > 8:
                         self._conversation_history = self._conversation_history[-8:]
@@ -1168,17 +1181,20 @@ _THINKING_TAG_PATTERNS = [
     re.compile(r"\|begin_of_thought\|[\s\S]*?\|end_of_thought\|", re.IGNORECASE),
     # 日本語タグ: 【思考】...【/思考】
     re.compile(r"【(?:思考|推論)】[\s\S]*?【/(?:思考|推論)】", re.IGNORECASE),
-    # 閉じられていない未閉鎖タグ（途中で切れた場合や本文手前で終了した場合）
-    re.compile(r"<(?:think|thought|reasoning|thought_process|reflection)>[\s\S]*$", re.IGNORECASE),
-    re.compile(r"\[(?:thought|reasoning|thought_process)\][\s\S]*$", re.IGNORECASE),
-    re.compile(r"\|begin_of_thought\|[\s\S]*$", re.IGNORECASE),
-    re.compile(r"【(?:思考|推論)】[\s\S]*$", re.IGNORECASE),
+    # 閉じられていない未閉鎖タグ（JSON開始 '{' 手前まで、または末尾までを除去）
+    re.compile(r"<(?:think|thought|reasoning|thought_process|reflection)>[\s\S]*?(?=\{|\Z)", re.IGNORECASE),
+    re.compile(r"\[(?:thought|reasoning|thought_process)\][\s\S]*?(?=\{|\Z)", re.IGNORECASE),
+    re.compile(r"\|begin_of_thought\|[\s\S]*?(?=\{|\Z)", re.IGNORECASE),
+    re.compile(r"【(?:思考|推論)】[\s\S]*?(?=\{|\Z)", re.IGNORECASE),
 ]
 
 
 def _clean_thinking_tokens(text: str) -> str:
-    """思考プロセスタグ（<think>, <thought>, <reasoning>, [THOUGHT] 等）を安全に除去する。"""
+    """思考プロセスタグ（<think>, <thought>, <reasoning>, [THOUGHT] 等）および特殊制御文字を安全に除去する。"""
     cleaned = text
+    # 制御文字・BOM・ゼロ幅文字の除去
+    cleaned = re.sub(r"[\ufeff\u200b\u200c\u200d\u2060]", "", cleaned)
+    cleaned = cleaned.replace("\u00a0", " ")
     for pattern in _THINKING_TAG_PATTERNS:
         cleaned = pattern.sub("", cleaned)
     return cleaned.strip()
@@ -1187,11 +1203,11 @@ def _clean_thinking_tokens(text: str) -> str:
 # タグなしプレーンテキスト思考の冒頭パターン（CoT: "The user wants...", "Let me plan...", "Thinking process:" 等）
 _PLAIN_THINKING_PATTERNS = [
     re.compile(
-        r"^(?:The user wants|I need to|Let me plan|Let's create|Thinking Process|Plan:|Step 1:|To draw|In this drawing)[\s\S]*?(?=(?:```|\{\s*\"(?:schema_version|prompt|seed|title|iteration|layers|strokes|operations)\"))",
+        r"^(?:The user wants|I need to|Let me plan|Let's create|Thinking Process|Plan:|Step 1:|To draw|In this drawing)[\s\S]*?(?=(?:```|\{\s*\"(?:schema_version|prompt|seed|title|iteration|layers|strokes|operations|strokes_summary|completed_layers)\"))",
         re.IGNORECASE,
     ),
     re.compile(
-        r"^[\s\S]*?(?=(?:```json\s*\{|```\s*\{|\{\s*\"(?:schema_version|prompt|strokes|operations)\"))",
+        r"^[\s\S]*?(?=(?:```json\s*\{|```\s*\{|\{\s*\"(?:schema_version|prompt|strokes|operations|strokes_summary)\"))",
         re.IGNORECASE,
     ),
 ]
@@ -1233,17 +1249,19 @@ def _find_best_json_start(text: str) -> int:
     if fence_m:
         return fence_m.start(1)
 
-    # 優先順位 2: DrawingPlan 主要キーを含む `{`
+    # 優先順位 2: DrawingPlan / StrokeProgram 主要キーを含む `{`
     plan_key_m = re.search(
-        r"\{\s*\"(?:schema_version|prompt|seed|title|iteration|layers|strokes|operations)\"",
+        r"\{\s*\"(?:schema_version|prompt|seed|title|iteration|layers|strokes|operations|strokes_summary|completed_layers)\"",
         text,
         flags=re.IGNORECASE,
     )
     if plan_key_m:
         return plan_key_m.start()
 
-    # 優先順位 3: ストローク要素のキーを含む `{`
-    stroke_key_m = re.search(r"\{\s*\"(?:id|points|brush_preset|layer_name)\"", text, flags=re.IGNORECASE)
+    # 優先順位 3: ストローク/Operation 要素のキーを含む `{`
+    stroke_key_m = re.search(
+        r"\{\s*\"(?:kind|id|points|polygon|brush|brush_preset|layer_name|layer|start_xy)\"", text, flags=re.IGNORECASE
+    )
     if stroke_key_m:
         return stroke_key_m.start()
 
@@ -1252,7 +1270,7 @@ def _find_best_json_start(text: str) -> int:
 
 
 def _sanitize_json_text(text: str) -> str:
-    """LLM 特有の構文乱れ（コメント、末尾カンマ、シングルクォート、Python 定数）をサニタイズする。"""
+    """LLM 特有の構文乱れ（コメント、末尾カンマ、シングルクォート、Python 定数、非クォートキー）を安全にサニタイズする。"""
     if not text:
         return ""
 
@@ -1261,10 +1279,11 @@ def _sanitize_json_text(text: str) -> str:
     # 1. ブロックコメント /* ... */ の除去
     s = re.sub(r"/\*[\s\S]*?\*/", "", s)
 
-    # 2. 行コメント // ... の除去 (URL 中の "http://" や "https://" は除外)
-    lines = []
+    # 2. 行コメント // ... および # ... の除去 (URL 中の "http://" や "https://" は除外)
+    lines: list[str] = []
     for line in s.splitlines():
         line_clean = re.sub(r'(?<![:"\'/])//.*$', "", line)
+        line_clean = re.sub(r'(?<!["\'\w])#.*$', "", line_clean)
         lines.append(line_clean)
     s = "\n".join(lines)
 
@@ -1272,18 +1291,165 @@ def _sanitize_json_text(text: str) -> str:
     s = re.sub(r"\bTrue\b", "true", s)
     s = re.sub(r"\bFalse\b", "false", s)
     s = re.sub(r"\bNone\b", "null", s)
+    s = re.sub(r"\bundefined\b", "null", s)
 
-    # 4. シングルクォートで囲まれた文字列 '...' をダブルクォート "..." に変換
-    def _replace_sq(m: re.Match[str]) -> str:
-        inner = m.group(1).replace('"', '\\"')
-        return f'"{inner}"'
+    # 4. 非クォートキーのダブルクォート化: { key: 123 } -> { "key": 123 }
+    s = re.sub(r"([{,]\s*)([a-zA-Z_][a-zA-Z0-9_-]*)\s*:", r'\1"\2":', s)
 
-    s = re.sub(r"(?<!\\)'([^'\\]*(?:\\.[^'\\]*)*)'", _replace_sq, s)
+    # 5. 数値末尾の単位サフィックス除去 (e.g. "size": 200px -> "size": 200)
+    s = re.sub(r"(:\s*-?\d+(?:\.\d+)?)\s*(?:px|pt|deg)\b", r"\1", s)
 
-    # 5. オブジェクト・配列末尾のカンマ（Trailing commas）の除去
+    # 6. 安全なシングルクォートキー・値の変換（単語内アポストロフィ破壊防止）
+    s = re.sub(r"([{,]\s*)'([^'\\]*(?:\\.[^'\\]*)*)'\s*:", r'\1"\2":', s)
+    s = re.sub(r":\s*'([^'\\]*(?:\\.[^'\\]*)*)'(\s*[,}\]])", r': "\1"\2', s)
+    s = re.sub(r"(\[\s*)'([^'\\]*(?:\\.[^'\\]*)*)'", r'\1"\2"', s)
+    s = re.sub(r",\s*'([^'\\]*(?:\\.[^'\\]*)*)'", r', "\1"', s)
+
+    # 7. オブジェクト・配列末尾のカンマ（Trailing commas）の除去
     s = re.sub(r",\s*([}\]])", r"\1", s)
 
     return s.strip()
+
+
+def _try_parse_any_json(text: str) -> Any | None:
+    """json.loads と ast.literal_eval を駆使して文字列から安全に辞書またはリストを復元する。"""
+    if not text or not text.strip():
+        return None
+    s = text.strip()
+
+    # 1. 生テキストの直接 json.loads
+    try:
+        val: Any = json.loads(s)
+        if isinstance(val, (dict, list)):
+            return val
+    except Exception:
+        pass
+
+    # 2. ast.literal_eval (Python リテラル、アポストロフィ混在、True/False/None をネイティブ解釈)
+    try:
+        parsed = ast.literal_eval(s)
+        if isinstance(parsed, (dict, list)):
+            normalized: Any = json.loads(json.dumps(parsed))
+            if isinstance(normalized, (dict, list)):
+                return normalized
+    except Exception:
+        pass
+
+    # 3. サニタイズ適用後に再試行
+    sanitized = _sanitize_json_text(s)
+    if sanitized:
+        try:
+            val_san: Any = json.loads(sanitized)
+            if isinstance(val_san, (dict, list)):
+                return val_san
+        except Exception:
+            pass
+        try:
+            parsed_san = ast.literal_eval(sanitized)
+            if isinstance(parsed_san, (dict, list)):
+                norm_san: Any = json.loads(json.dumps(parsed_san))
+                if isinstance(norm_san, (dict, list)):
+                    return norm_san
+        except Exception:
+            pass
+
+    return None
+
+
+def _unwrap_drawing_container(obj: Any) -> Mapping[str, Any] | None:
+    """ネストされたラッパー辞書や配列から DrawingPlan / StrokeProgram 辞書をアンラップして取り出す。"""
+    if isinstance(obj, Mapping):
+        if _looks_like_drawing_json(obj):
+            return obj
+        # ラッパーキーの探索
+        for wrapper_key in (
+            "plan",
+            "stroke_program",
+            "drawing_plan",
+            "data",
+            "result",
+            "response",
+            "output",
+            "payload",
+            "content",
+        ):
+            cand = obj.get(wrapper_key)
+            if isinstance(cand, Mapping) and _looks_like_drawing_json(cand):
+                return cand
+            if isinstance(cand, Sequence) and not isinstance(cand, (str, bytes)) and len(cand) > 0:
+                unwrapped = _unwrap_drawing_container(cand)
+                if unwrapped is not None:
+                    return unwrapped
+        # 計画関連キーを含む辞書であればそのまま返却
+        if any(k in obj for k in ("operations", "strokes", "strokes_summary", "schema_version", "canvas", "layers")):
+            return obj
+
+    elif isinstance(obj, Sequence) and not isinstance(obj, (str, bytes)):
+        items = [item for item in obj if isinstance(item, Mapping)]
+        if items:
+            if any(
+                "kind" in it or "polygon" in it or "bounds" in it or ("start_xy" in it and "end_xy" in it)
+                for it in items
+            ):
+                return {"schema_version": 2, "operations": items}
+            if any("points" in it for it in items):
+                return {"schema_version": 1, "strokes": items}
+            return {"schema_version": 2, "operations": items}
+
+    return None
+
+
+def _extract_balanced_json_blocks(text: str) -> list[str]:
+    """テキスト内から括弧の対応 ( { ... } または [ ... ] ) が取れた完全な JSON ブロック群を抽出する。"""
+    if not text:
+        return []
+    blocks: list[str] = []
+    stack: list[str] = []
+    start_pos: int = -1
+    in_string: bool = False
+    escape: bool = False
+
+    for idx, ch in enumerate(text):
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+
+        if ch in ("{", "["):
+            if not stack:
+                start_pos = idx
+            stack.append(ch)
+        elif ch in ("}", "]"):
+            if stack and ((ch == "}" and stack[-1] == "{") or (ch == "]" and stack[-1] == "[")):
+                stack.pop()
+                if not stack and start_pos >= 0:
+                    candidate = text[start_pos : idx + 1].strip()
+                    if candidate and candidate not in blocks:
+                        blocks.append(candidate)
+                    start_pos = -1
+
+    def _block_score(b: str) -> int:
+        score = 0
+        if "schema_version" in b:
+            score += 10
+        if "operations" in b:
+            score += 8
+        if "strokes_summary" in b:
+            score += 7
+        if "strokes" in b:
+            score += 6
+        if "canvas" in b:
+            score += 4
+        return -score
+
+    return sorted(blocks, key=_block_score)
 
 
 def _collect_candidate_texts_from_response(
@@ -1480,6 +1646,338 @@ def _extract_best_content_or_plan(
     return _extract_content_from_response(response, log_func=log_func, is_drawing_plan=is_drawing_plan)
 
 
+def _sanitize_and_rescue_program_dict(
+    value: Mapping[str, Any],
+    canvas_w: float = 1000.0,
+    canvas_h: float = 1000.0,
+) -> dict[str, Any]:
+    """LLM 出力辞書（strokes_summary、不正な型、未知キー、ピクセル座標混在等）を完全な StrokeProgram 辞書へ整形・救出する。"""
+    d = dict(value)
+
+    # 1. canvas の安全な取得
+    canvas = d.get("canvas")
+    if isinstance(canvas, Mapping):
+        w = float(canvas.get("width", canvas_w))
+        h = float(canvas.get("height", canvas_h))
+    else:
+        w = float(d.get("canvas_width", canvas_w))
+        h = float(d.get("canvas_height", canvas_h))
+    if w <= 1.0:
+        w = canvas_w
+    if h <= 1.0:
+        h = canvas_h
+
+    # 2. operations の探索と正規化
+    raw_ops = d.get("operations")
+    if raw_ops is None or not isinstance(raw_ops, Sequence) or isinstance(raw_ops, (str, bytes)):
+        for alt_key in (
+            "strokes_summary",
+            "summary_strokes",
+            "strokes",
+            "paths",
+            "lines",
+            "commands",
+            "items",
+            "shapes",
+            "draw_list",
+        ):
+            cand = d.get(alt_key)
+            if isinstance(cand, Sequence) and not isinstance(cand, (str, bytes)) and len(cand) > 0:
+                raw_ops = cand
+                break
+
+    if raw_ops is None or not isinstance(raw_ops, Sequence) or isinstance(raw_ops, (str, bytes)):
+        raw_ops = []
+
+    clean_ops: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+
+    for idx, item in enumerate(raw_ops):
+        if not isinstance(item, Mapping):
+            continue
+        item_d = dict(item)
+        raw_kind = str(item_d.get("kind", "")).strip().lower()
+
+        # kind の正規化
+        if raw_kind in ("fill", "wash", "area", "region", "polygon", "background", "base"):
+            kind = "fill"
+        elif raw_kind in ("hatch", "crosshatch", "shading", "shading_hatch"):
+            kind = "hatch"
+        elif raw_kind in ("particles", "particle", "dots", "sparks", "swarms", "bokeh", "fx"):
+            kind = "particles"
+        else:
+            kind = "path"
+
+        op_id = str(item_d.get("id") or "").strip()
+        if not op_id or op_id in seen_ids:
+            op_id = f"{op_id or 'op'}_{idx + 1}_{uuid.uuid4().hex[:4]}"
+        seen_ids.add(op_id)
+
+        layer_val = str(item_d.get("layer") or item_d.get("layer_name") or "").strip()
+        if not layer_val:
+            layer_val = (
+                "Flats"
+                if kind == "fill"
+                else "Shading"
+                if kind == "hatch"
+                else "FX"
+                if kind == "particles"
+                else "Lineart"
+            )
+
+        # brush の正規化
+        raw_brush = item_d.get("brush")
+        if isinstance(raw_brush, Mapping):
+            b_dict = dict(raw_brush)
+        else:
+            b_dict = {}
+
+        # brush 直下または operation 直下のフィールドを統合
+        p_name = str(
+            b_dict.get("profile")
+            or item_d.get("profile")
+            or ("marker" if kind == "fill" else "pencil" if kind == "hatch" else "auto")
+        ).strip()
+        canonical_p = canonical_brush_profile(p_name)
+        if canonical_p == "auto" and p_name.lower() != "auto":
+            inferred_p = infer_brush_profile(p_name)
+            if inferred_p != "auto":
+                canonical_p = inferred_p
+        preset_h = b_dict.get("preset_hint") or item_d.get("preset_hint") or item_d.get("brush_preset")
+        if not preset_h and canonical_p == "auto" and p_name.lower() != "auto":
+            preset_h = p_name
+
+        c_val = normalize_hex_color(b_dict.get("color") or item_d.get("color") or "#232323", fallback="#232323")
+
+        sz_val = b_dict.get("size") or b_dict.get("size_ratio") or item_d.get("size") or item_d.get("size_ratio")
+        if sz_val is None and ("size_px" in b_dict or "size_px" in item_d):
+            px_val = float(b_dict.get("size_px") or item_d.get("size_px") or 8.0)
+            sz_val = max(0.5, px_val)
+            sz_mode = "px"
+        else:
+            sz_val = (
+                float(sz_val)
+                if sz_val is not None
+                else (0.035 if kind == "fill" else 0.0025 if kind == "hatch" else 0.006)
+            )
+            sz_mode = "ratio"
+
+        op_opacity = float(b_dict.get("opacity") or item_d.get("opacity") or 1.0)
+        op_opacity = max(0.0, min(1.0, op_opacity))
+
+        raw_eraser = b_dict.get("is_eraser", item_d.get("is_eraser", False))
+        is_eraser = raw_eraser in (True, "true", "True", 1, "1")
+
+        clean_brush: dict[str, Any] = {
+            "profile": canonical_p,
+            "color": c_val,
+            "size": max(0.0001, sz_val),
+            "size_mode": sz_mode,
+            "opacity": op_opacity,
+            "is_eraser": is_eraser,
+        }
+        if preset_h:
+            clean_brush["preset_hint"] = str(preset_h)
+
+        # 点座標の正規化ヘルパー
+        def _norm_pts(raw_point_list: Any) -> list[list[float]]:
+            res: list[list[float]] = []
+            if not isinstance(raw_point_list, Sequence) or isinstance(raw_point_list, (str, bytes)):
+                return res
+            for pt in raw_point_list:
+                if isinstance(pt, Sequence) and not isinstance(pt, (str, bytes)) and len(pt) >= 2:
+                    px = float(pt[0])
+                    py = float(pt[1])
+                    if px > 1.0 and w > 1.0:
+                        px = px / w
+                    if py > 1.0 and h > 1.0:
+                        py = py / h
+                    pp = float(pt[2]) if len(pt) >= 3 else 0.8
+                    res.append([max(0.0, min(1.0, px)), max(0.0, min(1.0, py)), max(0.0, min(1.0, pp))])
+                elif isinstance(pt, Mapping) and "x" in pt and "y" in pt:
+                    px = float(pt["x"])
+                    py = float(pt["y"])
+                    if px > 1.0 and w > 1.0:
+                        px = px / w
+                    if py > 1.0 and h > 1.0:
+                        py = py / h
+                    pp = float(pt.get("pressure", 0.8))
+                    res.append([max(0.0, min(1.0, px)), max(0.0, min(1.0, py)), max(0.0, min(1.0, pp))])
+            return res
+
+        if kind == "path":
+            raw_pts = item_d.get("points")
+            if raw_pts is None:
+                if "start_xy" in item_d and "end_xy" in item_d:
+                    raw_pts = [item_d["start_xy"], item_d["end_xy"]]
+                elif "start" in item_d and "end" in item_d:
+                    raw_pts = [item_d["start"], item_d["end"]]
+                else:
+                    raw_pts = [[0.1, 0.1], [0.9, 0.9]]
+            pts = _norm_pts(raw_pts)
+            if len(pts) < 2:
+                if len(pts) == 1:
+                    p0 = pts[0]
+                    pts.append([min(1.0, p0[0] + 0.002), min(1.0, p0[1] + 0.002), p0[2]])
+                else:
+                    pts = [[0.1, 0.1, 0.8], [0.9, 0.9, 0.8]]
+            raw_closed = item_d.get("closed", False)
+            raw_smooth = item_d.get("smooth", True)
+            clean_ops.append(
+                {
+                    "kind": "path",
+                    "id": op_id,
+                    "layer": layer_val,
+                    "points": pts,
+                    "brush": clean_brush,
+                    "closed": raw_closed in (True, "true", "True", 1),
+                    "smooth": raw_smooth not in (False, "false", "False", 0),
+                }
+            )
+        elif kind == "fill":
+            raw_poly = item_d.get("polygon", item_d.get("points"))
+            if raw_poly is None:
+                if "start_xy" in item_d and "end_xy" in item_d:
+                    sx, sy = item_d["start_xy"]
+                    ex, ey = item_d["end_xy"]
+                    raw_poly = [[sx, sy], [ex, sy], [ex, ey], [sx, ey]]
+                else:
+                    raw_poly = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+            poly = _norm_pts(raw_poly)
+            if len(poly) < 3:
+                if len(poly) == 2:
+                    p0, p1 = poly[0], poly[1]
+                    poly = [p0, [p1[0], p0[1], 0.8], p1, [p0[0], p1[1], 0.8]]
+                elif len(poly) == 1:
+                    p0 = poly[0]
+                    poly = [
+                        p0,
+                        [min(1.0, p0[0] + 0.1), p0[1], 0.8],
+                        [min(1.0, p0[0] + 0.1), min(1.0, p0[1] + 0.1), 0.8],
+                        [p0[0], min(1.0, p0[1] + 0.1), 0.8],
+                    ]
+                else:
+                    poly = [[0.0, 0.0, 0.8], [1.0, 0.0, 0.8], [1.0, 1.0, 0.8], [0.0, 1.0, 0.8]]
+            style_str = str(item_d.get("style", "wash")).strip().lower()
+            if style_str not in {"wash", "scanline", "feathered", "contour"}:
+                style_str = "wash"
+            clean_ops.append(
+                {
+                    "kind": "fill",
+                    "id": op_id,
+                    "layer": layer_val,
+                    "polygon": poly,
+                    "brush": clean_brush,
+                    "spacing": max(0.2, min(1.0, float(item_d.get("spacing", 0.72)))),
+                    "style": style_str,
+                }
+            )
+        elif kind == "hatch":
+            raw_poly = item_d.get("polygon", item_d.get("points"))
+            if raw_poly is None:
+                if "start_xy" in item_d and "end_xy" in item_d:
+                    sx, sy = item_d["start_xy"]
+                    ex, ey = item_d["end_xy"]
+                    raw_poly = [[sx, sy], [ex, sy], [ex, ey], [sx, ey]]
+                else:
+                    raw_poly = [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]]
+            poly = _norm_pts(raw_poly)
+            if len(poly) < 3:
+                if len(poly) == 2:
+                    p0, p1 = poly[0], poly[1]
+                    poly = [p0, [p1[0], p0[1], 0.8], p1, [p0[0], p1[1], 0.8]]
+                else:
+                    poly = [[0.1, 0.1, 0.8], [0.9, 0.1, 0.8], [0.9, 0.9, 0.8], [0.1, 0.9, 0.8]]
+            raw_cross = item_d.get("cross", False)
+            clean_ops.append(
+                {
+                    "kind": "hatch",
+                    "id": op_id,
+                    "layer": layer_val,
+                    "polygon": poly,
+                    "brush": clean_brush,
+                    "angle_deg": float(item_d.get("angle_deg", 30.0)) % 180.0,
+                    "spacing": max(0.001, min(0.5, float(item_d.get("spacing", 0.012)))),
+                    "cross": raw_cross in (True, "true", "True", 1),
+                }
+            )
+        elif kind == "particles":
+            raw_b = item_d.get("bounds", (0.0, 0.0, 1.0, 1.0))
+            if isinstance(raw_b, Sequence) and not isinstance(raw_b, (str, bytes)) and len(raw_b) == 4:
+                b_floats = [max(0.0, min(1.0, float(v))) for v in raw_b]
+                if b_floats[2] <= b_floats[0] or b_floats[3] <= b_floats[1]:
+                    b_floats = [0.0, 0.0, 1.0, 1.0]
+            else:
+                b_floats = [0.0, 0.0, 1.0, 1.0]
+            shape_str = str(item_d.get("shape", "petal")).strip().lower()
+            if shape_str not in {"petal", "line", "sparkle", "drift", "bokeh"}:
+                shape_str = "petal"
+            clean_ops.append(
+                {
+                    "kind": "particles",
+                    "id": op_id,
+                    "layer": layer_val,
+                    "bounds": b_floats,
+                    "count": max(1, min(500, int(item_d.get("count", 20)))),
+                    "brush": clean_brush,
+                    "length": max(0.0005, min(0.5, float(item_d.get("length", 0.015)))),
+                    "angle_deg": float(item_d.get("angle_deg", 90.0)),
+                    "angle_jitter": max(0.0, min(180.0, float(item_d.get("angle_jitter", 35.0)))),
+                    "shape": shape_str,
+                }
+            )
+
+    if not clean_ops:
+        clean_ops = [
+            {
+                "kind": "fill",
+                "id": f"base_fill_{uuid.uuid4().hex[:6]}",
+                "layer": "Flats",
+                "polygon": [[0.0, 0.0, 0.8], [1.0, 0.0, 0.8], [1.0, 1.0, 0.8], [0.0, 1.0, 0.8]],
+                "brush": {
+                    "profile": "watercolor",
+                    "color": "#fce4ec",
+                    "size": 0.1,
+                    "size_mode": "ratio",
+                    "opacity": 0.9,
+                    "is_eraser": False,
+                },
+                "spacing": 0.72,
+                "style": "wash",
+            }
+        ]
+
+    return {
+        "schema_version": 2,
+        "prompt": str(d.get("prompt", "")),
+        "seed": int(
+            d.get("seed", 0) if isinstance(d.get("seed"), (int, float)) and not isinstance(d.get("seed"), bool) else 0
+        ),
+        "title": str(d.get("title", "")),
+        "iteration": int(
+            d.get("iteration", 1)
+            if isinstance(d.get("iteration"), int) and not isinstance(d.get("iteration"), bool)
+            else 1
+        ),
+        "canvas": {"width": w, "height": h},
+        "operations": clean_ops,
+        "metadata": dict(d.get("metadata", {})) if isinstance(d.get("metadata"), Mapping) else {},
+        "goal_reached": bool(d.get("goal_reached", False)),
+        "completion_score": max(
+            0.0,
+            min(
+                1.0,
+                float(
+                    d.get("completion_score", 0.0)
+                    if isinstance(d.get("completion_score"), (int, float))
+                    and not isinstance(d.get("completion_score"), bool)
+                    else 0.0
+                ),
+            ),
+        ),
+    }
+
+
 def _mapping_to_drawing_plan(
     value: Mapping[str, Any],
     *,
@@ -1488,19 +1986,51 @@ def _mapping_to_drawing_plan(
     width: float,
     height: float,
 ) -> DrawingPlan:
-    """v2 StrokeProgram を優先し、既存 v1 DrawingPlan も互換入力として受理する。"""
-    if value.get("schema_version") == 2 or "operations" in value:
-        program = StrokeProgram.from_dict(value)
-        # リクエスト契約を外部応答より優先する。粒子の決定性にも seed 補正をコンパイル前に反映する。
-        program = replace(
-            program,
-            prompt=prompt,
-            seed=seed,
-            canvas_width=width,
-            canvas_height=height,
-        )
-        return compile_stroke_program(program)
-    return DrawingPlan.from_dict(value)
+    """v2 StrokeProgram を優先し、strokes_summary や既存 v1 DrawingPlan も互換入力として受理する。"""
+    # 1. 既存 v1 strokes 形式で純粋な DrawingPlan の場合
+    if (
+        "strokes" in value
+        and isinstance(value["strokes"], list)
+        and "operations" not in value
+        and "strokes_summary" not in value
+    ):
+        try:
+            sanitized = _sanitize_repaired_dict(value)
+            val_to_use = sanitized if sanitized is not None else dict(value)
+            return DrawingPlan.from_dict(val_to_use)
+        except Exception:
+            pass
+
+    # 2. v2 StrokeProgram 形式（直接パース試行）
+    try:
+        if (
+            value.get("schema_version") == 2
+            and "operations" in value
+            and not any(k in value for k in ("strokes_summary", "summary_strokes"))
+        ):
+            program = StrokeProgram.from_dict(value)
+            program = replace(
+                program,
+                prompt=prompt or program.prompt,
+                seed=seed if seed > 0 else program.seed,
+                canvas_width=width,
+                canvas_height=height,
+            )
+            return compile_stroke_program(program)
+    except Exception:
+        pass
+
+    # 3. サニタイズ・救済レイヤーを通して StrokeProgram を構築
+    rescued_dict = _sanitize_and_rescue_program_dict(value, canvas_w=width, canvas_h=height)
+    program = StrokeProgram.from_dict(rescued_dict)
+    program = replace(
+        program,
+        prompt=prompt or program.prompt,
+        seed=seed if seed > 0 else program.seed,
+        canvas_width=width,
+        canvas_height=height,
+    )
+    return compile_stroke_program(program)
 
 
 def _plan_from_response(
@@ -1521,9 +2051,7 @@ def _plan_from_response(
         raise LLMPlannerError(f"LLM API エラー: {err}")
 
     # 2. 直接 StrokeProgram / DrawingPlan 辞書の場合
-    has_operations = isinstance(response.get("operations"), list) and bool(response["operations"])
-    has_strokes = isinstance(response.get("strokes"), list) and bool(response["strokes"])
-    if has_operations or has_strokes:
+    if _looks_like_drawing_json(response):
         try:
             return _mapping_to_drawing_plan(
                 response,
@@ -1551,34 +2079,32 @@ def _plan_from_response(
             continue
         try:
             value = _extract_json_object(text, log_func=log_func)
-            has_operations = isinstance(value.get("operations"), list) and bool(value["operations"])
-            has_strokes = isinstance(value.get("strokes"), list) and bool(value["strokes"])
-            if has_operations or has_strokes:
-                if log_func is not None and source_name != "message.content":
-                    log_func(f"通知: ソース [{source_name}] から描画 JSON オブジェクトを救出しました")
-                return _mapping_to_drawing_plan(
+            if _looks_like_drawing_json(value):
+                plan = _mapping_to_drawing_plan(
                     value,
                     prompt=prompt,
                     seed=seed,
                     width=width,
                     height=height,
                 )
+                if plan.strokes:
+                    if log_func is not None and source_name != "message.content":
+                        log_func(f"通知: ソース [{source_name}] から描画 JSON オブジェクトを救出しました")
+                    return plan
         except Exception as exc:
             last_error = exc
             continue
 
-    # 4. 断片ストローク・ハーベスターによる救出（全候補テキストからストロークを探索）
+    # 4. 断片ストローク・ハーベスターによる救出（全候補テキストからストローク/operationsを探索）
     for source_name, text in candidates:
         if not text.strip():
             continue
         harvested = _harvest_stroke_fragments(text, log_func=log_func)
-        if harvested is not None and "strokes" in harvested and len(harvested["strokes"]) > 0:
+        if harvested is not None and _looks_like_drawing_json(harvested):
             if log_func is not None:
-                log_func(
-                    f"通知: ソース [{source_name}] から {len(harvested['strokes'])} 本のストローク断片を直接救出・合成しました"
-                )
+                log_func(f"通知: ソース [{source_name}] から描画断片を直接救出・合成しました")
             try:
-                return DrawingPlan.from_dict(harvested)
+                return _mapping_to_drawing_plan(harvested, prompt=prompt, seed=seed, width=width, height=height)
             except Exception as exc:
                 last_error = exc
 
@@ -1596,84 +2122,114 @@ def _plan_from_response(
 
 
 def _looks_like_drawing_json(value: Any) -> TypeGuard[Mapping[str, Any]]:
-    return isinstance(value, Mapping) and any(key in value for key in ("operations", "strokes", "prompt"))
+    if not isinstance(value, Mapping):
+        return False
+    # 配列としてストロークや operations を含む計画
+    if any(
+        isinstance(value.get(k), list)
+        for k in (
+            "operations",
+            "strokes",
+            "strokes_summary",
+            "summary_strokes",
+            "commands",
+            "actions",
+            "elements",
+            "shapes",
+            "paths",
+            "lines",
+            "draw_list",
+        )
+    ):
+        return True
+    # スキーマバージョンと計画情報を持つオブジェクト
+    return bool(
+        "schema_version" in value
+        and any(k in value for k in ("prompt", "title", "canvas", "iteration", "completed_layers", "stroke_count"))
+    )
 
 
 def _extract_json_object(content: str, log_func: Callable[[str], None] | None = None) -> Mapping[str, Any]:
-    """プレーンテキスト思考除去・タグ除去・未完コードブロック救出・構文修復・断片救出を駆使して JSON を抽出する。"""
-    # 1. 思考タグおよびプレーンテキスト思考の除去
+    """思考除去・多段ダイレクトパース・AST解析・括弧バランサー・途切れ修復・断片救出を駆使して JSON を抽出する。"""
     cleaned_tags = _clean_thinking_tokens(content.strip())
     stripped_thinking = _strip_plain_text_thinking(cleaned_tags)
-    sanitized_stripped = _sanitize_json_text(stripped_thinking)
-    sanitized_cleaned = _sanitize_json_text(cleaned_tags)
-    sanitized_raw = _sanitize_json_text(content)
 
     text_sources = [
-        sanitized_stripped,
-        stripped_thinking,
-        sanitized_cleaned,
         cleaned_tags,
-        sanitized_raw,
+        stripped_thinking,
         content,
     ]
 
-    # 2. 完全なコードブロック ```json ... ``` の抽出
+    # 1. 完全なコードブロック ```json ... ``` の抽出と直接パース (AST含む)
     for text_source in text_sources:
         if not text_source.strip():
             continue
         fence_matches = list(re.finditer(r"```(?:json)?\s*([\s\S]*?)\s*```", text_source, flags=re.IGNORECASE))
         for match in reversed(fence_matches):
-            candidate = _sanitize_json_text(match.group(1).strip())
-            try:
-                value = json.loads(candidate)
-                if _looks_like_drawing_json(value):
-                    return value
-            except json.JSONDecodeError:
-                repaired = _attempt_json_repair(candidate)
-                if _looks_like_drawing_json(repaired):
-                    if log_func is not None:
-                        log_func("通知: コードブロック内の途切れた JSON を自動修復しました")
-                    return repaired
+            candidate = match.group(1).strip()
+            parsed = _try_parse_any_json(candidate)
+            if parsed is not None:
+                unwrapped = _unwrap_drawing_container(parsed)
+                if unwrapped is not None and _looks_like_drawing_json(unwrapped):
+                    return unwrapped
+            repaired = _attempt_json_repair(candidate)
+            if repaired is not None and _looks_like_drawing_json(repaired):
+                if log_func is not None:
+                    log_func("通知: コードブロック内の途切れた JSON を自動修復しました")
+                return repaired
 
-    # 3. 閉じられていない未完コードブロック (Unclosed Fences) の抽出
+    # 2. バランス括弧ブロック抽出 (最外層 { ... } を正確にスキャン)
+    for text_source in text_sources:
+        if not text_source.strip():
+            continue
+        blocks = _extract_balanced_json_blocks(text_source)
+        for block in blocks:
+            parsed = _try_parse_any_json(block)
+            if parsed is not None:
+                unwrapped = _unwrap_drawing_container(parsed)
+                if unwrapped is not None and _looks_like_drawing_json(unwrapped):
+                    return unwrapped
+
+    # 3. テキスト全体のダイレクトパース試行
+    for target in text_sources:
+        if not target.strip():
+            continue
+        parsed = _try_parse_any_json(target)
+        if parsed is not None:
+            unwrapped = _unwrap_drawing_container(parsed)
+            if unwrapped is not None and _looks_like_drawing_json(unwrapped):
+                return unwrapped
+
+        # 最適開始アンカーからの raw_decode 試行
+        start_idx = _find_best_json_start(target)
+        if start_idx >= 0:
+            try:
+                val, _ = json.JSONDecoder().raw_decode(target[start_idx:])
+                unwrapped = _unwrap_drawing_container(val)
+                if unwrapped is not None and _looks_like_drawing_json(unwrapped):
+                    return unwrapped
+            except Exception:
+                pass
+
+    # 4. 閉じられていない未完コードブロック (Unclosed Fences) の救出
     for text_source in text_sources:
         if not text_source.strip():
             continue
         unclosed_m = re.search(r"```(?:json)?\s*(\{[\s\S]*)$", text_source, flags=re.IGNORECASE)
         if unclosed_m:
-            candidate = _sanitize_json_text(unclosed_m.group(1).strip())
+            candidate = unclosed_m.group(1).strip()
             repaired = _attempt_json_repair(candidate)
-            if _looks_like_drawing_json(repaired):
+            if repaired is not None and _looks_like_drawing_json(repaired):
                 if log_func is not None:
                     log_func("通知: 閉じられていないコードブロックから途切れ JSON を自動修復しました")
                 return repaired
-
-    # 4. raw_decode (最適開始アンカーから)
-    for target in (sanitized_stripped, stripped_thinking, sanitized_cleaned, cleaned_tags):
-        if not target.strip():
-            continue
-        try:
-            value = json.loads(target)
-            if _looks_like_drawing_json(value):
-                return value
-        except json.JSONDecodeError:
-            pass
-
-        start_idx = _find_best_json_start(target)
-        if start_idx >= 0:
-            try:
-                value, _ = json.JSONDecoder().raw_decode(target[start_idx:])
-                if _looks_like_drawing_json(value):
-                    return value
-            except json.JSONDecodeError:
-                pass
 
     # 5. 途中で途切れた JSON の高度な末尾修復 & スタック解析
     for target in text_sources:
         if not target.strip():
             continue
         repaired = _attempt_json_repair(target)
-        if _looks_like_drawing_json(repaired):
+        if repaired is not None and _looks_like_drawing_json(repaired):
             if log_func is not None:
                 log_func("警告: トークン上限等で途切れた JSON を自動修復して読み込みました")
             return repaired
@@ -1683,16 +2239,16 @@ def _extract_json_object(content: str, log_func: Callable[[str], None] | None = 
         if not target.strip():
             continue
         harvested = _harvest_stroke_fragments(target, log_func=log_func)
-        if harvested is not None and "strokes" in harvested and len(harvested["strokes"]) > 0:
+        if harvested is not None and _looks_like_drawing_json(harvested):
             if log_func is not None:
-                log_func(f"通知: テキストから {len(harvested['strokes'])} 本のストローク断片を直接救出しました")
+                log_func("通知: テキストからストローク/Operation断片を直接救出しました")
             return harvested
 
     raise json.JSONDecodeError("DrawingPlan JSON オブジェクトを抽出できませんでした", content, 0)
 
 
 def _harvest_stroke_fragments(text: str, log_func: Callable[[str], None] | None = None) -> dict[str, Any] | None:
-    """崩壊した JSON や長文テキストから個々のストロークオブジェクトを正規表現・個別パースで救出して DrawingPlan 辞書を合成する。"""
+    """崩壊した JSON や長文テキストから個々の operation / stroke / summary 断片を正規表現・個別パースで救出して計画辞書を合成する。"""
     if not text:
         return None
 
@@ -1704,31 +2260,56 @@ def _harvest_stroke_fragments(text: str, log_func: Callable[[str], None] | None 
     seed_m = re.search(r'"seed"\s*:\s*(\d+)', text)
     found_seed = int(seed_m.group(1)) if seed_m else 42
 
+    operations: list[dict[str, Any]] = []
     strokes: list[dict[str, Any]] = []
     decoder = json.JSONDecoder()
 
-    # points 配列を持つ JSON オブジェクトの開始位置を検索
-    pattern = re.compile(
-        r'\{\s*(?:"id"|"brush_preset"|"color"|"size_px"|"layer_name"|"opacity"|"points")', re.IGNORECASE
+    # 1. operation / summary / stroke オブジェクトの探索
+    op_pattern = re.compile(
+        r'\{\s*(?:"id"|"kind"|"polygon"|"bounds"|"points"|"start_xy"|"start"|"brush"|"brush_preset"|"color"|"size_px"|"layer_name"|"layer"|"opacity")',
+        re.IGNORECASE,
     )
-    for m in pattern.finditer(text):
+    for m in op_pattern.finditer(text):
         idx = m.start()
         try:
             obj, _ = decoder.raw_decode(text[idx:])
-            if (
-                isinstance(obj, Mapping)
-                and "points" in obj
-                and isinstance(obj["points"], list)
-                and len(obj["points"]) >= 2
-            ):
-                # 重複防止
-                st_id = obj.get("id") or f"stroke_{len(strokes) + 1}"
-                if not any(s.get("id") == st_id for s in strokes):
-                    st_dict = dict(obj)
-                    st_dict["id"] = st_id
-                    strokes.append(st_dict)
+            if isinstance(obj, Mapping):
+                if (
+                    "kind" in obj
+                    or "polygon" in obj
+                    or "bounds" in obj
+                    or ("start_xy" in obj and "end_xy" in obj)
+                    or ("brush" in obj and "points" not in obj)
+                ):
+                    op_id = obj.get("id") or f"op_{len(operations) + 1}"
+                    if not any(o.get("id") == op_id for o in operations):
+                        op_dict = dict(obj)
+                        op_dict["id"] = op_id
+                        operations.append(op_dict)
+                elif "points" in obj and isinstance(obj["points"], list) and len(obj["points"]) >= 2:
+                    st_id = obj.get("id") or f"stroke_{len(strokes) + 1}"
+                    if not any(s.get("id") == st_id for s in strokes):
+                        st_dict = dict(obj)
+                        st_dict["id"] = st_id
+                        strokes.append(st_dict)
+                elif "color" in obj and ("start_xy" in obj or "size_px" in obj):
+                    op_id = obj.get("id") or f"op_{len(operations) + 1}"
+                    if not any(o.get("id") == op_id for o in operations):
+                        op_dict = dict(obj)
+                        op_dict["id"] = op_id
+                        operations.append(op_dict)
         except (json.JSONDecodeError, ValueError):
             continue
+
+    if operations:
+        return {
+            "schema_version": 2,
+            "prompt": found_prompt,
+            "seed": found_seed,
+            "title": f"Rescued AI Program - {found_prompt[:20]}",
+            "iteration": 1,
+            "operations": operations,
+        }
 
     if strokes:
         return {
@@ -1746,72 +2327,94 @@ def _harvest_stroke_fragments(text: str, log_func: Callable[[str], None] | None 
 
 
 def _sanitize_repaired_dict(val: Mapping[str, Any]) -> dict[str, Any] | None:
-    """修復された JSON 辞書内の strokes 配列を検査し、不完全な点を補完または未完ストロークを除去する。"""
+    """修復された JSON 辞書内の operations / strokes / strokes_summary 配列を検査し、不完全な点を補完または未完ストロークを除去する。"""
     d = dict(val)
+
+    # 1. operations 配列のサニタイズ
+    if "operations" in d and isinstance(d["operations"], list):
+        clean_ops: list[dict[str, Any]] = []
+        for op in d["operations"]:
+            if not isinstance(op, Mapping):
+                continue
+            op_dict = dict(op)
+            clean_ops.append(op_dict)
+        if clean_ops:
+            d["operations"] = clean_ops
+            return d
+
+    # 2. strokes_summary 配列のサニタイズ
+    if "strokes_summary" in d and isinstance(d["strokes_summary"], list):
+        clean_summary = [s for s in d["strokes_summary"] if isinstance(s, Mapping)]
+        if clean_summary:
+            d["strokes_summary"] = clean_summary
+            return d
+
+    # 3. strokes 配列のサニタイズ
     strokes_raw = d.get("strokes")
-    if not isinstance(strokes_raw, list):
-        return d
+    if isinstance(strokes_raw, list):
+        clean_strokes: list[dict[str, Any]] = []
+        for idx, st in enumerate(strokes_raw, start=1):
+            if not isinstance(st, Mapping):
+                continue
+            pts = st.get("points")
+            if not isinstance(pts, list) or len(pts) == 0:
+                continue
+            clean_pts: list[Any] = []
+            for p in pts:
+                if isinstance(p, Mapping):
+                    if "x" in p and "y" in p and not isinstance(p.get("x"), bool) and not isinstance(p.get("y"), bool):
+                        clean_pts.append(dict(p))
+                elif (
+                    isinstance(p, (list, tuple))
+                    and len(p) >= 2
+                    and not isinstance(p[0], bool)
+                    and not isinstance(p[1], bool)
+                ):
+                    clean_pts.append(list(p))
+            if len(clean_pts) == 1:
+                p0 = clean_pts[0]
+                if isinstance(p0, Mapping):
+                    clean_pts.append(
+                        {
+                            "x": float(p0.get("x", 0.0)) + 1.0,
+                            "y": float(p0.get("y", 0.0)) + 1.0,
+                            "pressure": float(p0.get("pressure", 0.5)),
+                            "time_ms": int(p0.get("time_ms", 0)) + 10,
+                        }
+                    )
+                else:
+                    clean_pts.append([float(p0[0]) + 1.0, float(p0[1]) + 1.0, 0.8, 10])
+            if len(clean_pts) >= 2:
+                st_clean = dict(st)
+                st_clean["points"] = clean_pts
+                if not st_clean.get("id"):
+                    st_clean["id"] = f"stroke_{idx}"
+                clean_strokes.append(st_clean)
 
-    clean_strokes: list[dict[str, Any]] = []
-    for idx, st in enumerate(strokes_raw, start=1):
-        if not isinstance(st, Mapping):
-            continue
-        pts = st.get("points")
-        if not isinstance(pts, list) or len(pts) == 0:
-            continue
-        clean_pts: list[Any] = []
-        for p in pts:
-            if isinstance(p, Mapping):
-                if "x" in p and "y" in p and not isinstance(p.get("x"), bool) and not isinstance(p.get("y"), bool):
-                    clean_pts.append(dict(p))
-            elif (
-                isinstance(p, (list, tuple))
-                and len(p) >= 2
-                and not isinstance(p[0], bool)
-                and not isinstance(p[1], bool)
-            ):
-                clean_pts.append(list(p))
-        if len(clean_pts) == 1:
-            p0 = clean_pts[0]
-            if isinstance(p0, Mapping):
-                clean_pts.append(
-                    {
-                        "x": float(p0.get("x", 0.0)) + 1.0,
-                        "y": float(p0.get("y", 0.0)) + 1.0,
-                        "pressure": float(p0.get("pressure", 0.5)),
-                        "time_ms": int(p0.get("time_ms", 0)) + 10,
-                    }
-                )
-            else:
-                clean_pts.append([float(p0[0]) + 1.0, float(p0[1]) + 1.0, 0.8, 10])
-        if len(clean_pts) >= 2:
-            st_clean = dict(st)
-            st_clean["points"] = clean_pts
-            if not st_clean.get("id"):
-                st_clean["id"] = f"stroke_{idx}"
-            clean_strokes.append(st_clean)
+        if clean_strokes:
+            d["strokes"] = clean_strokes
+            return dict(d)
 
-    if clean_strokes:
-        d["strokes"] = clean_strokes
-        return d
+    if _looks_like_drawing_json(d):
+        return dict(d)
     return None
 
 
 def _attempt_json_repair(text: str) -> Mapping[str, Any] | None:
-    """トークン上限等で末尾が切れた JSON の最適開始アンカー特定、未完ストローク切落し、構文修復を行う。"""
+    """トークン上限等で末尾が切れた JSON の最適開始アンカー特定、未完ストローク/operation切落し、構文修復を行う。"""
     start = _find_best_json_start(text)
     if start < 0:
         return None
     s = _sanitize_json_text(text[start:].strip())
 
-    # 1. 未完のストロークを直前の完全なストローク `}` までロールバックして閉じる救済
+    # 1. 未完の要素を直前の完全なオブジェクト `}` までロールバックして閉じる救済
     last_brace = s.rfind("}")
     if last_brace > 0:
         candidate_truncated = s[: last_brace + 1].strip()
         for suffix in ("]}", "]}]}", "}]}", "]}", "}"):
             try:
                 val = json.loads(candidate_truncated + suffix)
-                if isinstance(val, Mapping) and "strokes" in val:
+                if isinstance(val, Mapping) and _looks_like_drawing_json(val):
                     sanitized = _sanitize_repaired_dict(val)
                     if sanitized is not None:
                         return sanitized
@@ -1854,7 +2457,7 @@ def _attempt_json_repair(text: str) -> Mapping[str, Any] | None:
     if closing_suffix:
         try:
             val = json.loads(s_cleaned + closing_suffix)
-            if isinstance(val, Mapping) and "strokes" in val:
+            if isinstance(val, Mapping) and _looks_like_drawing_json(val):
                 sanitized = _sanitize_repaired_dict(val)
                 if sanitized is not None:
                     return sanitized
@@ -1871,22 +2474,15 @@ def _attempt_json_repair(text: str) -> Mapping[str, Any] | None:
         '0,"time_ms":0}]}]}',
         "]}]}",
     ):
-        try:
-            val = json.loads(s_cleaned + suffix)
-            if isinstance(val, Mapping) and "strokes" in val:
-                sanitized = _sanitize_repaired_dict(val)
-                if sanitized is not None:
-                    return sanitized
-        except json.JSONDecodeError:
-            pass
-        try:
-            val = json.loads(s + suffix)
-            if isinstance(val, Mapping) and "strokes" in val:
-                sanitized = _sanitize_repaired_dict(val)
-                if sanitized is not None:
-                    return sanitized
-        except json.JSONDecodeError:
-            pass
+        for base in (s_cleaned, s):
+            try:
+                val = json.loads(base + suffix)
+                if isinstance(val, Mapping) and _looks_like_drawing_json(val):
+                    sanitized = _sanitize_repaired_dict(val)
+                    if sanitized is not None:
+                        return sanitized
+            except json.JSONDecodeError:
+                pass
 
     return None
 

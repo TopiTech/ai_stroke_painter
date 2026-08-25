@@ -36,6 +36,7 @@ from .llm_planner import (
     _extract_content_from_response,
     _extract_json_object,
     _is_reasoning_model,
+    _mapping_to_drawing_plan,
     _plan_from_response,
     _redact_sensitive_text,
     _SameOriginRedirectHandler,
@@ -4913,6 +4914,277 @@ class ExtendedCustomizationTests(unittest.TestCase):
         self.assertIn("[USER REQUEST]", str(user_msgs[0]["content"]))
         self.assertNotIn("[USER REQUEST]", str(user_msgs[1]["content"]))
         self.assertIn("Turn 2 user prompt", str(user_msgs[1]["content"]))
+
+    def test_strokes_summary_json_rescue_from_actual_user_log(self) -> None:
+        # ユーザーログで発生した strokes_summary 形式（比率座標およびピクセル座標）の救済検証
+        log_payload_1 = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "schema_version": 2,
+                                "iteration": 2,
+                                "completed_layers": ["Flats", "Shading"],
+                                "stroke_count": 35,
+                                "request_canvas_image": False,
+                                "strokes_summary": [
+                                    {
+                                        "id": "shadow_sky_blue",
+                                        "layer": "Shading",
+                                        "color": "#b3c4e0",
+                                        "size_px": 200.0,
+                                        "start_xy": [0.0, 0.2],
+                                        "end_xy": [1.0, 0.2],
+                                    },
+                                    {
+                                        "id": "shadow_sky_rose",
+                                        "layer": "Shading",
+                                        "color": "#e8a4b8",
+                                        "size_px": 200.0,
+                                        "start_xy": [0.0, 0.35],
+                                        "end_xy": [1.0, 0.35],
+                                    },
+                                    {
+                                        "id": "shadow_grass_upper",
+                                        "layer": "Shading",
+                                        "color": "#5f805c",
+                                        "size_px": 120.0,
+                                        "start_xy": [0.0, 0.58],
+                                        "end_xy": [1.0, 0.6],
+                                    },
+                                ],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+        plan1 = _plan_from_response(log_payload_1, prompt="wildflower garden", width=2480, height=3508)
+        self.assertGreaterEqual(len(plan1.strokes), 3)
+        self.assertIn("Shading", plan1.layers)
+
+        # ユーザーログのピクセル座標（1000.0, 2400.0 など > 1.0）混在レスポンスの救済検証
+        log_payload_2 = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "schema_version": 2,
+                                "iteration": 2,
+                                "completed_layers": ["Flats", "Shading"],
+                                "stroke_count": 18,
+                                "request_canvas_image": False,
+                                "goal_reached": False,
+                                "completion_score": 0.35,
+                                "strokes_summary": [
+                                    {
+                                        "id": "a1b2c3d4",
+                                        "layer": "Shading",
+                                        "color": "#c5b1d8",
+                                        "size_px": 350.0,
+                                        "start_xy": [1000.0, 2400.0],
+                                        "end_xy": [1800.0, 2400.0],
+                                    },
+                                    {
+                                        "id": "b1c2d3e4",
+                                        "layer": "Shading",
+                                        "color": "#c5b1d8",
+                                        "size_px": 350.0,
+                                        "start_xy": [1100.0, 2600.0],
+                                        "end_xy": [1900.0, 2600.0],
+                                    },
+                                ],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+        plan2 = _plan_from_response(log_payload_2, prompt="wildflower garden", width=2480, height=3508)
+        self.assertGreaterEqual(len(plan2.strokes), 2)
+        for s in plan2.strokes:
+            self.assertTrue(all(0.0 <= pt.x <= 2480.0 and 0.0 <= pt.y <= 3508.0 for pt in s.points))
+
+    def test_dry_bristles_natural_brush_name_rescue(self) -> None:
+        # LLM が dry bristles や soft airbrush などの自然なブラシ名を出力した場合の救済検証
+        program_json = {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "schema_version": 2,
+                                "prompt": "wildflower garden",
+                                "seed": 42,
+                                "title": "Watercolor Wildflower Garden",
+                                "iteration": 2,
+                                "operations": [
+                                    {
+                                        "kind": "path",
+                                        "id": "stroke-1",
+                                        "layer": "Shading",
+                                        "points": [[0.1, 0.2], [0.5, 0.6], [0.9, 0.8]],
+                                        "brush": {"profile": "dry bristles", "color": "#a3c29b", "size": 0.05},
+                                    },
+                                    {
+                                        "kind": "fill",
+                                        "id": "fill-1",
+                                        "layer": "Flats",
+                                        "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.0, 0.5]],
+                                        "brush": {"profile": "wash", "color": "#fce4ec", "size": 0.1},
+                                    },
+                                ],
+                            }
+                        )
+                    }
+                }
+            ]
+        }
+        plan = _plan_from_response(program_json, prompt="wildflower garden", width=1000, height=1000)
+        self.assertGreaterEqual(len(plan.strokes), 2)
+
+    def test_apostrophe_in_prompt_and_thinking_json_parsing(self) -> None:
+        # プロンプトやタイトル、思考文にアポストロフィ ('s) が含まれる場合の正常パース検証
+        raw_text = (
+            "Thinking Process: Let's create an artist's garden with nature's beauty.\n\n"
+            "```json\n"
+            "{\n"
+            '  "schema_version": 2,\n'
+            '  "prompt": "delicate wildflower\'s garden with soft petal\'s glow",\n'
+            '  "seed": 42,\n'
+            '  "title": "Nature\'s Masterpiece",\n'
+            '  "iteration": 2,\n'
+            '  "operations": [\n'
+            "    {\n"
+            '      "kind": "path",\n'
+            '      "id": "op-1",\n'
+            '      "layer": "Lineart",\n'
+            '      "points": [[0.1, 0.1], [0.9, 0.9]],\n'
+            '      "brush": {"profile": "gpen", "color": "#232323", "size": 0.005}\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "```\n"
+        )
+        parsed = _extract_json_object(raw_text)
+        self.assertIn("operations", parsed)
+        self.assertEqual(parsed["title"], "Nature's Masterpiece")
+        self.assertEqual(parsed["prompt"], "delicate wildflower's garden with soft petal's glow")
+
+    def test_unquoted_keys_and_comments_json_extraction(self) -> None:
+        # クォートなしキー、JavaScriptコメント、Python真偽値混在の救済検証
+        raw_text = (
+            "{\n"
+            "  schema_version: 2, // スキーマバージョン\n"
+            "  prompt: 'delicate wildflower garden',\n"
+            "  seed: 42,\n"
+            "  goal_reached: False,\n"
+            "  completion_score: 0.5,\n"
+            "  operations: [\n"
+            "    /* ベース背景 */\n"
+            "    {\n"
+            "      kind: 'fill',\n"
+            "      id: 'bg-1',\n"
+            "      layer: 'Flats',\n"
+            "      polygon: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],\n"
+            "      brush: { profile: 'watercolor', color: '#fce4ec', size: 0.1 }\n"
+            "    }\n"
+            "  ]\n"
+            "}\n"
+        )
+        parsed = _extract_json_object(raw_text)
+        self.assertIn("operations", parsed)
+        self.assertEqual(len(parsed["operations"]), 1)
+
+    def test_nested_container_unwrapping(self) -> None:
+        # {"plan": {...}} や [{"kind": "fill", ...}] のようなラッパーの自動アンラップ検証
+        wrapper_json_1 = {
+            "plan": {
+                "schema_version": 2,
+                "operations": [
+                    {
+                        "kind": "path",
+                        "id": "p1",
+                        "points": [[0.1, 0.2], [0.8, 0.9]],
+                        "brush": {"profile": "gpen", "color": "#000000"},
+                    }
+                ],
+            }
+        }
+        plan1 = _mapping_to_drawing_plan(wrapper_json_1, prompt="test", seed=1, width=1000, height=1000)
+        self.assertGreaterEqual(len(plan1.strokes), 1)
+
+        raw_list_text = (
+            '[{"kind": "fill", "id": "f1", "polygon": [[0,0],[1,0],[1,1],[0,1]], "brush": {"color": "#ffffff"}}]'
+        )
+        parsed_list = _extract_json_object(raw_list_text)
+        self.assertIn("operations", parsed_list)
+
+    def test_actual_user_log_all_three_attempts_repro(self) -> None:
+        # ユーザーログ Step 2 の全 3 試行の生レスポンスが全て正常に計画へ変換できることを検証
+        # 試行 1: strokes_summary (比率座標)
+        attempt_1_content = (
+            '{"schema_version": 2, "iteration": 2, "completed_layers": ["Flats", "Shading"], '
+            '"stroke_count": 35, "request_canvas_image": false, "strokes_summary": ['
+            '{"id": "shadow_sky_blue", "layer": "Shading", "color": "#b3c4e0", "size_px": 200.0, "start_xy": [0.0, 0.2], "end_xy": [1.0, 0.2]}, '
+            '{"id": "shadow_sky_rose", "layer": "Shading", "color": "#e8a4b8", "size_px": 200.0, "start_xy": [0.0, 0.35], "end_xy": [1.0, 0.35]}'
+            "]}"
+        )
+        plan_1 = _plan_from_response(
+            {"choices": [{"message": {"content": attempt_1_content}}]},
+            prompt="wildflowers",
+            width=2480,
+            height=3508,
+        )
+        self.assertGreaterEqual(len(plan_1.strokes), 2)
+
+        # 試行 2: dry bristles プロファイル
+        attempt_2_content = (
+            "```json\n"
+            "{\n"
+            '  "schema_version": 2,\n'
+            '  "prompt": "delicate watercolor wildflower garden with soft petals",\n'
+            '  "seed": 42,\n'
+            '  "title": "Watercolor Wildflower Garden",\n'
+            '  "iteration": 2,\n'
+            '  "operations": [\n'
+            "    {\n"
+            '      "kind": "path",\n'
+            '      "id": "shadow-1",\n'
+            '      "layer": "Shading",\n'
+            '      "points": [[0.1, 0.5], [0.8, 0.5]],\n'
+            '      "brush": {"profile": "dry bristles", "color": "#5f805c", "size_px": 120.0, "size_mode": "px"}\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "```"
+        )
+        plan_2 = _plan_from_response(
+            {"choices": [{"message": {"content": attempt_2_content}}]},
+            prompt="wildflowers",
+            width=2480,
+            height=3508,
+        )
+        self.assertGreaterEqual(len(plan_2.strokes), 1)
+
+        # 試行 3: strokes_summary (ピクセル座標 1000.0, 2400.0)
+        attempt_3_content = (
+            '{"schema_version": 2, "iteration": 2, "completed_layers": ["Flats", "Shading"], '
+            '"stroke_count": 18, "request_canvas_image": false, "goal_reached": false, "completion_score": 0.35, '
+            '"strokes_summary": ['
+            '{"id": "a1b2c3d4", "layer": "Shading", "color": "#c5b1d8", "size_px": 350.0, "start_xy": [1000.0, 2400.0], "end_xy": [1800.0, 2400.0]}, '
+            '{"id": "b1c2d3e4", "layer": "Shading", "color": "#c5b1d8", "size_px": 350.0, "start_xy": [1100.0, 2600.0], "end_xy": [1900.0, 2600.0]}'
+            "]}"
+        )
+        plan_3 = _plan_from_response(
+            {"choices": [{"message": {"content": attempt_3_content}}]},
+            prompt="wildflowers",
+            width=2480,
+            height=3508,
+        )
+        self.assertGreaterEqual(len(plan_3.strokes), 2)
 
 
 def run() -> bool:

@@ -66,21 +66,69 @@ BRUSH_PROFILES: dict[str, BrushProfileDefinition] = {
 }
 
 
-_PROFILE_ALIASES = {
+_PROFILE_ALIASES: dict[str, str] = {
     "pen": "gpen",
     "ink": "gpen",
+    "g-pen": "gpen",
+    "fineliner": "gpen",
+    "dip pen": "gpen",
     "fude": "brush",
     "calligraphy": "brush",
+    "paint": "brush",
+    "oil": "brush",
+    "acrylic": "brush",
+    "bristle": "brush",
+    "bristles": "brush",
+    "dry bristles": "brush",
+    "dry bristle": "brush",
+    "dry": "brush",
+    "felt": "marker",
+    "broad": "marker",
     "water": "watercolor",
+    "wet": "watercolor",
+    "wash": "watercolor",
+    "glaze": "watercolor",
+    "charcoal": "pencil",
+    "graphite": "pencil",
+    "chalk": "pencil",
+    "pastel": "pencil",
     "spray": "airbrush",
     "soft": "airbrush",
+    "gradient": "airbrush",
+    "glow": "airbrush",
+    "blur": "airbrush",
+    "dry brush": "brush",
+    "ink brush": "brush",
+    "flat brush": "brush",
+    "round brush": "brush",
+    "filbert": "brush",
+    "mop": "brush",
+    "gouache": "brush",
+    "tempera": "brush",
+    "sumi": "brush",
+    "liner": "gpen",
+    "lineart": "gpen",
+    "contour": "gpen",
+    "sketch": "pencil",
+    "shading": "pencil",
+    "highlighter": "marker",
+    "chisel": "marker",
+    "blend": "airbrush",
+    "smudge": "airbrush",
+    "fog": "airbrush",
+    "mist": "airbrush",
 }
 
 
 def canonical_brush_profile(profile: str | None) -> str:
-    key = (profile or "auto").strip().lower()
-    key = _PROFILE_ALIASES.get(key, key)
-    return key if key in BRUSH_PROFILES else "auto"
+    if not profile:
+        return "auto"
+    key = profile.strip().lower()
+    if key in BRUSH_PROFILES:
+        return key
+    if key in _PROFILE_ALIASES:
+        return _PROFILE_ALIASES[key]
+    return "auto"
 
 
 def brush_definition(profile: str | None) -> BrushProfileDefinition:
