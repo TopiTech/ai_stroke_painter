@@ -36,6 +36,7 @@ QMessageBox: Any = None
 QFileDialog: Any = None
 QApplication: Any = None
 QPainter: Any = None
+QPainterPath: Any = None
 QColor: Any = None
 QPen: Any = None
 QBrush: Any = None
@@ -230,6 +231,7 @@ for binding in _binding_order:
         QApplication = getattr(_widgets, "QApplication", None)
 
         QPainter = getattr(_gui, "QPainter", None)
+        QPainterPath = getattr(_gui, "QPainterPath", None)
         QColor = getattr(_gui, "QColor", None)
         QPen = getattr(_gui, "QPen", None)
         QBrush = getattr(_gui, "QBrush", None)
@@ -294,6 +296,16 @@ if not HAS_QT:
             TouchUpdate = 195
             TouchEnd = 196
             ShortcutOverride = 51
+
+    class QPainterPath:  # type: ignore[no-redef]
+        def __init__(self) -> None:
+            self.points: list[tuple[float, float]] = []
+
+        def moveTo(self, x: float, y: float) -> None:  # noqa: N802
+            self.points = [(float(x), float(y))]
+
+        def lineTo(self, x: float, y: float) -> None:  # noqa: N802
+            self.points.append((float(x), float(y)))
 
     class QWidget(QObject):  # type: ignore[no-redef]
         def __init__(self, *args: Any, **kwargs: Any) -> None:
@@ -522,6 +534,10 @@ if not HAS_QT:
         def addItem(self, text: str, data: Any = None) -> None:
             self._items.append((text, data))
 
+        def clear(self) -> None:
+            self._items.clear()
+            self._idx = 0
+
         def itemData(self, index: int) -> Any:
             if 0 <= index < len(self._items):
                 return self._items[index][1]
@@ -545,6 +561,7 @@ if not HAS_QT:
 
         def setCurrentIndex(self, i: int) -> None:
             self._idx = i
+            self.currentIndexChanged.emit(i)
 
     class QProgressBar(QWidget):  # type: ignore[no-redef]
         def __init__(self, *args: Any, **kwargs: Any) -> None:

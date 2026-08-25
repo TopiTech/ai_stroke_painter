@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 import heapq
 import math
 import random
@@ -10,7 +11,7 @@ import uuid
 
 from .domain import MAX_PLAN_STROKES, DrawingPlan, Stroke
 from .procedural.base import catmull_rom_spline, color_palette, create_stroke, sample_strokes_by_priority
-from .qt_compat import QImage, argb32_image_format
+from .qt_compat import QBuffer, QByteArray, QImage, QIODevice, argb32_image_format, write_only_open_mode
 from .stroke_program import compile_stroke_program, drawing_plan_to_stroke_program
 
 MAX_DECODED_IMAGE_PIXELS = 50_000_000
@@ -20,6 +21,118 @@ MAX_ENCODED_IMAGE_BYTES = 25 * 1024 * 1024
 AUTO_STROKE_BUDGET = min(500, MAX_PLAN_STROKES)
 MAX_ANALYSIS_DIMENSION = 512
 MAX_ANALYSIS_PIXELS = 120_000
+
+
+def _strip_png_private_metadata(data: bytes) -> bytes:
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("PNG signature が不正です")
+    output = bytearray(data[:8])
+    offset = 8
+    saw_header = False
+    saw_end = False
+    safe_ancillary = {b"tRNS", b"cHRM", b"gAMA", b"sRGB", b"iCCP"}
+    while offset + 12 <= len(data):
+        length = int.from_bytes(data[offset : offset + 4], "big")
+        chunk_end = offset + 12 + length
+        if chunk_end > len(data):
+            raise ValueError("PNG chunk が途中で切れています")
+        chunk_type = data[offset + 4 : offset + 8]
+        is_critical = bool(chunk_type and 65 <= chunk_type[0] <= 90)
+        if is_critical or chunk_type in safe_ancillary:
+            output.extend(data[offset:chunk_end])
+        saw_header = saw_header or chunk_type == b"IHDR"
+        if chunk_type == b"IEND":
+            saw_end = True
+            break
+        offset = chunk_end
+    if not saw_header or not saw_end:
+        raise ValueError("PNG の必須 chunk が不足しています")
+    return bytes(output)
+
+
+def _strip_jpeg_private_metadata(data: bytes) -> bytes:
+    if not data.startswith(b"\xff\xd8"):
+        raise ValueError("JPEG signature が不正です")
+    output = bytearray(data[:2])
+    offset = 2
+    saw_scan = False
+    while offset < len(data):
+        if data[offset] != 0xFF:
+            raise ValueError("JPEG marker が不正です")
+        marker_start = offset
+        while offset < len(data) and data[offset] == 0xFF:
+            offset += 1
+        if offset >= len(data):
+            break
+        marker = data[offset]
+        offset += 1
+        if marker == 0xD9:
+            output.extend(data[marker_start:offset])
+            break
+        if marker == 0xDA:
+            if offset + 2 > len(data):
+                raise ValueError("JPEG scan header が途中で切れています")
+            segment_length = int.from_bytes(data[offset : offset + 2], "big")
+            scan_start = offset + segment_length
+            if segment_length < 2 or scan_start > len(data):
+                raise ValueError("JPEG scan length が不正です")
+            output.extend(data[marker_start:scan_start])
+            output.extend(data[scan_start:])
+            saw_scan = True
+            break
+        if marker in {0xD8} or 0xD0 <= marker <= 0xD7:
+            output.extend(data[marker_start:offset])
+            continue
+        if offset + 2 > len(data):
+            raise ValueError("JPEG segment が途中で切れています")
+        segment_length = int.from_bytes(data[offset : offset + 2], "big")
+        segment_end = offset + segment_length
+        if segment_length < 2 or segment_end > len(data):
+            raise ValueError("JPEG segment length が不正です")
+        # APP1(EXIF/XMP), APP13(IPTC), COM は位置・作者情報を含み得るため除去する。
+        if marker not in {0xE1, 0xED, 0xFE}:
+            output.extend(data[marker_start:segment_end])
+        offset = segment_end
+    if not saw_scan:
+        raise ValueError("JPEG scan data がありません")
+    return bytes(output)
+
+
+def sanitize_reference_image(image_bytes: bytes, *, max_dimension: int = 1024) -> bytes:
+    """外部送信用に画像を縮小・PNG再符号化し、私的 metadata を除去する。"""
+    if not isinstance(image_bytes, bytes) or not image_bytes:
+        raise ValueError("参照画像は空でない bytes である必要があります")
+    if isinstance(max_dimension, bool) or not isinstance(max_dimension, int) or not 64 <= max_dimension <= 4096:
+        raise ValueError("max_dimension は64から4096の整数である必要があります")
+    dimensions = _image_dimensions_from_header(image_bytes)
+    if dimensions is None or dimensions[0] <= 0 or dimensions[1] <= 0:
+        raise ValueError("参照画像の寸法を取得できません")
+    if dimensions[0] * dimensions[1] > MAX_DECODED_IMAGE_PIXELS:
+        raise ValueError("参照画像の総画素数が安全上限を超えています")
+
+    image: Any = QImage() if QImage is not None and callable(QImage) else None
+    if image is not None and hasattr(image, "loadFromData") and image.loadFromData(image_bytes):
+        width = int(image.width())
+        height = int(image.height())
+        longest = max(width, height)
+        if longest > max_dimension and hasattr(image, "scaled"):
+            scale = max_dimension / float(longest)
+            image = image.scaled(max(1, round(width * scale)), max(1, round(height * scale)))
+        if callable(QByteArray) and callable(QBuffer):
+            output = QByteArray()
+            buffer: Any = QBuffer(output)
+            if buffer.open(write_only_open_mode(QIODevice)) and image.save(buffer, "PNG"):
+                encoded = output.data() if hasattr(output, "data") else b""
+                if encoded:
+                    return _strip_png_private_metadata(bytes(encoded))
+
+    if max(dimensions) > max_dimension:
+        raise ValueError("この環境では参照画像を安全な送信サイズへ縮小できません")
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return _strip_png_private_metadata(image_bytes)
+    if image_bytes.startswith(b"\xff\xd8"):
+        return _strip_jpeg_private_metadata(image_bytes)
+    raise ValueError("外部送信用に安全化できる画像形式は PNG/JPEG です")
 
 
 def _image_dimensions_from_header(data: bytes) -> tuple[int, int] | None:
@@ -98,12 +211,38 @@ def _hex_to_rgb(hex_str: str) -> tuple[int, int, int]:
     return (0, 0, 0)
 
 
+def _srgb_channel_to_linear(value: float) -> float:
+    normalized = value / 255.0
+    return normalized / 12.92 if normalized <= 0.04045 else ((normalized + 0.055) / 1.055) ** 2.4
+
+
+def _rgb_to_oklab(r: int, g: int, b: int) -> tuple[float, float, float]:
+    """sRGB を知覚的な距離比較に向く OKLab へ変換する。"""
+    red = _srgb_channel_to_linear(float(r))
+    green = _srgb_channel_to_linear(float(g))
+    blue = _srgb_channel_to_linear(float(b))
+    light = 0.4122214708 * red + 0.5363325363 * green + 0.0514459929 * blue
+    medium = 0.2119034982 * red + 0.6806995451 * green + 0.1073969566 * blue
+    short = 0.0883024619 * red + 0.2817188376 * green + 0.6299787005 * blue
+    light_root = math.copysign(abs(light) ** (1.0 / 3.0), light)
+    medium_root = math.copysign(abs(medium) ** (1.0 / 3.0), medium)
+    short_root = math.copysign(abs(short) ** (1.0 / 3.0), short)
+    return (
+        0.2104542553 * light_root + 0.7936177850 * medium_root - 0.0040720468 * short_root,
+        1.9779984951 * light_root - 2.4285922050 * medium_root + 0.4505937099 * short_root,
+        0.0259040371 * light_root + 0.7827717662 * medium_root - 0.8086757660 * short_root,
+    )
+
+
 def _find_closest_palette_color(r: int, g: int, b: int, palette_hex_list: list[str]) -> str:
     best_color = palette_hex_list[0] if palette_hex_list else f"#{r:02x}{g:02x}{b:02x}"
     min_dist_sq = float("inf")
+    source_l, source_a, source_b = _rgb_to_oklab(r, g, b)
     for p_hex in palette_hex_list:
         pr, pg, pb = _hex_to_rgb(p_hex)
-        dist_sq = (r - pr) ** 2 + (g - pg) ** 2 + (b - pb) ** 2
+        palette_l, palette_a, palette_b = _rgb_to_oklab(pr, pg, pb)
+        # 色相を保ちつつ、明度の破綻も避ける知覚距離。
+        dist_sq = 1.15 * (source_l - palette_l) ** 2 + (source_a - palette_a) ** 2 + (source_b - palette_b) ** 2
         if dist_sq < min_dist_sq:
             min_dist_sq = dist_sq
             best_color = p_hex
@@ -320,11 +459,13 @@ class ImageStrokeConverter:
         luminance_map: list[list[float]] = []
         color_map: list[list[str]] = []
         alpha_map: list[list[float]] = []
+        rgb_map: list[list[tuple[int, int, int]]] = []
 
         for y in range(grid_h):
             lum_row: list[float] = []
             col_row: list[str] = []
             alpha_row: list[float] = []
+            rgb_row: list[tuple[int, int, int]] = []
             for x in range(grid_w):
                 pixel = scaled.pixelColor(x, y)
                 r, g, b = pixel.red(), pixel.green(), pixel.blue()
@@ -337,6 +478,7 @@ class ImageStrokeConverter:
                 sample_r = round(composited_r)
                 sample_g = round(composited_g)
                 sample_b = round(composited_b)
+                rgb_row.append((sample_r, sample_g, sample_b))
                 if color_mode == "palette":
                     col_row.append(_find_closest_palette_color(sample_r, sample_g, sample_b, palette_hexes))
                 else:
@@ -345,6 +487,7 @@ class ImageStrokeConverter:
             luminance_map.append(lum_row)
             color_map.append(col_row)
             alpha_map.append(alpha_row)
+            rgb_map.append(rgb_row)
 
         strokes: list[Stroke] = []
         fit_scale = min(target_width / grid_w, target_height / grid_h)
@@ -354,6 +497,99 @@ class ImageStrokeConverter:
         def uid(name: str, idx: int = 0) -> str:
             return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/img/{seed}/{name}/{idx}"))
 
+        visible_samples = [
+            (x, y, rgb_map[y][x], luminance_map[y][x])
+            for y in range(grid_h)
+            for x in range(grid_w)
+            if alpha_map[y][x] >= 0.05
+        ]
+        if not visible_samples:
+            return []
+        visible_pixels = [(rgb, luminance) for _x, _y, rgb, luminance in visible_samples]
+        channel_ranges = [
+            max(rgb[channel] for rgb, _lum in visible_pixels) - min(rgb[channel] for rgb, _lum in visible_pixels)
+            for channel in range(3)
+        ]
+        luminances = [lum for _rgb, lum in visible_pixels]
+        if max(channel_ranges) <= 5 and max(luminances) - min(luminances) <= 0.02:
+            average_rgb: tuple[int, int, int] = (
+                round(sum(rgb[0] for rgb, _lum in visible_pixels) / len(visible_pixels)),
+                round(sum(rgb[1] for rgb, _lum in visible_pixels) / len(visible_pixels)),
+                round(sum(rgb[2] for rgb, _lum in visible_pixels) / len(visible_pixels)),
+            )
+            average_luminance = sum(luminances) / len(luminances)
+            # 紙色だけの画像を数百本の白ストロークへ変換しない。
+            if average_luminance >= 0.96:
+                return []
+            if not enable_flats:
+                return []
+            uniform_color = (
+                _find_closest_palette_color(*average_rgb, palette_hexes)
+                if color_mode == "palette"
+                else f"#{average_rgb[0]:02x}{average_rgb[1]:02x}{average_rgb[2]:02x}"
+            )
+            visible_x = [x for x, _y, _rgb, _luminance in visible_samples]
+            visible_y = [y for _x, y, _rgb, _luminance in visible_samples]
+            fill_x0 = offset_x + min(visible_x) * fit_scale
+            fill_x1 = offset_x + (max(visible_x) + 1) * fit_scale
+            fill_y0 = offset_y + min(visible_y) * fit_scale
+            fill_y1 = offset_y + (max(visible_y) + 1) * fit_scale
+            return [
+                create_stroke(
+                    [(fill_x0, (fill_y0 + fill_y1) * 0.5), (fill_x1, (fill_y0 + fill_y1) * 0.5)],
+                    profile_type="brush",
+                    base_pressure=1.0,
+                    color=uniform_color,
+                    size_px=max(2.0, (fill_y1 - fill_y0) * 1.05),
+                    layer_name="Flats",
+                    opacity=1.0,
+                    rng=rng,
+                    width=target_width,
+                    height=target_height,
+                    stroke_id=uid("uniform_fill"),
+                    preferred_profile=brush_profile,
+                )
+            ]
+
+        # 明るい／透明な外周から連結する領域だけを背景とみなし、白い被写体内部は保持する。
+        border_samples = [
+            rgb_map[y][x] for y in range(grid_h) for x in range(grid_w) if x in {0, grid_w - 1} or y in {0, grid_h - 1}
+        ]
+        border_rgb = tuple(
+            round(sum(rgb[channel] for rgb in border_samples) / len(border_samples)) for channel in range(3)
+        )
+        border_luminance = sum(0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2] for rgb in border_samples) / (
+            255.0 * len(border_samples)
+        )
+
+        def is_background_candidate(x: int, y: int) -> bool:
+            if alpha_map[y][x] < 0.05:
+                return True
+            if border_luminance < 0.72:
+                return False
+            rgb = rgb_map[y][x]
+            color_delta = math.sqrt(sum((rgb[channel] - border_rgb[channel]) ** 2 for channel in range(3))) / 441.7
+            return color_delta <= 0.10 and abs(luminance_map[y][x] - border_luminance) <= 0.12
+
+        background_mask = [[False for _x in range(grid_w)] for _y in range(grid_h)]
+        background_queue: deque[tuple[int, int]] = deque()
+        for y in range(grid_h):
+            for x in range(grid_w):
+                if x not in {0, grid_w - 1} and y not in {0, grid_h - 1}:
+                    continue
+                if is_background_candidate(x, y) and not background_mask[y][x]:
+                    background_mask[y][x] = True
+                    background_queue.append((x, y))
+        while background_queue:
+            x, y = background_queue.popleft()
+            for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                nx, ny = x + dx, y + dy
+                if not (0 <= nx < grid_w and 0 <= ny < grid_h) or background_mask[ny][nx]:
+                    continue
+                if is_background_candidate(nx, ny):
+                    background_mask[ny][nx] = True
+                    background_queue.append((nx, ny))
+
         # 1. エッジ検出（Sobel風フィルタによる輪郭抽出）-> Lineart
         safe_edge_threshold = max(0.02, min(0.60, edge_threshold))
         edge_mask = [[False for _x in range(grid_w)] for _y in range(grid_h)]
@@ -361,14 +597,22 @@ class ImageStrokeConverter:
         for y in range(1, grid_h - 1):
             for x in range(1, grid_w - 1):
                 # 勾配の算出
-                dx = (luminance_map[y - 1][x + 1] + 2 * luminance_map[y][x + 1] + luminance_map[y + 1][x + 1]) - (
+                lum_dx = (luminance_map[y - 1][x + 1] + 2 * luminance_map[y][x + 1] + luminance_map[y + 1][x + 1]) - (
                     luminance_map[y - 1][x - 1] + 2 * luminance_map[y][x - 1] + luminance_map[y + 1][x - 1]
                 )
-                dy = (luminance_map[y + 1][x - 1] + 2 * luminance_map[y + 1][x] + luminance_map[y + 1][x + 1]) - (
+                lum_dy = (luminance_map[y + 1][x - 1] + 2 * luminance_map[y + 1][x] + luminance_map[y + 1][x + 1]) - (
                     luminance_map[y - 1][x - 1] + 2 * luminance_map[y - 1][x] + luminance_map[y - 1][x + 1]
                 )
-                mag = math.sqrt(dx * dx + dy * dy)
-                if mag > safe_edge_threshold:
+                color_gradient_sq = 0.0
+                for channel in range(3):
+                    color_dx = (rgb_map[y][x + 1][channel] - rgb_map[y][x - 1][channel]) / 255.0
+                    color_dy = (rgb_map[y + 1][x][channel] - rgb_map[y - 1][x][channel]) / 255.0
+                    color_gradient_sq += color_dx * color_dx + color_dy * color_dy
+                mag = max(math.hypot(lum_dx, lum_dy), 0.65 * math.sqrt(color_gradient_sq))
+                touches_subject = not background_mask[y][x] or any(
+                    not background_mask[y + ny][x + nx] for nx, ny in ((-1, 0), (1, 0), (0, -1), (0, 1))
+                )
+                if mag > safe_edge_threshold and touches_subject:
                     edge_mask[y][x] = True
 
         # エッジを連結し、輪郭に沿う連続ストロークを構築する（微小ノイズパスはフィルタ）。
@@ -420,12 +664,8 @@ class ImageStrokeConverter:
                 for x in range(0, grid_w, dark_step):
                     lum = luminance_map[y][x]
                     if lum < lum_cutoff:
-                        if alpha_map[y][x] < 0.05:
+                        if alpha_map[y][x] < 0.05 or background_mask[y][x]:
                             continue
-                        hx = offset_x + x * fit_scale
-                        hy = offset_y + y * fit_scale
-                        h_len = fit_scale * dark_step * 1.5
-
                         # 局所輝度勾配（Sobel法線推定）から面の接線（等高線）方向を算出
                         if 1 <= x < grid_w - 1 and 1 <= y < grid_h - 1:
                             gx = (luminance_map[y][x + 1] - luminance_map[y][x - 1]) * 0.5
@@ -440,8 +680,34 @@ class ImageStrokeConverter:
                         else:
                             dir_x, dir_y = 0.866, 0.5
 
-                        # 第1方向ハッチング（曲面に沿った立体ハッチング）
-                        h_stroke = [(hx, hy), (hx + dir_x * h_len, hy + dir_y * h_len)]
+                        def clipped_hatch(
+                            origin_x: int,
+                            origin_y: int,
+                            direction_x: float,
+                            direction_y: float,
+                            maximum_distance: float,
+                        ) -> list[tuple[float, float]]:
+                            endpoints: list[tuple[float, float]] = []
+                            for sign in (-1.0, 1.0):
+                                last_x, last_y = float(origin_x), float(origin_y)
+                                distance = 0.5
+                                while distance <= maximum_distance:
+                                    sample_x = origin_x + direction_x * distance * sign
+                                    sample_y = origin_y + direction_y * distance * sign
+                                    ix, iy = round(sample_x), round(sample_y)
+                                    if not (0 <= ix < grid_w and 0 <= iy < grid_h):
+                                        break
+                                    if alpha_map[iy][ix] < 0.05 or background_mask[iy][ix]:
+                                        break
+                                    last_x, last_y = sample_x, sample_y
+                                    distance += 0.5
+                                endpoints.append((offset_x + last_x * fit_scale, offset_y + last_y * fit_scale))
+                            return endpoints
+
+                        # 第1方向ハッチング（被写体マスク内で曲面に沿う）
+                        h_stroke = clipped_hatch(x, y, dir_x, dir_y, dark_step * 1.5)
+                        if math.dist(h_stroke[0], h_stroke[1]) < max(1.0, fit_scale * 0.5):
+                            continue
                         strokes.append(
                             create_stroke(
                                 h_stroke,
@@ -460,7 +726,9 @@ class ImageStrokeConverter:
                         )
                         # 最暗部（lum < 0.20）ではクロスハッチングを追加して深みを表現
                         if lum < 0.20 and shading_density in {"medium", "high"}:
-                            cross_stroke = [(hx + dir_y * h_len, hy - dir_x * h_len * 0.5), (hx, hy + dir_y * h_len)]
+                            cross_stroke = clipped_hatch(x, y, dir_y, -dir_x, dark_step * 1.5)
+                            if math.dist(cross_stroke[0], cross_stroke[1]) < max(1.0, fit_scale * 0.5):
+                                continue
                             strokes.append(
                                 create_stroke(
                                     cross_stroke,
@@ -483,7 +751,7 @@ class ImageStrokeConverter:
             flat_step = max(3, int(grid_w / 15))
             for y in range(0, grid_h, flat_step):
                 for x in range(0, grid_w, flat_step):
-                    if alpha_map[y][x] < 0.05:
+                    if alpha_map[y][x] < 0.05 or background_mask[y][x]:
                         continue
                     fx = offset_x + x * fit_scale
                     fy = offset_y + y * fit_scale
@@ -510,7 +778,7 @@ class ImageStrokeConverter:
         for y in range(0, grid_h, hl_step):
             for x in range(0, grid_w, hl_step):
                 lum = luminance_map[y][x]
-                if lum > 0.90 and alpha_map[y][x] > 0.5:
+                if lum > 0.90 and alpha_map[y][x] > 0.5 and not background_mask[y][x]:
                     hlx = offset_x + x * fit_scale
                     hly = offset_y + y * fit_scale
                     hl_stroke = [(hlx, hly), (hlx + fit_scale * 2.0, hly + fit_scale * 1.0)]

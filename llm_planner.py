@@ -12,6 +12,7 @@ from collections.abc import Callable, Mapping, Sequence
 import contextlib
 from dataclasses import dataclass, replace
 import datetime
+import hashlib
 import ipaddress
 import json
 import math
@@ -23,12 +24,12 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 import uuid
 
-from .brushes import canonical_brush_profile, infer_brush_profile
-from .domain import DrawingPlan, Stroke, StrokePoint
-from .image_converter import MAX_ENCODED_IMAGE_BYTES
+from .brushes import brush_preset_for_profile, canonical_brush_profile, infer_brush_profile
+from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint
+from .image_converter import MAX_ENCODED_IMAGE_BYTES, sanitize_reference_image
 from .planner import validate_iterations, validate_plan_request
 from .ports import PlannerPort
-from .procedural.base import sample_strokes_by_priority
+from .procedural.base import pressure_profile, recolor_strokes_to_palette, sample_strokes_by_priority
 from .stroke_program import StrokeProgram, compile_stroke_program, normalize_hex_color
 
 AUTO_LLM_STROKE_BUDGET = 500
@@ -100,9 +101,108 @@ def _is_reasoning_model(model_name: str) -> bool:
 
 def _get_stroke_program_json_schema() -> dict[str, Any]:
     """OpenAI Structured Outputs (json_schema) 用の厳格な StrokeProgram スキーマ。"""
+    point_schema = {
+        "type": "array",
+        "items": {"type": "number"},
+        "minItems": 2,
+        "maxItems": 3,
+    }
+    brush_schema = {
+        "type": "object",
+        "properties": {
+            "profile": {"type": "string"},
+            "color": {"type": "string"},
+            "size": {"type": "number"},
+            "size_mode": {"type": "string", "enum": ["ratio", "px"]},
+            "opacity": {"type": "number"},
+            "is_eraser": {"type": "boolean"},
+            "preset_hint": {"type": ["string", "null"]},
+        },
+        "required": ["profile", "color", "size", "size_mode", "opacity", "is_eraser", "preset_hint"],
+        "additionalProperties": False,
+    }
+    common_properties: dict[str, Any] = {
+        "id": {"type": "string", "minLength": 1},
+        "layer": {"type": "string", "minLength": 1},
+        "brush": brush_schema,
+    }
+    operation_schemas = [
+        {
+            "type": "object",
+            "properties": {
+                **common_properties,
+                "kind": {"type": "string", "enum": ["path"]},
+                "points": {"type": "array", "items": point_schema, "minItems": 2},
+                "closed": {"type": "boolean"},
+                "smooth": {"type": "boolean"},
+            },
+            "required": ["kind", "id", "layer", "points", "brush", "closed", "smooth"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                **common_properties,
+                "kind": {"type": "string", "enum": ["fill"]},
+                "polygon": {"type": "array", "items": point_schema, "minItems": 3},
+                "style": {
+                    "type": "string",
+                    "enum": ["wash", "scanline", "feathered", "contour", "radial", "directional"],
+                },
+                "spacing": {"type": "number"},
+                "angle_deg": {"type": "number"},
+            },
+            "required": ["kind", "id", "layer", "polygon", "brush", "style", "spacing", "angle_deg"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                **common_properties,
+                "kind": {"type": "string", "enum": ["hatch"]},
+                "polygon": {"type": "array", "items": point_schema, "minItems": 3},
+                "spacing": {"type": "number"},
+                "angle_deg": {"type": "number"},
+                "cross": {"type": "boolean"},
+            },
+            "required": ["kind", "id", "layer", "polygon", "brush", "spacing", "angle_deg", "cross"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                **common_properties,
+                "kind": {"type": "string", "enum": ["particles"]},
+                "bounds": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 4,
+                    "maxItems": 4,
+                },
+                "count": {"type": "integer", "minimum": 1},
+                "length": {"type": "number"},
+                "angle_deg": {"type": "number"},
+                "angle_jitter": {"type": "number"},
+                "shape": {"type": "string", "enum": ["petal", "line", "sparkle", "drift", "bokeh"]},
+            },
+            "required": [
+                "kind",
+                "id",
+                "layer",
+                "bounds",
+                "count",
+                "brush",
+                "length",
+                "angle_deg",
+                "angle_jitter",
+                "shape",
+            ],
+            "additionalProperties": False,
+        },
+    ]
     return {
         "name": "stroke_program",
-        "strict": False,
+        "strict": True,
         "schema": {
             "type": "object",
             "properties": {
@@ -120,59 +220,28 @@ def _get_stroke_program_json_schema() -> dict[str, Any]:
                         "height": {"type": "number"},
                     },
                     "required": ["width", "height"],
+                    "additionalProperties": False,
                 },
                 "operations": {
                     "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "kind": {"type": "string", "enum": ["path", "fill", "hatch", "particles"]},
-                            "id": {"type": "string"},
-                            "layer": {"type": "string"},
-                            "points": {
-                                "type": "array",
-                                "items": {
-                                    "type": "array",
-                                    "items": {"type": "number"},
-                                },
-                            },
-                            "polygon": {
-                                "type": "array",
-                                "items": {
-                                    "type": "array",
-                                    "items": {"type": "number"},
-                                },
-                            },
-                            "bounds": {
-                                "type": "array",
-                                "items": {"type": "number"},
-                            },
-                            "count": {"type": "integer"},
-                            "brush": {
-                                "type": "object",
-                                "properties": {
-                                    "profile": {"type": "string"},
-                                    "color": {"type": "string"},
-                                    "size": {"type": "number"},
-                                    "size_mode": {"type": "string", "enum": ["ratio", "px"]},
-                                    "opacity": {"type": "number"},
-                                    "is_eraser": {"type": "boolean"},
-                                    "preset_hint": {"type": "string"},
-                                },
-                            },
-                            "closed": {"type": "boolean"},
-                            "smooth": {"type": "boolean"},
-                            "style": {"type": "string"},
-                            "spacing": {"type": "number"},
-                            "angle_deg": {"type": "number"},
-                            "cross": {"type": "boolean"},
-                            "shape": {"type": "string"},
-                        },
-                        "required": ["kind", "id", "layer"],
-                    },
+                    "items": {"oneOf": operation_schemas},
+                    "minItems": 1,
                 },
+                "request_canvas_image": {"type": "boolean"},
             },
-            "required": ["schema_version", "operations"],
+            "required": [
+                "schema_version",
+                "prompt",
+                "seed",
+                "title",
+                "iteration",
+                "goal_reached",
+                "completion_score",
+                "canvas",
+                "operations",
+                "request_canvas_image",
+            ],
+            "additionalProperties": False,
         },
     }
 
@@ -232,7 +301,7 @@ class OpenAICompatibleSettings:
     top_p: float = 1.0
     custom_system_prompt: str = ""
     vision_resolution: int = 512
-    max_retries: int = 3
+    max_retries: int = 2
     fallback_to_procedural: bool = False
 
     def __post_init__(self) -> None:
@@ -350,6 +419,8 @@ class OpenAICompatiblePlanner(PlannerPort):
         self._opener = opener or build_opener(_SameOriginRedirectHandler()).open
         self.log_callback = log_callback
         self._conversation_history: list[dict[str, Any]] = []
+        self._reference_cache_key: bytes | None = None
+        self._reference_cache_bytes: bytes | None = None
 
     def _log(self, message: str) -> None:
         if self.log_callback is not None:
@@ -382,13 +453,15 @@ class OpenAICompatiblePlanner(PlannerPort):
         try:
             plan_or_content = _extract_best_content_or_plan(response, log_func=self._log, is_drawing_plan=False)
             preview = str(plan_or_content)[:60].replace("\n", " ")
+            if not preview.strip():
+                raise LLMPlannerError("モデル応答が空でした")
             msg = f"接続成功: モデルが正常に応答しました ({elapsed:.2f}s, 応答: {preview!r})"
             self._log(msg)
             return msg
         except Exception as exc:
-            msg = f"接続確認完了 (警告): HTTP 200 を受信しましたが応答の解釈に失敗しました ({elapsed:.2f}s): {exc}"
+            msg = f"接続失敗: HTTP 200 でしたがモデル応答を解釈できませんでした ({elapsed:.2f}s): {exc}"
             self._log(msg)
-            return msg
+            raise LLMPlannerError(msg) from exc
 
     def plan(
         self,
@@ -416,6 +489,33 @@ class OpenAICompatiblePlanner(PlannerPort):
             if image_value is not None and len(image_value) > MAX_ENCODED_IMAGE_BYTES:
                 raise ValueError(f"{image_name} のサイズが上限を超えています")
         cancelled = kwargs.get("cancelled")
+        brush_profile = canonical_brush_profile(str(kwargs.get("brush_profile", "auto") or "auto"))
+
+        if image_data:
+            cache_key = hashlib.blake2b(image_data, digest_size=16).digest()
+            if cache_key == self._reference_cache_key and self._reference_cache_bytes is not None:
+                image_data = self._reference_cache_bytes
+            else:
+                try:
+                    image_data = sanitize_reference_image(
+                        image_data,
+                        max_dimension=min(1024, self.settings.vision_resolution),
+                    )
+                except ValueError as exc:
+                    raise LLMPlannerError(f"参照画像を外部送信用に安全化できませんでした: {exc}") from exc
+                self._reference_cache_key = cache_key
+                self._reference_cache_bytes = image_data
+            if iteration > 1:
+                self._log("参照画像は初回ステップで送信済みのため再送せず、最新キャンバスだけを評価します")
+                image_data = None
+        if canvas_image:
+            try:
+                canvas_image = sanitize_reference_image(
+                    canvas_image,
+                    max_dimension=min(1024, self.settings.vision_resolution),
+                )
+            except ValueError as exc:
+                raise LLMPlannerError(f"現在のキャンバス画像を外部送信用に安全化できませんでした: {exc}") from exc
 
         def raise_if_cancelled() -> None:
             if callable(cancelled) and cancelled():
@@ -428,9 +528,10 @@ class OpenAICompatiblePlanner(PlannerPort):
         count_display = (
             f"{valid_count}" if valid_count is not None else f"Auto (品質予算: 最大{AUTO_LLM_STROKE_BUDGET}本)"
         )
+        prompt_digest = hashlib.blake2b(valid_prompt.encode("utf-8"), digest_size=6).hexdigest()
         self._log(
             f"--- 描画計画生成開始 (Step {iteration}/{max_iterations}) ---\n"
-            f"Prompt: {valid_prompt!r}, Seed: {valid_seed}, Count: {count_display}, GoalMode: {goal_mode}, Canvas: {valid_width}x{valid_height}\n"
+            f"Prompt: {len(valid_prompt)} chars, digest={prompt_digest}, Seed: {valid_seed}, Count: {count_display}, GoalMode: {goal_mode}, Canvas: {valid_width}x{valid_height}\n"
             f"Endpoint: {_endpoint_origin_label(self.settings.endpoint_url)}, Model: {self.settings.model} (思考モデル最適化: {is_reasoning}, ReasoningEffort: {self.settings.reasoning_effort}), Timeout: {self.settings.timeout_seconds}s"
         )
 
@@ -441,7 +542,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                 phase_goal = (
                     "Phase 1/2: Base Color Blocking, Environment & Initial Shadows (Flats/Shading layer)"
                     if iteration == 1
-                    else "Phase 2/2 [FINAL]: Structural Lineart, Highlights, Petals & Final Polish (Lineart/Highlights/FX)"
+                    else "Phase 2/2 [FINAL]: Structural Lineart, Highlights & Subject-appropriate Polish (Lineart/Highlights/FX)"
                 )
             elif max_iterations == 3:
                 if iteration == 1:
@@ -449,9 +550,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                 elif iteration == 2:
                     phase_goal = "Phase 2/3: 3D Form Sculpting, Ambient Occlusion & Shadows (Shading layer)"
                 else:
-                    phase_goal = (
-                        "Phase 3/3 [FINAL]: Crisp Lineart, Highlights, Petal Scatter & Polish (Lineart/Highlights/FX)"
-                    )
+                    phase_goal = "Phase 3/3 [FINAL]: Crisp Lineart, Highlights & Subject-appropriate Polish (Lineart/Highlights/FX)"
             else:
                 if iteration == 1:
                     phase_goal = f"Phase {iteration}/{max_iterations}: Base Color Blocking & Foundations (Flats layer)"
@@ -460,7 +559,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                 elif iteration < max_iterations:
                     phase_goal = f"Phase {iteration}/{max_iterations}: Shadow Crevices, Eraser Refinements & Structural Contours (Shading/Lineart layer)"
                 else:
-                    phase_goal = f"Phase {iteration}/{max_iterations} [FINAL]: Fine Lineart, Eraser Carving, Highlights, Petals & Polish (Lineart/Highlights/FX)"
+                    phase_goal = f"Phase {iteration}/{max_iterations} [FINAL]: Fine Lineart, Eraser Carving, Highlights & Subject-appropriate Polish (Lineart/Highlights/FX)"
 
         user_content_parts: list[dict[str, Any]] = []
 
@@ -476,6 +575,7 @@ class OpenAICompatiblePlanner(PlannerPort):
             "stroke_count": req_stroke_count,
             "canvas": {"width": valid_width, "height": valid_height},
             "palette": palette_name,
+            "brush_profile": brush_profile,
             "iteration": iteration,
             "max_iterations": max_iterations,
             "goal_mode": goal_mode,
@@ -501,6 +601,12 @@ class OpenAICompatiblePlanner(PlannerPort):
             b64_ref = base64.b64encode(image_data).decode("ascii")
             user_content_parts.append(
                 {
+                    "type": "text",
+                    "text": "REFERENCE IMAGE: Use this only as the requested subject/style reference.",
+                }
+            )
+            user_content_parts.append(
+                {
                     "type": "image_url",
                     "image_url": {"url": f"data:{mime_type};base64,{b64_ref}", "detail": "high"},
                 }
@@ -511,6 +617,12 @@ class OpenAICompatiblePlanner(PlannerPort):
             canvas_mime = _detect_image_mime_type(canvas_image)
             self._log(f"現在のキャンバス状態を視覚評価用に添付します ({len(canvas_image)} bytes, MIME: {canvas_mime})")
             b64_canvas = base64.b64encode(canvas_image).decode("ascii")
+            user_content_parts.append(
+                {
+                    "type": "text",
+                    "text": "CURRENT CANVAS: Evaluate this rendered state and return only missing corrective operations.",
+                }
+            )
             user_content_parts.append(
                 {
                     "type": "image_url",
@@ -531,6 +643,7 @@ class OpenAICompatiblePlanner(PlannerPort):
             height=valid_height,
             prompt=valid_prompt,
             palette_name=palette_name,
+            brush_profile=brush_profile,
         )
         if self.settings.custom_system_prompt.strip():
             system_content += f"\n\n[USER CUSTOM INSTRUCTIONS]\n{self.settings.custom_system_prompt.strip()}"
@@ -543,7 +656,7 @@ class OpenAICompatiblePlanner(PlannerPort):
         payload: dict[str, Any] = {
             "model": self.settings.model.strip(),
             "messages": base_messages,
-            "response_format": {"type": "json_object"},
+            "response_format": {"type": "json_schema", "json_schema": _get_stroke_program_json_schema()},
         }
 
         if is_reasoning:
@@ -577,7 +690,6 @@ class OpenAICompatiblePlanner(PlannerPort):
                 )
 
                 current_payload = dict(payload)
-                current_payload["response_format"] = {"type": "json_object"}
                 current_payload.pop("reasoning_effort", None)
                 if not is_reasoning:
                     current_payload["temperature"] = 0.2
@@ -596,9 +708,10 @@ class OpenAICompatiblePlanner(PlannerPort):
                         height=valid_height,
                         prompt=valid_prompt,
                         palette_name=palette_name,
+                        brush_profile=brush_profile,
                     )
                     + f"\n\n[FEEDBACK FROM PREVIOUS ATTEMPT]\nPrevious attempt failed: {err_summary}.{len_advice}\n"
-                    "CRITICAL: Output ONLY a single, valid raw JSON object for StrokeProgram schema. Start immediately with ```json. Do NOT write any preamble, conversational text, or commentary."
+                    "CRITICAL: Output ONLY a single valid raw JSON object for the StrokeProgram schema, beginning with '{'. Do not use Markdown fences, preamble, or commentary."
                 )
                 r_messages: list[dict[str, Any]] = [{"role": "system", "content": retry_sys}]
                 if self._conversation_history and iteration > 1:
@@ -648,6 +761,11 @@ class OpenAICompatiblePlanner(PlannerPort):
                     iteration=iteration,
                     log_func=self._log,
                 )
+                sanitized_plan = _apply_llm_style_constraints(
+                    sanitized_plan,
+                    brush_profile=brush_profile,
+                    palette_name=palette_name,
+                )
                 total_pts = sum(len(s.points) for s in sanitized_plan.strokes)
                 layers_str = ", ".join(sanitized_plan.layers)
                 self._log(
@@ -655,41 +773,47 @@ class OpenAICompatiblePlanner(PlannerPort):
                     f"互換フィールド(request_canvas_image)={sanitized_plan.request_canvas_image}"
                 )
 
-                # 会話履歴に記録（次ステップへの文脈継承・Few-shot手本として標準 StrokeProgram 形式を保持）
+                # 端点だけの疑似 StrokeProgram は元の形状を誤伝達するため、履歴には集計値だけを保持する。
+                # 次ステップの視覚的な正解は、常に最新キャンバス画像を権威ある入力として扱う。
                 if max_iterations > 1:
-                    history_program_dict = {
-                        "schema_version": 2,
+                    layer_summaries: list[dict[str, Any]] = []
+                    for layer_name in sanitized_plan.layers:
+                        layer_strokes = [s for s in sanitized_plan.strokes if s.layer_name == layer_name]
+                        if not layer_strokes:
+                            continue
+                        points = [point for stroke in layer_strokes for point in stroke.points]
+                        colors = list(dict.fromkeys(stroke.color for stroke in layer_strokes))[:5]
+                        layer_summaries.append(
+                            {
+                                "layer": layer_name,
+                                "stroke_count": len(layer_strokes),
+                                "point_count": len(points),
+                                "eraser_count": sum(stroke.is_eraser for stroke in layer_strokes),
+                                "bounds": [
+                                    round(min(point.x for point in points) / valid_width, 3),
+                                    round(min(point.y for point in points) / valid_height, 3),
+                                    round(max(point.x for point in points) / valid_width, 3),
+                                    round(max(point.y for point in points) / valid_height, 3),
+                                ],
+                                "representative_colors": colors,
+                            }
+                        )
+                    history_summary = {
+                        "type": "rendered_plan_summary",
                         "prompt": valid_prompt,
                         "seed": valid_seed,
                         "iteration": iteration,
                         "goal_reached": sanitized_plan.goal_reached,
                         "completion_score": sanitized_plan.completion_score,
                         "canvas": {"width": int(valid_width), "height": int(valid_height)},
-                        "operations": [
-                            {
-                                "kind": "path",
-                                "id": s.id,
-                                "layer": s.layer_name,
-                                "points": [
-                                    [round(s.points[0].x / valid_width, 3), round(s.points[0].y / valid_height, 3)],
-                                    [round(s.points[-1].x / valid_width, 3), round(s.points[-1].y / valid_height, 3)],
-                                ],
-                                "brush": {
-                                    "profile": infer_brush_profile(s.brush_preset, is_eraser=s.is_eraser),
-                                    "color": s.color,
-                                    "size": round(s.size_px / min(valid_width, valid_height), 4),
-                                    "opacity": s.opacity,
-                                    "is_eraser": s.is_eraser,
-                                },
-                            }
-                            for s in sanitized_plan.strokes[:15]
-                        ],
+                        "layers": layer_summaries,
+                        "note": "Use the attached CURRENT CANVAS as authoritative visual state.",
                     }
                     # 画像を履歴へ複製すると、反復ごとに Base64 ペイロードが累積する。
                     # 次のキャンバス画像は常に最新リクエストへ個別添付し、履歴はテキスト要約だけ保持する。
                     self._conversation_history.append({"role": "user", "content": req_json})
                     self._conversation_history.append(
-                        {"role": "assistant", "content": json.dumps(history_program_dict, ensure_ascii=False)}
+                        {"role": "assistant", "content": json.dumps(history_summary, ensure_ascii=False)}
                     )
                     if len(self._conversation_history) > 8:
                         self._conversation_history = self._conversation_history[-8:]
@@ -732,6 +856,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                 width=valid_width,
                 height=valid_height,
                 palette_name=palette_name,
+                brush_profile=brush_profile,
             )
             self._log(
                 f"緊急救済成功: プロシージャル描画計画を生成しました (ストローク数: {len(fallback_plan.strokes)})"
@@ -763,16 +888,17 @@ class OpenAICompatiblePlanner(PlannerPort):
     ) -> Mapping[str, Any]:
         """400/422 のパラメータ非互換エラー（json_schema, temperature, max_tokens, response_format, reasoning_effort 等）および一時的障害を自動検知・適応して再試行する。"""
         current_payload = dict(payload)
-        max_param_retries = 5
+        max_param_retries = 3
 
         for p_attempt in range(max_param_retries):
             if cancelled is not None and cancelled():
                 raise LLMPlannerError("LLM API リクエストをキャンセルしました")
             try:
-                return self._post(current_payload)
+                return self._post(current_payload, cancelled=cancelled)
             except LLMPlannerError as exc:
                 err_text = str(exc).lower()
                 modified = False
+                response_format_adapted = False
 
                 # 0. 一時的サーバーエラー (429 Rate Limit, 500, 502, 503, 504, タイムアウト) への指数バックオフ再送
                 is_transient = any(
@@ -793,7 +919,11 @@ class OpenAICompatiblePlanner(PlannerPort):
                     self._log(
                         f"[一時通信エラー再試行] 一時的エラー ({exc}) を検知しました。{backoff_sec:.1f}s 後に再試行します..."
                     )
-                    time.sleep(backoff_sec)
+                    deadline = time.monotonic() + backoff_sec
+                    while time.monotonic() < deadline:
+                        if cancelled is not None and cancelled():
+                            raise LLMPlannerError("LLM API リクエストをキャンセルしました") from exc
+                        time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
                     continue
 
                 # 1. response_format: json_schema 非対応エラーの json_object / 除外への自動フォールバック
@@ -807,10 +937,12 @@ class OpenAICompatiblePlanner(PlannerPort):
                         )
                         current_payload["response_format"] = {"type": "json_object"}
                         modified = True
+                        response_format_adapted = True
                     else:
                         self._log("[パラメータ自動適応] モデルが response_format をサポートしていないため除外します")
                         current_payload.pop("response_format", None)
                         modified = True
+                        response_format_adapted = True
 
                 # 2. reasoning_effort 非対応エラーの自動パージ
                 if (
@@ -856,7 +988,8 @@ class OpenAICompatiblePlanner(PlannerPort):
 
                 # 6. response_format 一般非対応エラーの自動パージ
                 if (
-                    "response_format" in err_text
+                    not response_format_adapted
+                    and "response_format" in err_text
                     and any(kw in err_text for kw in ("unsupported", "not support", "invalid", "json_object"))
                     and "response_format" in current_payload
                 ):
@@ -914,9 +1047,13 @@ class OpenAICompatiblePlanner(PlannerPort):
 
                 raise
 
-        return self._post(current_payload)
+        raise LLMPlannerError("LLM API の互換パラメータ調整上限に達しました")
 
-    def _post(self, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+    def _post(
+        self,
+        payload: Mapping[str, Any],
+        cancelled: Callable[[], bool] | None = None,
+    ) -> Mapping[str, Any]:
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -937,7 +1074,26 @@ class OpenAICompatiblePlanner(PlannerPort):
         try:
             with self._opener(request, timeout=self.settings.timeout_seconds) as response:
                 status_code = getattr(response, "status", getattr(response, "code", 200))
-                raw = response.read(self.MAX_RESPONSE_BYTES + 1)
+                if getattr(response, "headers", None) is None:
+                    # 単純な互換transport／テストdoubleは1回read契約の場合がある。
+                    raw = response.read(self.MAX_RESPONSE_BYTES + 1)
+                else:
+                    chunks: list[bytes] = []
+                    received_bytes = 0
+                    while received_bytes <= self.MAX_RESPONSE_BYTES:
+                        if cancelled is not None and cancelled():
+                            raise LLMPlannerError("LLM API 応答の受信をキャンセルしました")
+                        read_size = min(64 * 1024, self.MAX_RESPONSE_BYTES + 1 - received_bytes)
+                        chunk = response.read(read_size)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        received_bytes += len(chunk)
+                        # Buffered HTTP responses return a short read at EOF. This also keeps
+                        # simple OpenAI-compatible transports that do not model EOF usable.
+                        if len(chunk) < read_size:
+                            break
+                    raw = b"".join(chunks)
         except _CrossOriginRedirectError as exc:
             self._log("エラー: 別オリジンへのリダイレクト拒否")
             raise LLMPlannerError("LLM API の別オリジンへのリダイレクトを拒否しました") from exc
@@ -963,8 +1119,8 @@ class OpenAICompatiblePlanner(PlannerPort):
             decoded_text = raw.decode("utf-8", errors="replace")
             decoded = json.loads(decoded_text)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            preview = _redact_sensitive_text(raw[:500].decode("utf-8", errors="replace"))
-            self._log(f"JSON デコードエラー: {exc}\n応答先頭 500 文字: {preview!r}")
+            response_digest = hashlib.blake2b(raw, digest_size=6).hexdigest()
+            self._log(f"JSON デコードエラー: {exc} (応答長={len(raw)} bytes, digest={response_digest})")
             raise LLMPlannerError("LLM API が JSON 応答を返しませんでした") from exc
 
         if not isinstance(decoded, Mapping):
@@ -995,28 +1151,14 @@ class OpenAICompatiblePlanner(PlannerPort):
                 # 思考プロセスのログ
                 reasoning = msg.get("reasoning_content") or msg.get("reasoning") or msg.get("thought")
                 if isinstance(reasoning, str) and reasoning.strip():
-                    r_preview = _redact_sensitive_text(reasoning.strip()[:300].replace("\n", " ")) + (
-                        "..." if len(reasoning) > 300 else ""
-                    )
-                    self._log(f"[思考プロセス (reasoning)] {len(reasoning)} 文字: {r_preview}")
+                    self._log(f"[思考プロセス (reasoning)] {len(reasoning)} 文字（本文はログへ記録しません）")
 
                 # 本文 content のプレビュー
                 content_val = msg.get("content")
                 if isinstance(content_val, str) and content_val.strip():
                     c_lines = content_val.strip().splitlines()
-                    head_lines = _redact_sensitive_text("\n".join(c_lines[:6]))
-                    tail_preview = (
-                        (
-                            "\n... [中略 "
-                            + str(len(c_lines) - 10)
-                            + " 行] ...\n"
-                            + _redact_sensitive_text("\n".join(c_lines[-4:]))
-                        )
-                        if len(c_lines) > 10
-                        else ""
-                    )
                     self._log(
-                        f"[LLM 応答本文プレビュー ({len(content_val)} 文字, {len(c_lines)} 行)]:\n{head_lines}{tail_preview}"
+                        f"[LLM 応答本文プレビュー] {len(content_val)} 文字, {len(c_lines)} 行（本文はログへ記録しません）"
                     )
 
         return decoded
@@ -1030,6 +1172,7 @@ def _system_instruction(
     height: float = 1000.0,
     prompt: str = "",
     palette_name: str = "anime",
+    brush_profile: str = "auto",
 ) -> str:
     """プロフェッショナルなデジタルイラスト作画戦略・レイヤー階層・空間アンカー・4層ライティングを含む高品質プロンプト。"""
     min_dim = min(width, height)
@@ -1042,6 +1185,7 @@ def _system_instruction(
     hl_glint_sz = "2.0 to 3.5 px (eye specular glints) / 6 to 16 px (hair halo & rim light)"
 
     prompt_lower = prompt.lower()
+    has_sakura = any(keyword in prompt_lower for keyword in ("sakura", "桜", "cherry blossom"))
     domain_guidance = ""
 
     if any(
@@ -1092,6 +1236,28 @@ def _system_instruction(
             f"   - Falling Petal Blizzard: Use particle operations with 'shape': 'petal' or scatter individual curved petal strokes drifting on wind (size_px: {detail_line_sz}, colors: #ffffff, #ffe6f0, #ffd0e2) across foreground and midground.\n"
             f"   - Luminous Rim Lighting & Cloud Edges: Pure glowing white/pale-gold rim highlights on sunny mountain peaks and top cloud rims (size_px: {hl_glint_sz}, colors: #ffffff, #fffde6).\n"
         )
+        if not has_sakura:
+            domain_guidance = (
+                domain_guidance.replace(
+                    "Landscape, Mountains, Clouds & Sakura Trees", "Landscape and Natural Environment"
+                )
+                .replace("Sakura Tree / Lake", "Tree / Lake")
+                .replace(" / Petal Swarm", "")
+                .replace(" with scattered drifting petals", "")
+                .replace("   - Sakura Blossom Canopy Clumps:", "   - Foliage Canopy Clumps:")
+                .replace("pink foliage", "foliage")
+                .replace("pink blossom canopy", "tree canopy")
+                .replace("Blossom Canopy Deep Shadows", "Foliage Canopy Deep Shadows")
+                .replace("Majestic Sakura Tree", "Majestic Foreground Tree")
+                .replace(
+                    "4. Layer 'Highlights' & 'FX' (Light Accents & Falling Petal Blizzard):\n",
+                    "4. Layer 'Highlights' & 'FX' (Subject-appropriate Light and Atmosphere):\n",
+                )
+                .replace(
+                    f"   - Falling Petal Blizzard: Use particle operations with 'shape': 'petal' or scatter individual curved petal strokes drifting on wind (size_px: {detail_line_sz}, colors: #ffffff, #ffe6f0, #ffd0e2) across foreground and midground.\n",
+                    "   - Use sparse subject-appropriate atmospheric accents; do not add petals unless requested.\n",
+                )
+            )
     elif any(
         k in prompt_lower
         for k in [
@@ -1188,6 +1354,24 @@ def _system_instruction(
             f"4. Layer 'Highlights': Dewdrops, petal edge rim highlights (size_px: {hl_glint_sz}, brush: 'Basic-5 Size', color: #ffffff).\n"
         )
 
+    has_character_subject = any(
+        keyword in prompt_lower
+        for keyword in ("girl", "boy", "woman", "man", "character", "anime", "人物", "少女", "少年")
+    )
+    has_natural_environment = any(
+        keyword in prompt_lower
+        for keyword in ("landscape", "mountain", "forest", "ocean", "garden", "山", "森", "海", "庭")
+    )
+    has_urban_environment = any(
+        keyword in prompt_lower for keyword in ("city", "street", "building", "skyline", "都市", "街", "ビル")
+    )
+    if has_character_subject and (has_natural_environment or has_urban_environment):
+        environment_name = "natural landscape" if has_natural_environment else "urban environment"
+        domain_guidance += (
+            f"\n[MIXED SCENE REQUIREMENT]\nKeep the character as the identifiable foreground subject while also drawing the requested {environment_name} in background and midground layers. "
+            "Do not replace either component with the other; reserve clear silhouette separation and value contrast.\n"
+        )
+
     progressive_section = ""
     if max_iterations > 1:
         if max_iterations == 2:
@@ -1203,7 +1387,7 @@ def _system_instruction(
                 )
                 phase_task = (
                     "Complete the artwork by layering shadow depths (Shading), drawing crisp expressive contours (Lineart), "
-                    "and scattering sparkling highlights / petals (Highlights/FX) over the existing base."
+                    "and adding sparse subject-appropriate highlights and atmosphere (Highlights/FX) over the existing base."
                 )
         elif max_iterations == 3:
             if iteration == 1:
@@ -1213,9 +1397,7 @@ def _system_instruction(
                 phase_title = "Step 2/3: 3D Form Sculpting, Ambient Occlusion & Shadows (Shading layer)"
                 phase_task = "Paint shadow crevices, cloud depth, muscle/cloth shading, and ambient occlusion over the base colors."
             else:
-                phase_title = (
-                    "Step 3/3 [FINAL]: Expressive Lineart, Highlights, Petal Scatter & Polish (Lineart/Highlights/FX)"
-                )
+                phase_title = "Step 3/3 [FINAL]: Expressive Lineart, Highlights & Subject-appropriate Polish (Lineart/Highlights/FX)"
                 phase_task = (
                     "Draw crisp structural lines, facial/branch details, glowing highlights, and finishing touches."
                 )
@@ -1234,8 +1416,8 @@ def _system_instruction(
                 phase_title = f"Step {iteration}/{max_iterations}: Deep Shadow Crevices & Structural Contours (Shading/Lineart layer)"
                 phase_task = "Add deep occlusion shadows and organic structural contours over the existing shapes."
             else:
-                phase_title = f"Step {iteration}/{max_iterations} [FINAL]: Fine Lineart, Highlights, Petals & Polish (Lineart/Highlights/FX)"
-                phase_task = "Finish the painting with sharp line details, sparkling highlights, falling petals, and lighting FX."
+                phase_title = f"Step {iteration}/{max_iterations} [FINAL]: Fine Lineart, Highlights & Polish (Lineart/Highlights/FX)"
+                phase_task = "Finish the painting with sharp line details, subject-appropriate highlights, and restrained lighting FX."
 
         progressive_section = (
             f"\n=== MULTI-STEP PROGRESSIVE DRAWING MODE ===\n"
@@ -1284,13 +1466,15 @@ def _system_instruction(
         f"   - Use fill (style: 'contour' / 'wash' / 'directional') with 'watercolor' / 'airbrush' for rich smooth volume, or medium/fine brush sizes ({form_shad_sz} for general volume, {detail_shad_sz} for crevices) with darker/cooler tones.\n"
         f"3. Layer 'Lineart' (Contours, Tree Anatomy & Fine Features):\n"
         f"   - Use dynamic crisp brush sizes ({main_line_sz} for outer silhouettes, {detail_line_sz} for fine eyes/lashes/nose/mouth/hair tips, preset: 'Ink-3 Gpen').\n"
-        f"4. Layer 'Highlights' & 'FX' (Specular Glints, Petal Swarms, Atmosphere - Blended with Addition):\n"
-        f"   - Use accent brush sizes ({hl_glint_sz}) with luminous colors for falling petals, cloud rim light, sun flecks, iris crescent light, and particle FX.\n"
+        f"4. Layer 'Highlights' & 'FX' (Specular Glints and Subject-appropriate Atmosphere - Blended with Addition):\n"
+        f"   - Use accent brush sizes ({hl_glint_sz}) with luminous colors for requested motifs, cloud rim light, sun flecks, iris crescent light, and sparse particle FX. Never add petals unless the prompt requests flowers or blossoms.\n"
         "5. Eraser Paths (`brush.is_eraser: true`):\n"
         '   - Add path operations with `"brush":{"profile":"eraser","is_eraser":true,...}` to sculpt contours, fix color bleeds, or carve highlights.\n'
         "   - Any size_px target in the art direction must be encoded as brush.size with brush.size_mode='px'; preset names map to brush.preset_hint. Prefer ratio sizes for resolution independence.\n\n"
         f"=== PALETTE DIRECTION: {palette_name.upper()} ===\n"
         f"Harmonize colors to match the '{palette_name}' aesthetic: prioritize cohesive color theory (warm lights, cool shadows, vibrant SSS accents), distinct value contrast, and radiant specular highlights.\n"
+        f"=== BRUSH OVERRIDE: {brush_profile.upper()} ===\n"
+        f"The UI-selected brush profile is '{brush_profile}'. Use it for normal operations; eraser operations remain erasers.\n"
         f"{domain_guidance}"
         f"{progressive_section}"
         f"{visual_feedback_section}\n"
@@ -1310,7 +1494,7 @@ def _system_instruction(
         '    {"kind":"fill","id":"base","layer":"Flats","style":"wash","polygon":[[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]],"brush":{"profile":"marker","color":"#3a7bd5","size":0.10}},\n'
         '    {"kind":"fill","id":"form-shadow","layer":"Shading","style":"contour","polygon":[[0.2,0.2],[0.8,0.2],[0.7,0.8],[0.25,0.75]],"brush":{"profile":"watercolor","color":"#203050","size":0.04,"opacity":0.55}},\n'
         '    {"kind":"path","id":"contour","layer":"Lineart","points":[[0.25,0.8,0.15],[0.5,0.2,0.95],[0.75,0.8,0.1]],"smooth":true,"brush":{"profile":"gpen","color":"#2c1810","size":0.005}},\n'
-        '    {"kind":"particles","id":"accents","layer":"FX","shape":"petal","bounds":[0.05,0.05,0.95,0.95],"count":30,"length":0.012,"angle_deg":90,"angle_jitter":35,"brush":{"profile":"gpen","color":"#ffffff","size":0.002}}\n'
+        '    {"kind":"particles","id":"accents","layer":"FX","shape":"sparkle","bounds":[0.05,0.05,0.95,0.95],"count":12,"length":0.012,"angle_deg":90,"angle_jitter":35,"brush":{"profile":"gpen","color":"#ffffff","size":0.002}}\n'
         "  ]\n"
         "}\n"
         "```\n"
@@ -1330,7 +1514,7 @@ def _system_instruction(
         "4. Composition: Establish large coherent silhouettes with fill, then soft form shadows on Shading with fill/contour, then tapered contour paths on Lineart and sparse particle accents on FX.\n"
         "5. Curves: Give path 2-12 meaningful control points [x,y,pressure]; the compiler creates continuous smooth geometry with ink pooling at corners.\n"
         "6. Goal Evaluation: Set goal_reached true only when the artwork is fully finished and composition, values, edges, and requested details are complete.\n"
-        "7. First character of output must be '{' or '```json'."
+        "7. First character of output must be '{'. Do not use Markdown fences."
     )
 
 
@@ -1883,7 +2067,7 @@ def _sanitize_and_rescue_program_dict(
     canvas_w: float = 1000.0,
     canvas_h: float = 1000.0,
 ) -> dict[str, Any]:
-    """LLM 出力辞書（strokes_summary、レイヤーネスト、簡易図形、不正な型、未知キー、ピクセル座標混在等）を完全な StrokeProgram 辞書へ整形・救出する。"""
+    """LLM 出力の表記揺れを正規化する。欠落したジオメトリ自体は創作しない。"""
     d = dict(value)
 
     # 1. canvas の安全な取得
@@ -2032,7 +2216,12 @@ def _sanitize_and_rescue_program_dict(
 
         op_id = str(item_d.get("id") or "").strip()
         if not op_id or op_id in seen_ids:
-            op_id = f"{op_id or 'op'}_{idx + 1}_{uuid.uuid4().hex[:4]}"
+            raw_fingerprint = json.dumps(item_d, ensure_ascii=True, sort_keys=True, default=str)
+            deterministic_suffix = uuid.uuid5(
+                uuid.NAMESPACE_URL,
+                f"ai-stroke/llm-rescue/{idx}/{raw_fingerprint}",
+            ).hex[:8]
+            op_id = f"{op_id or 'op'}_{idx + 1}_{deterministic_suffix}"
         seen_ids.add(op_id)
 
         layer_val = str(item_d.get("layer") or item_d.get("layer_name") or "").strip()
@@ -2145,14 +2334,10 @@ def _sanitize_and_rescue_program_dict(
                 elif "x1" in item_d and "y1" in item_d and "x2" in item_d and "y2" in item_d:
                     raw_pts = [[item_d["x1"], item_d["y1"]], [item_d["x2"], item_d["y2"]]]
                 else:
-                    raw_pts = [[0.1, 0.1], [0.9, 0.9]]
+                    continue
             pts = _norm_pts(raw_pts)
             if len(pts) < 2:
-                if len(pts) == 1:
-                    p0 = pts[0]
-                    pts.append([min(1.0, p0[0] + 0.002), min(1.0, p0[1] + 0.002), p0[2]])
-                else:
-                    pts = [[0.1, 0.1, 0.8], [0.9, 0.9, 0.8]]
+                continue
             raw_closed = item_d.get("closed", False)
             raw_smooth = item_d.get("smooth", True)
             clean_ops.append(
@@ -2174,25 +2359,15 @@ def _sanitize_and_rescue_program_dict(
                     ex, ey = item_d["end_xy"]
                     raw_poly = [[sx, sy], [ex, sy], [ex, ey], [sx, ey]]
                 else:
-                    raw_poly = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]]
+                    continue
             poly = _norm_pts(raw_poly)
             if len(poly) < 3:
-                if len(poly) == 2:
-                    p0, p1 = poly[0], poly[1]
-                    poly = [p0, [p1[0], p0[1], 0.8], p1, [p0[0], p1[1], 0.8]]
-                elif len(poly) == 1:
-                    p0 = poly[0]
-                    poly = [
-                        p0,
-                        [min(1.0, p0[0] + 0.1), p0[1], 0.8],
-                        [min(1.0, p0[0] + 0.1), min(1.0, p0[1] + 0.1), 0.8],
-                        [p0[0], min(1.0, p0[1] + 0.1), 0.8],
-                    ]
-                else:
-                    poly = [[0.0, 0.0, 0.8], [1.0, 0.0, 0.8], [1.0, 1.0, 0.8], [0.0, 1.0, 0.8]]
+                continue
             style_str = str(item_d.get("style", "wash")).strip().lower()
-            if style_str not in {"wash", "scanline", "feathered", "contour"}:
+            if style_str not in {"wash", "scanline", "feathered", "contour", "radial", "directional"}:
                 style_str = "wash"
+            angle_value = item_d.get("angle_deg", item_d.get("angle", 0.0))
+            angle_deg = float(angle_value) if isinstance(angle_value, (int, float, str)) else 0.0
             clean_ops.append(
                 {
                     "kind": "fill",
@@ -2202,6 +2377,7 @@ def _sanitize_and_rescue_program_dict(
                     "brush": clean_brush,
                     "spacing": max(0.2, min(1.0, float(item_d.get("spacing", 0.72)))),
                     "style": style_str,
+                    "angle_deg": angle_deg % 360.0,
                 }
             )
         elif kind == "hatch":
@@ -2212,14 +2388,10 @@ def _sanitize_and_rescue_program_dict(
                     ex, ey = item_d["end_xy"]
                     raw_poly = [[sx, sy], [ex, sy], [ex, ey], [sx, ey]]
                 else:
-                    raw_poly = [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]]
+                    continue
             poly = _norm_pts(raw_poly)
             if len(poly) < 3:
-                if len(poly) == 2:
-                    p0, p1 = poly[0], poly[1]
-                    poly = [p0, [p1[0], p0[1], 0.8], p1, [p0[0], p1[1], 0.8]]
-                else:
-                    poly = [[0.1, 0.1, 0.8], [0.9, 0.1, 0.8], [0.9, 0.9, 0.8], [0.1, 0.9, 0.8]]
+                continue
             raw_cross = item_d.get("cross", False)
             clean_ops.append(
                 {
@@ -2260,24 +2432,7 @@ def _sanitize_and_rescue_program_dict(
             )
 
     if not clean_ops:
-        clean_ops = [
-            {
-                "kind": "fill",
-                "id": f"base_fill_{uuid.uuid4().hex[:6]}",
-                "layer": "Flats",
-                "polygon": [[0.0, 0.0, 0.8], [1.0, 0.0, 0.8], [1.0, 1.0, 0.8], [0.0, 1.0, 0.8]],
-                "brush": {
-                    "profile": "watercolor",
-                    "color": "#fce4ec",
-                    "size": 0.1,
-                    "size_mode": "ratio",
-                    "opacity": 0.9,
-                    "is_eraser": False,
-                },
-                "spacing": 0.72,
-                "style": "wash",
-            }
-        ]
+        raise PlanValidationError("有効なジオメトリを持つ operation がありません")
 
     return {
         "schema_version": 2,
@@ -2319,6 +2474,10 @@ def _mapping_to_drawing_plan(
     height: float,
 ) -> DrawingPlan:
     """v2 StrokeProgram を優先し、strokes_summary や既存 v1 DrawingPlan も互換入力として受理する。"""
+    unwrapped = _unwrap_drawing_container(value)
+    if unwrapped is not None:
+        value = unwrapped
+
     # 1. 既存 v1 strokes 形式で純粋な DrawingPlan の場合
     if (
         "strokes" in value
@@ -2344,7 +2503,7 @@ def _mapping_to_drawing_plan(
             program = replace(
                 program,
                 prompt=prompt or program.prompt,
-                seed=seed if seed > 0 else program.seed,
+                seed=seed,
                 canvas_width=width,
                 canvas_height=height,
             )
@@ -2358,7 +2517,7 @@ def _mapping_to_drawing_plan(
     program = replace(
         program,
         prompt=prompt or program.prompt,
-        seed=seed if seed > 0 else program.seed,
+        seed=seed,
         canvas_width=width,
         canvas_height=height,
     )
@@ -2443,8 +2602,8 @@ def _plan_from_response(
     # どの候補からも完全な DrawingPlan が得られなかった場合
     first_text = candidates[0][1]
     if log_func is not None:
-        log_preview = first_text[:200] + ("..." if len(first_text) > 200 else "")
-        log_func(f"LLM 応答パース試行 (テキスト先頭):\n{log_preview}")
+        response_digest = hashlib.blake2b(first_text.encode("utf-8"), digest_size=6).hexdigest()
+        log_func(f"LLM 応答パース再試行: {len(first_text)} 文字, digest={response_digest}")
 
     try:
         value = _extract_json_object(first_text, log_func=log_func)
@@ -2703,19 +2862,6 @@ def _sanitize_repaired_dict(val: Mapping[str, Any]) -> dict[str, Any] | None:
                     and not isinstance(p[1], bool)
                 ):
                     clean_pts.append(list(p))
-            if len(clean_pts) == 1:
-                p0 = clean_pts[0]
-                if isinstance(p0, Mapping):
-                    clean_pts.append(
-                        {
-                            "x": float(p0.get("x", 0.0)) + 1.0,
-                            "y": float(p0.get("y", 0.0)) + 1.0,
-                            "pressure": float(p0.get("pressure", 0.5)),
-                            "time_ms": int(p0.get("time_ms", 0)) + 10,
-                        }
-                    )
-                else:
-                    clean_pts.append([float(p0[0]) + 1.0, float(p0[1]) + 1.0, 0.8, 10])
             if len(clean_pts) >= 2:
                 st_clean = dict(st)
                 st_clean["points"] = clean_pts
@@ -3148,6 +3294,68 @@ def _validate_and_sanitize_plan(
         canvas_height=height,
         goal_reached=goal_reached,
         completion_score=completion_score,
+    )
+
+
+def _apply_llm_style_constraints(
+    plan: DrawingPlan,
+    *,
+    brush_profile: str,
+    palette_name: str,
+) -> DrawingPlan:
+    """UI で選んだブラシとパレットを、モデルの自由記述より優先して確実に適用する。"""
+    normalized_profile = canonical_brush_profile(brush_profile)
+    recolored = recolor_strokes_to_palette(list(plan.strokes), palette_name)
+    constrained: list[Stroke] = []
+    for stroke in recolored:
+        if normalized_profile == "auto" or stroke.is_eraser:
+            constrained.append(stroke)
+            continue
+        point_count = len(stroke.points)
+        constrained_points = tuple(
+            StrokePoint(
+                point.x,
+                point.y,
+                pressure_profile(
+                    index / max(1, point_count - 1),
+                    normalized_profile,
+                    base=point.pressure,
+                ),
+                point.time_ms,
+            )
+            for index, point in enumerate(stroke.points)
+        )
+        constrained.append(
+            Stroke(
+                id=stroke.id,
+                points=constrained_points,
+                brush_preset=brush_preset_for_profile(normalized_profile),
+                color=stroke.color,
+                size_px=stroke.size_px,
+                layer_name=stroke.layer_name,
+                opacity=stroke.opacity,
+                is_eraser=False,
+            )
+        )
+    metadata = dict(plan.metadata)
+    metadata["style_constraints"] = {
+        "brush_profile": normalized_profile,
+        "palette": palette_name,
+        "palette_locked": True,
+    }
+    return DrawingPlan(
+        prompt=plan.prompt,
+        seed=plan.seed,
+        strokes=tuple(constrained),
+        title=plan.title,
+        iteration=plan.iteration,
+        layers=plan.layers,
+        request_canvas_image=plan.request_canvas_image,
+        metadata=metadata,
+        canvas_width=plan.canvas_width,
+        canvas_height=plan.canvas_height,
+        goal_reached=plan.goal_reached,
+        completion_score=plan.completion_score,
     )
 
 

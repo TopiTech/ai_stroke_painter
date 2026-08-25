@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import contextlib
+from dataclasses import replace
 import datetime
 import json
 import os
@@ -15,12 +16,21 @@ import traceback
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
-from .domain import LAYER_RENDER_ORDER, DrawingPlan, Stroke, split_color_alpha
-from .image_converter import MAX_ENCODED_IMAGE_BYTES
+from .domain import (
+    LAYER_RENDER_ORDER,
+    MAX_PLAN_STROKES,
+    DrawingPlan,
+    Stroke,
+    combine_drawing_plans,
+    materialize_render_options,
+    split_color_alpha,
+)
+from .image_converter import MAX_ENCODED_IMAGE_BYTES, _image_dimensions_from_header
 from .krita_adapter import KritaCanvasAdapter
 from .llm_planner import OpenAICompatiblePlanner, OpenAICompatibleSettings
 from .planner import RuleBasedPlanner
 from .ports import PlannerPort
+from .procedural.base import sample_strokes_by_priority
 from .qt_compat import (
     QApplication,
     QBrush,
@@ -32,6 +42,7 @@ from .qt_compat import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QImage,
     QInputDialog,
     QLabel,
     QLineEdit,
@@ -49,6 +60,8 @@ from .qt_compat import (
     QVBoxLayout,
     QWidget,
     antialiasing_render_hint,
+    argb32_image_format,
+    composition_mode_destination_out,
     composition_mode_multiply,
     composition_mode_plus,
     composition_mode_source_over,
@@ -57,6 +70,7 @@ from .qt_compat import (
     round_cap_style,
     round_join_style,
 )
+from .quality import evaluate_plan_quality
 from .storage import save_plan, save_svg
 
 MAX_REFERENCE_IMAGE_BYTES = MAX_ENCODED_IMAGE_BYTES
@@ -64,8 +78,12 @@ RENDER_WAIT_TIMEOUT_SECONDS = 15 * 60
 
 
 def _is_plan_goal_reached(plan: DrawingPlan) -> bool:
-    """完成度スコアを参考値に留め、明示された完了判定だけを採用する。"""
-    return bool(plan.goal_reached or plan.metadata.get("goal_reached", False) is True)
+    """モデル自己申告だけでなく、独立した品質検査にも合格した場合だけ完成とする。"""
+    explicit_goal = bool(plan.goal_reached or plan.metadata.get("goal_reached", False) is True)
+    if not explicit_goal or plan.completion_score < 0.85 or not plan.strokes:
+        return False
+    report = evaluate_plan_quality(plan)
+    return report.score >= 0.70 and report.out_of_bounds_points == 0
 
 
 if TYPE_CHECKING:
@@ -182,6 +200,7 @@ class PreviewWidget(QWidget):
         self._canvas_height: float = 1000.0
         self._size_multiplier: float = 1.0
         self._opacity_multiplier: float = 1.0
+        self._layer_mode: str = "multi_layer"
         self.setMinimumHeight(160)
         self.setMaximumHeight(200)
 
@@ -197,10 +216,14 @@ class PreviewWidget(QWidget):
         size_multiplier: float = 1.0,
         opacity_multiplier: float = 1.0,
         accumulate: bool = False,
+        layer_mode: str = "multi_layer",
     ) -> None:
         self._plan = plan
         self._size_multiplier = float(size_multiplier)
         self._opacity_multiplier = float(opacity_multiplier)
+        self._layer_mode = (
+            layer_mode if layer_mode in {"multi_layer", "single_layer", "active_layer"} else "multi_layer"
+        )
         if plan is None:
             self._accumulated_strokes.clear()
         elif accumulate:
@@ -269,88 +292,127 @@ class PreviewWidget(QWidget):
         if hasattr(painter, "drawRect"):
             painter.drawRect(rx, ry, rw, rh)
 
-        # 3. ストロークの精密描画（レイヤー順ソート、レイヤーブレンドモード反映、消しゴム対応）
+        # 3. ストロークの精密描画。multi layer はレイヤー別の透明バッファへ描き、
+        # 消しゴムをそのレイヤーだけに適用してから Krita と同じ順序で合成する。
         cap_round = round_cap_style()
         join_round = round_join_style()
         mode_source_over = composition_mode_source_over(QPainter)
+        mode_destination_out = composition_mode_destination_out(QPainter)
         mode_multiply = composition_mode_multiply(QPainter)
         mode_plus = composition_mode_plus(QPainter)
 
-        # レイヤー階層順にストロークをソートして描画（Krita レイヤー順を忠実に再現）
-        sorted_strokes = sorted(
-            strokes,
-            key=lambda s: LAYER_RENDER_ORDER.get(s.layer_name, 35),
+        sorted_strokes = (
+            sorted(strokes, key=lambda stroke: LAYER_RENDER_ORDER.get(stroke.layer_name, 35))
+            if self._layer_mode == "multi_layer"
+            else list(strokes)
         )
 
-        for stroke in sorted_strokes:
-            pts = stroke.points
-            if not pts:
-                continue
+        def layer_blend_mode(layer_name: str) -> Any:
+            if self._layer_mode != "multi_layer":
+                return mode_source_over
+            lowered = layer_name.lower()
+            if "shading" in lowered or "shadow" in lowered:
+                return mode_multiply
+            if "highlight" in lowered or "fx" in lowered or "glow" in lowered:
+                return mode_plus
+            return mode_source_over
 
+        def draw_stroke(target: Any, stroke: Stroke, *, isolated_layer: bool = True) -> None:
+            points = stroke.points
+            if not points:
+                return
             base_size = max(0.5, float(stroke.size_px) * self._size_multiplier)
-            pen_w = max(1.0, base_size * scale)
-
-            # レイヤー合成モードの決定
-            lname = (stroke.layer_name or "").lower()
-            if stroke.is_eraser:
-                blend_mode = mode_source_over
-                col = QColor("#ffffff")
-            else:
-                if "shading" in lname or "shadow" in lname:
-                    blend_mode = mode_multiply
-                elif "highlight" in lname or "fx" in lname or "glow" in lname:
-                    blend_mode = mode_plus
-                else:
-                    blend_mode = mode_source_over
-
-                rgb_color, color_alpha = split_color_alpha(stroke.color)
-                col = QColor(rgb_color)
-                eff_op = max(0.0, min(1.0, float(stroke.opacity) * self._opacity_multiplier * color_alpha))
-                if eff_op < 1.0 and hasattr(col, "setAlphaF"):
-                    col.setAlphaF(eff_op)
-
-            if hasattr(painter, "setCompositionMode"):
+            pen_width = max(1.0, base_size * scale)
+            rgb_color, color_alpha = split_color_alpha(stroke.color)
+            color = QColor(rgb_color)
+            effective_opacity = max(
+                0.0,
+                min(1.0, float(stroke.opacity) * self._opacity_multiplier * color_alpha),
+            )
+            if hasattr(color, "setAlphaF"):
+                color.setAlphaF(effective_opacity)
+            if hasattr(target, "setCompositionMode"):
                 with contextlib.suppress(Exception):
-                    painter.setCompositionMode(blend_mode)
+                    if stroke.is_eraser:
+                        target.setCompositionMode(mode_destination_out)
+                    elif isolated_layer:
+                        target.setCompositionMode(mode_source_over)
 
-            pen = QPen(col, pen_w)
+            pen = QPen(color, pen_width)
             if hasattr(pen, "setCapStyle"):
                 pen.setCapStyle(cap_round)
             if hasattr(pen, "setJoinStyle"):
                 pen.setJoinStyle(join_round)
 
-            is_dot = len(pts) == 1 or (len(pts) == 2 and pts[0].x == pts[1].x and pts[0].y == pts[1].y)
+            is_dot = len(points) == 1 or (
+                len(points) == 2 and points[0].x == points[1].x and points[0].y == points[1].y
+            )
             if is_dot:
-                p0 = pts[0]
-                px = ox + p0.x * scale
-                py = oy + p0.y * scale
-                eff_pt_w = max(1.0, pen_w * max(0.2, p0.pressure))
-                radius = eff_pt_w * 0.5
-                painter.setPen(pen)
-                if hasattr(painter, "drawEllipse"):
-                    if hasattr(painter, "setBrush") and QBrush is not None and callable(QBrush):
-                        painter.setBrush(QBrush(col))
+                point = points[0]
+                px = ox + point.x * scale
+                py = oy + point.y * scale
+                effective_width = max(1.0, pen_width * max(0.2, point.pressure))
+                radius = effective_width * 0.5
+                target.setPen(pen)
+                if hasattr(target, "drawEllipse"):
+                    if hasattr(target, "setBrush") and QBrush is not None and callable(QBrush):
+                        target.setBrush(QBrush(color))
                     if QPointF is not None and callable(QPointF):
-                        painter.drawEllipse(QPointF(px, py), radius, radius)
+                        target.drawEllipse(QPointF(px, py), radius, radius)
                     else:
-                        painter.drawEllipse(int(px - radius), int(py - radius), int(radius * 2), int(radius * 2))
+                        target.drawEllipse(int(px - radius), int(py - radius), int(radius * 2), int(radius * 2))
                 else:
-                    painter.drawLine(int(px), int(py), int(px), int(py))
-            else:
-                for p0, p1 in zip(pts, pts[1:], strict=False):
-                    avg_press = (p0.pressure + p1.pressure) * 0.5
-                    eff_line_w = max(1.0, pen_w * avg_press)
-                    if hasattr(pen, "setWidthF"):
-                        pen.setWidthF(eff_line_w)
-                    elif hasattr(pen, "setWidth"):
-                        pen.setWidth(max(1, int(round(eff_line_w))))
-                    painter.setPen(pen)
-                    painter.drawLine(
-                        int(round(ox + p0.x * scale)),
-                        int(round(oy + p0.y * scale)),
-                        int(round(ox + p1.x * scale)),
-                        int(round(oy + p1.y * scale)),
-                    )
+                    target.drawLine(int(px), int(py), int(px), int(py))
+                return
+
+            for first, second in zip(points, points[1:], strict=False):
+                average_pressure = (first.pressure + second.pressure) * 0.5
+                effective_width = max(1.0, pen_width * average_pressure)
+                if hasattr(pen, "setWidthF"):
+                    pen.setWidthF(effective_width)
+                elif hasattr(pen, "setWidth"):
+                    pen.setWidth(max(1, int(round(effective_width))))
+                target.setPen(pen)
+                target.drawLine(
+                    int(round(ox + first.x * scale)),
+                    int(round(oy + first.y * scale)),
+                    int(round(ox + second.x * scale)),
+                    int(round(oy + second.y * scale)),
+                )
+
+        can_buffer_layers = (
+            QImage is not None
+            and callable(QImage)
+            and QPainter is not None
+            and callable(QPainter)
+            and hasattr(painter, "drawImage")
+        )
+        if can_buffer_layers:
+            grouped: dict[str, list[Stroke]] = {}
+            for stroke in sorted_strokes:
+                group_name = stroke.layer_name if self._layer_mode == "multi_layer" else "__single_layer__"
+                grouped.setdefault(group_name, []).append(stroke)
+            for group_name, layer_strokes in grouped.items():
+                image: Any = QImage(max(1, int(round(w))), max(1, int(round(h))), argb32_image_format(QImage))
+                image.fill(0)
+                layer_painter: Any = QPainter(image)
+                try:
+                    if hasattr(layer_painter, "setRenderHint"):
+                        with contextlib.suppress(Exception):
+                            layer_painter.setRenderHint(antialiasing_render_hint())
+                    for stroke in layer_strokes:
+                        draw_stroke(layer_painter, stroke)
+                finally:
+                    layer_painter.end()
+                if hasattr(painter, "setCompositionMode"):
+                    painter.setCompositionMode(layer_blend_mode(group_name))
+                painter.drawImage(0, 0, image)
+        else:
+            # 軽量テスト painter など、オフスクリーン画像を扱えない実装の互換経路。
+            for stroke in sorted_strokes:
+                if hasattr(painter, "setCompositionMode") and not stroke.is_eraser:
+                    painter.setCompositionMode(layer_blend_mode(stroke.layer_name))
+                draw_stroke(painter, stroke, isolated_layer=False)
 
         if hasattr(painter, "setCompositionMode"):
             with contextlib.suppress(Exception):
@@ -480,6 +542,13 @@ class PlanWorker(QObject):
     def isRunning(self) -> bool:  # noqa: N802
         return self._is_running or (self._thread is not None and self._thread.is_alive())
 
+    def wait(self, timeout_ms: int = 1_500) -> bool:
+        thread = self._thread
+        if thread is None:
+            return True
+        thread.join(max(0, timeout_ms) / 1000.0)
+        return not thread.is_alive()
+
     def start(self) -> None:
         if self.isRunning():
             return
@@ -504,6 +573,8 @@ class PlanWorker(QObject):
                 f"[ワーカー開始] Total Iterations: {self.max_iterations}, Strokes: {count_label}{goal_label}, Target Size: {self.width:.0f}x{self.height:.0f}, Palette: {self.palette_name}, Profile: {self.brush_profile}"
             )
 
+            session_stroke_count = 0
+            session_plans: list[DrawingPlan] = []
             for iter_idx in range(1, self.max_iterations + 1):
                 if self.is_cancelled():
                     self.debug_log.emit("[ワーカー] 処理が中断されました")
@@ -537,6 +608,42 @@ class PlanWorker(QObject):
                     cancelled=self.is_cancelled,
                 )
 
+                remaining_steps = self.max_iterations - iter_idx + 1
+                remaining_session_budget = MAX_PLAN_STROKES - session_stroke_count
+                iteration_budget = max(1, remaining_session_budget // remaining_steps)
+                if len(current_plan.strokes) > iteration_budget:
+                    source_stroke_count = len(current_plan.strokes)
+                    sampled_strokes = tuple(sample_strokes_by_priority(list(current_plan.strokes), iteration_budget))
+                    budget_metadata = dict(current_plan.metadata)
+                    budget_metadata["session_budget"] = {
+                        "maximum_strokes": MAX_PLAN_STROKES,
+                        "iteration_budget": iteration_budget,
+                        "source_stroke_count": source_stroke_count,
+                    }
+                    current_plan = replace(
+                        current_plan,
+                        strokes=sampled_strokes,
+                        metadata=budget_metadata,
+                    )
+                    self.debug_log.emit(
+                        f"[セッション品質予算] ステップ {iter_idx} を {len(sampled_strokes)}/{source_stroke_count} 本へ調整しました"
+                    )
+                session_stroke_count += len(current_plan.strokes)
+
+                # Goal判定は仕上げ差分だけでなく、それまでに描画した全反復の累積品質で行う。
+                # 現ステップへ結果を記録して、UI側の最終保存判定にも同じ結論を渡す。
+                session_goal_met = False
+                if self.goal_mode:
+                    session_plans.append(current_plan)
+                    cumulative_goal_plan = combine_drawing_plans(session_plans)
+                    session_goal_met = _is_plan_goal_reached(cumulative_goal_plan)
+                    if session_goal_met:
+                        goal_metadata = dict(current_plan.metadata)
+                        goal_metadata["session_goal_reached"] = True
+                        goal_metadata["session_stroke_count"] = session_stroke_count
+                        current_plan = replace(current_plan, metadata=goal_metadata)
+                        session_plans[-1] = current_plan
+
                 if self.is_cancelled():
                     self.debug_log.emit("[ワーカー] 描画計画受領後にキャンセルを確認しました")
                     return
@@ -563,8 +670,7 @@ class PlanWorker(QObject):
                     raise RuntimeError(self._render_error)
 
                 # Goal モード時の目標達成判定による早期自律完了
-                is_goal_met = _is_plan_goal_reached(current_plan)
-                if self.goal_mode and is_goal_met and iter_idx >= 1:
+                if session_goal_met and iter_idx >= 1:
                     if not self._mark_completed_successfully():
                         return
                     self.iteration_progress.emit(
@@ -601,6 +707,7 @@ class ApiConnectionWorker(QObject):
         self.planner = planner
         self._thread: threading.Thread | None = None
         self._is_running = False
+        self._cancelled = False
         self.planner.log_callback = self.debug_log.emit
 
     def start(self) -> None:
@@ -613,11 +720,24 @@ class ApiConnectionWorker(QObject):
     def isRunning(self) -> bool:  # noqa: N802
         return self._is_running or (self._thread is not None and self._thread.is_alive())
 
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def wait(self, timeout_ms: int = 1_500) -> bool:
+        thread = self._thread
+        if thread is None:
+            return True
+        thread.join(max(0, timeout_ms) / 1000.0)
+        return not thread.is_alive()
+
     def _run(self) -> None:
         try:
-            self.succeeded.emit(self.planner.test_connection())
+            result = self.planner.test_connection()
+            if not self._cancelled:
+                self.succeeded.emit(result)
         except Exception as exc:
-            self.failed.emit(str(exc) or exc.__class__.__name__)
+            if not self._cancelled:
+                self.failed.emit(str(exc) or exc.__class__.__name__)
         finally:
             self._is_running = False
             self.finished.emit()
@@ -672,6 +792,10 @@ class AIStrokePainterDocker(DockWidget):
         self._canvas: Any | None = None
         self._image_bytes: bytes | None = None
         self._last_plan: DrawingPlan | None = None
+        self._session_plans: list[DrawingPlan] = []
+        self._pending_plan: DrawingPlan | None = None
+        self._applying_pending = False
+        self._closing = False
 
         container = QWidget()
         root_layout = QVBoxLayout(container)
@@ -727,6 +851,11 @@ class AIStrokePainterDocker(DockWidget):
         self.load_image_btn.clicked.connect(self._select_reference_image)
         self.clear_image_btn.clicked.connect(self._clear_reference_image)
         image_layout.addLayout(img_btn_row)
+        self.image_privacy_label = QLabel(
+            "LLM / Vision モードでは、参照画像を最大1024pxへ縮小し、位置・作者等のメタデータを除去して外部APIへ送信します。"
+        )
+        self.image_privacy_label.setWordWrap(True)
+        image_layout.addWidget(self.image_privacy_label)
 
         img_params_layout = QFormLayout()
         self.edge_threshold = QDoubleSpinBox()
@@ -872,7 +1001,9 @@ class AIStrokePainterDocker(DockWidget):
         self.layer_mode.addItem("マルチレイヤー分割 (Draft/Flats/Lineart/etc)", "multi_layer")
         self.layer_mode.addItem("現在のアクティブレイヤーに直接描画", "active_layer")
         self.layer_mode.addItem("単一の新規レイヤーにまとめて描画", "single_layer")
-        self.layer_mode.setToolTip("ストロークをレイヤー別に自動分割するか、単一レイヤーに描画するかを選択します")
+        self.layer_mode.setToolTip(
+            "マルチレイヤーが推奨です。アクティブレイヤー直接描画は安全な取消のため画素スナップショットを取得します。"
+        )
         layer_row.addWidget(self.layer_mode)
         brush_form.addRow("レイヤー出力", layer_row)
 
@@ -993,6 +1124,11 @@ class AIStrokePainterDocker(DockWidget):
         save_layout.addWidget(self.save_svg_chk)
         root_layout.addLayout(save_layout)
 
+        self.confirm_before_apply = QCheckBox("適用前にプレビューを確認")
+        self.confirm_before_apply.setChecked(True)
+        self.confirm_before_apply.setToolTip("生成計画を確認してから「キャンバスへ適用」を押す安全モード")
+        root_layout.addWidget(self.confirm_before_apply)
+
         debug_toggle_layout = QHBoxLayout()
         self.debug_mode_chk = QCheckBox("🐞 デバッグモード (詳細ログを表示)")
         self.debug_mode_chk.setChecked(False)
@@ -1033,34 +1169,41 @@ class AIStrokePainterDocker(DockWidget):
         root_layout.addWidget(self.debug_box)
 
         # 10. 描画・停止ボタン
-        self.run_btn = QPushButton("🎨 AIストロークを描画")
-        self.stop_btn = QPushButton("⏹ 停止")
+        self.run_btn = QPushButton("プレビュー生成")
+        self.apply_btn = QPushButton("キャンバスへ適用")
+        self.apply_btn.setEnabled(False)
+        self.stop_btn = QPushButton("停止")
         self.stop_btn.setEnabled(False)
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(self.run_btn)
+        btn_layout.addWidget(self.apply_btn)
         btn_layout.addWidget(self.stop_btn)
-        root_layout.addLayout(btn_layout)
 
         # 11. プログレスバー & ステータス
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
-        root_layout.addWidget(self.progress)
         self.status = QLabel("待機中: プロンプトまたはプリセットを選んで描画を開始してください")
         self.status.setWordWrap(True)
-        root_layout.addWidget(self.status)
 
         root_layout.addStretch(1)
         scroll_area = QScrollArea(self)
         scroll_area.setWidgetResizable(True)
         scroll_area.setWidget(container)
-        self.setWidget(scroll_area)
+        dock_container = QWidget(self)
+        dock_layout = QVBoxLayout(dock_container)
+        dock_layout.addWidget(scroll_area)
+        dock_layout.addLayout(btn_layout)
+        dock_layout.addWidget(self.progress)
+        dock_layout.addWidget(self.status)
+        self.setWidget(dock_container)
 
         # 設定の復元
         self._load_settings()
 
         # イベント接続
         self.run_btn.clicked.connect(self.run)
+        self.apply_btn.clicked.connect(self._apply_pending_plan)
         self.stop_btn.clicked.connect(self.cancel)
         self.planner_mode.currentIndexChanged.connect(self._update_planner_settings_state)
         self.brush_size_multiplier.valueChanged.connect(self._update_preview_multipliers)
@@ -1070,6 +1213,26 @@ class AIStrokePainterDocker(DockWidget):
     def canvasChanged(self, canvas: Any) -> None:  # noqa: N802
         """Kritaからキャンバス切り替えイベント通知を受け取る (DockWidgetの必須抽象メソッド)。"""
         self._canvas = canvas
+
+    def closeEvent(self, event: Any) -> None:  # noqa: N802
+        """設定を保存し、バックグラウンド処理と描画セッションを安全に終了する。"""
+        self._closing = True
+        self._save_settings()
+        worker = _get_attr(self, "_worker")
+        if worker is not None:
+            if hasattr(worker, "cancel"):
+                worker.cancel()
+            if hasattr(worker, "wait"):
+                worker.wait(1_500)
+        connection_worker = _get_attr(self, "_connection_worker")
+        if connection_worker is not None:
+            if hasattr(connection_worker, "cancel"):
+                connection_worker.cancel()
+            if hasattr(connection_worker, "wait"):
+                connection_worker.wait(1_500)
+        self._finish_canvas_session(False)
+        with contextlib.suppress(Exception):
+            super().closeEvent(event)
 
     def _update_preview_multipliers(self, *_args: Any) -> None:
         prev = _get_attr(self, "preview")
@@ -1125,6 +1288,7 @@ class AIStrokePainterDocker(DockWidget):
         prof_w = _get_attr(self, "brush_profile")
         bs_w = _get_attr(self, "brush_size_multiplier")
         op_w = _get_attr(self, "opacity_multiplier")
+        auto_count_w = _get_attr(self, "auto_count")
 
         data = {
             "prompt": prompt_w.toPlainText() if prompt_w is not None and hasattr(prompt_w, "toPlainText") else "",
@@ -1133,6 +1297,9 @@ class AIStrokePainterDocker(DockWidget):
             "brush_profile": prof_w.currentData() if prof_w is not None and hasattr(prof_w, "currentData") else "auto",
             "brush_size": bs_w.value() if bs_w is not None and hasattr(bs_w, "value") else 1.0,
             "opacity": op_w.value() if op_w is not None and hasattr(op_w, "value") else 100,
+            "auto_count": bool(auto_count_w.isChecked())
+            if auto_count_w is not None and hasattr(auto_count_w, "isChecked")
+            else False,
             "custom": True,
         }
 
@@ -1227,7 +1394,7 @@ class AIStrokePainterDocker(DockWidget):
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(loaded, f, ensure_ascii=False, indent=2)
-            self._log_debug(f"[プリセット出力成功] {file_path}")
+            self._log_debug(f"[プリセット出力成功] {Path(file_path).name}")
             QMessageBox.information(self, "プリセット出力", f"カスタムプリセットを出力しました:\n{file_path}")
         except Exception as exc:
             self._log_debug(f"[プリセット出力ファイル保存失敗] {exc}")
@@ -1276,6 +1443,12 @@ class AIStrokePainterDocker(DockWidget):
         """全設定値を標準デフォルト値にリセットする。"""
         if not _confirm(self, "設定リセット", "すべての設定を初期値に戻しますか？"):
             return
+        w = _get_attr(self, "planner_mode")
+        if w is not None and hasattr(w, "setCurrentIndex"):
+            w.setCurrentIndex(0)
+        w = _get_attr(self, "api_key")
+        if w is not None and hasattr(w, "clear"):
+            w.clear()
         w = _get_attr(self, "prompt")
         if w is not None and hasattr(w, "setPlainText"):
             w.setPlainText("anime girl portrait, delicate eyes, flowing hair")
@@ -1369,6 +1542,9 @@ class AIStrokePainterDocker(DockWidget):
         w = _get_attr(self, "save_svg_chk")
         if w is not None and hasattr(w, "setChecked"):
             w.setChecked(True)
+        w = _get_attr(self, "confirm_before_apply")
+        if w is not None and hasattr(w, "setChecked"):
+            w.setChecked(True)
         w = _get_attr(self, "debug_mode_chk")
         if w is not None and hasattr(w, "setChecked"):
             w.setChecked(False)
@@ -1379,142 +1555,84 @@ class AIStrokePainterDocker(DockWidget):
         """QSettings から前回の UI 設定値を自動復元する。"""
         if QSettings is None or not callable(QSettings):
             return
-        with contextlib.suppress(Exception):
+        try:
             settings: Any = QSettings("AIStrokePainter", "DockerSettings")
-            w = _get_attr(self, "base_url")
-            if w is not None and settings.value("base_url") is not None:
-                w.setText(str(settings.value("base_url")))
-            w = _get_attr(self, "model")
-            if w is not None and settings.value("model") is not None:
-                w.setText(str(settings.value("model")))
-            w = _get_attr(self, "timeout_sec")
-            if w is not None and settings.value("timeout_sec") is not None:
-                w.setValue(int(settings.value("timeout_sec")))
-            w = _get_attr(self, "max_tokens")
-            if w is not None and settings.value("max_tokens") is not None:
-                w.setValue(int(settings.value("max_tokens")))
-            w = _get_attr(self, "reasoning_effort")
-            if w is not None and settings.value("reasoning_effort") is not None:
-                effort_val = str(settings.value("reasoning_effort"))
-                if hasattr(w, "count") and hasattr(w, "itemData"):
-                    for i in range(w.count()):
-                        if w.itemData(i) == effort_val:
-                            w.setCurrentIndex(i)
-                            break
-            w = _get_attr(self, "temperature")
-            if w is not None and settings.value("temperature") is not None:
-                w.setValue(float(settings.value("temperature")))
-            w = _get_attr(self, "top_p")
-            if w is not None and settings.value("top_p") is not None:
-                w.setValue(float(settings.value("top_p")))
-            w = _get_attr(self, "vision_res")
-            if w is not None and settings.value("vision_res") is not None:
-                vres_val = int(settings.value("vision_res"))
-                if hasattr(w, "count") and hasattr(w, "itemData"):
-                    for i in range(w.count()):
-                        if w.itemData(i) == vres_val:
-                            w.setCurrentIndex(i)
-                            break
-            w = _get_attr(self, "custom_instructions")
-            if w is not None and settings.value("custom_instructions") is not None:
-                w.setText(str(settings.value("custom_instructions")))
-            w = _get_attr(self, "fallback_to_procedural")
-            if w is not None and settings.value("fallback_to_procedural") is not None:
-                w.setChecked(str(settings.value("fallback_to_procedural")).lower() in ("true", "1"))
-            w = _get_attr(self, "prompt")
-            if w is not None and settings.value("prompt") is not None:
-                if hasattr(w, "setPlainText"):
-                    w.setPlainText(str(settings.value("prompt")))
-                elif hasattr(w, "setText"):
-                    w.setText(str(settings.value("prompt")))
-            w = _get_attr(self, "seed")
-            if w is not None and settings.value("seed") is not None:
-                w.setValue(int(settings.value("seed")))
-            w = _get_attr(self, "auto_seed")
-            if w is not None and settings.value("auto_seed") is not None:
-                w.setChecked(str(settings.value("auto_seed")).lower() in ("true", "1"))
-            w = _get_attr(self, "count")
-            if w is not None and settings.value("count") is not None:
-                w.setValue(int(settings.value("count")))
-            w = _get_attr(self, "auto_count")
-            if w is not None and settings.value("auto_count") is not None:
-                w.setChecked(str(settings.value("auto_count")).lower() in ("true", "1"))
-            w = _get_attr(self, "palette_combo")
-            if w is not None and settings.value("palette") is not None:
-                pal_val = str(settings.value("palette"))
-                if hasattr(w, "count") and hasattr(w, "itemData"):
-                    for i in range(w.count()):
-                        if w.itemData(i) == pal_val:
-                            w.setCurrentIndex(i)
-                            break
-            w = _get_attr(self, "brush_profile")
-            if w is not None and settings.value("brush_profile") is not None:
-                prof_val = str(settings.value("brush_profile"))
-                if hasattr(w, "count") and hasattr(w, "itemData"):
-                    for i in range(w.count()):
-                        if w.itemData(i) == prof_val:
-                            w.setCurrentIndex(i)
-                            break
-            w = _get_attr(self, "iterations")
-            if w is not None and settings.value("iterations") is not None:
-                w.setValue(int(settings.value("iterations")))
-            w = _get_attr(self, "auto_refine")
-            if w is not None and settings.value("auto_refine") is not None:
-                w.setChecked(str(settings.value("auto_refine")).lower() in ("true", "1"))
-            w = _get_attr(self, "goal_mode")
-            if w is not None and settings.value("goal_mode") is not None:
-                w.setChecked(str(settings.value("goal_mode")).lower() in ("true", "1"))
-            w = _get_attr(self, "brush_size_multiplier")
-            if w is not None and settings.value("brush_size_multiplier") is not None:
-                w.setValue(float(settings.value("brush_size_multiplier")))
-            w = _get_attr(self, "opacity_multiplier")
-            if w is not None and settings.value("opacity_multiplier") is not None:
-                w.setValue(int(settings.value("opacity_multiplier")))
-            w = _get_attr(self, "layer_mode")
-            if w is not None and settings.value("layer_mode") is not None:
-                lmode_val = str(settings.value("layer_mode"))
-                if hasattr(w, "count") and hasattr(w, "itemData"):
-                    for i in range(w.count()):
-                        if w.itemData(i) == lmode_val:
-                            w.setCurrentIndex(i)
-                            break
-            w = _get_attr(self, "layer_prefix")
-            if w is not None and settings.value("layer_prefix") is not None:
-                w.setText(str(settings.value("layer_prefix")))
-            w = _get_attr(self, "event_interval")
-            if w is not None and settings.value("event_interval") is not None:
-                w.setValue(int(settings.value("event_interval")))
-            w = _get_attr(self, "edge_threshold")
-            if w is not None and settings.value("edge_threshold") is not None:
-                w.setValue(float(settings.value("edge_threshold")))
-            w = _get_attr(self, "shading_density")
-            if w is not None and settings.value("shading_density") is not None:
-                s_val = str(settings.value("shading_density"))
-                if hasattr(w, "count") and hasattr(w, "itemData"):
-                    for i in range(w.count()):
-                        if w.itemData(i) == s_val:
-                            w.setCurrentIndex(i)
-                            break
-            w = _get_attr(self, "enable_flats")
-            if w is not None and settings.value("enable_flats") is not None:
-                w.setChecked(str(settings.value("enable_flats")).lower() in ("true", "1"))
-            w = _get_attr(self, "image_color_mode")
-            if w is not None and settings.value("image_color_mode") is not None:
-                c_val = str(settings.value("image_color_mode"))
-                if hasattr(w, "count") and hasattr(w, "itemData"):
-                    for i in range(w.count()):
-                        if w.itemData(i) == c_val:
-                            w.setCurrentIndex(i)
-                            break
-            w = _get_attr(self, "save_json")
-            if w is not None and settings.value("save_json") is not None:
-                w.setChecked(str(settings.value("save_json")).lower() in ("true", "1"))
-            w = _get_attr(self, "save_svg_chk")
-            if w is not None and settings.value("save_svg") is not None:
-                w.setChecked(str(settings.value("save_svg")).lower() in ("true", "1"))
-            w = _get_attr(self, "debug_mode_chk")
-            if w is not None and settings.value("debug_mode") is not None:
-                w.setChecked(str(settings.value("debug_mode")).lower() in ("true", "1"))
+        except Exception as exc:
+            self._log_debug(f"[設定復元警告] QSettings を開けませんでした: {exc}")
+            return
+
+        def restore(key: str, apply_value: Any) -> None:
+            try:
+                value = settings.value(key)
+                if value is not None:
+                    apply_value(value)
+            except Exception as exc:
+                # 破損した1項目だけを既定値のまま残し、後続項目の復元は継続する。
+                self._log_debug(f"[設定復元警告] {key} を復元できないため既定値を使用します: {exc}")
+
+        def set_text(name: str, value: Any, *, plain: bool = False) -> None:
+            widget = _get_attr(self, name)
+            if widget is None:
+                return
+            if plain and hasattr(widget, "setPlainText"):
+                widget.setPlainText(str(value))
+            elif hasattr(widget, "setText"):
+                widget.setText(str(value))
+
+        def set_number(name: str, value: Any, converter: Any) -> None:
+            widget = _get_attr(self, name)
+            if widget is not None and hasattr(widget, "setValue"):
+                widget.setValue(converter(value))
+
+        def set_checked(name: str, value: Any) -> None:
+            widget = _get_attr(self, name)
+            if widget is not None and hasattr(widget, "setChecked"):
+                widget.setChecked(str(value).lower() in ("true", "1"))
+
+        def set_combo(name: str, value: Any, converter: Any = str) -> None:
+            widget = _get_attr(self, name)
+            if widget is None or not hasattr(widget, "count") or not hasattr(widget, "itemData"):
+                return
+            expected = converter(value)
+            for index in range(widget.count()):
+                if converter(widget.itemData(index)) == expected:
+                    widget.setCurrentIndex(index)
+                    return
+
+        restore("planner_mode", lambda value: set_combo("planner_mode", value))
+        restore("base_url", lambda value: set_text("base_url", value))
+        restore("model", lambda value: set_text("model", value))
+        restore("timeout_sec", lambda value: set_number("timeout_sec", value, int))
+        restore("max_tokens", lambda value: set_number("max_tokens", value, int))
+        restore("reasoning_effort", lambda value: set_combo("reasoning_effort", value))
+        restore("temperature", lambda value: set_number("temperature", value, float))
+        restore("top_p", lambda value: set_number("top_p", value, float))
+        restore("vision_res", lambda value: set_combo("vision_res", value, int))
+        restore("custom_instructions", lambda value: set_text("custom_instructions", value))
+        restore("fallback_to_procedural", lambda value: set_checked("fallback_to_procedural", value))
+        restore("prompt", lambda value: set_text("prompt", value, plain=True))
+        restore("seed", lambda value: set_number("seed", value, int))
+        restore("auto_seed", lambda value: set_checked("auto_seed", value))
+        restore("count", lambda value: set_number("count", value, int))
+        restore("auto_count", lambda value: set_checked("auto_count", value))
+        restore("palette", lambda value: set_combo("palette_combo", value))
+        restore("brush_profile", lambda value: set_combo("brush_profile", value))
+        restore("iterations", lambda value: set_number("iterations", value, int))
+        restore("auto_refine", lambda value: set_checked("auto_refine", value))
+        restore("goal_mode", lambda value: set_checked("goal_mode", value))
+        restore("brush_size_multiplier", lambda value: set_number("brush_size_multiplier", value, float))
+        restore("opacity_multiplier", lambda value: set_number("opacity_multiplier", value, int))
+        restore("layer_mode", lambda value: set_combo("layer_mode", value))
+        restore("layer_prefix", lambda value: set_text("layer_prefix", value))
+        restore("event_interval", lambda value: set_number("event_interval", value, int))
+        restore("edge_threshold", lambda value: set_number("edge_threshold", value, float))
+        restore("shading_density", lambda value: set_combo("shading_density", value))
+        restore("enable_flats", lambda value: set_checked("enable_flats", value))
+        restore("image_color_mode", lambda value: set_combo("image_color_mode", value))
+        restore("save_json", lambda value: set_checked("save_json", value))
+        restore("save_svg", lambda value: set_checked("save_svg_chk", value))
+        restore("confirm_before_apply", lambda value: set_checked("confirm_before_apply", value))
+        restore("debug_mode", lambda value: set_checked("debug_mode_chk", value))
 
     def _save_settings(self) -> None:
         """現在の UI 設定値を QSettings に保存する。"""
@@ -1522,6 +1640,9 @@ class AIStrokePainterDocker(DockWidget):
             return
         with contextlib.suppress(Exception):
             settings: Any = QSettings("AIStrokePainter", "DockerSettings")
+            w = _get_attr(self, "planner_mode")
+            if w is not None and hasattr(w, "currentData"):
+                settings.setValue("planner_mode", w.currentData() or "offline")
             w = _get_attr(self, "base_url")
             if w is not None and hasattr(w, "text"):
                 settings.setValue("base_url", w.text())
@@ -1615,6 +1736,9 @@ class AIStrokePainterDocker(DockWidget):
             w = _get_attr(self, "save_svg_chk")
             if w is not None and hasattr(w, "isChecked"):
                 settings.setValue("save_svg", w.isChecked())
+            w = _get_attr(self, "confirm_before_apply")
+            if w is not None and hasattr(w, "isChecked"):
+                settings.setValue("confirm_before_apply", w.isChecked())
             w = _get_attr(self, "debug_mode_chk")
             if w is not None and hasattr(w, "isChecked"):
                 settings.setValue("debug_mode", w.isChecked())
@@ -1684,6 +1808,7 @@ class AIStrokePainterDocker(DockWidget):
         prof_w = _get_attr(self, "brush_profile")
         bs_w = _get_attr(self, "brush_size_multiplier")
         op_w = _get_attr(self, "opacity_multiplier")
+        auto_count_w = _get_attr(self, "auto_count")
 
         if isinstance(data, dict):
             # カスタムプリセット
@@ -1707,6 +1832,8 @@ class AIStrokePainterDocker(DockWidget):
                 bs_w.setValue(float(data["brush_size"]))
             if "opacity" in data and op_w is not None and hasattr(op_w, "setValue"):
                 op_w.setValue(int(data["opacity"]))
+            if auto_count_w is not None and hasattr(auto_count_w, "setChecked"):
+                auto_count_w.setChecked(bool(data.get("auto_count", False)))
         elif isinstance(data, (list, tuple)):
             # ビルトインプリセット
             prompt_text = data[1]
@@ -1716,6 +1843,9 @@ class AIStrokePainterDocker(DockWidget):
                 prompt_w.setPlainText(prompt_text)
             if count_w is not None and hasattr(count_w, "setValue"):
                 count_w.setValue(count)
+            if auto_count_w is not None and hasattr(auto_count_w, "setChecked"):
+                # 内蔵プリセットは完成品質を優先し、少数の走査線だけを残す手動間引きを避ける。
+                auto_count_w.setChecked(True)
             if pal_w is not None and hasattr(pal_w, "count") and hasattr(pal_w, "itemData"):
                 for i in range(pal_w.count()):
                     if pal_w.itemData(i) == palette:
@@ -1747,13 +1877,21 @@ class AIStrokePainterDocker(DockWidget):
                 if len(image_data) > MAX_REFERENCE_IMAGE_BYTES:
                     raise ValueError(f"参照画像は {MAX_REFERENCE_IMAGE_BYTES // (1024 * 1024)}MB 以下にしてください")
                 self._image_bytes = image_data
+                dimensions = _image_dimensions_from_header(image_data)
+                dimension_text = f" — {dimensions[0]}×{dimensions[1]}px" if dimensions is not None else ""
                 lbl = _get_attr(self, "image_status_label")
                 if lbl is not None and hasattr(lbl, "setText"):
-                    lbl.setText(Path(file_path).name)
+                    lbl.setText(f"{image_path.name}{dimension_text}")
+                    if hasattr(lbl, "setToolTip"):
+                        lbl.setToolTip(
+                            "オフラインモードでは端末内だけで解析します。LLMモードでは縮小・メタデータ除去後に送信します。"
+                        )
                 btn = _get_attr(self, "clear_image_btn")
                 if btn is not None and hasattr(btn, "setEnabled"):
                     btn.setEnabled(True)
-                self._log_debug(f"[参照画像読込] {file_path} ({len(self._image_bytes)} bytes)")
+                self._log_debug(
+                    f"[参照画像読込] {dimension_text.lstrip(' —') or '寸法不明'} ({len(self._image_bytes)} bytes)"
+                )
             except Exception as exc:
                 QMessageBox.critical(self, "エラー", f"画像を読み込めませんでした: {exc}")
 
@@ -1922,8 +2060,65 @@ class AIStrokePainterDocker(DockWidget):
     def is_cancelled(self) -> bool:
         return self._cancel
 
+    def _set_generation_controls_enabled(self, enabled: bool) -> None:
+        """実行中に変更しても現在の worker へ反映されない設定をロックする。"""
+        names = (
+            "preset_combo",
+            "save_preset_btn",
+            "del_preset_btn",
+            "export_preset_btn",
+            "import_preset_btn",
+            "prompt",
+            "load_image_btn",
+            "clear_image_btn",
+            "planner_mode",
+            "seed",
+            "auto_seed",
+            "count",
+            "auto_count",
+            "palette_combo",
+            "brush_profile",
+            "iterations",
+            "auto_refine",
+            "goal_mode",
+            "brush_size_multiplier",
+            "opacity_multiplier",
+            "layer_mode",
+            "layer_prefix",
+            "event_interval",
+            "edge_threshold",
+            "shading_density",
+            "enable_flats",
+            "image_color_mode",
+            "llm_settings",
+            "save_json",
+            "save_svg_chk",
+            "confirm_before_apply",
+            "reset_defaults_btn",
+        )
+        for name in names:
+            widget = _get_attr(self, name)
+            if widget is not None and hasattr(widget, "setEnabled"):
+                widget.setEnabled(enabled)
+        if enabled:
+            self._update_planner_settings_state()
+            for toggle_name, value_name in (("auto_seed", "seed"), ("auto_count", "count")):
+                toggle = _get_attr(self, toggle_name)
+                value_widget = _get_attr(self, value_name)
+                if (
+                    toggle is not None
+                    and hasattr(toggle, "isChecked")
+                    and toggle.isChecked()
+                    and value_widget is not None
+                    and hasattr(value_widget, "setEnabled")
+                ):
+                    value_widget.setEnabled(False)
+
     def cancel(self) -> None:
         self._cancel = True
+        apply_button = _get_attr(self, "apply_btn")
+        if apply_button is not None and hasattr(apply_button, "setEnabled"):
+            apply_button.setEnabled(False)
         worker = _get_attr(self, "_worker")
         if worker is not None and hasattr(worker, "cancel"):
             worker.cancel()
@@ -1955,6 +2150,10 @@ class AIStrokePainterDocker(DockWidget):
         self._active_doc = document
         self._active_view = active_view
         self._cancel = False
+        self._session_plans = []
+        self._last_plan = None
+        self._pending_plan = None
+        self._applying_pending = False
         run_b = _get_attr(self, "run_btn")
         if run_b is not None and hasattr(run_b, "setEnabled"):
             run_b.setEnabled(False)
@@ -1964,6 +2163,7 @@ class AIStrokePainterDocker(DockWidget):
         prog = _get_attr(self, "progress")
         if prog is not None and hasattr(prog, "setRange"):
             prog.setRange(0, 0)
+        self._set_generation_controls_enabled(False)
 
         iter_w = _get_attr(self, "iterations")
         ref_w = _get_attr(self, "auto_refine")
@@ -2029,6 +2229,8 @@ class AIStrokePainterDocker(DockWidget):
         self._log_debug(
             f"選択モード: {mode_str}, 反復数: {max_iters}{goal_mode_str}, ストローク本数: {count_mode_str}, パレット: {palette}, プロファイル: {profile}, 太さ倍率: {size_val}x, 不透明度: {op_val}%"
         )
+        if self._image_bytes and mode_w is not None and mode_w.currentData() == "openai_compatible":
+            self._log_debug("[プライバシー] 参照画像は縮小・私的メタデータ除去後に設定先APIへ送信されます")
         st = _get_attr(self, "status")
         if st is not None and hasattr(st, "setText"):
             st.setText("描画計画を生成中… 停止できます。")
@@ -2117,9 +2319,36 @@ class AIStrokePainterDocker(DockWidget):
         st = _get_attr(self, "status")
         if st is not None and hasattr(st, "setText"):
             st.setText(msg)
+        progress = _get_attr(self, "progress")
+        if progress is not None and hasattr(progress, "setRange") and hasattr(progress, "setValue"):
+            progress.setRange(0, max(1, total))
+            progress.setValue(max(0, current - 1))
 
     def _on_plan_ready(self, plan: DrawingPlan) -> None:
-        self._last_plan = plan
+        resuming_pending = (
+            bool(_get_attr(self, "_applying_pending", False)) and _get_attr(self, "_pending_plan") is plan
+        )
+        if resuming_pending:
+            cumulative_plan = _get_attr(self, "_last_plan")
+            if not isinstance(cumulative_plan, DrawingPlan):
+                resuming_pending = False
+        if not resuming_pending:
+            session_plans = list(_get_attr(self, "_session_plans", []))
+            session_plans.append(plan)
+            try:
+                cumulative_plan = combine_drawing_plans(session_plans)
+            except Exception as exc:
+                message = f"反復計画を統合できませんでした: {exc}"
+                self._log_debug(f"[累積計画エラー] {message}")
+                st_w = _get_attr(self, "status")
+                if st_w is not None and hasattr(st_w, "setText"):
+                    st_w.setText(message)
+                worker = _get_attr(self, "_worker")
+                if worker is not None and hasattr(worker, "notify_render_failed"):
+                    worker.notify_render_failed(message)
+                return
+            self._session_plans = session_plans
+            self._last_plan = cumulative_plan
         bs_w = _get_attr(self, "brush_size_multiplier")
         op_w = _get_attr(self, "opacity_multiplier")
         prev_w = _get_attr(self, "preview")
@@ -2137,10 +2366,23 @@ class AIStrokePainterDocker(DockWidget):
         render_options = _get_attr(self, "_run_render_options") or {}
         size_mult = float(render_options.get("size_multiplier", size_mult))
         op_mult = float(render_options.get("opacity_multiplier", op_mult))
+        preview_layer_mode = str(
+            render_options.get(
+                "layer_mode",
+                lm_w.currentData() if lm_w is not None and hasattr(lm_w, "currentData") else "multi_layer",
+            )
+            or "multi_layer"
+        )
 
-        if prev_w is not None and hasattr(prev_w, "set_plan"):
+        if not resuming_pending and prev_w is not None and hasattr(prev_w, "set_plan"):
             try:
-                prev_w.set_plan(plan, size_multiplier=size_mult, opacity_multiplier=op_mult, accumulate=True)
+                prev_w.set_plan(
+                    plan,
+                    size_multiplier=size_mult,
+                    opacity_multiplier=op_mult,
+                    accumulate=True,
+                    layer_mode=preview_layer_mode,
+                )
             except TypeError:
                 try:
                     prev_w.set_plan(plan, size_multiplier=size_mult, opacity_multiplier=op_mult)
@@ -2151,6 +2393,27 @@ class AIStrokePainterDocker(DockWidget):
                         self._log_debug(f"[プレビュー更新失敗] {exc}")
             except Exception as exc:
                 self._log_debug(f"[プレビュー更新失敗] {exc}")
+
+        confirm_w = _get_attr(self, "confirm_before_apply")
+        confirmation_required = bool(
+            confirm_w is not None and hasattr(confirm_w, "isChecked") and confirm_w.isChecked()
+        )
+        if confirmation_required and not resuming_pending:
+            self._pending_plan = plan
+            apply_button = _get_attr(self, "apply_btn")
+            if apply_button is not None and hasattr(apply_button, "setEnabled"):
+                apply_button.setEnabled(True)
+            st_w = _get_attr(self, "status")
+            if st_w is not None and hasattr(st_w, "setText"):
+                st_w.setText(f"ステップ {plan.iteration} のプレビューを確認し、「キャンバスへ適用」を押してください")
+            self._log_debug(f"[適用待機] ステップ {plan.iteration} の計画をプレビューで確認できます")
+            return
+        if resuming_pending:
+            self._pending_plan = None
+            self._applying_pending = False
+            apply_button = _get_attr(self, "apply_btn")
+            if apply_button is not None and hasattr(apply_button, "setEnabled"):
+                apply_button.setEnabled(False)
 
         active_doc = _get_attr(self, "_active_doc")
         document = active_doc or (Krita.instance().activeDocument() if Krita.instance() is not None else None)
@@ -2171,7 +2434,8 @@ class AIStrokePainterDocker(DockWidget):
             if self.is_cancelled():
                 return
 
-            paths = []
+            paths: list[str] = []
+            export_errors: list[str] = []
             save_json_enabled = bool(
                 render_options.get("save_json", sj_w is not None and hasattr(sj_w, "isChecked") and sj_w.isChecked())
             )
@@ -2217,29 +2481,57 @@ class AIStrokePainterDocker(DockWidget):
                 view=_get_attr(self, "_active_view"),
             )
             render_worker = _get_attr(self, "_worker")
-            is_goal_completion = bool(getattr(render_worker, "goal_mode", False)) and _is_plan_goal_reached(plan)
+            is_goal_completion = bool(getattr(render_worker, "goal_mode", False)) and (
+                plan.metadata.get("session_goal_reached", False) is True or _is_plan_goal_reached(plan)
+            )
             is_final_iteration = (
                 plan.iteration >= int(getattr(render_worker, "max_iterations", plan.iteration)) or is_goal_completion
             )
             if not self.is_cancelled() and is_final_iteration:
+                export_plan = materialize_render_options(
+                    cumulative_plan,
+                    size_multiplier=size_mult,
+                    opacity_multiplier=op_mult,
+                    layer_mode=l_mode,
+                )
                 if save_json_enabled:
-                    saved_json_path = save_plan(plan)
-                    paths.append(str(saved_json_path))
-                    self._log_debug(f"[JSON保存] {saved_json_path}")
+                    try:
+                        saved_json_path = save_plan(export_plan)
+                    except Exception as exc:
+                        export_errors.append(f"JSON: {exc}")
+                        self._log_debug(f"[JSON保存失敗] {exc}\n{traceback.format_exc()}")
+                    else:
+                        paths.append(str(saved_json_path))
+                        self._log_debug(f"[JSON保存] {Path(saved_json_path).name}")
                 if save_svg_enabled:
-                    saved_svg_path = save_svg(plan)
-                    paths.append(str(saved_svg_path))
-                    self._log_debug(f"[SVG保存] {saved_svg_path}")
+                    try:
+                        saved_svg_path = save_svg(export_plan)
+                    except Exception as exc:
+                        export_errors.append(f"SVG: {exc}")
+                        self._log_debug(f"[SVG保存失敗] {exc}\n{traceback.format_exc()}")
+                    else:
+                        paths.append(str(saved_svg_path))
+                        self._log_debug(f"[SVG保存] {Path(saved_svg_path).name}")
             suffix = f" ({', '.join(paths)})" if paths else ""
+            warning_suffix = f" / 保存警告: {'; '.join(export_errors)}" if export_errors else ""
             st_w = _get_attr(self, "status")
             if self.is_cancelled():
                 if st_w is not None and hasattr(st_w, "setText"):
-                    st_w.setText(f"{rendered}本を描画して停止しました{suffix}")
+                    st_w.setText(f"{rendered}本を描画して停止しました{suffix}{warning_suffix}")
                 self._log_debug(f"[描画停止] {rendered} 本を描画後に停止")
             else:
                 if st_w is not None and hasattr(st_w, "setText"):
-                    st_w.setText(f"描画完了: {rendered}本を生成しました{suffix}")
-                self._log_debug(f"[描画完了] 合計 {rendered} 本をキャンバスに描画しました")
+                    if is_final_iteration:
+                        st_w.setText(
+                            f"描画完了: 累積{len(cumulative_plan.strokes)}本を生成しました{suffix}{warning_suffix}"
+                        )
+                    else:
+                        st_w.setText(
+                            f"ステップ {plan.iteration} を適用済み: {rendered}本、累積{len(cumulative_plan.strokes)}本"
+                        )
+                self._log_debug(
+                    f"[描画適用] ステップ {plan.iteration}: {rendered} 本、累積 {len(cumulative_plan.strokes)} 本をキャンバスに描画しました"
+                )
         except Exception as exc:
             render_error = str(exc) or exc.__class__.__name__
             self._log_debug(f"[描画レンダリング例外] {exc}\n{traceback.format_exc()}")
@@ -2282,6 +2574,16 @@ class AIStrokePainterDocker(DockWidget):
                     worker.notify_render_done()
             if worker is None or not (hasattr(worker, "isRunning") and worker.isRunning()):
                 self._reset_run_state()
+
+    def _apply_pending_plan(self) -> None:
+        plan = _get_attr(self, "_pending_plan")
+        if not isinstance(plan, DrawingPlan) or self.is_cancelled():
+            return
+        self._applying_pending = True
+        apply_button = _get_attr(self, "apply_btn")
+        if apply_button is not None and hasattr(apply_button, "setEnabled"):
+            apply_button.setEnabled(False)
+        self._on_plan_ready(plan)
 
     def _on_plan_failed(self, error_msg: str) -> None:
         self._worker = None
@@ -2348,10 +2650,17 @@ class AIStrokePainterDocker(DockWidget):
         r_btn = _get_attr(self, "run_btn")
         if r_btn is not None and hasattr(r_btn, "setEnabled"):
             r_btn.setEnabled(True)
+        self._set_generation_controls_enabled(True)
         s_btn = _get_attr(self, "stop_btn")
         if s_btn is not None and hasattr(s_btn, "setEnabled"):
             s_btn.setEnabled(False)
+        apply_button = _get_attr(self, "apply_btn")
+        if apply_button is not None and hasattr(apply_button, "setEnabled"):
+            apply_button.setEnabled(False)
         self._active_doc = None
         self._active_view = None
         self._run_render_options = None
+        self._session_plans = []
+        self._pending_plan = None
+        self._applying_pending = False
         self._worker = None

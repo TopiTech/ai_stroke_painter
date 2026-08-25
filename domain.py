@@ -427,12 +427,22 @@ class DrawingPlan:
         svg_definitions = ["    <style>.stroke { stroke-linecap: round; stroke-linejoin: round; fill: none; }</style>"]
         svg_body: list[str] = []
 
-        # レイヤーごとにグループ化
-        by_layer: dict[str, list[Stroke]] = {}
-        for stroke in self.strokes:
-            by_layer.setdefault(stroke.layer_name, []).append(stroke)
+        render_options = self.metadata.get("render_options", {})
+        layer_mode = (
+            str(render_options.get("layer_mode", "multi_layer"))
+            if isinstance(render_options, Mapping)
+            else "multi_layer"
+        )
 
-        ordered_layers = list(self.layers) if self.layers else list(by_layer.keys())
+        # 実描画が単一／アクティブレイヤーなら、SVGも意味レイヤーの合成効果を足さず適用順を保つ。
+        by_layer: dict[str, list[Stroke]] = {}
+        if layer_mode == "multi_layer":
+            for stroke in self.strokes:
+                by_layer.setdefault(stroke.layer_name, []).append(stroke)
+        else:
+            by_layer["Combined"] = list(self.strokes)
+
+        ordered_layers = list(self.layers) if layer_mode == "multi_layer" and self.layers else list(by_layer.keys())
         for layer in by_layer:
             if layer not in ordered_layers:
                 ordered_layers.append(layer)
@@ -458,8 +468,151 @@ class DrawingPlan:
                 svg_definitions.extend(f"      {line}" for line in _stroke_svg_lines(stroke, mask=True))
                 svg_definitions.append("    </mask>")
                 layer_content = [f'<g mask="url(#{mask_id})">', *layer_content, "</g>"]
-            svg_body.append(f'  <g id="layer_{html.escape(layer_name)}">')
+            blend_attributes = ""
+            lowered_layer = layer_name.lower()
+            if layer_mode == "multi_layer" and ("shading" in lowered_layer or "shadow" in lowered_layer):
+                blend_attributes = ' style="mix-blend-mode:multiply" data-krita-blend-mode="multiply"'
+            elif layer_mode == "multi_layer" and any(token in lowered_layer for token in ("highlight", "fx", "glow")):
+                # SVGにKritaの線形加算と同一の標準指定はないため、近似screenと元モード名を併記する。
+                blend_attributes = ' style="mix-blend-mode:screen" data-krita-blend-mode="addition"'
+            svg_body.append(f'  <g id="layer_{html.escape(layer_name)}"{blend_attributes}>')
             svg_body.extend(f"    {line}" for line in layer_content)
             svg_body.append("  </g>")
 
         return "\n".join([*svg_header, "  <defs>", *svg_definitions, "  </defs>", *svg_body, "</svg>"])
+
+
+def combine_drawing_plans(plans: Sequence[DrawingPlan]) -> DrawingPlan:
+    """反復ごとの差分計画を、キャンバスへ適用した順序の単一計画へ統合する。"""
+    if not isinstance(plans, Sequence) or not plans:
+        raise PlanValidationError("plans は1件以上の DrawingPlan 配列である必要があります")
+    normalized = tuple(plans)
+    if any(not isinstance(plan, DrawingPlan) for plan in normalized):
+        raise PlanValidationError("plans の各要素は DrawingPlan である必要があります")
+
+    first = normalized[0]
+    total_strokes = sum(len(plan.strokes) for plan in normalized)
+    if total_strokes > MAX_PLAN_STROKES:
+        raise PlanValidationError(
+            f"反復を統合した strokes は {MAX_PLAN_STROKES} 本以下である必要があります（現在 {total_strokes} 本）"
+        )
+
+    for plan in normalized[1:]:
+        if plan.prompt != first.prompt or plan.seed != first.seed:
+            raise PlanValidationError("異なる prompt または seed の計画は同一セッションとして統合できません")
+    for field_name in ("canvas_width", "canvas_height"):
+        known_values = [getattr(plan, field_name) for plan in normalized if getattr(plan, field_name) is not None]
+        if known_values and any(
+            not math.isclose(known_values[0], value, rel_tol=0.0, abs_tol=1e-6) for value in known_values[1:]
+        ):
+            raise PlanValidationError("キャンバス寸法が異なる計画は統合できません")
+
+    merged_strokes: list[Stroke] = []
+    used_ids: set[str] = set()
+    for plan_index, plan in enumerate(normalized, start=1):
+        for stroke in plan.strokes:
+            stroke_id = stroke.id
+            if stroke_id in used_ids:
+                prefix = f"iteration-{plan.iteration}-{plan_index}"
+                stroke_id = f"{prefix}:{stroke.id}"
+                collision = 1
+                while stroke_id in used_ids:
+                    collision += 1
+                    stroke_id = f"{prefix}-{collision}:{stroke.id}"
+                stroke = Stroke(
+                    id=stroke_id,
+                    points=stroke.points,
+                    brush_preset=stroke.brush_preset,
+                    color=stroke.color,
+                    size_px=stroke.size_px,
+                    layer_name=stroke.layer_name,
+                    opacity=stroke.opacity,
+                    is_eraser=stroke.is_eraser,
+                )
+            used_ids.add(stroke_id)
+            merged_strokes.append(stroke)
+
+    merged_layers: list[str] = []
+    for plan in normalized:
+        for layer in plan.layers:
+            if layer not in merged_layers:
+                merged_layers.append(layer)
+    last = normalized[-1]
+    metadata = dict(last.metadata)
+    metadata.update(
+        {
+            "cumulative": len(normalized) > 1,
+            "iteration_count": len(normalized),
+            "source_iterations": [plan.iteration for plan in normalized],
+            "source_stroke_counts": [len(plan.strokes) for plan in normalized],
+        }
+    )
+    return DrawingPlan(
+        prompt=first.prompt,
+        seed=first.seed,
+        strokes=tuple(merged_strokes),
+        title=last.title or first.title,
+        iteration=last.iteration,
+        layers=tuple(merged_layers),
+        request_canvas_image=False,
+        metadata=metadata,
+        canvas_width=next((plan.canvas_width for plan in normalized if plan.canvas_width is not None), None),
+        canvas_height=next((plan.canvas_height for plan in normalized if plan.canvas_height is not None), None),
+        goal_reached=last.goal_reached,
+        completion_score=last.completion_score,
+    )
+
+
+def materialize_render_options(
+    plan: DrawingPlan,
+    *,
+    size_multiplier: float = 1.0,
+    opacity_multiplier: float = 1.0,
+    layer_mode: str = "multi_layer",
+) -> DrawingPlan:
+    """UI の描画倍率を計画へ焼き込み、保存物を実描画と一致させる。"""
+    if not isinstance(plan, DrawingPlan):
+        raise TypeError("plan は DrawingPlan である必要があります")
+    size_value = _finite_number(size_multiplier, "size_multiplier")
+    opacity_value = _finite_number(opacity_multiplier, "opacity_multiplier")
+    if size_value <= 0:
+        raise PlanValidationError("size_multiplier は正の有限数値である必要があります")
+    if opacity_value < 0:
+        raise PlanValidationError("opacity_multiplier は 0 以上の有限数値である必要があります")
+    if layer_mode not in {"multi_layer", "single_layer", "active_layer"}:
+        raise PlanValidationError("layer_mode が未対応です")
+
+    strokes = tuple(
+        Stroke(
+            id=stroke.id,
+            points=stroke.points,
+            brush_preset=stroke.brush_preset,
+            color=stroke.color,
+            size_px=stroke.size_px * size_value,
+            layer_name=stroke.layer_name,
+            opacity=min(1.0, stroke.opacity * opacity_value),
+            is_eraser=stroke.is_eraser,
+        )
+        for stroke in plan.strokes
+    )
+    metadata = dict(plan.metadata)
+    metadata["render_options"] = {
+        "size_multiplier": size_value,
+        "opacity_multiplier": opacity_value,
+        "layer_mode": layer_mode,
+        "materialized": True,
+    }
+    return DrawingPlan(
+        prompt=plan.prompt,
+        seed=plan.seed,
+        strokes=strokes,
+        title=plan.title,
+        iteration=plan.iteration,
+        layers=plan.layers,
+        request_canvas_image=plan.request_canvas_image,
+        metadata=metadata,
+        canvas_width=plan.canvas_width,
+        canvas_height=plan.canvas_height,
+        goal_reached=plan.goal_reached,
+        completion_score=plan.completion_score,
+    )

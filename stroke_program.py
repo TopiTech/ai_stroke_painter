@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 import random
 import re
@@ -906,10 +906,13 @@ def _compile_fill_radial(
         dir_x = math.cos(ang)
         dir_y = math.sin(ang)
 
-        outer_x = cx + dir_x * max_radius
-        outer_y = cy + dir_y * max_radius
-        mid_x = cx + dir_x * max_radius * 0.5
-        mid_y = cy + dir_y * max_radius * 0.5
+        ray_radius = _ray_polygon_distance((cx, cy), (dir_x, dir_y), polygon)
+        if ray_radius is None:
+            continue
+        outer_x = cx + dir_x * ray_radius
+        outer_y = cy + dir_y * ray_radius
+        mid_x = cx + dir_x * ray_radius * 0.5
+        mid_y = cy + dir_y * ray_radius * 0.5
         pts = [
             (cx, cy, 0.95),
             (mid_x, mid_y, 0.80),
@@ -918,6 +921,28 @@ def _compile_fill_radial(
         strokes.append(_make_stroke(program, operation, len(strokes), pts))
 
     return strokes
+
+
+def _ray_polygon_distance(
+    origin: tuple[float, float], direction: tuple[float, float], polygon: Sequence[tuple[float, float]]
+) -> float | None:
+    """Ray と polygon 辺の最も近い前方交点までの距離を返す。"""
+    ox, oy = origin
+    dx, dy = direction
+    distances: list[float] = []
+    for first, second in zip(polygon, (*polygon[1:], polygon[0]), strict=False):
+        edge_x = second[0] - first[0]
+        edge_y = second[1] - first[1]
+        denominator = dx * edge_y - dy * edge_x
+        if abs(denominator) < 1e-9:
+            continue
+        rel_x = first[0] - ox
+        rel_y = first[1] - oy
+        ray_t = (rel_x * edge_y - rel_y * edge_x) / denominator
+        edge_t = (rel_x * dy - rel_y * dx) / denominator
+        if ray_t >= 0.0 and 0.0 <= edge_t <= 1.0:
+            distances.append(ray_t)
+    return min(distances) if distances else None
 
 
 def _compile_fill_directional(
@@ -958,10 +983,10 @@ def _compile_fill_directional(
                 p2_x = second_rot[0] - (second_rot[0] - first_rot[0]) * 0.12
                 p2_y = second_rot[1] - (second_rot[1] - first_rot[1]) * 0.12
                 pts = [
-                    (first_rot[0], first_rot[1], 0.45),
+                    (first_rot[0], first_rot[1], 0.75),
                     (p1_x, p1_y, 0.95),
                     (p2_x, p2_y, 0.95),
-                    (second_rot[0], second_rot[1], 0.45),
+                    (second_rot[0], second_rot[1], 0.75),
                 ]
             else:
                 pts = [(first_rot[0], first_rot[1], 1.0), (second_rot[0], second_rot[1], 1.0)]
@@ -1000,10 +1025,10 @@ def _compile_fill(program: StrokeProgram, operation: FillOperation, limit: int) 
                 p1_x = first_x + (second_x - first_x) * 0.12
                 p2_x = second_x - (second_x - first_x) * 0.12
                 pts = [
-                    (first_x, y, 0.45),
+                    (first_x, y, 0.75),
                     (p1_x, y, 0.95),
                     (p2_x, y, 0.95),
-                    (second_x, y, 0.45),
+                    (second_x, y, 0.75),
                 ]
             else:
                 pts = [(first_x, y, 1.0), (second_x, y, 1.0)]
@@ -1110,10 +1135,29 @@ def _compile_particles(program: StrokeProgram, operation: ParticleOperation, lim
         elif shape == "sparkle":
             mid_x = (start_x + end_x) * 0.5
             mid_y = (start_y + end_y) * 0.5
+            norm_x = -dy / max(1e-5, length)
+            norm_y = dx / max(1e-5, length)
+            cross = length * 0.42
             pts = [
                 (start_x, start_y, 0.15),
                 (mid_x, mid_y, 1.0),
                 (end_x, end_y, 0.15),
+                (mid_x, mid_y, 0.25),
+                (mid_x + norm_x * cross, mid_y + norm_y * cross, 0.12),
+                (mid_x, mid_y, 1.0),
+                (mid_x - norm_x * cross, mid_y - norm_y * cross, 0.12),
+            ]
+        elif shape == "bokeh":
+            center_x = (start_x + end_x) * 0.5
+            center_y = (start_y + end_y) * 0.5
+            radius = max(0.5, length * 0.5)
+            pts = [
+                (
+                    center_x + math.cos(math.tau * point_index / 12.0) * radius,
+                    center_y + math.sin(math.tau * point_index / 12.0) * radius,
+                    0.35,
+                )
+                for point_index in range(13)
             ]
         elif shape == "drift":
             p1_x = start_x + dx * 0.33 + (-dy / max(1e-5, length)) * length * 0.15
@@ -1133,6 +1177,72 @@ def _compile_particles(program: StrokeProgram, operation: ParticleOperation, lim
     return strokes
 
 
+def _polygon_area(operation: FillOperation) -> float:
+    points = operation.polygon
+    return (
+        abs(
+            sum(
+                first.x * second.y - second.x * first.y
+                for first, second in zip(points, (*points[1:], points[0]), strict=False)
+            )
+        )
+        * 0.5
+    )
+
+
+def _allocate_fill_budgets(operations: Sequence[FillOperation], total: int) -> list[int]:
+    """大面積の背景を優先しつつ、選択した各 fill に最低1本を割り当てる。"""
+    if total <= 0 or not operations:
+        return [0] * len(operations)
+    selected_count = min(len(operations), total)
+    ranked = sorted(range(len(operations)), key=lambda index: _polygon_area(operations[index]), reverse=True)
+    selected = set(ranked[:selected_count])
+    budgets = [1 if index in selected else 0 for index in range(len(operations))]
+    remaining = total - selected_count
+    if remaining <= 0:
+        return budgets
+
+    weights = [
+        math.sqrt(max(1e-6, _polygon_area(operation))) if index in selected else 0.0
+        for index, operation in enumerate(operations)
+    ]
+    weight_sum = sum(weights)
+    raw_shares = [remaining * weight / weight_sum if weight_sum > 0 else 0.0 for weight in weights]
+    for index, share in enumerate(raw_shares):
+        budgets[index] += int(math.floor(share))
+    leftover = total - sum(budgets)
+    fractional_order = sorted(
+        selected,
+        key=lambda index: (raw_shares[index] - math.floor(raw_shares[index]), weights[index]),
+        reverse=True,
+    )
+    for index in fractional_order[:leftover]:
+        budgets[index] += 1
+    return budgets
+
+
+def _compile_fill_to_budget(program: StrokeProgram, operation: FillOperation, limit: int) -> list[Stroke]:
+    """走査線を欠落させず、予算が少ない時はブラシを太く再コンパイルする。"""
+    if limit <= 0:
+        return []
+    polygon = [(point.x * program.canvas_width, point.y * program.canvas_height) for point in operation.polygon]
+    span = max(max(point[1] for point in polygon) - min(point[1] for point in polygon), 1.0)
+    if operation.style in {"directional", "radial", "contour"} or abs(operation.angle_deg) > 1e-3:
+        span = max(span, max(point[0] for point in polygon) - min(point[0] for point in polygon))
+    spacing_scale = 0.50 if operation.style in {"wash", "feathered"} else operation.spacing
+    current_px = operation.brush.size_px(program.canvas_width, program.canvas_height)
+    required_px = span / max(1.0, limit * spacing_scale) * 1.08
+    adjusted = operation
+    if required_px > current_px:
+        adjusted_size = (
+            required_px
+            if operation.brush.size_mode == "px"
+            else required_px / min(program.canvas_width, program.canvas_height)
+        )
+        adjusted = replace(operation, brush=replace(operation.brush, size=adjusted_size))
+    return _compile_fill(program, adjusted, limit)
+
+
 def compile_stroke_program(program: StrokeProgram, count: int | None = None) -> DrawingPlan:
     """高水準命令を、既存レンダラーと保存形式が扱える DrawingPlan へ変換する。"""
     if not isinstance(program, StrokeProgram):
@@ -1141,28 +1251,45 @@ def compile_stroke_program(program: StrokeProgram, count: int | None = None) -> 
         isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_PLAN_STROKES
     ):
         raise ValueError(f"count は1から{MAX_PLAN_STROKES}またはNoneである必要があります")
-    strokes: list[Stroke] = []
     operation_budget = max(1, math.ceil(MAX_PLAN_STROKES / len(program.operations)))
+    fill_operations = [operation for operation in program.operations if isinstance(operation, FillOperation)]
+    fill_budgets: list[int]
+    if count is None:
+        fill_budgets = [operation_budget] * len(fill_operations)
+    else:
+        has_non_fill = len(fill_operations) < len(program.operations)
+        reserved = count if not has_non_fill else min(count, max(len(fill_operations), round(count * 0.48)))
+        fill_budgets = _allocate_fill_budgets(fill_operations, reserved)
+
+    fill_index = 0
+    fill_strokes: list[Stroke] = []
+    other_strokes: list[Stroke] = []
     for operation in program.operations:
-        if isinstance(operation, PathOperation):
-            compiled = _compile_path(program, operation)
-        elif isinstance(operation, FillOperation):
-            compiled = _compile_fill(program, operation, operation_budget)
+        if isinstance(operation, FillOperation):
+            compiled = _compile_fill_to_budget(program, operation, fill_budgets[fill_index])
+            fill_index += 1
+            fill_strokes.extend(compiled)
+        elif isinstance(operation, PathOperation):
+            other_strokes.extend(_compile_path(program, operation))
         elif isinstance(operation, HatchOperation):
-            compiled = _compile_hatch(program, operation, operation_budget)
+            other_strokes.extend(_compile_hatch(program, operation, operation_budget))
         else:
-            compiled = _compile_particles(program, operation, operation_budget)
-        strokes.extend(compiled)
+            other_strokes.extend(_compile_particles(program, operation, operation_budget))
+
+    if count is None:
+        strokes = [*fill_strokes, *other_strokes]
+    else:
+        remaining = max(0, count - len(fill_strokes))
+        strokes = [*fill_strokes, *_sample_strokes_by_priority(other_strokes, remaining)]
     if len(strokes) > MAX_PLAN_STROKES:
         strokes = _sample_strokes_by_priority(strokes, MAX_PLAN_STROKES)
-    if count is not None:
-        strokes = _sample_strokes_by_priority(strokes, count)
     if not strokes:
         raise PlanValidationError("StrokeProgram から有効なストロークを生成できませんでした")
     metadata = {
         **dict(program.metadata),
         "source_schema_version": PROGRAM_SCHEMA_VERSION,
         "operation_count": len(program.operations),
+        "budget_strategy": "operation_aware_v1",
     }
     return DrawingPlan(
         prompt=program.prompt,

@@ -96,19 +96,23 @@ def evaluate_plan_quality(plan: DrawingPlan, *, grid_size: int = 40) -> PlanQual
     estimated_calls = sum(max(0, len(stroke.points) - 1) for stroke in plan.strokes)
     # 宣言だけの空レイヤーでは品質を水増しできないよう、実ストロークから数える。
     layer_count = len({stroke.layer_name for stroke in plan.strokes})
+    overlay = plan.metadata.get("overlay", False) is True
+    coverage_target = 0.12 if overlay else 0.80
+    layer_target = 1.0 if overlay else 4.0
+    dynamic_component = 1.0 if overlay or not expressive else min(1.0, dynamic_ratio / 0.25)
     score = (
-        min(1.0, coverage / 0.80) * 0.40
-        + min(1.0, layer_count / 4.0) * 0.20
-        + min(1.0, dynamic_ratio / 0.25) * 0.20
+        min(1.0, coverage / coverage_target) * 0.40
+        + min(1.0, layer_count / layer_target) * 0.20
+        + dynamic_component * 0.20
         + (1.0 - fragment_ratio) * 0.10
         + (0.10 if out_of_bounds == 0 else 0.0)
     )
     issues: list[str] = []
-    if coverage < 0.35:
+    if coverage < (0.05 if overlay else 0.35):
         issues.append("キャンバス被覆率が低く、白抜けの可能性があります")
-    if layer_count < 2:
+    if not overlay and layer_count < 2:
         issues.append("単一レイヤーだけで奥行きの分離が不足しています")
-    if expressive and dynamic_ratio < 0.10:
+    if not overlay and expressive and dynamic_ratio < 0.10:
         issues.append("線画・陰影の筆圧変化が不足しています")
     if fragment_ratio > 0.20:
         issues.append("短い断片ストロークが多すぎます")

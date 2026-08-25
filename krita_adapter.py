@@ -7,7 +7,7 @@ import contextlib
 from dataclasses import dataclass
 import hashlib
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .brushes import brush_definition, infer_brush_profile
 from .domain import LAYER_RENDER_ORDER, Stroke, split_color_alpha
@@ -21,6 +21,7 @@ from .qt_compat import (
     QEvent,
     QIODevice,
     QObject,
+    QPainterPath,
     QPoint,
     QPointF,
     write_only_open_mode,
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
 
 # 標準的なレイヤー階層順序（インデックスが大きいほど上層/前面に配置）
 LAYER_STACK_ORDER = LAYER_RENDER_ORDER
+MAX_ACTIVE_LAYER_SNAPSHOT_BYTES = 512 * 1024 * 1024
 
 
 _last_applied_color: str | None = None
@@ -43,6 +45,8 @@ class _LayerSnapshot:
 
     node: Any
     pixels: Any
+    x: int
+    y: int
     width: int
     height: int
 
@@ -479,7 +483,11 @@ class KritaCanvasAdapter(CanvasPort):
                     if self._session_active_expected is not None:
                         self._assert_active_session_rollback_safe(document, current_node)
                 elif rollback_on_cancel and not active_target_created:
-                    active_snapshot = _capture_layer_snapshot(document, current_node)
+                    active_snapshot = _capture_layer_snapshot(
+                        document,
+                        current_node,
+                        bounds=_plan_snapshot_bounds(document, plan, size_mult),
+                    )
                 current_layer_name = getattr(current_node, "name", lambda: self.DEFAULT_LAYER_NAME)()
             elif mode == "single_layer":
                 current_node = self._session_container if session_active else None
@@ -573,12 +581,39 @@ class KritaCanvasAdapter(CanvasPort):
                     raise RuntimeError("消しゴムストロークにはKritaのアクティブビューが必要です")
                 _apply_stroke_style(
                     stroke,
-                    size_multiplier=size_mult,
+                    size_multiplier=(
+                        size_mult * _constant_path_pressure(stroke)
+                        if _can_use_continuous_path(current_node, stroke)
+                        else size_mult
+                    ),
                     opacity_multiplier=op_mult,
                     view=target_view,
                     preset_cache=self._brush_preset_cache,
                 )
                 _apply_color_to_krita(stroke.color, view=target_view)
+
+                if _can_use_continuous_path(current_node, stroke):
+                    path = _make_continuous_path(stroke)
+                    try:
+                        current_node.paintPath(path)
+                    except TypeError:
+                        # 一部ビルドで paintPath のPython bindingが欠ける場合だけ区間描画へ戻す。
+                        _apply_stroke_style(
+                            stroke,
+                            size_multiplier=size_mult,
+                            opacity_multiplier=op_mult,
+                            view=target_view,
+                            preset_cache=self._brush_preset_cache,
+                        )
+                    else:
+                        mutated = True
+                        rendered += 1
+                        segment_count += max(1, len(stroke.points) - 1)
+                        if segment_count >= evt_interval:
+                            segment_count = 0
+                            if process_events_during_render:
+                                _process_events()
+                        continue
 
                 for start, end in zip(stroke.points, stroke.points[1:], strict=False):
                     if cancelled():
@@ -729,23 +764,53 @@ def _end_macro(document: Any) -> None:
         raise RuntimeError("Krita Undoマクロの終了に失敗しました") from exc
 
 
-def _capture_layer_snapshot(document: Any, node: Any) -> _LayerSnapshot:
+def _estimated_pixel_bytes(node: Any, width: int, height: int) -> int:
+    depth = str(getattr(node, "colorDepth", lambda: "U8")()).upper()
+    model = str(getattr(node, "colorModel", lambda: "RGBA")()).upper()
+    bytes_per_channel = {"U8": 1, "U16": 2, "F16": 2, "F32": 4}.get(depth, 4)
+    channels = 5 if "CMYK" in model else (2 if model in {"A", "ALPHA", "GRAYA"} else 4)
+    return width * height * bytes_per_channel * channels
+
+
+def _plan_snapshot_bounds(document: Any, plan: DrawingPlan, size_multiplier: float) -> tuple[int, int, int, int]:
+    width = int(document.width())
+    height = int(document.height())
+    max_radius = max(stroke.size_px * size_multiplier * 1.5 + 4.0 for stroke in plan.strokes)
+    min_x = max(0, math.floor(min(point.x for stroke in plan.strokes for point in stroke.points) - max_radius))
+    min_y = max(0, math.floor(min(point.y for stroke in plan.strokes for point in stroke.points) - max_radius))
+    max_x = min(width, math.ceil(max(point.x for stroke in plan.strokes for point in stroke.points) + max_radius + 1))
+    max_y = min(height, math.ceil(max(point.y for stroke in plan.strokes for point in stroke.points) + max_radius + 1))
+    return min_x, min_y, max(1, max_x - min_x), max(1, max_y - min_y)
+
+
+def _capture_layer_snapshot(
+    document: Any,
+    node: Any,
+    bounds: tuple[int, int, int, int] | None = None,
+) -> _LayerSnapshot:
     """標準Krita Node APIだけで、既存レイヤーの復元可能なコピーを取得する。"""
     pixel_data = getattr(node, "pixelData", None)
     set_pixel_data = getattr(node, "setPixelData", None)
     if not callable(pixel_data) or not callable(set_pixel_data):
         raise RuntimeError("対象レイヤーが画素スナップショットAPIに対応していないため安全に描画できません")
     try:
-        width = int(document.width())
-        height = int(document.height())
+        if bounds is None:
+            x, y, width, height = 0, 0, int(document.width()), int(document.height())
+        else:
+            x, y, width, height = bounds
         if width <= 0 or height <= 0:
             raise ValueError("invalid document dimensions")
-        pixels = pixel_data(0, 0, width, height)
+        if _estimated_pixel_bytes(node, width, height) > MAX_ACTIVE_LAYER_SNAPSHOT_BYTES:
+            raise RuntimeError("snapshot exceeds safety budget")
+        pixels = pixel_data(x, y, width, height)
     except Exception as exc:
         raise RuntimeError("アクティブレイヤーのロールバック用スナップショットを取得できません") from exc
     if pixels is None:
         raise RuntimeError("アクティブレイヤーのロールバック用スナップショットが空です")
-    return _LayerSnapshot(node=node, pixels=pixels, width=width, height=height)
+    with contextlib.suppress(TypeError, ValueError):
+        if len(bytes(cast(Any, pixels))) > MAX_ACTIVE_LAYER_SNAPSHOT_BYTES:
+            raise RuntimeError("アクティブレイヤーのスナップショットが安全なメモリ上限を超えています")
+    return _LayerSnapshot(node=node, pixels=pixels, x=x, y=y, width=width, height=height)
 
 
 def _fingerprint_layer(document: Any, node: Any) -> _LayerFingerprint:
@@ -778,7 +843,7 @@ def _restore_layer_snapshot(snapshot: _LayerSnapshot) -> None:
     if not callable(set_pixel_data):
         raise RuntimeError("対象レイヤーが画素復元APIに対応していません")
     try:
-        result = set_pixel_data(snapshot.pixels, 0, 0, snapshot.width, snapshot.height)
+        result = set_pixel_data(snapshot.pixels, snapshot.x, snapshot.y, snapshot.width, snapshot.height)
     except Exception as exc:
         raise RuntimeError("アクティブレイヤーの画素復元に失敗しました") from exc
     if result is False:
@@ -797,6 +862,28 @@ def _qpoint_float(x: float, y: float) -> Any:
     if QPointF is not None and callable(QPointF):
         return QPointF(float(x), float(y))
     return _qpoint(x, y)
+
+
+def _constant_path_pressure(stroke: Stroke) -> float:
+    return sum(point.pressure for point in stroke.points) / len(stroke.points)
+
+
+def _can_use_continuous_path(node: Any, stroke: Stroke) -> bool:
+    if stroke.is_eraser or len(stroke.points) < 3 or not callable(QPainterPath):
+        return False
+    if not callable(getattr(node, "paintPath", None)):
+        return False
+    pressures = [point.pressure for point in stroke.points]
+    return max(pressures) - min(pressures) <= 0.03
+
+
+def _make_continuous_path(stroke: Stroke) -> Any:
+    path = QPainterPath()
+    first = stroke.points[0]
+    path.moveTo(float(first.x), float(first.y))
+    for point in stroke.points[1:]:
+        path.lineTo(float(point.x), float(point.y))
+    return path
 
 
 # 後方互換エイリアス

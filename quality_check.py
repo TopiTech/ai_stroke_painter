@@ -5,55 +5,101 @@ from __future__ import annotations
 import json
 import time
 
+from .brushes import infer_brush_profile
+from .docker import AIStrokePainterDocker
 from .procedural import generate_procedural_plan
+from .procedural.base import color_palette
 from .quality import evaluate_plan_quality
 
-SCENARIOS = (
-    "anime girl with blue hair and green eyes",
-    "mountain landscape with sakura",
-    "blooming rose flower",
-    "cute cat",
-    "magic circle",
-    "cyberpunk city skyline",
+EXPECTED_CATEGORIES = (
+    "character",
+    "character",
+    "landscape",
+    "landscape",
+    "landscape",
+    "fx",
+    "fx",
+    "creature",
+    "geometry",
+    "geometry",
+    "landscape",
+    "landscape",
 )
 
 
 def main() -> int:
     failed = False
     rows: list[dict[str, object]] = []
-    for prompt in SCENARIOS:
-        started = time.perf_counter()
-        plan = generate_procedural_plan(prompt, 42, None, 800, 600)
-        elapsed = time.perf_counter() - started
-        repeated = generate_procedural_plan(prompt, 42, None, 800, 600)
-        report = evaluate_plan_quality(plan)
-        deterministic = plan.as_dict() == repeated.as_dict()
-        passed = (
-            deterministic
-            and elapsed < 2.0
-            and report.coverage >= 0.35
-            and report.layer_count >= 2
-            and report.out_of_bounds_points == 0
-            and report.score >= 0.70
-            and not report.issues
-            and report.estimated_paint_calls <= 15_000
-            and len(plan.strokes) <= 500
-        )
-        failed = failed or not passed
-        rows.append(
-            {
-                "prompt": prompt,
-                "passed": passed,
-                "seconds": round(elapsed, 4),
-                "strokes": len(plan.strokes),
-                "coverage": round(report.coverage, 3),
-                "quality_score": round(report.score, 3),
-                "layers": report.layer_count,
-                "fallback_paint_calls": report.estimated_paint_calls,
-                "issues": report.issues,
-            }
-        )
-    print(json.dumps(rows, ensure_ascii=False, indent=2))
+    for scenario_index, preset in enumerate(AIStrokePainterDocker.PRESETS):
+        _title, prompt, palette_name, manual_count, brush_profile, _size, _opacity = preset
+        expected_category = EXPECTED_CATEGORIES[scenario_index]
+        palette_colors = {color.lower() for color in color_palette(palette_name).values()}
+        for count_mode, requested_count in (("manual", manual_count), ("auto", None)):
+            started = time.perf_counter()
+            plan = generate_procedural_plan(
+                prompt,
+                42,
+                requested_count,
+                800,
+                600,
+                palette_name=palette_name,
+                brush_profile=brush_profile,
+            )
+            elapsed = time.perf_counter() - started
+            repeated = generate_procedural_plan(
+                prompt,
+                42,
+                requested_count,
+                800,
+                600,
+                palette_name=palette_name,
+                brush_profile=brush_profile,
+            )
+            report = evaluate_plan_quality(plan)
+            deterministic = plan.as_dict() == repeated.as_dict()
+            overlay = plan.metadata.get("overlay", False) is True
+            minimum_coverage = 0.05 if overlay else 0.35
+            minimum_layers = 1 if overlay else 2
+            brush_contract = all(
+                infer_brush_profile(stroke.brush_preset, is_eraser=stroke.is_eraser) == brush_profile
+                for stroke in plan.strokes
+            )
+            palette_contract = all(stroke.color.lower() in palette_colors for stroke in plan.strokes)
+            budget = manual_count if requested_count is not None else 500
+            passed = (
+                deterministic
+                and elapsed < 2.0
+                and report.coverage >= minimum_coverage
+                and report.layer_count >= minimum_layers
+                and report.out_of_bounds_points == 0
+                and report.score >= 0.70
+                and not report.issues
+                and report.estimated_paint_calls <= 15_000
+                and 0 < len(plan.strokes) <= budget
+                and plan.metadata.get("prompt_category") == expected_category
+                and brush_contract
+                and palette_contract
+            )
+            failed = failed or not passed
+            rows.append(
+                {
+                    "scenario": scenario_index,
+                    "prompt": prompt,
+                    "count_mode": count_mode,
+                    "passed": passed,
+                    "seconds": round(elapsed, 4),
+                    "strokes": len(plan.strokes),
+                    "coverage": round(report.coverage, 3),
+                    "quality_score": round(report.score, 3),
+                    "layers": report.layer_count,
+                    "category": plan.metadata.get("prompt_category"),
+                    "brush_contract": brush_contract,
+                    "palette_contract": palette_contract,
+                    "fallback_paint_calls": report.estimated_paint_calls,
+                    "issues": report.issues,
+                }
+            )
+    print(json.dumps(rows, ensure_ascii=True, indent=2))
     return 1 if failed else 0
 
 

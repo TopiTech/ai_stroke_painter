@@ -34,8 +34,13 @@ def generate_landscape_strokes(
     def uid(name: str, idx: int = 0) -> str:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/land/{seed}/{name}/{idx}"))
 
-    is_wave = any(k in prompt_l for k in ["wave", "波", "海", "ocean", "北斎", "hokusai", "water"])
-    is_flower = any(k in prompt_l for k in ["flower", "花", "rose", "バラ", "薔薇", "sakura", "桜", "cherry"])
+    # "water" の部分一致は "watercolor" を波へ誤分類するため、波を示す明示語だけを使う。
+    is_wave = any(k in prompt_l for k in ["wave", "波", "海", "ocean", "sea", "北斎", "hokusai"])
+    is_rose = any(k in prompt_l for k in ["rose", "バラ", "薔薇"])
+    is_sakura = any(k in prompt_l for k in ["sakura", "桜", "cherry blossom"])
+    is_wildflower = any(
+        k in prompt_l for k in ["wildflower", "wild flower", "garden", "meadow", "野花", "花畑", "庭園"]
+    )
 
     if is_wave:
         # =====================================================================
@@ -143,7 +148,109 @@ def generate_landscape_strokes(
                 )
             )
 
-    elif is_flower:
+    elif is_wildflower:
+        # =====================================================================
+        # 野花の水彩ガーデン。人物や一輪のバラへ流用せず、複数株の奥行きを作る。
+        # =====================================================================
+        strokes.extend(
+            [
+                create_stroke(
+                    [(0.0, height * 0.28), (width, height * 0.28)],
+                    profile_type="airbrush",
+                    base_pressure=0.9,
+                    color="#dceef2",
+                    size_px=max(60.0, height * 0.42),
+                    layer_name="Flats",
+                    opacity=0.55,
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid("meadow_sky"),
+                ),
+                create_stroke(
+                    [(0.0, height * 0.78), (width, height * 0.78)],
+                    profile_type="watercolor",
+                    base_pressure=0.9,
+                    color="#8fbc8f",
+                    size_px=max(70.0, height * 0.45),
+                    layer_name="Flats",
+                    opacity=0.55,
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid("meadow_ground"),
+                ),
+            ]
+        )
+        flower_colors = ["#d95d8a", "#e9a13a", "#8b6fc0", "#f2d15c", "#de7b72"]
+        plant_count = 15
+        for plant_index in range(plant_count):
+            x = width * (0.08 + 0.84 * plant_index / max(1, plant_count - 1)) + rng.uniform(
+                -width * 0.018, width * 0.018
+            )
+            base_y = height * rng.uniform(0.72, 0.96)
+            stem_h = height * rng.uniform(0.16, 0.38)
+            flower_y = base_y - stem_h
+            stem = catmull_rom_spline(
+                [(x, base_y), (x + rng.uniform(-10, 10), base_y - stem_h * 0.55), (x, flower_y)], 5
+            )
+            strokes.append(
+                create_stroke(
+                    stem,
+                    profile_type="brush",
+                    base_pressure=0.72,
+                    color="#3f7f58",
+                    size_px=max(2.0, min(width, height) * 0.0045),
+                    layer_name="Lineart",
+                    opacity=0.82,
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid("wildflower_stem", plant_index),
+                )
+            )
+            radius = min(width, height) * rng.uniform(0.018, 0.032)
+            color = flower_colors[plant_index % len(flower_colors)]
+            petals = 5 + plant_index % 3
+            for petal_index in range(petals):
+                angle = math.tau * petal_index / petals + rng.uniform(-0.10, 0.10)
+                inner = (x + math.cos(angle) * radius * 0.18, flower_y + math.sin(angle) * radius * 0.18)
+                outer = (x + math.cos(angle) * radius, flower_y + math.sin(angle) * radius)
+                control = (
+                    x + math.cos(angle + 0.28) * radius * 0.72,
+                    flower_y + math.sin(angle + 0.28) * radius * 0.72,
+                )
+                strokes.append(
+                    create_stroke(
+                        [inner, control, outer],
+                        profile_type="watercolor",
+                        base_pressure=0.72,
+                        color=color,
+                        size_px=max(2.5, radius * 0.38),
+                        layer_name="Lineart",
+                        opacity=0.72,
+                        rng=rng,
+                        width=width,
+                        height=height,
+                        stroke_id=uid(f"wildflower_petals_{plant_index}", petal_index),
+                    )
+                )
+            strokes.append(
+                create_stroke(
+                    [(x - radius * 0.18, flower_y), (x + radius * 0.18, flower_y)],
+                    profile_type="marupen",
+                    base_pressure=0.9,
+                    color="#7b5a2c",
+                    size_px=max(2.0, radius * 0.35),
+                    layer_name="Highlights",
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid("wildflower_center", plant_index),
+                )
+            )
+
+    elif is_rose:
         # =====================================================================
         # 花（バラ・桜の美しい有機的ストローク）
         # =====================================================================
@@ -377,7 +484,9 @@ def generate_landscape_strokes(
                     foliage,
                     profile_type="gpen",
                     base_pressure=0.85,
-                    color="#2d6a4f" if b_i % 2 == 0 else "#40916c",
+                    color=("#d85f8f" if b_i % 2 == 0 else "#ef9fba")
+                    if is_sakura
+                    else ("#2d6a4f" if b_i % 2 == 0 else "#40916c"),
                     size_px=5.5,
                     layer_name="Lineart",
                     rng=rng,
@@ -386,6 +495,39 @@ def generate_landscape_strokes(
                     stroke_id=uid("foliage", b_i),
                 )
             )
+
+        if is_sakura:
+            blossom_colors = ["#f7c4d8", "#ee8fb5", "#fff0f5"]
+            for cluster_index in range(18):
+                angle = math.tau * cluster_index / 18.0
+                radius_x = width * (0.035 + 0.10 * ((cluster_index % 4) / 3.0))
+                radius_y = height * (0.025 + 0.08 * ((cluster_index % 5) / 4.0))
+                bx = tree_x + math.cos(angle) * radius_x + rng.uniform(-width * 0.018, width * 0.018)
+                by = tree_y - tree_h * 0.72 + math.sin(angle) * radius_y + rng.uniform(-height * 0.012, height * 0.012)
+                petal_radius = min(width, height) * 0.014
+                petal_points = [
+                    (
+                        bx + math.cos(math.tau * point_index / 5.0) * petal_radius,
+                        by + math.sin(math.tau * point_index / 5.0) * petal_radius,
+                    )
+                    for point_index in range(5)
+                ]
+                petal_points.append(petal_points[0])
+                strokes.append(
+                    create_stroke(
+                        petal_points,
+                        profile_type="watercolor",
+                        base_pressure=0.72,
+                        color=blossom_colors[cluster_index % len(blossom_colors)],
+                        size_px=max(2.0, petal_radius * 0.45),
+                        layer_name="Highlights",
+                        opacity=0.82,
+                        rng=rng,
+                        width=width,
+                        height=height,
+                        stroke_id=uid("sakura_blossom", cluster_index),
+                    )
+                )
 
         # 3. 雲 (Clouds - 立体フォーム＆光彩エッジ)
         for c_i in range(3):

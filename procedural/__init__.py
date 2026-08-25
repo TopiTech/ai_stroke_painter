@@ -104,6 +104,15 @@ def _prompt_category(prompt: str) -> str:
             "water",
             "tree",
             "flower",
+            "wildflower",
+            "wildflowers",
+            "garden",
+            "meadow",
+            "petal",
+            "petals",
+            "bouquet",
+            "blossom",
+            "cherry blossom",
             "rose",
             "sakura",
             "風景",
@@ -245,7 +254,11 @@ def _foundation_operations(category: str, prompt: str, colors: Mapping[str, str]
     if category == "landscape":
         prompt_lower = prompt.casefold()
         is_wave = any(keyword in prompt_lower for keyword in ("wave", "ocean", "sea", "波", "海", "北斎"))
-        is_flower = any(keyword in prompt_lower for keyword in ("flower", "rose", "sakura", "花", "バラ", "桜"))
+        is_rose = any(keyword in prompt_lower for keyword in ("rose", "バラ", "薔薇"))
+        is_wildflower = any(
+            keyword in prompt_lower
+            for keyword in ("wildflower", "wild flower", "garden", "meadow", "野花", "花畑", "庭園")
+        )
         if is_wave:
             return (
                 fill("sky", canvas, colors["hair_highlight"], size=0.12, profile="airbrush"),
@@ -257,7 +270,7 @@ def _foundation_operations(category: str, prompt: str, colors: Mapping[str, str]
                     profile="watercolor",
                 ),
             )
-        if is_flower:
+        if is_rose or is_wildflower:
             return (
                 fill("background", canvas, colors["hair_highlight"], size=0.12, profile="watercolor", opacity=0.4),
                 fill("flower-mass", _ellipse_points(0.5, 0.45, 0.30, 0.28), colors["hair_main"], size=0.055),
@@ -289,8 +302,10 @@ def _foundation_operations(category: str, prompt: str, colors: Mapping[str, str]
             fill("background", canvas, colors["hair_highlight"], size=0.12, profile="airbrush", opacity=0.35),
             fill("body", _ellipse_points(0.5, 0.56, 0.28, 0.34), colors["hair_main"], size=0.07),
         )
-    dark_background = colors["cloth_shadow"] if category == "geometry" else colors["lineart"]
-    return (fill("background", canvas, dark_background, size=0.12, profile="airbrush"),)
+    if category == "fx":
+        # FX は既存作品へ重ねる用途が主なので、全面背景でキャンバスを覆わない。
+        return ()
+    return (fill("background", canvas, colors["cloth_shadow"], size=0.12, profile="airbrush"),)
 
 
 def generate_procedural_program(
@@ -323,6 +338,22 @@ def generate_procedural_program(
     else:
         strokes = generate_character_strokes(prompt, seed, None, width, height, palette_name)
         title = "Character Portrait"
+
+    # 主役と舞台を排他的にせず、混合プロンプトでは軽量な環境輪郭を主役の背後へ追加する。
+    prompt_lower = prompt.casefold()
+    has_landscape_environment = any(
+        keyword in prompt_lower
+        for keyword in ("landscape", "mountain", "ocean", "forest", "garden", "山", "海", "森", "庭")
+    )
+    has_geometry_environment = any(
+        keyword in prompt_lower for keyword in ("city", "building", "skyline", "street", "都市", "街", "ビル")
+    )
+    if category in {"character", "creature"} and has_landscape_environment:
+        environment = generate_landscape_strokes(prompt, seed + 3_571, None, width, height, palette_name)
+        strokes = [stroke for stroke in environment if stroke.layer_name in {"Lineart", "Shading"}] + strokes
+    if category in {"character", "creature"} and has_geometry_environment:
+        environment = generate_geometry_strokes(prompt, seed + 4_267, None, width, height)
+        strokes = [stroke for stroke in environment if stroke.layer_name in {"Lineart", "Shading"}] + strokes
 
     has_fx_modifier = any(
         keyword in prompt.casefold()
@@ -416,5 +447,6 @@ def generate_procedural_program(
             "generator": "procedural_v2",
             "prompt_category": category,
             "requested_count": count,
+            "overlay": category == "fx",
         },
     )
