@@ -5275,6 +5275,274 @@ class ExtendedCustomizationTests(unittest.TestCase):
         )
         self.assertGreaterEqual(len(plan_3.strokes), 2)
 
+    def test_fullwidth_and_smart_quotes_and_unescaped_newlines_json(self) -> None:
+        """全角記号・スマートクォート・文字列内生改行・コメント混入のJSONが正常にパース・救出されるテスト。"""
+        from .llm_planner import _extract_json_object, _mapping_to_drawing_plan
+
+        raw_text = """
+        // Header comment
+        ｛
+            “schema_version”： 2，
+            “prompt”： “beautiful
+            sunset over
+            lake”，
+            “operations”： ［
+                ｛
+                    “kind”： “fill”，
+                    “id”： “sky_base”，
+                    ‘layer’： “Flats”，
+                    ‘polygon’： ［［0.0， 0.0］， ［1.0， 0.0］， ［1.0， 0.5］， ［0.0， 0.5］］，
+                    “brush”： ｛“color”： “#ff7f50”， “size”： 0.1｝，
+                ｝
+            ］
+        ｝
+        """
+        parsed = _extract_json_object(raw_text)
+        self.assertIn("operations", parsed)
+        plan = _mapping_to_drawing_plan(parsed, prompt="sunset", seed=1, width=1000, height=1000)
+        self.assertGreaterEqual(len(plan.strokes), 1)
+        self.assertEqual(plan.strokes[0].layer_name, "Flats")
+
+    def test_nested_layers_operations_unwrapping(self) -> None:
+        """layers 配列内にネストされた operations/strokes が自動フラット化されて救出されるテスト。"""
+        from .llm_planner import _sanitize_and_rescue_program_dict
+
+        nested_json = {
+            "schema_version": 2,
+            "title": "Nested Artwork",
+            "layers": [
+                {
+                    "name": "Flats",
+                    "operations": [
+                        {
+                            "kind": "fill",
+                            "id": "f_bg",
+                            "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+                            "brush": {"color": "#abcdef"},
+                        }
+                    ],
+                },
+                {
+                    "name": "Lineart",
+                    "operations": [
+                        {
+                            "kind": "path",
+                            "id": "p_contour",
+                            "points": [[0.1, 0.1], [0.9, 0.9]],
+                            "brush": {"profile": "gpen", "color": "#111111"},
+                        }
+                    ],
+                },
+            ],
+        }
+        rescued = _sanitize_and_rescue_program_dict(nested_json, canvas_w=1000, canvas_h=1000)
+        ops = rescued.get("operations", [])
+        self.assertEqual(len(ops), 2)
+        self.assertEqual(ops[0]["layer"], "Flats")
+        self.assertEqual(ops[1]["layer"], "Lineart")
+
+    def test_rect_circle_line_shape_conversions(self) -> None:
+        """簡易図形 (rect, circle, line) が自動的に正規の fill / path に変換されるテスト。"""
+        from .llm_planner import _sanitize_and_rescue_program_dict
+
+        shapes_json = {
+            "schema_version": 2,
+            "operations": [
+                {
+                    "kind": "rect",
+                    "id": "r1",
+                    "bounds": [0.1, 0.1, 0.8, 0.8],
+                    "layer": "Flats",
+                    "brush": {"color": "#ff0000"},
+                },
+                {
+                    "kind": "circle",
+                    "id": "c1",
+                    "center": [0.5, 0.5],
+                    "radius": 0.2,
+                    "layer": "Shading",
+                    "brush": {"color": "#0000ff"},
+                },
+                {
+                    "kind": "line",
+                    "id": "l1",
+                    "from": [0.1, 0.2],
+                    "to": [0.8, 0.9],
+                    "layer": "Lineart",
+                    "brush": {"profile": "gpen", "color": "#000000"},
+                },
+            ],
+        }
+        rescued = _sanitize_and_rescue_program_dict(shapes_json, canvas_w=1000, canvas_h=1000)
+        ops = rescued.get("operations", [])
+        self.assertEqual(len(ops), 3)
+        self.assertEqual(ops[0]["kind"], "fill")
+        self.assertEqual(len(ops[0]["polygon"]), 4)
+        self.assertEqual(ops[1]["kind"], "fill")
+        self.assertGreaterEqual(len(ops[1]["polygon"]), 12)
+        self.assertEqual(ops[2]["kind"], "path")
+        self.assertEqual(len(ops[2]["points"]), 2)
+
+    def test_hsl_and_rgba_and_named_colors(self) -> None:
+        """HSL / RGBA / 色名 / transparent が正しく16進数に正規化されるテスト。"""
+        from .stroke_program import normalize_hex_color
+
+        self.assertEqual(normalize_hex_color("coral"), "#ff7f50")
+        self.assertEqual(normalize_hex_color("navy"), "#000080")
+        self.assertEqual(normalize_hex_color("transparent"), "#00000000")
+        self.assertEqual(normalize_hex_color("rgba(255, 0, 0, 1.0)"), "#ff0000ff")
+        self.assertEqual(normalize_hex_color("hsl(0, 100%, 50%)"), "#ff0000")
+        self.assertEqual(normalize_hex_color("hsla(240, 100%, 50%, 0.5)"), "#0000ff80")
+
+    def test_truncated_json_multi_brace_repair(self) -> None:
+        """トークン上限で途中で切断された JSON がスタック解析・多段巻き戻しで正常に修復されるテスト。"""
+        truncated_raw = (
+            '{"schema_version": 2, "prompt": "cyberpunk city", "canvas": {"width": 1000, "height": 1000}, '
+            '"operations": ['
+            '{"kind": "fill", "id": "f1", "layer": "Flats", "polygon": [[0,0],[1,0],[1,1],[0,1]], "brush": {"color": "#112233"}}, '
+            '{"kind": "path", "id": "p1", "layer": "Lineart", "points": [[0.1, 0.2], [0.5, 0.8]], "brush": {"color": "#ffffff"}}, '
+            '{"kind": "path", "id": "p2", "layer": "Lineart", "points": [[0.2, 0.3], [0.6'
+        )
+        repaired = _attempt_json_repair(truncated_raw)
+        self.assertIsNotNone(repaired)
+        assert repaired is not None
+        ops = repaired.get("operations", [])
+        # 途切れた p2 の直前までの f1 と p1 が救出される
+        self.assertGreaterEqual(len(ops), 2)
+        self.assertEqual(ops[0]["id"], "f1")
+        self.assertEqual(ops[1]["id"], "p1")
+
+    def test_error_feedback_retry_flow(self) -> None:
+        """1回目の応答が構文エラーだった際に、2回目でエラーフィードバック付きリトライが行われ成功するテスト。"""
+
+        class RetryHandler(BaseHTTPRequestHandler):
+            attempt_count = 0
+            received_messages: list[Any] = []
+
+            def do_POST(self) -> None:
+                type(self).attempt_count += 1
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length))
+                type(self).received_messages.append(body.get("messages", []))
+
+                if type(self).attempt_count == 1:
+                    # 1回目は壊れた構文（JSONパース不可テキスト）
+                    resp = {"choices": [{"message": {"content": "Sorry, I am thinking... not a json"}}]}
+                else:
+                    # 2回目は正常な StrokeProgram JSON
+                    valid_prog = {
+                        "schema_version": 2,
+                        "prompt": "test retry",
+                        "operations": [
+                            {
+                                "kind": "path",
+                                "id": "retried_op",
+                                "layer": "Lineart",
+                                "points": [[0.1, 0.1], [0.9, 0.9]],
+                                "brush": {"color": "#000000"},
+                            }
+                        ],
+                    }
+                    resp = {"choices": [{"message": {"content": json.dumps(valid_prog)}}]}
+
+                encoded = json.dumps(resp).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def log_message(self, _format: str, *_args: Any) -> None:
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), RetryHandler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            planner = OpenAICompatiblePlanner(
+                OpenAICompatibleSettings(
+                    f"http://127.0.0.1:{server.server_port}/v1",
+                    "test-model",
+                    "test-key",
+                    2,
+                    max_retries=3,
+                )
+            )
+            plan = planner.plan("test retry", 1, 1, 1000, 1000)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+        self.assertEqual(RetryHandler.attempt_count, 2)
+        self.assertEqual(len(plan.strokes), 1)
+        # 2回目のプロンプトに FEEDBACK が含まれていることを検証
+        second_msgs = RetryHandler.received_messages[1]
+        self.assertTrue(any("FEEDBACK" in str(m.get("content", "")) for m in second_msgs))
+
+    def test_parameter_fallback_transient_retry(self) -> None:
+        """HTTP 429 / 503 等の一時的障害時に指数バックオフで再試行されるテスト。"""
+
+        class TransientHandler(BaseHTTPRequestHandler):
+            attempt_count = 0
+
+            def do_POST(self) -> None:
+                type(self).attempt_count += 1
+                if type(self).attempt_count == 1:
+                    # 1回目は 429 Rate Limit
+                    self.send_response(429)
+                    self.send_header("Content-Type", "application/json")
+                    body = b'{"error": {"message": "Rate limit exceeded"}}'
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                else:
+                    # 2回目は 200 OK
+                    valid_prog = {
+                        "schema_version": 2,
+                        "prompt": "transient test",
+                        "operations": [
+                            {
+                                "kind": "path",
+                                "id": "transient_op",
+                                "layer": "Lineart",
+                                "points": [[0.1, 0.1], [0.9, 0.9]],
+                                "brush": {"color": "#333333"},
+                            }
+                        ],
+                    }
+                    resp = {"choices": [{"message": {"content": json.dumps(valid_prog)}}]}
+                    encoded = json.dumps(resp).encode("utf-8")
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(encoded)))
+                    self.end_headers()
+                    self.wfile.write(encoded)
+
+            def log_message(self, _format: str, *_args: Any) -> None:
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), TransientHandler)
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            planner = OpenAICompatiblePlanner(
+                OpenAICompatibleSettings(
+                    f"http://127.0.0.1:{server.server_port}/v1",
+                    "test-model",
+                    "test-key",
+                    3,
+                )
+            )
+            plan = planner.plan("transient test", 1, 1, 1000, 1000)
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+        self.assertEqual(TransientHandler.attempt_count, 2)
+        self.assertEqual(len(plan.strokes), 1)
+
 
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))

@@ -39,11 +39,45 @@ _NAMED_COLORS: dict[str, str] = {
     "sky": "#87ceeb",
     "navy": "#000080",
     "gold": "#ffd700",
+    "silver": "#c0c0c0",
+    "teal": "#008080",
+    "olive": "#808000",
+    "maroon": "#800000",
+    "lime": "#00ff00",
+    "aqua": "#00ffff",
+    "fuchsia": "#ff00ff",
+    "crimson": "#dc143c",
+    "coral": "#ff7f50",
+    "indigo": "#4b0082",
+    "khaki": "#f0e68c",
+    "lavender": "#e6e6fa",
+    "peach": "#ffdab9",
+    "plum": "#dda0dd",
+    "salmon": "#fa8072",
+    "tan": "#d2b48c",
+    "turquoise": "#40e0d0",
+    "ivory": "#fffff0",
+    "snow": "#fffafa",
+    "charcoal": "#36454f",
+    "cream": "#fffdd0",
+    "transparent": "#00000000",
+    "none": "#00000000",
 }
 
 
+def _hsl_to_rgb(h_deg: float, s_pct: float, l_pct: float) -> tuple[int, int, int]:
+    """HSL (h: 0-360, s: 0-100%, l: 0-100%) を RGB (0-255) に変換する。"""
+    import colorsys
+
+    h = (h_deg % 360.0) / 360.0
+    s = max(0.0, min(100.0, s_pct)) / 100.0
+    lum = max(0.0, min(100.0, l_pct)) / 100.0
+    r, g, b = colorsys.hls_to_rgb(h, lum, s)
+    return round(r * 255), round(g * 255), round(b * 255)
+
+
 def normalize_hex_color(color_val: Any, fallback: str = "#232323") -> str:
-    """様々な色表現（#RGB, #RRGGBB, #なしHEX, 名前付き色, rgb() 等）を安全に標準16進カラーコードに変換する。"""
+    """様々な色表現（#RGB, #RRGGBB, #RRGGBBAA, #なしHEX, 名前付き色, rgb(), rgba(), hsl(), hsla() 等）を安全に標準16進カラーコードに変換する。"""
     if not isinstance(color_val, str):
         return fallback
     c = color_val.strip()
@@ -61,12 +95,56 @@ def normalize_hex_color(color_val: Any, fallback: str = "#232323") -> str:
     if low in _NAMED_COLORS:
         return _NAMED_COLORS[low]
     # rgb(r, g, b) または rgba(r, g, b, a)
-    rgb_m = re.match(r"rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)", c, re.I)
+    rgb_m = re.match(
+        r"rgba?\s*\(\s*(\d+(?:\.\d+)?%?)\s*,\s*(\d+(?:\.\d+)?%?)\s*,\s*(\d+(?:\.\d+)?%?)(?:\s*,\s*(\d+(?:\.\d+)?%?))?\s*\)",
+        c,
+        re.I,
+    )
     if rgb_m:
-        r = max(0, min(255, int(rgb_m.group(1))))
-        g = max(0, min(255, int(rgb_m.group(2))))
-        b = max(0, min(255, int(rgb_m.group(3))))
+
+        def _parse_rgb_part(v: str) -> int:
+            if v.endswith("%"):
+                return max(0, min(255, round(float(v[:-1]) * 2.55)))
+            f_val = float(v)
+            if f_val <= 1.0 and "." in v:
+                return max(0, min(255, round(f_val * 255)))
+            return max(0, min(255, round(f_val)))
+
+        r = _parse_rgb_part(rgb_m.group(1))
+        g = _parse_rgb_part(rgb_m.group(2))
+        b = _parse_rgb_part(rgb_m.group(3))
+        a_str = rgb_m.group(4)
+        if a_str is not None:
+            if a_str.endswith("%"):
+                a = max(0, min(255, round(float(a_str[:-1]) * 2.55)))
+            else:
+                f_a = float(a_str)
+                a = max(0, min(255, round(f_a * 255 if f_a <= 1.0 else f_a)))
+            return f"#{r:02x}{g:02x}{b:02x}{a:02x}"
         return f"#{r:02x}{g:02x}{b:02x}"
+
+    # hsl(h, s%, l%) または hsla(h, s%, l%, a)
+    hsl_m = re.match(
+        r"hsla?\s*\(\s*(\d+(?:\.\d+)?(?:deg)?)\s*,\s*(\d+(?:\.\d+)?)%?\s*,\s*(\d+(?:\.\d+)?)%?(?:\s*,\s*(\d+(?:\.\d+)?%?))?\s*\)",
+        c,
+        re.I,
+    )
+    if hsl_m:
+        h_str = hsl_m.group(1).lower().replace("deg", "")
+        h = float(h_str)
+        s = float(hsl_m.group(2))
+        lum = float(hsl_m.group(3))
+        r, g, b = _hsl_to_rgb(h, s, lum)
+        a_str = hsl_m.group(4)
+        if a_str is not None:
+            if a_str.endswith("%"):
+                a = max(0, min(255, round(float(a_str[:-1]) * 2.55)))
+            else:
+                f_a = float(a_str)
+                a = max(0, min(255, round(f_a * 255 if f_a <= 1.0 else f_a)))
+            return f"#{r:02x}{g:02x}{b:02x}{a:02x}"
+        return f"#{r:02x}{g:02x}{b:02x}"
+
     return fallback
 
 

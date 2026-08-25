@@ -82,8 +82,10 @@ def _is_reasoning_model(model_name: str) -> bool:
             "o4",
             "deepseek-r1",
             "deepseek-reasoner",
+            "deepseek-v3",
             "r1",
             "qwq",
+            "qwen-2.5-coder",
             "thinking",
             "reasoning",
             "reasoner",
@@ -91,8 +93,88 @@ def _is_reasoning_model(model_name: str) -> bool:
             "claude-3-7",
             "gemini-2.0-flash-thinking",
             "gemini-2.5",
+            "gemini-thinking",
         )
     )
+
+
+def _get_stroke_program_json_schema() -> dict[str, Any]:
+    """OpenAI Structured Outputs (json_schema) 用の厳格な StrokeProgram スキーマ。"""
+    return {
+        "name": "stroke_program",
+        "strict": False,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "schema_version": {"type": "integer", "enum": [2]},
+                "prompt": {"type": "string"},
+                "seed": {"type": "integer"},
+                "title": {"type": "string"},
+                "iteration": {"type": "integer"},
+                "goal_reached": {"type": "boolean"},
+                "completion_score": {"type": "number"},
+                "canvas": {
+                    "type": "object",
+                    "properties": {
+                        "width": {"type": "number"},
+                        "height": {"type": "number"},
+                    },
+                    "required": ["width", "height"],
+                },
+                "operations": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string", "enum": ["path", "fill", "hatch", "particles"]},
+                            "id": {"type": "string"},
+                            "layer": {"type": "string"},
+                            "points": {
+                                "type": "array",
+                                "items": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                },
+                            },
+                            "polygon": {
+                                "type": "array",
+                                "items": {
+                                    "type": "array",
+                                    "items": {"type": "number"},
+                                },
+                            },
+                            "bounds": {
+                                "type": "array",
+                                "items": {"type": "number"},
+                            },
+                            "count": {"type": "integer"},
+                            "brush": {
+                                "type": "object",
+                                "properties": {
+                                    "profile": {"type": "string"},
+                                    "color": {"type": "string"},
+                                    "size": {"type": "number"},
+                                    "size_mode": {"type": "string", "enum": ["ratio", "px"]},
+                                    "opacity": {"type": "number"},
+                                    "is_eraser": {"type": "boolean"},
+                                    "preset_hint": {"type": "string"},
+                                },
+                            },
+                            "closed": {"type": "boolean"},
+                            "smooth": {"type": "boolean"},
+                            "style": {"type": "string"},
+                            "spacing": {"type": "number"},
+                            "angle_deg": {"type": "number"},
+                            "cross": {"type": "boolean"},
+                            "shape": {"type": "string"},
+                        },
+                        "required": ["kind", "id", "layer"],
+                    },
+                },
+            },
+            "required": ["schema_version", "operations"],
+        },
+    }
 
 
 def _detect_image_mime_type(data: bytes) -> str:
@@ -486,13 +568,25 @@ class OpenAICompatiblePlanner(PlannerPort):
             if attempt == 1:
                 current_payload = dict(payload)
             elif attempt == 2:
-                self._log("[自動リトライ 1/2] response_format を除外し、直接確定 JSON 出力指定で再試行します...")
+                err_summary = (
+                    str(last_error)[:200].replace("\n", " ") if last_error else "Invalid format or incomplete JSON"
+                )
+                is_len_err = any(kw in err_summary.lower() for kw in ("token", "length", "途切れ", "上限"))
+                self._log(
+                    f"[自動リトライ 1/{max_attempts - 1}] エラーフィードバック付き (原因: {err_summary}) で再試行します..."
+                )
+
                 current_payload = dict(payload)
-                current_payload.pop("response_format", None)
+                current_payload["response_format"] = {"type": "json_object"}
                 current_payload.pop("reasoning_effort", None)
                 if not is_reasoning:
                     current_payload["temperature"] = 0.2
 
+                len_advice = (
+                    " Your previous output was cut off due to token limit. Use compact operations (e.g. fill with 'wash' style and hatch) to keep total operations under 35."
+                    if is_len_err
+                    else ""
+                )
                 retry_sys = (
                     _system_instruction(
                         iteration=iteration,
@@ -503,7 +597,8 @@ class OpenAICompatiblePlanner(PlannerPort):
                         prompt=valid_prompt,
                         palette_name=palette_name,
                     )
-                    + "\nIMPORTANT: Output ONLY the raw JSON starting immediately with ```json. Do NOT write any reasoning text or preamble."
+                    + f"\n\n[FEEDBACK FROM PREVIOUS ATTEMPT]\nPrevious attempt failed: {err_summary}.{len_advice}\n"
+                    "CRITICAL: Output ONLY a single, valid raw JSON object for StrokeProgram schema. Start immediately with ```json. Do NOT write any preamble, conversational text, or commentary."
                 )
                 r_messages: list[dict[str, Any]] = [{"role": "system", "content": retry_sys}]
                 if self._conversation_history and iteration > 1:
@@ -511,7 +606,10 @@ class OpenAICompatiblePlanner(PlannerPort):
                 r_messages.append({"role": "user", "content": user_content})
                 current_payload["messages"] = r_messages
             else:
-                self._log("[自動リトライ 2/2] 思考抑制・最小構造モードで再試行します...")
+                err_summary = str(last_error)[:200].replace("\n", " ") if last_error else "Malformed output"
+                self._log(
+                    f"[自動リトライ {attempt - 1}/{max_attempts - 1}] 思考抑制・最小構造 Zero-Thought モードで再試行します..."
+                )
                 current_payload = dict(payload)
                 current_payload.pop("response_format", None)
                 current_payload.pop("reasoning_effort", None)
@@ -519,8 +617,9 @@ class OpenAICompatiblePlanner(PlannerPort):
                     current_payload["temperature"] = 0.0
 
                 min_sys = (
-                    'You must output ONLY valid JSON matching StrokeProgram schema. Start directly with {"schema_version": 2. '
-                    "Use normalized coordinates and operations. No thoughts, no analysis."
+                    f"Previous error: {err_summary}.\n"
+                    'You must output ONLY raw valid JSON matching StrokeProgram schema. Start immediately with {"schema_version": 2, "operations": [...]. '
+                    "Use normalized 0.0-1.0 coordinates. Absolutely no thoughts, explanations, or text outside the JSON."
                 )
                 r_messages_min: list[dict[str, Any]] = [{"role": "system", "content": min_sys}]
                 if self._conversation_history and iteration > 1:
@@ -662,9 +761,9 @@ class OpenAICompatiblePlanner(PlannerPort):
         payload: dict[str, Any],
         cancelled: Callable[[], bool] | None = None,
     ) -> Mapping[str, Any]:
-        """400/422 のパラメータ非互換エラー（temperature, max_tokens, response_format, reasoning_effort 等）を自動検知・パージして再試行する。"""
+        """400/422 のパラメータ非互換エラー（json_schema, temperature, max_tokens, response_format, reasoning_effort 等）および一時的障害を自動検知・適応して再試行する。"""
         current_payload = dict(payload)
-        max_param_retries = 4
+        max_param_retries = 5
 
         for p_attempt in range(max_param_retries):
             if cancelled is not None and cancelled():
@@ -675,7 +774,45 @@ class OpenAICompatiblePlanner(PlannerPort):
                 err_text = str(exc).lower()
                 modified = False
 
-                # 1. reasoning_effort 非対応エラーの自動パージ
+                # 0. 一時的サーバーエラー (429 Rate Limit, 500, 502, 503, 504, タイムアウト) への指数バックオフ再送
+                is_transient = any(
+                    code in err_text
+                    for code in (
+                        "http 429",
+                        "http 500",
+                        "http 502",
+                        "http 503",
+                        "http 504",
+                        "rate limit",
+                        "timed out",
+                        "timeout",
+                    )
+                )
+                if is_transient and p_attempt < max_param_retries - 1:
+                    backoff_sec = min(4.0, 0.4 * (2**p_attempt))
+                    self._log(
+                        f"[一時通信エラー再試行] 一時的エラー ({exc}) を検知しました。{backoff_sec:.1f}s 後に再試行します..."
+                    )
+                    time.sleep(backoff_sec)
+                    continue
+
+                # 1. response_format: json_schema 非対応エラーの json_object / 除外への自動フォールバック
+                if (
+                    "response_format" in err_text or "json_schema" in err_text or "schema" in err_text
+                ) and "response_format" in current_payload:
+                    cur_rf = current_payload.get("response_format")
+                    if isinstance(cur_rf, Mapping) and cur_rf.get("type") == "json_schema":
+                        self._log(
+                            "[パラメータ自動適応] モデルが json_schema をサポートしていないため json_object に切り替えます"
+                        )
+                        current_payload["response_format"] = {"type": "json_object"}
+                        modified = True
+                    else:
+                        self._log("[パラメータ自動適応] モデルが response_format をサポートしていないため除外します")
+                        current_payload.pop("response_format", None)
+                        modified = True
+
+                # 2. reasoning_effort 非対応エラーの自動パージ
                 if (
                     "reasoning_effort" in err_text
                     and any(kw in err_text for kw in ("unsupported", "not support", "invalid", "extra_forbidden"))
@@ -685,7 +822,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                     current_payload.pop("reasoning_effort", None)
                     modified = True
 
-                # 2. temperature 非対応エラーの自動パージ
+                # 3. temperature 非対応エラーの自動パージ
                 if (
                     "temperature" in err_text
                     and any(kw in err_text for kw in ("unsupported", "not support", "invalid", "extra_forbidden"))
@@ -695,7 +832,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                     current_payload.pop("temperature", None)
                     modified = True
 
-                # 3. max_tokens -> max_completion_tokens への自動変換
+                # 4. max_tokens -> max_completion_tokens への自動変換
                 if (
                     "max_tokens" in err_text
                     and any(kw in err_text for kw in ("max_completion_tokens", "unsupported", "not support"))
@@ -706,7 +843,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                     current_payload["max_completion_tokens"] = val
                     modified = True
 
-                # 4. max_completion_tokens -> max_tokens への逆変換 (旧型互換サーバー対応)
+                # 5. max_completion_tokens -> max_tokens への逆変換 (旧型互換サーバー対応)
                 if (
                     "max_completion_tokens" in err_text
                     and any(kw in err_text for kw in ("unsupported", "not support", "extra_forbidden"))
@@ -717,10 +854,10 @@ class OpenAICompatiblePlanner(PlannerPort):
                     current_payload["max_tokens"] = val
                     modified = True
 
-                # 5. response_format 非対応エラーの自動パージ
+                # 6. response_format 一般非対応エラーの自動パージ
                 if (
                     "response_format" in err_text
-                    and any(kw in err_text for kw in ("unsupported", "not support", "invalid", "schema", "json_object"))
+                    and any(kw in err_text for kw in ("unsupported", "not support", "invalid", "json_object"))
                     and "response_format" in current_payload
                 ):
                     self._log("[パラメータ自動適応] モデルが response_format をサポートしていないため除外します")
@@ -1269,43 +1406,107 @@ def _find_best_json_start(text: str) -> int:
     return text.find("{")
 
 
+_FULLWIDTH_MAP = str.maketrans(
+    {
+        "：": ":",
+        "，": ",",
+        "｛": "{",
+        "｝": "}",
+        "［": "[",
+        "］": "]",
+        "（": "(",
+        "）": ")",
+        "“": '"',
+        "”": '"',
+        "‘": "'",
+        "’": "'",
+        "｀": "`",
+        "；": ";",
+    }
+)
+
+
+def _escape_raw_newlines_in_json_strings(text: str) -> str:
+    """JSON 文字列リテラル内部に直接改行が入っている場合、エスケープ \\n に安全に変換する。"""
+    out: list[str] = []
+    in_string = False
+    escape = False
+
+    for ch in text:
+        if escape:
+            out.append(ch)
+            escape = False
+            continue
+        if ch == "\\":
+            out.append(ch)
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            out.append(ch)
+            continue
+        if in_string and ch == "\n":
+            out.append("\\n")
+            continue
+        if in_string and ch == "\r":
+            continue
+        if in_string and ch == "\t":
+            out.append("\\t")
+            continue
+        out.append(ch)
+
+    return "".join(out)
+
+
 def _sanitize_json_text(text: str) -> str:
-    """LLM 特有の構文乱れ（コメント、末尾カンマ、シングルクォート、Python 定数、非クォートキー）を安全にサニタイズする。"""
+    """LLM 特有の構文乱れ（全角記号、スマートクォート、コメント、末尾カンマ、シングルクォート、Python/JS定数、非クォートキー、単位付き数値）を包括的にサニタイズする。"""
     if not text:
         return ""
 
-    s = text.strip()
+    # 1. 全角記号・スマートクォート・不可視文字の半角 ASCII 正規化
+    s = text.translate(_FULLWIDTH_MAP)
+    s = re.sub(r"[\ufeff\u200b\u200c\u200d\u2060\u00a0]", " ", s)
+    s = s.strip()
 
-    # 1. ブロックコメント /* ... */ の除去
+    # 2. ブロックコメント /* ... */ の除去
     s = re.sub(r"/\*[\s\S]*?\*/", "", s)
 
-    # 2. 行コメント // ... および # ... の除去 (URL 中の "http://" や "https://" は除外)
+    # 3. 行コメント // ... および # ... の除去 (URL 中の "http://" や "https://", カラーコード "#ffffff" は保護)
     lines: list[str] = []
     for line in s.splitlines():
+        # // コメントの除去 (http:// や https:// の後ではないもの)
         line_clean = re.sub(r'(?<![:"\'/])//.*$', "", line)
-        line_clean = re.sub(r'(?<!["\'\w])#.*$', "", line_clean)
+        # # コメントの除去 (引用符内や16進カラー #abcdef の直後ではないもの)
+        line_clean = re.sub(r'(?<!["\'\w#])#(?![0-9a-fA-F]{3,8}\b).*$', "", line_clean)
         lines.append(line_clean)
     s = "\n".join(lines)
 
-    # 3. Python 定数を JSON 定数に正規化
+    # 4. 文字列リテラル内の生改行のエスケープ
+    s = _escape_raw_newlines_in_json_strings(s)
+
+    # 5. Python / JS 定数を JSON 標準定数に正規化
     s = re.sub(r"\bTrue\b", "true", s)
     s = re.sub(r"\bFalse\b", "false", s)
     s = re.sub(r"\bNone\b", "null", s)
     s = re.sub(r"\bundefined\b", "null", s)
+    s = re.sub(r"\bNaN\b", "null", s)
+    s = re.sub(r"\bInfinity\b", "null", s)
+    s = re.sub(r"\b-Infinity\b", "null", s)
 
-    # 4. 非クォートキーのダブルクォート化: { key: 123 } -> { "key": 123 }
+    # 6. 非クォートキーのダブルクォート化: { key: 123, sub_key-1: "val" } -> { "key": 123, "sub_key-1": "val" }
     s = re.sub(r"([{,]\s*)([a-zA-Z_][a-zA-Z0-9_-]*)\s*:", r'\1"\2":', s)
 
-    # 5. 数値末尾の単位サフィックス除去 (e.g. "size": 200px -> "size": 200)
-    s = re.sub(r"(:\s*-?\d+(?:\.\d+)?)\s*(?:px|pt|deg)\b", r"\1", s)
+    # 7. 数値末尾の単位サフィックス除去 (e.g. "size": 200px -> "size": 200, "angle": 30deg -> 30, "opacity": 50% -> 0.5)
+    s = re.sub(r"(:\s*-?\d+(?:\.\d+)?)\s*%\b", lambda m: f": {float(m.group(1).split(':')[1].strip()) / 100.0}", s)
+    s = re.sub(r"(:\s*-?\d+(?:\.\d+)?)\s*(?:px|pt|deg|rad)\b", r"\1", s)
 
-    # 6. 安全なシングルクォートキー・値の変換（単語内アポストロフィ破壊防止）
+    # 8. 安全なシングルクォートキー・値の変換（単語内アポストロフィ don't / let's 等の破壊防止）
     s = re.sub(r"([{,]\s*)'([^'\\]*(?:\\.[^'\\]*)*)'\s*:", r'\1"\2":', s)
     s = re.sub(r":\s*'([^'\\]*(?:\\.[^'\\]*)*)'(\s*[,}\]])", r': "\1"\2', s)
     s = re.sub(r"(\[\s*)'([^'\\]*(?:\\.[^'\\]*)*)'", r'\1"\2"', s)
     s = re.sub(r",\s*'([^'\\]*(?:\\.[^'\\]*)*)'", r', "\1"', s)
 
-    # 7. オブジェクト・配列末尾のカンマ（Trailing commas）の除去
+    # 9. オブジェクト・配列末尾のカンマ（Trailing commas）の除去
     s = re.sub(r",\s*([}\]])", r"\1", s)
 
     return s.strip()
@@ -1651,7 +1852,7 @@ def _sanitize_and_rescue_program_dict(
     canvas_w: float = 1000.0,
     canvas_h: float = 1000.0,
 ) -> dict[str, Any]:
-    """LLM 出力辞書（strokes_summary、不正な型、未知キー、ピクセル座標混在等）を完全な StrokeProgram 辞書へ整形・救出する。"""
+    """LLM 出力辞書（strokes_summary、レイヤーネスト、簡易図形、不正な型、未知キー、ピクセル座標混在等）を完全な StrokeProgram 辞書へ整形・救出する。"""
     d = dict(value)
 
     # 1. canvas の安全な取得
@@ -1667,9 +1868,12 @@ def _sanitize_and_rescue_program_dict(
     if h <= 1.0:
         h = canvas_h
 
-    # 2. operations の探索と正規化
-    raw_ops = d.get("operations")
-    if raw_ops is None or not isinstance(raw_ops, Sequence) or isinstance(raw_ops, (str, bytes)):
+    # 2. operations の探索と正規化（レイヤーネスト構造の自動フラット化を含む）
+    raw_ops: list[Any] = []
+    direct_ops = d.get("operations")
+    if isinstance(direct_ops, Sequence) and not isinstance(direct_ops, (str, bytes)):
+        raw_ops.extend(direct_ops)
+    else:
         for alt_key in (
             "strokes_summary",
             "summary_strokes",
@@ -1680,14 +1884,35 @@ def _sanitize_and_rescue_program_dict(
             "items",
             "shapes",
             "draw_list",
+            "elements",
+            "actions",
+            "steps",
         ):
             cand = d.get(alt_key)
             if isinstance(cand, Sequence) and not isinstance(cand, (str, bytes)) and len(cand) > 0:
-                raw_ops = cand
+                raw_ops.extend(cand)
                 break
 
-    if raw_ops is None or not isinstance(raw_ops, Sequence) or isinstance(raw_ops, (str, bytes)):
-        raw_ops = []
+    # レイヤーネスト構造 (例: {"layers": [{"name": "Flats", "operations": [...]}, ...]}) の展開
+    layers_raw = d.get("layers") or d.get("layer_list")
+    if isinstance(layers_raw, Sequence) and not isinstance(layers_raw, (str, bytes)):
+        for l_item in layers_raw:
+            if isinstance(l_item, Mapping):
+                l_name = str(l_item.get("name") or l_item.get("layer") or l_item.get("layer_name") or "").strip()
+                l_ops = (
+                    l_item.get("operations")
+                    or l_item.get("strokes")
+                    or l_item.get("paths")
+                    or l_item.get("elements")
+                    or l_item.get("draw_list")
+                )
+                if isinstance(l_ops, Sequence) and not isinstance(l_ops, (str, bytes)):
+                    for sub_op in l_ops:
+                        if isinstance(sub_op, Mapping):
+                            sub_d = dict(sub_op)
+                            if l_name and not sub_d.get("layer") and not sub_d.get("layer_name"):
+                                sub_d["layer"] = l_name
+                            raw_ops.append(sub_d)
 
     clean_ops: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
@@ -1698,12 +1923,78 @@ def _sanitize_and_rescue_program_dict(
         item_d = dict(item)
         raw_kind = str(item_d.get("kind", "")).strip().lower()
 
-        # kind の正規化
-        if raw_kind in ("fill", "wash", "area", "region", "polygon", "background", "base"):
+        # 点座標の正規化ヘルパー
+        def _norm_pts(raw_point_list: Any) -> list[list[float]]:
+            res: list[list[float]] = []
+            if not isinstance(raw_point_list, Sequence) or isinstance(raw_point_list, (str, bytes)):
+                return res
+            for pt in raw_point_list:
+                if isinstance(pt, Sequence) and not isinstance(pt, (str, bytes)) and len(pt) >= 2:
+                    px = float(pt[0])
+                    py = float(pt[1])
+                    if px > 1.0 and w > 1.0:
+                        px = px / w
+                    if py > 1.0 and h > 1.0:
+                        py = py / h
+                    pp = float(pt[2]) if len(pt) >= 3 else 0.8
+                    res.append([max(0.0, min(1.0, px)), max(0.0, min(1.0, py)), max(0.0, min(1.0, pp))])
+                elif isinstance(pt, Mapping) and "x" in pt and "y" in pt:
+                    px = float(pt["x"])
+                    py = float(pt["y"])
+                    if px > 1.0 and w > 1.0:
+                        px = px / w
+                    if py > 1.0 and h > 1.0:
+                        py = py / h
+                    pp = float(pt.get("pressure", 0.8))
+                    res.append([max(0.0, min(1.0, px)), max(0.0, min(1.0, py)), max(0.0, min(1.0, pp))])
+            return res
+
+        # 簡易図形の自動変換 (rect, box, circle, ellipse 等)
+        if raw_kind in ("rect", "rectangle", "box"):
+            kind = "fill"
+            # rect: [x, y, w, h] または bounds: [x0, y0, x1, y1]
+            raw_rect = item_d.get("rect") or item_d.get("bounds") or item_d.get("box")
+            if isinstance(raw_rect, Sequence) and len(raw_rect) >= 4:
+                rx0, ry0, rx1, ry1 = float(raw_rect[0]), float(raw_rect[1]), float(raw_rect[2]), float(raw_rect[3])
+                if (
+                    raw_kind in ("rect", "rectangle")
+                    and "bounds" not in item_d
+                    and rx1 <= 1.0
+                    and ry1 <= 1.0
+                    and rx0 + rx1 <= 1.01
+                ):
+                    # [x, y, width, height] 形式
+                    rx1, ry1 = rx0 + rx1, ry0 + ry1
+                if rx0 > 1.0 and w > 1.0:
+                    rx0, rx1 = rx0 / w, rx1 / w
+                if ry0 > 1.0 and h > 1.0:
+                    ry0, ry1 = ry0 / h, ry1 / h
+                item_d["polygon"] = [[rx0, ry0], [rx1, ry0], [rx1, ry1], [rx0, ry1]]
+        elif raw_kind in ("circle", "ellipse", "disc"):
+            kind = "fill"
+            raw_center = item_d.get("center") or (item_d.get("cx", 0.5), item_d.get("cy", 0.5))
+            cx = float(raw_center[0]) if isinstance(raw_center, Sequence) and len(raw_center) >= 2 else 0.5
+            cy = float(raw_center[1]) if isinstance(raw_center, Sequence) and len(raw_center) >= 2 else 0.5
+            if cx > 1.0 and w > 1.0:
+                cx = cx / w
+            if cy > 1.0 and h > 1.0:
+                cy = cy / h
+            r_val = float(item_d.get("radius") or item_d.get("r") or 0.05)
+            if r_val > 1.0 and min(w, h) > 1.0:
+                r_val = r_val / min(w, h)
+            # 16頂点の近似円ポリゴン
+            circle_poly: list[list[float]] = []
+            for deg_idx in range(16):
+                ang = (deg_idx / 16.0) * 2.0 * math.pi
+                circle_poly.append(
+                    [max(0.0, min(1.0, cx + r_val * math.cos(ang))), max(0.0, min(1.0, cy + r_val * math.sin(ang)))]
+                )
+            item_d["polygon"] = circle_poly
+        elif raw_kind in ("fill", "wash", "area", "region", "polygon", "background", "base"):
             kind = "fill"
         elif raw_kind in ("hatch", "crosshatch", "shading", "shading_hatch"):
             kind = "hatch"
-        elif raw_kind in ("particles", "particle", "dots", "sparks", "swarms", "bokeh", "fx"):
+        elif raw_kind in ("particles", "particle", "dots", "sparks", "swarms", "bokeh", "fx", "scatter"):
             kind = "particles"
         else:
             kind = "path"
@@ -1725,10 +2016,12 @@ def _sanitize_and_rescue_program_dict(
                 else "Lineart"
             )
 
-        # brush の正規化
+        # brush の正規化（文字列型指定も自動吸収）
         raw_brush = item_d.get("brush")
         if isinstance(raw_brush, Mapping):
             b_dict = dict(raw_brush)
+        elif isinstance(raw_brush, str) and raw_brush.strip():
+            b_dict = {"profile": infer_brush_profile(raw_brush), "preset_hint": raw_brush.strip()}
         else:
             b_dict = {}
 
@@ -1736,6 +2029,8 @@ def _sanitize_and_rescue_program_dict(
         p_name = str(
             b_dict.get("profile")
             or item_d.get("profile")
+            or b_dict.get("preset_hint")
+            or item_d.get("brush_preset")
             or ("marker" if kind == "fill" else "pencil" if kind == "hatch" else "auto")
         ).strip()
         canonical_p = canonical_brush_profile(p_name)
@@ -1747,9 +2042,21 @@ def _sanitize_and_rescue_program_dict(
         if not preset_h and canonical_p == "auto" and p_name.lower() != "auto":
             preset_h = p_name
 
-        c_val = normalize_hex_color(b_dict.get("color") or item_d.get("color") or "#232323", fallback="#232323")
+        c_val = normalize_hex_color(
+            b_dict.get("color") or item_d.get("color") or "#232323",
+            fallback="#232323",
+        )
 
-        sz_val = b_dict.get("size") or b_dict.get("size_ratio") or item_d.get("size") or item_d.get("size_ratio")
+        sz_val = (
+            b_dict.get("size")
+            or b_dict.get("size_ratio")
+            or item_d.get("size")
+            or item_d.get("size_ratio")
+            or b_dict.get("thickness")
+            or item_d.get("thickness")
+            or b_dict.get("width")
+            or item_d.get("width")
+        )
         sz_mode_raw = str(b_dict.get("size_mode") or item_d.get("size_mode") or "").strip().lower()
         if sz_val is None and ("size_px" in b_dict or "size_px" in item_d):
             px_val = float(b_dict.get("size_px") or item_d.get("size_px") or 8.0)
@@ -1784,39 +2091,23 @@ def _sanitize_and_rescue_program_dict(
         if preset_h:
             clean_brush["preset_hint"] = str(preset_h)
 
-        # 点座標の正規化ヘルパー
-        def _norm_pts(raw_point_list: Any) -> list[list[float]]:
-            res: list[list[float]] = []
-            if not isinstance(raw_point_list, Sequence) or isinstance(raw_point_list, (str, bytes)):
-                return res
-            for pt in raw_point_list:
-                if isinstance(pt, Sequence) and not isinstance(pt, (str, bytes)) and len(pt) >= 2:
-                    px = float(pt[0])
-                    py = float(pt[1])
-                    if px > 1.0 and w > 1.0:
-                        px = px / w
-                    if py > 1.0 and h > 1.0:
-                        py = py / h
-                    pp = float(pt[2]) if len(pt) >= 3 else 0.8
-                    res.append([max(0.0, min(1.0, px)), max(0.0, min(1.0, py)), max(0.0, min(1.0, pp))])
-                elif isinstance(pt, Mapping) and "x" in pt and "y" in pt:
-                    px = float(pt["x"])
-                    py = float(pt["y"])
-                    if px > 1.0 and w > 1.0:
-                        px = px / w
-                    if py > 1.0 and h > 1.0:
-                        py = py / h
-                    pp = float(pt.get("pressure", 0.8))
-                    res.append([max(0.0, min(1.0, px)), max(0.0, min(1.0, py)), max(0.0, min(1.0, pp))])
-            return res
-
         if kind == "path":
-            raw_pts = item_d.get("points")
+            raw_pts = (
+                item_d.get("points")
+                or item_d.get("coords")
+                or item_d.get("control_points")
+                or item_d.get("vertices")
+                or item_d.get("nodes")
+            )
             if raw_pts is None:
                 if "start_xy" in item_d and "end_xy" in item_d:
                     raw_pts = [item_d["start_xy"], item_d["end_xy"]]
                 elif "start" in item_d and "end" in item_d:
                     raw_pts = [item_d["start"], item_d["end"]]
+                elif "from" in item_d and "to" in item_d:
+                    raw_pts = [item_d["from"], item_d["to"]]
+                elif "x1" in item_d and "y1" in item_d and "x2" in item_d and "y2" in item_d:
+                    raw_pts = [[item_d["x1"], item_d["y1"]], [item_d["x2"], item_d["y2"]]]
                 else:
                     raw_pts = [[0.1, 0.1], [0.9, 0.9]]
             pts = _norm_pts(raw_pts)
@@ -1840,7 +2131,7 @@ def _sanitize_and_rescue_program_dict(
                 }
             )
         elif kind == "fill":
-            raw_poly = item_d.get("polygon", item_d.get("points"))
+            raw_poly = item_d.get("polygon") or item_d.get("points") or item_d.get("coords") or item_d.get("vertices")
             if raw_poly is None:
                 if "start_xy" in item_d and "end_xy" in item_d:
                     sx, sy = item_d["start_xy"]
@@ -1878,7 +2169,7 @@ def _sanitize_and_rescue_program_dict(
                 }
             )
         elif kind == "hatch":
-            raw_poly = item_d.get("polygon", item_d.get("points"))
+            raw_poly = item_d.get("polygon") or item_d.get("points") or item_d.get("coords") or item_d.get("vertices")
             if raw_poly is None:
                 if "start_xy" in item_d and "end_xy" in item_d:
                     sx, sy = item_d["start_xy"]
@@ -2412,17 +2703,23 @@ def _attempt_json_repair(text: str) -> Mapping[str, Any] | None:
         return None
     s = _sanitize_json_text(text[start:].strip())
 
-    # 1. 未完の要素を直前の完全なオブジェクト `}` までロールバックして閉じる救済
-    last_brace = s.rfind("}")
-    if last_brace > 0:
+    repaired_candidates: list[Mapping[str, Any]] = []
+
+    def _eval_candidate(c_dict: Mapping[str, Any]) -> None:
+        if _looks_like_drawing_json(c_dict):
+            sanitized = _sanitize_repaired_dict(c_dict)
+            if sanitized is not None and sanitized not in repaired_candidates:
+                repaired_candidates.append(sanitized)
+
+    # 1. 過去数個の完全なオブジェクト `}` まで巻き戻して閉じる多段救済
+    brace_indices = [i for i, ch in enumerate(s) if ch == "}"]
+    for last_brace in reversed(brace_indices[-6:]):
         candidate_truncated = s[: last_brace + 1].strip()
-        for suffix in ("]}", "]}]}", "}]}", "]}", "}"):
+        for suffix in ("]}", "]}]}", "}]}", "]}", "}", '"]}', '"]}]}', ""):
             try:
                 val = json.loads(candidate_truncated + suffix)
-                if isinstance(val, Mapping) and _looks_like_drawing_json(val):
-                    sanitized = _sanitize_repaired_dict(val)
-                    if sanitized is not None:
-                        return sanitized
+                if isinstance(val, Mapping):
+                    _eval_candidate(val)
             except json.JSONDecodeError:
                 continue
 
@@ -2460,14 +2757,13 @@ def _attempt_json_repair(text: str) -> Mapping[str, Any] | None:
         closing_suffix += "}" if opener == "{" else "]"
 
     if closing_suffix:
-        try:
-            val = json.loads(s_cleaned + closing_suffix)
-            if isinstance(val, Mapping) and _looks_like_drawing_json(val):
-                sanitized = _sanitize_repaired_dict(val)
-                if sanitized is not None:
-                    return sanitized
-        except json.JSONDecodeError:
-            pass
+        for base in (s_cleaned, s):
+            try:
+                val = json.loads(base + closing_suffix)
+                if isinstance(val, Mapping):
+                    _eval_candidate(val)
+            except json.JSONDecodeError:
+                pass
 
     # 4. 定型サフィックスによるフォールバック修復
     for suffix in (
@@ -2482,12 +2778,18 @@ def _attempt_json_repair(text: str) -> Mapping[str, Any] | None:
         for base in (s_cleaned, s):
             try:
                 val = json.loads(base + suffix)
-                if isinstance(val, Mapping) and _looks_like_drawing_json(val):
-                    sanitized = _sanitize_repaired_dict(val)
-                    if sanitized is not None:
-                        return sanitized
+                if isinstance(val, Mapping):
+                    _eval_candidate(val)
             except json.JSONDecodeError:
                 pass
+
+    if repaired_candidates:
+        # 最も operations / strokes の要素数が多い候補を採用
+        def _candidate_score(cand: Mapping[str, Any]) -> int:
+            ops = cand.get("operations") or cand.get("strokes") or cand.get("strokes_summary") or []
+            return len(ops) if isinstance(ops, Sequence) else 0
+
+        return max(repaired_candidates, key=_candidate_score)
 
     return None
 
