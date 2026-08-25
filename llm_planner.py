@@ -1266,12 +1266,12 @@ def _system_instruction(
         "  - Eye Highlights: Use pressure 1.0 on tiny strokes (size_px: 2.0 to 3.0) for crisp sparkling dots.\n\n"
         "Layer Hierarchy (Back to Front):\n"
         f"1. Layer 'Flats' (Backdrop, Gradients & Seamless Color Blocking):\n"
-        f"   - Must use LARGE brush sizes (size_px: {flats_sz}) with dense overlapping strokes to fully cover backgrounds (sky, mountains, foliage masses, skin, ground). Leave no unpainted gaps!\n"
-        f"2. Layer 'Shading' (3D Volume, Cast Shadows & Occlusion):\n"
-        f"   - Use medium/fine brush sizes ({form_shad_sz} for general volume, {detail_shad_sz} for delicate face/crevices) with darker/cooler tones.\n"
+        f"   - Must use LARGE brush sizes (size_px: {flats_sz}) with dense overlapping strokes or fill (style: 'wash') to fully cover backgrounds (sky, mountains, foliage masses, skin, ground). Leave no unpainted gaps!\n"
+        f"2. Layer 'Shading' (3D Volume, Cast Shadows & Occlusion - Blended with Multiply):\n"
+        f"   - Use fill (style: 'wash' / 'feathered') with 'watercolor' / 'airbrush' for rich smooth volume, or medium/fine brush sizes ({form_shad_sz} for general volume, {detail_shad_sz} for crevices) with darker/cooler tones.\n"
         f"3. Layer 'Lineart' (Contours, Tree Anatomy & Fine Features):\n"
         f"   - Use dynamic crisp brush sizes ({main_line_sz} for outer silhouettes, {detail_line_sz} for fine eyes/lashes/nose/mouth/hair tips, preset: 'Ink-3 Gpen').\n"
-        f"4. Layer 'Highlights' & 'FX' (Specular Glints, Petal Swarms, Atmosphere):\n"
+        f"4. Layer 'Highlights' & 'FX' (Specular Glints, Petal Swarms, Atmosphere - Blended with Addition):\n"
         f"   - Use accent brush sizes ({hl_glint_sz}) with luminous colors for falling petals, cloud rim light, sun flecks, and particle FX.\n"
         "5. Eraser Paths (`brush.is_eraser: true`):\n"
         '   - Add path operations with `"brush":{"profile":"eraser","is_eraser":true,...}` to sculpt contours, fix color bleeds, or carve highlights.\n'
@@ -1295,20 +1295,22 @@ def _system_instruction(
         f'  "canvas": {{"width": {width:.0f}, "height": {height:.0f}}},\n'
         '  "operations": [\n'
         '    {"kind":"fill","id":"base","layer":"Flats","style":"wash","polygon":[[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]],"brush":{"profile":"marker","color":"#3a7bd5","size":0.10}},\n'
-        '    {"kind":"hatch","id":"form-shadow","layer":"Shading","polygon":[[0.2,0.2],[0.8,0.2],[0.7,0.8],[0.25,0.75]],"angle_deg":30,"spacing":0.015,"brush":{"profile":"pencil","color":"#203050","size":0.003,"opacity":0.65}},\n'
+        '    {"kind":"fill","id":"form-shadow","layer":"Shading","style":"wash","polygon":[[0.2,0.2],[0.8,0.2],[0.7,0.8],[0.25,0.75]],"brush":{"profile":"watercolor","color":"#203050","size":0.04,"opacity":0.55}},\n'
         '    {"kind":"path","id":"contour","layer":"Lineart","points":[[0.25,0.8,0.15],[0.5,0.2,0.95],[0.75,0.8,0.1]],"smooth":true,"brush":{"profile":"gpen","color":"#2c1810","size":0.005}},\n'
         '    {"kind":"particles","id":"accents","layer":"FX","shape":"petal","bounds":[0.05,0.05,0.95,0.95],"count":30,"length":0.012,"angle_deg":90,"angle_jitter":35,"brush":{"profile":"gpen","color":"#ffffff","size":0.002}}\n'
         "  ]\n"
         "}\n"
         "```\n"
         "=== CRITICAL RULES & ANTI-PATTERNS ===\n"
-        "1. Operation kinds: path (2+ points), fill (3+ polygon points, style: 'wash'/'feathered'/'scanline'), hatch (polygon, single-angle preferred), particles (bounds/count, shape: 'petal'/'sparkle'/'drift'/'line'). IDs must be unique.\n"
+        "1. Operation kinds: path (2+ points), fill (3+ polygon points, style: 'wash'/'feathered'/'scanline'), hatch (polygon, only for manga screen-tones), particles (bounds/count, shape: 'petal'/'sparkle'/'drift'/'line'). IDs must be unique.\n"
         "2. Brush profiles: auto, gpen, marupen, brush, marker, pencil, watercolor, airbrush, eraser. Size defaults to a canvas ratio; use size_mode='px' only for deliberately fixed pixel sizes.\n"
         "3. Anti-Patterns (STRICTLY FORBIDDEN):\n"
-        "   - NEVER use cross: true on ground, terrain, grass, or natural foliage (causes artificial wireframe/graph-paper look).\n"
+        "   - NEVER use hatch for smooth 3D shading, foliage, clouds, or landscape (causes artificial wireframe/coarse zebra stripes). Use fill with style 'wash' and 'watercolor' / 'airbrush' instead.\n"
+        "   - NEVER use cross: true on ground, terrain, grass, or natural foliage.\n"
         "   - NEVER draw isolated mathematical parabolic/bezier arc paths across foliage clumps or mountain peaks as fake highlights.\n"
         "   - NEVER draw flat rectangular fog/mist bars cutting across the scenery; use soft curved wash strokes on Flats/Shading.\n"
-        "4. Composition: Establish large coherent silhouettes with fill, then form shadows with hatch/path, then tapered contour paths and sparse accents. Avoid disconnected random marks.\n"
+        "   - NEVER draw solid white (#ffffff) normal brush strokes on Shading layer (which multiplies). For highlights, use Highlights/FX layers; for erasing, set is_eraser: true.\n"
+        "4. Composition: Establish large coherent silhouettes with fill, then soft form shadows on Shading with fill/wash, then tapered contour paths on Lineart and sparse particle accents on FX.\n"
         "5. Curves: Give path 2-12 meaningful control points [x,y,pressure]; the compiler creates continuous smooth geometry.\n"
         "6. Goal Evaluation: Set goal_reached true only when the artwork is fully finished and composition, values, edges, and requested details are complete.\n"
         "7. First character of output must be '{' or '```json'."
@@ -2089,8 +2091,13 @@ def _sanitize_and_rescue_program_dict(
         op_opacity = float(b_dict.get("opacity") or item_d.get("opacity") or 1.0)
         op_opacity = max(0.0, min(1.0, op_opacity))
 
-        raw_eraser = b_dict.get("is_eraser", item_d.get("is_eraser", False))
-        is_eraser = raw_eraser in (True, "true", "True", 1, "1")
+        raw_eraser = b_dict.get("is_eraser", item_d.get("is_eraser"))
+        if raw_eraser is None:
+            is_eraser = (
+                canonical_p == "eraser" or "eraser" in str(preset_h or "").lower() or str(layer_val).lower() == "eraser"
+            )
+        else:
+            is_eraser = raw_eraser in (True, "true", "True", 1, "1")
 
         clean_brush: dict[str, Any] = {
             "profile": canonical_p,

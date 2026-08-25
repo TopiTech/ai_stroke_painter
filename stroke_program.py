@@ -274,6 +274,15 @@ class ProgramBrush:
             {"profile", "preset_hint", "color", "size", "size_ratio", "size_mode", "opacity", "is_eraser"},
             "brush",
         )
+        raw_is_eraser = value.get("is_eraser")
+        profile_str = str(value.get("profile", "auto")).strip().lower()
+        preset_str = str(value.get("preset_hint", "") or "").strip().lower()
+        if raw_is_eraser is None:
+            is_eraser = profile_str == "eraser" or "eraser" in preset_str
+        elif isinstance(raw_is_eraser, bool):
+            is_eraser = raw_is_eraser
+        else:
+            raise PlanValidationError("brush is_eraser は真偽値である必要があります")
         return cls(
             profile=value.get("profile", "auto"),
             preset_hint=value.get("preset_hint"),
@@ -281,7 +290,7 @@ class ProgramBrush:
             size=value.get("size", value.get("size_ratio", 0.006)),
             size_mode=value.get("size_mode", "ratio"),
             opacity=value.get("opacity", 1.0),
-            is_eraser=value.get("is_eraser", False),
+            is_eraser=is_eraser,
         )
 
     def size_px(self, width: float, height: float) -> float:
@@ -724,16 +733,22 @@ def _make_stroke(
         if isinstance(operation, PathOperation) and index == 0
         else _operation_uuid(program, operation.id, index)
     )
+    is_eraser = bool(
+        operation.brush.is_eraser
+        or operation.brush.profile == "eraser"
+        or "eraser" in (operation.brush.preset_hint or "").lower()
+        or operation.layer.lower() == "eraser"
+    )
+    preset = operation.brush.preset_hint or brush_preset_for_profile("eraser" if is_eraser else operation.brush.profile)
     return Stroke(
         id=stroke_id,
         points=bounded,
-        brush_preset=operation.brush.preset_hint
-        or brush_preset_for_profile("eraser" if operation.brush.is_eraser else operation.brush.profile),
+        brush_preset=preset,
         color=operation.brush.color,
         size_px=operation.brush.size_px(program.canvas_width, program.canvas_height),
         layer_name=operation.layer,
         opacity=operation.brush.opacity,
-        is_eraser=operation.brush.is_eraser,
+        is_eraser=is_eraser,
     )
 
 
@@ -836,7 +851,10 @@ def _compile_hatch_angle(
     rotated = [_rotate(point, center, -angle) for point in polygon]
     min_y = min(point[1] for point in rotated)
     max_y = max(point[1] for point in rotated)
-    spacing = max(1.0, operation.spacing * min(program.canvas_width, program.canvas_height))
+    raw_spacing = operation.spacing * min(program.canvas_width, program.canvas_height)
+    brush_px = operation.brush.size_px(program.canvas_width, program.canvas_height)
+    # 高解像度キャンバスでハッチングが粗すぎるゼブラ縞になるのを抑制
+    spacing = max(1.0, min(raw_spacing, max(1.5, brush_px * 2.8)))
     strokes: list[Stroke] = []
     y = min_y + spacing * 0.5
     while y < max_y and start_index + len(strokes) < limit:

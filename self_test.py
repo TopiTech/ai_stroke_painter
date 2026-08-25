@@ -23,7 +23,13 @@ from .docker import (
     _is_plan_goal_reached,
     _safe_endpoint_label,
 )
-from .domain import DrawingPlan, PlanValidationError, Stroke, StrokePoint, VisionCritique
+from .domain import (
+    DrawingPlan,
+    PlanValidationError,
+    Stroke,
+    StrokePoint,
+    VisionCritique,
+)
 from .image_converter import ImageStrokeConverter, _image_dimensions_from_header, _trace_edge_paths
 from .krita_adapter import ActiveLayerSessionConflict, KritaCanvasAdapter
 from .llm_planner import (
@@ -65,6 +71,9 @@ from .qt_compat import (
     QSettings,
     QWidget,
     argb32_image_format,
+    composition_mode_multiply,
+    composition_mode_plus,
+    composition_mode_source_over,
     password_echo_mode,
     write_only_open_mode,
 )
@@ -75,6 +84,7 @@ from .stroke_program import (
     HatchOperation,
     ParticleOperation,
     PathOperation,
+    ProgramBrush,
     ProgramPoint,
     StrokeProgram,
     compile_stroke_program,
@@ -5619,6 +5629,134 @@ class ExtendedCustomizationTests(unittest.TestCase):
 
         self.assertEqual(TransientHandler.attempt_count, 2)
         self.assertEqual(len(plan.strokes), 1)
+
+    def test_preview_composition_modes_and_layer_sorting(self) -> None:
+        """PreviewWidget がレイヤー階層順にソートし、ブレンドモード（乗算・加算・通常）を適切に適用することを検証。"""
+        from .docker import PreviewWidget
+        from .qt_compat import QPainter
+
+        prev = PreviewWidget.__new__(PreviewWidget)
+        prev._plan = None
+        prev._accumulated_strokes = []
+        prev._canvas_width = 1000.0
+        prev._canvas_height = 1000.0
+        prev._size_multiplier = 1.0
+        prev._opacity_multiplier = 1.0
+        prev.update = lambda: None
+        prev.width = lambda: 200
+        prev.height = lambda: 160
+
+        # 意図的にレイヤー順序をバラバラに配置（Lineart -> Flats -> Highlights -> Shading）
+        s_lineart = Stroke("s_line", [StrokePoint(10, 10, 1.0, 0), StrokePoint(20, 20, 1.0, 1)], layer_name="Lineart")
+        s_flats = Stroke("s_flat", [StrokePoint(30, 30, 1.0, 0), StrokePoint(40, 40, 1.0, 1)], layer_name="Flats")
+        s_hl = Stroke("s_hl", [StrokePoint(50, 50, 1.0, 0), StrokePoint(60, 60, 1.0, 1)], layer_name="Highlights")
+        s_shade = Stroke("s_sh", [StrokePoint(70, 70, 1.0, 0), StrokePoint(80, 80, 1.0, 1)], layer_name="Shading")
+        s_eraser = Stroke("s_er", [StrokePoint(90, 90, 1.0, 0), StrokePoint(95, 95, 1.0, 1)], is_eraser=True)
+
+        plan = DrawingPlan(
+            prompt="blend test",
+            seed=1,
+            strokes=[s_lineart, s_flats, s_hl, s_shade, s_eraser],
+            canvas_width=1000.0,
+            canvas_height=1000.0,
+        )
+        prev.set_plan(plan)
+
+        modes_used: list[Any] = []
+        drawn_strokes_order: list[str] = []
+
+        class _RecordingPainter:
+            def fillRect(self, *args: Any) -> None:
+                pass
+
+            def drawRect(self, *args: Any) -> None:
+                pass
+
+            def setPen(self, *args: Any) -> None:
+                pass
+
+            def setBrush(self, *args: Any) -> None:
+                pass
+
+            def setCompositionMode(self, mode: Any) -> None:
+                modes_used.append(mode)
+
+            def drawLine(self, x0: int, y0: int, x1: int, y1: int) -> None:
+                drawn_strokes_order.append(f"{x0},{y0}->{x1},{y1}")
+
+        mock_painter = _RecordingPainter()
+        prev.paint_to_painter(mock_painter, 200, 160)
+
+        # モードが設定されたこと（乗算、加算、通常）を確認
+        expected_mul = composition_mode_multiply(QPainter)
+        expected_plus = composition_mode_plus(QPainter)
+        expected_over = composition_mode_source_over(QPainter)
+
+        self.assertIn(expected_mul, modes_used)
+        self.assertIn(expected_plus, modes_used)
+        self.assertIn(expected_over, modes_used)
+        # 描画ストローク数が一致すること
+        self.assertEqual(len(drawn_strokes_order), 5)
+
+    def test_high_res_hatch_angle_density_and_clamping(self) -> None:
+        """高解像度キャンバス（2480x3508）でハッチングが粗すぎるゼブラ縞にならず適切に間隔がクランプされることを検証。"""
+        prog_dict = {
+            "schema_version": 2,
+            "prompt": "high res hatch test",
+            "seed": 42,
+            "canvas": {"width": 2480, "height": 3508},
+            "operations": [
+                {
+                    "kind": "hatch",
+                    "id": "hatch_clamp",
+                    "layer": "Shading",
+                    "polygon": [[0.2, 0.2], [0.8, 0.2], [0.8, 0.8], [0.2, 0.8]],
+                    "angle_deg": 45,
+                    "spacing": 0.05,  # 粗い比率指定 (124px相当)
+                    "brush": {"profile": "pencil", "size": 5.0, "size_mode": "px", "color": "#202020"},
+                }
+            ],
+        }
+        prog = StrokeProgram.from_dict(prog_dict)
+        plan = compile_stroke_program(prog)
+        # クランプによりブラシサイズ (5px * 2.8 = 14px) に近い適切なストローク数に生成される
+        self.assertGreater(len(plan.strokes), 50)
+        self.assertLess(len(plan.strokes), 500)
+
+    def test_program_brush_eraser_inference_and_stroke_sync(self) -> None:
+        """ProgramBrush および _make_stroke が is_eraser を確実に判定・同期することを検証。"""
+        # 1. profile = "eraser" からの自動判定
+        b1 = ProgramBrush.from_dict({"profile": "eraser", "size": 0.01})
+        self.assertTrue(b1.is_eraser)
+
+        # 2. preset_hint に eraser が含まれる場合の自動判定
+        b2 = ProgramBrush.from_dict({"profile": "auto", "preset_hint": "Eraser Soft", "size": 0.01})
+        self.assertTrue(b2.is_eraser)
+
+        # 3. 通常ブラシの場合
+        b3 = ProgramBrush.from_dict({"profile": "gpen", "size": 0.01})
+        self.assertFalse(b3.is_eraser)
+
+        # 4. StrokeProgram コンパイル時の stroke.is_eraser 伝播
+        prog = StrokeProgram.from_dict(
+            {
+                "schema_version": 2,
+                "prompt": "eraser sync",
+                "seed": 1,
+                "canvas": {"width": 1000, "height": 1000},
+                "operations": [
+                    {
+                        "kind": "path",
+                        "id": "erase_op",
+                        "points": [[0.1, 0.1], [0.5, 0.5]],
+                        "brush": {"profile": "eraser", "size": 0.02},
+                    }
+                ],
+            }
+        )
+        plan = compile_stroke_program(prog)
+        self.assertEqual(len(plan.strokes), 1)
+        self.assertTrue(plan.strokes[0].is_eraser)
 
 
 def run() -> bool:

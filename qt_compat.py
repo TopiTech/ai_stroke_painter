@@ -136,6 +136,54 @@ def antialiasing_render_hint(painter_cls: Any | None = None) -> Any:
     return 0x01
 
 
+def composition_mode_source_over(painter_cls: Any | None = None) -> Any:
+    """Return QPainter.CompositionMode_SourceOver for Qt 5 or Qt 6."""
+    target_painter = QPainter if painter_cls is None else painter_cls
+    if target_painter is None:
+        return 0
+    scoped = getattr(target_painter, "CompositionMode", None)
+    scoped_val = getattr(scoped, "CompositionMode_SourceOver", None)
+    if scoped_val is not None:
+        return scoped_val
+    return getattr(target_painter, "CompositionMode_SourceOver", 0)
+
+
+def composition_mode_multiply(painter_cls: Any | None = None) -> Any:
+    """Return QPainter.CompositionMode_Multiply for Qt 5 or Qt 6."""
+    target_painter = QPainter if painter_cls is None else painter_cls
+    if target_painter is None:
+        return 14
+    scoped = getattr(target_painter, "CompositionMode", None)
+    scoped_val = getattr(scoped, "CompositionMode_Multiply", None)
+    if scoped_val is not None:
+        return scoped_val
+    return getattr(target_painter, "CompositionMode_Multiply", 14)
+
+
+def composition_mode_plus(painter_cls: Any | None = None) -> Any:
+    """Return QPainter.CompositionMode_Plus for Qt 5 or Qt 6."""
+    target_painter = QPainter if painter_cls is None else painter_cls
+    if target_painter is None:
+        return 17
+    scoped = getattr(target_painter, "CompositionMode", None)
+    scoped_val = getattr(scoped, "CompositionMode_Plus", None)
+    if scoped_val is not None:
+        return scoped_val
+    return getattr(target_painter, "CompositionMode_Plus", 17)
+
+
+def composition_mode_destination_out(painter_cls: Any | None = None) -> Any:
+    """Return QPainter.CompositionMode_DestinationOut for Qt 5 or Qt 6."""
+    target_painter = QPainter if painter_cls is None else painter_cls
+    if target_painter is None:
+        return 4
+    scoped = getattr(target_painter, "CompositionMode", None)
+    scoped_val = getattr(scoped, "CompositionMode_DestinationOut", None)
+    if scoped_val is not None:
+        return scoped_val
+    return getattr(target_painter, "CompositionMode_DestinationOut", 4)
+
+
 # Krita が既に読み込んだ Qt バインディングを最優先し、未確定時は Krita 6 の PyQt6 を先に試す。
 if any(name == "PyQt5" or name.startswith("PyQt5.") for name in sys.modules):
     _binding_order = ("PyQt5", "PyQt6")
@@ -666,14 +714,30 @@ if not HAS_QT:
 
     class QPainter:  # type: ignore[no-redef]
         Antialiasing = 0x01
+        CompositionMode_SourceOver = 0
+        CompositionMode_DestinationOut = 4
+        CompositionMode_Multiply = 14
+        CompositionMode_Plus = 17
 
         class RenderHint:
             Antialiasing = 0x01
+
+        class CompositionMode:
+            CompositionMode_SourceOver = 0
+            CompositionMode_DestinationOut = 4
+            CompositionMode_Multiply = 14
+            CompositionMode_Plus = 17
 
         def __init__(self, *args: Any) -> None:
             pass
 
         def setRenderHint(self, *args: Any) -> None:
+            pass
+
+        def setCompositionMode(self, *args: Any) -> None:
+            pass
+
+        def setClipRect(self, *args: Any) -> None:
             pass
 
         def fillRect(self, *args: Any) -> None:

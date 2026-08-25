@@ -15,7 +15,7 @@ import traceback
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlsplit
 
-from .domain import DrawingPlan, Stroke, split_color_alpha
+from .domain import LAYER_RENDER_ORDER, DrawingPlan, Stroke, split_color_alpha
 from .image_converter import MAX_ENCODED_IMAGE_BYTES
 from .krita_adapter import KritaCanvasAdapter
 from .llm_planner import OpenAICompatiblePlanner, OpenAICompatibleSettings
@@ -49,6 +49,9 @@ from .qt_compat import (
     QVBoxLayout,
     QWidget,
     antialiasing_render_hint,
+    composition_mode_multiply,
+    composition_mode_plus,
+    composition_mode_source_over,
     password_echo_mode,
     pyqtSignal,
     round_cap_style,
@@ -266,11 +269,20 @@ class PreviewWidget(QWidget):
         if hasattr(painter, "drawRect"):
             painter.drawRect(rx, ry, rw, rh)
 
-        # 3. ストロークの精密描画（RoundCap, RoundJoin, 筆圧ダイナミクス、単一ポイント描画、正確な1.0xスケール）
+        # 3. ストロークの精密描画（レイヤー順ソート、レイヤーブレンドモード反映、消しゴム対応）
         cap_round = round_cap_style()
         join_round = round_join_style()
+        mode_source_over = composition_mode_source_over(QPainter)
+        mode_multiply = composition_mode_multiply(QPainter)
+        mode_plus = composition_mode_plus(QPainter)
 
-        for stroke in strokes:
+        # レイヤー階層順にストロークをソートして描画（Krita レイヤー順を忠実に再現）
+        sorted_strokes = sorted(
+            strokes,
+            key=lambda s: LAYER_RENDER_ORDER.get(s.layer_name, 35),
+        )
+
+        for stroke in sorted_strokes:
             pts = stroke.points
             if not pts:
                 continue
@@ -278,14 +290,28 @@ class PreviewWidget(QWidget):
             base_size = max(0.5, float(stroke.size_px) * self._size_multiplier)
             pen_w = max(1.0, base_size * scale)
 
+            # レイヤー合成モードの決定
+            lname = (stroke.layer_name or "").lower()
             if stroke.is_eraser:
+                blend_mode = mode_source_over
                 col = QColor("#ffffff")
             else:
+                if "shading" in lname or "shadow" in lname:
+                    blend_mode = mode_multiply
+                elif "highlight" in lname or "fx" in lname or "glow" in lname:
+                    blend_mode = mode_plus
+                else:
+                    blend_mode = mode_source_over
+
                 rgb_color, color_alpha = split_color_alpha(stroke.color)
                 col = QColor(rgb_color)
                 eff_op = max(0.0, min(1.0, float(stroke.opacity) * self._opacity_multiplier * color_alpha))
                 if eff_op < 1.0 and hasattr(col, "setAlphaF"):
                     col.setAlphaF(eff_op)
+
+            if hasattr(painter, "setCompositionMode"):
+                with contextlib.suppress(Exception):
+                    painter.setCompositionMode(blend_mode)
 
             pen = QPen(col, pen_w)
             if hasattr(pen, "setCapStyle"):
@@ -325,6 +351,10 @@ class PreviewWidget(QWidget):
                         int(round(ox + p1.x * scale)),
                         int(round(oy + p1.y * scale)),
                     )
+
+        if hasattr(painter, "setCompositionMode"):
+            with contextlib.suppress(Exception):
+                painter.setCompositionMode(mode_source_over)
 
     def paintEvent(self, event: Any) -> None:  # noqa: N802
         if QPainter is None or QColor is None or QPen is None or not callable(QPainter):
