@@ -763,3 +763,19 @@ Workstream A と B のデータ構造を先に確定し、その後 C/D/E/F を�
 11. `perf/krita-render-session`: BUG-12 + PERF-01 + OPS-01
 
 各チケットでは、先に失敗する unit/golden test を追加し、修正後に `python check.py` と実 Krita smoke の該当項目を通すこと。
+
+## 13. 2026-08-26 包括的コードレビューと修正 (Hardening & Bugfixes)
+
+プロジェクト全体の再レビューを実施し、重要度・影響範囲の観点から以下の課題を特定・修正しました。
+
+| ID | 重要度 | 対象ファイル | 概要 | 状態 |
+|---|---|---|---|---|
+| BUG-14 | **P1 (Critical)** | `build_plugin.py` | `PACKAGE_FILES` に `image_generator.py` が未登録で、生成された ZIP から Krita にインストールすると `ModuleNotFoundError: No module named 'ai_stroke_painter.image_generator'` が発生し起動不能になる不具合。 | **解消済み** |
+| BUG-15 | **P1 (Critical)** | `stroke_program.py` | `_compile_gradient_fill` のスキャンライン走査ループ内で `y += spacing` が欠落しており、全ストロークが最上行の同一 Y 座標にスタック生成される不具合、および無限ループの潜在バグ。 | **解消済み** |
+| BUG-16 | **P2 (High)** | `stroke_program.py` | `_interpolate_color_hex` が 6 桁 HEX のみを前提としたスライスを行っていたため、3 桁・4 桁・8 桁 HEX（例: `#fff`）が渡されると `ValueError` でクラッシュする不具合。 | **解消済み** |
+| BUG-17 | **P2 (Medium)** | `stroke_program.py` | `_polygon_area` および `_allocate_fill_budgets` が `FillOperation` 型のみに限定されており、`GradientFillOperation` が含まれると面積加重予算配分から除外されて均等割に縮退する問題。 | **解消済み** |
+| SEC-01 | **P1 (Security)** | `image_generator.py` | OpenAI API 等が画像 URL を返却した際、`_validate_endpoint_url` による SSRF 検証（HTTPS/ローカルホスト強制）を行わず無制限に `resp.read()` していた脆弱性。上限ガード（50MB）、チャンク受信、キャンセル即時検知、認証情報マスク強化、各種例外の `ImageGenerationError` ラップを実施。 | **解消済み** |
+| SEC-02 | **P3 (Maintainability)** | `image_generator.py` | API Key ログマスクの正規表現が `llm_planner.py` より甘く、URL 埋め込み認証や非 sk 接頭辞キーが残る可能性があった不一致を是正。 | **解消済み** |
+| ROBUST-01 | **P3 (Low)** | `stroke_program.py` | `_compile_macro` で未定義マクロ名が渡された際に空リストが返りストローク計画バリデーションエラーとなる問題を、安全なロゼット装飾フォールバックを生成するよう強化。 | **解消済み** |
+| QA-02 | **P2 (Quality)** | `self_test.py` | 配布 ZIP の完全性（独立サブプロセスでのインポート検証）、SSRF 防御、ストリーム上限、キャンセル中断、グラデーション塗り、マクロフォールバックの自動テストを追加（テスト数 182 → 224 件に拡充、全パス）。 | **解消済み** |
+

@@ -16,6 +16,7 @@ PACKAGE_FILES = (
     "docker.py",
     "domain.py",
     "image_converter.py",
+    "image_generator.py",
     "krita_adapter.py",
     "krita_smoke.py",
     "llm_planner.py",

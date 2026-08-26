@@ -1134,11 +1134,27 @@ def _make_stroke(
     )
 
 
+def _parse_hex_rgb(color_str: str) -> tuple[int, int, int]:
+    """HEXカラー文字列 (3, 4, 6, 8 桁) を安全に RGB タプルへ変換する。"""
+    c = color_str.strip().lstrip("#")
+    if len(c) in (3, 4):
+        try:
+            return int(c[0] * 2, 16), int(c[1] * 2, 16), int(c[2] * 2, 16)
+        except ValueError:
+            return (35, 35, 35)
+    if len(c) in (6, 8):
+        try:
+            return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
+        except ValueError:
+            return (35, 35, 35)
+    return (35, 35, 35)
+
+
 def _interpolate_color_hex(c1: str, c2: str, t: float) -> str:
-    """2つのHEXカラーをRGB空間で補間する。"""
+    """2つのHEXカラーをRGB空間で安全に補間する（3/4/6/8桁対応）。"""
     t = max(0.0, min(1.0, float(t)))
-    r1, g1, b1 = (int(c1[i : i + 2], 16) for i in (1, 3, 5))
-    r2, g2, b2 = (int(c2[i : i + 2], 16) for i in (1, 3, 5))
+    r1, g1, b1 = _parse_hex_rgb(c1)
+    r2, g2, b2 = _parse_hex_rgb(c2)
     r = round(r1 + (r2 - r1) * t)
     g = round(g1 + (g2 - g1) * t)
     b = round(b1 + (b2 - b1) * t)
@@ -1822,7 +1838,7 @@ def _compile_particles(program: StrokeProgram, operation: ParticleOperation, lim
     return strokes
 
 
-def _polygon_area(operation: FillOperation) -> float:
+def _polygon_area(operation: FillOperation | GradientFillOperation) -> float:
     points = operation.polygon
     return (
         abs(
@@ -1835,7 +1851,7 @@ def _polygon_area(operation: FillOperation) -> float:
     )
 
 
-def _allocate_fill_budgets(operations: Sequence[FillOperation], total: int) -> list[int]:
+def _allocate_fill_budgets(operations: Sequence[FillOperation | GradientFillOperation], total: int) -> list[int]:
     """大面積の背景を優先しつつ、選択した各 fill に最低1本を割り当てる。"""
     if total <= 0 or not operations:
         return [0] * len(operations)
@@ -2573,6 +2589,27 @@ def _compile_macro(
             height=h,
         )
 
+    if not strokes and limit > 0:
+        ring_segments = 16
+        pts_fallback = [
+            (
+                cx + math.cos(i / ring_segments * math.tau) * r,
+                cy + math.sin(i / ring_segments * math.tau) * r,
+                0.75,
+            )
+            for i in range(ring_segments + 1)
+        ]
+        strokes.append(
+            _create_macro_stroke(
+                stroke_id=uid("fallback_accent", 0),
+                points=pts_fallback,
+                profile=operation.brush.profile,
+                color=operation.brush.color,
+                size_px=operation.brush.size_px(w, h),
+                layer_name=operation.layer,
+                opacity=operation.brush.opacity,
+            )
+        )
     return strokes
 
 
@@ -2614,6 +2651,29 @@ def _compile_gradient_fill(
             pts = [(first_rot[0], first_rot[1], 1.0), (second_rot[0], second_rot[1], 1.0)]
             strokes.append(_make_stroke(program, replace(operation, brush=colored_brush), len(strokes), pts))
         row += 1
+        y += spacing
+
+    if not strokes and limit > 0:
+        mid_y = (min_y + max_y) * 0.5
+        segments = _scanline_segments(rotated, mid_y)
+        if not segments:
+            min_x = min(p[0] for p in rotated)
+            max_x = max(p[0] for p in rotated)
+            if max_x - min_x >= 0.25:
+                segments = [(min_x, max_x)]
+            else:
+                segments = [(min_x, max_x + 0.5)]
+        for start_x, end_x in segments:
+            if len(strokes) >= limit:
+                break
+            first_rot = _rotate((start_x, mid_y), center, angle)
+            second_rot = _rotate((end_x, mid_y), center, angle)
+            pts = [(first_rot[0], first_rot[1], 1.0), (second_rot[0], second_rot[1], 1.0)]
+            t_pos = (mid_y - min_y) / dy_total
+            cur_color = _multi_color_interpolate(operation.colors, t_pos)
+            colored_brush = replace(operation.brush, color=cur_color)
+            strokes.append(_make_stroke(program, replace(operation, brush=colored_brush), len(strokes), pts))
+
     return strokes
 
 
@@ -2645,7 +2705,7 @@ def compile_stroke_program(
     else:
         has_non_fill = len(fill_operations) < len(program.operations)
         reserved = count if not has_non_fill else min(count, max(len(fill_operations), round(count * 0.48)))
-        fill_budgets = _allocate_fill_budgets([f for f in fill_operations if isinstance(f, FillOperation)], reserved)
+        fill_budgets = _allocate_fill_budgets(fill_operations, reserved)
         if len(fill_budgets) < len(fill_operations):
             fill_budgets = [max(1, reserved // len(fill_operations))] * len(fill_operations)
 

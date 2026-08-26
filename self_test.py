@@ -8,6 +8,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import random
+import subprocess
+import sys
 import tempfile
 from threading import Thread
 from typing import Any, cast
@@ -1179,6 +1181,7 @@ class PluginBuildTests(unittest.TestCase):
         self.assertIn(f"{PACKAGE_NAME}/qt_compat.py", names)
         self.assertIn(f"{PACKAGE_NAME}/procedural/__init__.py", names)
         self.assertIn(f"{PACKAGE_NAME}/image_converter.py", names)
+        self.assertIn(f"{PACKAGE_NAME}/image_generator.py", names)
         self.assertIn(f"{PACKAGE_NAME}/brushes.py", names)
         self.assertIn(f"{PACKAGE_NAME}/stroke_program.py", names)
         self.assertIn(f"{PACKAGE_NAME}/native_bridge.py", names)
@@ -1196,6 +1199,24 @@ class PluginBuildTests(unittest.TestCase):
             ):
                 build(output)
             self.assertFalse(output.exists())
+
+    def test_packaged_zip_imports_cleanly_in_isolated_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            zip_path = Path(temp) / f"{PACKAGE_NAME}.zip"
+            extract_dir = Path(temp) / "extracted"
+            build(zip_path)
+            with ZipFile(zip_path) as archive:
+                archive.extractall(extract_dir)
+            code = (
+                "import sys\n"
+                f"sys.path.insert(0, r'{extract_dir}')\n"
+                "import ai_stroke_painter.docker\n"
+                "import ai_stroke_painter.image_generator\n"
+                "print('OK')\n"
+            )
+            res = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+            self.assertEqual(res.returncode, 0, f"Import failed: {res.stderr}")
+            self.assertIn("OK", res.stdout)
 
 
 class OpenAICompatiblePlannerTests(unittest.TestCase):
@@ -7799,6 +7820,160 @@ class ImageGeneratorAndPlannerTests(unittest.TestCase):
         self.assertGreater(len(plan.strokes), 15)
         layer_set = {s.layer_name for s in plan.strokes}
         self.assertTrue("Flats" in layer_set or "Lineart" in layer_set)
+
+    def test_macro_unrecognized_name_graceful_fallback(self) -> None:
+        from .stroke_program import (
+            MacroOperation,
+            ProgramBrush,
+            StrokeProgram,
+            compile_stroke_program,
+        )
+
+        unknown_macro = MacroOperation(
+            id="unknown_1",
+            layer="Flats",
+            name="custom_futuristic_crystal_monolith",
+            brush=ProgramBrush(profile="gpen", color="#4488ff", size=0.02),
+            center=(0.5, 0.5),
+            radius=0.2,
+        )
+        prog = StrokeProgram(
+            prompt="crystal monolith",
+            seed=123,
+            canvas_width=800,
+            canvas_height=800,
+            operations=(unknown_macro,),
+        )
+        plan = compile_stroke_program(prog, count=10)
+        self.assertGreater(len(plan.strokes), 0)
+        self.assertEqual(plan.strokes[0].layer_name, "Flats")
+
+    def test_gradient_fill_operation_compilation_and_budgeting(self) -> None:
+        from .stroke_program import (
+            FillOperation,
+            GradientFillOperation,
+            ProgramBrush,
+            ProgramPoint,
+            StrokeProgram,
+            compile_stroke_program,
+        )
+
+        grad_op = GradientFillOperation(
+            id="grad_test",
+            polygon=[ProgramPoint(0.1, 0.1, 1.0), ProgramPoint(0.9, 0.1, 1.0), ProgramPoint(0.5, 0.9, 1.0)],
+            colors=["#fff", "#000"],  # 3-digit hex
+            brush=ProgramBrush(profile="watercolor", size=0.05),
+        )
+        fill_op = FillOperation(
+            id="fill_test",
+            polygon=[
+                ProgramPoint(0.0, 0.0, 1.0),
+                ProgramPoint(1.0, 0.0, 1.0),
+                ProgramPoint(1.0, 1.0, 1.0),
+                ProgramPoint(0.0, 1.0, 1.0),
+            ],
+            brush=ProgramBrush(profile="watercolor", size=0.08, color="#ffffff"),
+        )
+        prog = StrokeProgram(
+            prompt="gradient test",
+            seed=1,
+            canvas_width=1000,
+            canvas_height=1000,
+            operations=(grad_op, fill_op),
+        )
+        plan = compile_stroke_program(prog, count=30)
+        grad_strokes = [s for s in plan.strokes if s.color != "#ffffff"]
+        self.assertGreater(len(grad_strokes), 3)
+        # Verify scanlines advance vertically (not stacked)
+        y_coords = {round(s.points[0].y, 1) for s in grad_strokes}
+        self.assertGreater(len(y_coords), 1)
+
+    def test_image_generator_openai_url_ssrf_prevention(self) -> None:
+        from .image_generator import ImageGenerationError, ImageGeneratorClient, ImageGeneratorSettings
+
+        client = ImageGeneratorClient(ImageGeneratorSettings(api_key="sk-test"))
+
+        class FakeHTTPResponse:
+            def __init__(self, data: bytes) -> None:
+                self._data = data
+                self.status = 200
+
+            def read(self, _size: int = -1) -> bytes:
+                d = self._data
+                self._data = b""
+                return d
+
+            def __enter__(self) -> FakeHTTPResponse:
+                return self
+
+            def __exit__(self, *args: Any) -> None:
+                pass
+
+        # 1. SSRF prevention: Non-HTTPS external URL returned in API response must be rejected
+        insecure_resp = json.dumps({"data": [{"url": "http://evil.internal.network/secret.png"}]}).encode("utf-8")
+        with patch("ai_stroke_painter.image_generator.build_opener") as mock_opener:
+            mock_inst = mock_opener.return_value
+            mock_inst.open.return_value = FakeHTTPResponse(insecure_resp)
+            with self.assertRaises(ImageGenerationError) as ctx:
+                client.generate_image("test prompt")
+            self.assertIn("HTTPS", str(ctx.exception))
+
+        # 2. HTTPS URL returned is accepted and downloaded safely
+        valid_png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        )
+        secure_resp = json.dumps({"data": [{"url": "https://images.openai.com/generated.png"}]}).encode("utf-8")
+        with patch("ai_stroke_painter.image_generator.build_opener") as mock_opener:
+            mock_inst = mock_opener.return_value
+            # First open returns API json, second open returns image bytes
+            mock_inst.open.side_effect = [FakeHTTPResponse(secure_resp), FakeHTTPResponse(valid_png)]
+            img_bytes = client.generate_image("test prompt")
+            self.assertTrue(img_bytes.startswith(b"\x89PNG"))
+
+    def test_image_generator_sd_webui_and_error_handling(self) -> None:
+        from .image_generator import ImageGenerationError, ImageGeneratorClient, ImageGeneratorSettings
+
+        # 1. SD WebUI call
+        client = ImageGeneratorClient(
+            ImageGeneratorSettings(provider="sd_webui", endpoint_url="http://127.0.0.1:7860/sdapi/v1/txt2img")
+        )
+        fake_png_b64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        sd_resp = json.dumps({"images": [fake_png_b64]}).encode("utf-8")
+
+        class ChunkResponse:
+            def __init__(self, data: bytes) -> None:
+                self._data = data
+                self.status = 200
+
+            def read(self, _size: int = -1) -> bytes:
+                d = self._data
+                self._data = b""
+                return d
+
+            def __enter__(self) -> ChunkResponse:
+                return self
+
+            def __exit__(self, *args: Any) -> None:
+                pass
+
+        with patch("ai_stroke_painter.image_generator.build_opener") as mock_opener:
+            mock_inst = mock_opener.return_value
+            mock_inst.open.return_value = ChunkResponse(sd_resp)
+            result = client.generate_image("sd portrait")
+            self.assertTrue(result.startswith(b"\x89PNG"))
+
+        # 2. Corrupt base64 is caught and wrapped in ImageGenerationError
+        bad_sd_resp = json.dumps({"images": ["!!!NOT_BASE_64!!!"]}).encode("utf-8")
+        with patch("ai_stroke_painter.image_generator.build_opener") as mock_opener:
+            mock_inst = mock_opener.return_value
+            mock_inst.open.return_value = ChunkResponse(bad_sd_resp)
+            with self.assertRaises(ImageGenerationError):
+                client.generate_image("bad base64")
+
+        # 3. Cancellation check during execution raises ImageGenerationError
+        with self.assertRaises(ImageGenerationError) as cancel_ctx:
+            client.generate_image("cancelled", cancel_check=lambda: True)
+        self.assertIn("キャンセル", str(cancel_ctx.exception))
 
 
 def run() -> bool:

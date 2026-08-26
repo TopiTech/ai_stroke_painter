@@ -7,14 +7,15 @@ ComfyUI、およびカスタム HTTP 画像生成エンドポイントをサポ�
 from __future__ import annotations
 
 import base64
-from collections.abc import Callable
+import binascii
+from collections.abc import Callable, Mapping
 import contextlib
 from dataclasses import dataclass
 import ipaddress
 import json
 import re
 import time
-from typing import Any
+from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -77,17 +78,53 @@ class ImageGeneratorSettings:
     negative_prompt: str = ""
 
 
+MAX_IMAGE_RESPONSE_BYTES = 50 * 1024 * 1024  # 50 MB
+
+
 def sanitize_api_key_log(text: str) -> str:
-    """API Key や Bearer トークンを伏字化する。"""
+    """API Key、Bearer トークン、および認証情報を伏字化する。"""
     masked = re.sub(r"Bearer\s+[A-Za-z0-9_\-\.]{8,}", "Bearer [REDACTED]", text, flags=re.IGNORECASE)
     masked = re.sub(r"sk-[A-Za-z0-9_\-\.]{10,}", "sk-[REDACTED]", masked)
     masked = re.sub(
-        r'(["\']?api[_-]?key["\']?\s*[:=]\s*["\'])([^"\']{6,})(["\'])',
+        r'(["\']?(?:api[_-]?key|authorization|token)["\']?\s*[:=]\s*["\'])([^"\']{6,})(["\'])',
         r"\1[REDACTED]\3",
         masked,
         flags=re.IGNORECASE,
     )
+    masked = re.sub(
+        r"https?://([^:]+):([^@]+)@",
+        r"https://\1:[REDACTED]@",
+        masked,
+        flags=re.IGNORECASE,
+    )
     return masked
+
+
+def _read_bounded_stream(
+    response: Any,
+    max_bytes: int,
+    cancel_check: Callable[[], bool] | None = None,
+) -> bytes:
+    if getattr(response, "headers", None) is None:
+        # 単純な互換transport／テストdoubleは1回read契約の場合がある
+        raw = cast(bytes, response.read())
+        if len(raw) > max_bytes:
+            raise ImageGenerationError(f"画像生成 API の応答が上限 ({max_bytes} bytes) を超えています")
+        return raw
+    chunks: list[bytes] = []
+    received_bytes = 0
+    while received_bytes <= max_bytes:
+        if cancel_check is not None and cancel_check():
+            raise ImageGenerationError("画像データの受信をキャンセルしました")
+        read_size = min(64 * 1024, max_bytes + 1 - received_bytes)
+        chunk = cast(bytes, response.read(read_size))
+        if not chunk:
+            break
+        chunks.append(chunk)
+        received_bytes += len(chunk)
+    if received_bytes > max_bytes:
+        raise ImageGenerationError(f"画像生成 API の応答が上限 ({max_bytes} bytes) を超えています")
+    return b"".join(chunks)
 
 
 def _validate_endpoint_url(url_str: str, api_key: str = "") -> str:
@@ -209,30 +246,46 @@ class ImageGeneratorClient:
         try:
             start_time = time.time()
             with opener.open(req, timeout=max(5.0, self.settings.timeout_seconds)) as resp:
-                resp_bytes = resp.read()
+                resp_bytes = _read_bounded_stream(resp, MAX_IMAGE_RESPONSE_BYTES, cancel_check=cancel_check)
                 elapsed = time.time() - start_time
-                self._log(f"画像生成 API 応答受信 ({elapsed:.1f}s, HTTP {resp.status})")
+                status_code = getattr(resp, "status", getattr(resp, "code", 200))
+                self._log(f"画像生成 API 応答受信 ({elapsed:.1f}s, HTTP {status_code})")
 
             result_json = json.loads(resp_bytes.decode("utf-8", errors="replace"))
+            if not isinstance(result_json, Mapping):
+                raise ImageGenerationError("画像生成 API の応答は JSON オブジェクトである必要があります")
+
             data_list = result_json.get("data", [])
-            if not data_list:
+            if not isinstance(data_list, list) or not data_list:
                 raise ImageGenerationError("画像生成 API の応答に画像データが含まれていません")
 
             first_item = data_list[0]
+            if not isinstance(first_item, Mapping):
+                raise ImageGenerationError("画像生成 API のデータ項目が不正です")
+
             if "b64_json" in first_item:
                 b64_str = first_item["b64_json"]
+                if not isinstance(b64_str, str):
+                    raise ImageGenerationError("b64_json は文字列である必要があります")
                 image_bytes = base64.b64decode(b64_str)
                 return sanitize_reference_image(image_bytes, max_dimension=1024)
             elif "url" in first_item:
-                img_url = first_item["url"]
+                raw_url = first_item["url"]
+                if not isinstance(raw_url, str) or not raw_url.strip():
+                    raise ImageGenerationError("画像 URL が無効です")
+                validated_img_url = _validate_endpoint_url(raw_url)
                 self._log("画像 URL から画像データをダウンロード中...")
-                img_req = Request(img_url, headers={"User-Agent": "AIStrokePainter/2.0"})
+                img_req = Request(validated_img_url, headers={"User-Agent": "AIStrokePainter/2.0"})
                 with opener.open(img_req, timeout=30.0) as img_resp:
-                    raw_img = img_resp.read()
+                    raw_img = _read_bounded_stream(img_resp, MAX_IMAGE_RESPONSE_BYTES, cancel_check=cancel_check)
                 return sanitize_reference_image(raw_img, max_dimension=1024)
             else:
                 raise ImageGenerationError("画像生成 API の応答形式が不明です (b64_json/url がありません)")
 
+        except ImageGenerationError:
+            raise
+        except _CrossOriginRedirectError as e:
+            raise ImageGenerationError("画像ダウンロードで別オリジンへのリダイレクトを拒否しました") from e
         except HTTPError as e:
             err_body = ""
             with contextlib.suppress(Exception):
@@ -240,10 +293,12 @@ class ImageGeneratorClient:
             raise ImageGenerationError(
                 f"画像生成 API エラー (HTTP {e.code}): {sanitize_api_key_log(err_body or str(e.reason))}"
             ) from e
-        except URLError as e:
-            raise ImageGenerationError(f"画像生成 API 接続エラー: {e.reason}") from e
+        except (URLError, TimeoutError, OSError) as e:
+            raise ImageGenerationError(f"画像生成 API 接続エラー: {e}") from e
         except json.JSONDecodeError as e:
             raise ImageGenerationError(f"画像生成 API の応答 JSON 解析に失敗しました: {e}") from e
+        except (binascii.Error, ValueError, TypeError, KeyError, AttributeError) as e:
+            raise ImageGenerationError(f"画像生成データの処理に失敗しました: {e}") from e
 
     def _call_sd_webui(
         self,
@@ -277,21 +332,32 @@ class ImageGeneratorClient:
         try:
             start_time = time.time()
             with opener.open(req, timeout=max(5.0, self.settings.timeout_seconds)) as resp:
-                resp_bytes = resp.read()
+                resp_bytes = _read_bounded_stream(resp, MAX_IMAGE_RESPONSE_BYTES, cancel_check=cancel_check)
                 elapsed = time.time() - start_time
-                self._log(f"SD WebUI 応答受信 ({elapsed:.1f}s, HTTP {resp.status})")
+                status_code = getattr(resp, "status", getattr(resp, "code", 200))
+                self._log(f"SD WebUI 応答受信 ({elapsed:.1f}s, HTTP {status_code})")
 
             result_json = json.loads(resp_bytes.decode("utf-8", errors="replace"))
+            if not isinstance(result_json, Mapping):
+                raise ImageGenerationError("SD WebUI 応答は JSON オブジェクトである必要があります")
+
             images_list = result_json.get("images", [])
-            if not images_list:
+            if not isinstance(images_list, list) or not images_list:
                 raise ImageGenerationError("SD WebUI 応答に画像が含まれていません")
 
             b64_str = images_list[0]
+            if not isinstance(b64_str, str):
+                raise ImageGenerationError("SD WebUI の画像データ形式が不正です")
+
             if "," in b64_str:
                 b64_str = b64_str.split(",", 1)[1]
             image_bytes = base64.b64decode(b64_str)
             return sanitize_reference_image(image_bytes, max_dimension=1024)
 
+        except ImageGenerationError:
+            raise
+        except _CrossOriginRedirectError as e:
+            raise ImageGenerationError("SD WebUI で別オリジンへのリダイレクトを拒否しました") from e
         except HTTPError as e:
             err_body = ""
             with contextlib.suppress(Exception):
@@ -299,5 +365,9 @@ class ImageGeneratorClient:
             raise ImageGenerationError(
                 f"SD WebUI エラー (HTTP {e.code}): {sanitize_api_key_log(err_body or str(e.reason))}"
             ) from e
-        except URLError as e:
-            raise ImageGenerationError(f"SD WebUI 接続エラー: {e.reason}") from e
+        except (URLError, TimeoutError, OSError) as e:
+            raise ImageGenerationError(f"SD WebUI 接続エラー: {e}") from e
+        except json.JSONDecodeError as e:
+            raise ImageGenerationError(f"SD WebUI の応答 JSON 解析に失敗しました: {e}") from e
+        except (binascii.Error, ValueError, TypeError, KeyError, AttributeError) as e:
+            raise ImageGenerationError(f"SD WebUI 画像データの処理に失敗しました: {e}") from e
