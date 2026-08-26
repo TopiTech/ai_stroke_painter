@@ -264,6 +264,13 @@ def _get_stroke_program_json_schema() -> dict[str, Any]:
                         "watercolor_wash",
                         "rose_bloom",
                         "wildflower",
+                        "cloud_cluster",
+                        "cumulus_clouds",
+                        "character_face",
+                        "anime_face",
+                        "portrait",
+                        "magic_circle",
+                        "cyber_city",
                     ],
                 },
                 "center": {
@@ -1642,13 +1649,14 @@ def _system_instruction(
         "```\n"
         "=== CRITICAL RULES & ANTI-PATTERNS ===\n"
         "1. Operation kinds:\n"
-        "   - macro: (HIGHLY RECOMMENDED for natural motifs! 'flower_cluster', 'sakura_canopy', 'branch_tree', 'mountain_range', 'watercolor_wash')\n"
-        "   - path: (2-12 organic spline control points with tapering pressure [x,y,pressure])\n"
+        "   - macro: (STRONGLY RECOMMENDED for motifs and subjects! 'character_face', 'cloud_cluster', 'cumulus_clouds', 'flower_cluster', 'sakura_canopy', 'branch_tree', 'mountain_range', 'watercolor_wash', 'magic_circle', 'cyber_city')\n"
+        "   - path: (2-12 organic spline control points with tapering pressure [x,y,pressure]. Do NOT output raw chaotic random paths)\n"
         "   - fill: (3+ polygon points, styles: 'wash' (organic watercolor flow), 'contour', 'radial', 'directional')\n"
         "   - hatch: (polygon, angle_deg, spacing, only for manga screen-tones)\n"
         "   - particles: (bounds/count, shape: 'petal'/'sparkle'/'drift'/'bokeh'/'line')\n"
         "2. Brush profiles: auto, gpen, marupen, brush, marker, pencil, watercolor, airbrush, eraser.\n"
         "3. Anti-Patterns (STRICTLY FORBIDDEN):\n"
+        "   - NEVER draw giant sweeping loops, random zig-zags, or arbitrary abstract lines across the canvas.\n"
         "   - NEVER draw plain rectangular boxes, wireframe border frames, or blind-curtain horizontal stripes across the entire canvas.\n"
         "   - NEVER use straight lines or coarse parallel stripes to depict trees, flowers, or mountains. Use macro primitives or curved paths instead.\n"
         "   - NEVER use hatch for smooth 3D shading, foliage, clouds, or landscape (causes artificial wireframe/zebra stripes). Use watercolor/airbrush wash or contour fill.\n"

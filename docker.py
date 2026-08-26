@@ -27,9 +27,10 @@ from .domain import (
     split_color_alpha,
 )
 from .image_converter import MAX_ENCODED_IMAGE_BYTES, _image_dimensions_from_header
+from .image_generator import ImageGeneratorSettings
 from .krita_adapter import KritaCanvasAdapter
 from .llm_planner import OpenAICompatiblePlanner, OpenAICompatibleSettings
-from .planner import RuleBasedPlanner
+from .planner import ImageGenerationPlanner, RuleBasedPlanner
 from .ports import PlannerPort
 from .procedural.base import sample_strokes_by_priority
 from .qt_compat import (
@@ -1066,10 +1067,53 @@ class AIStrokePainterDocker(DockWidget):
         self.planner_mode = QComboBox()
         self.planner_mode.addItem("プロシージャル (オフライン 高品質)", "offline")
         self.planner_mode.addItem("OpenAI 互換 LLM / Vision", "openai_compatible")
+        self.planner_mode.addItem("🎨 AI 画像生成 -> ストローク (T2I 高品質)", "t2i_stroke")
         engine_layout.addWidget(self.planner_mode)
         tab_ai_layout.addWidget(engine_box)
 
-        self.llm_settings = QGroupBox("OpenAI 互換 API 詳細設定")
+        # ----------------------------------------------------
+        # AI 画像生成 (Text-to-Image) 詳細設定
+        # ----------------------------------------------------
+        self.t2i_settings = QGroupBox("🎨 AI 画像生成 (Text-to-Image) 設定")
+        t2i_layout = QVBoxLayout(self.t2i_settings)
+        t2i_form = QFormLayout()
+
+        self.t2i_provider = QComboBox()
+        self.t2i_provider.addItem("OpenAI (DALL-E 3 / DALL-E 2)", "openai")
+        self.t2i_provider.addItem("Stable Diffusion WebUI (Forge/A1111)", "sd_webui")
+        self.t2i_provider.addItem("カスタム HTTP エンドポイント", "custom_http")
+        t2i_form.addRow("Provider", self.t2i_provider)
+
+        self.t2i_endpoint = QLineEdit("https://api.openai.com/v1/images/generations")
+        self.t2i_endpoint.setPlaceholderText("例: https://api.openai.com/v1/images/generations")
+        t2i_form.addRow("エンドポイント", self.t2i_endpoint)
+
+        self.t2i_model = QLineEdit("dall-e-3")
+        self.t2i_model.setPlaceholderText("例: dall-e-3, dall-e-2, flux-schnell")
+        t2i_form.addRow("Model", self.t2i_model)
+
+        self.t2i_api_key = QLineEdit()
+        self.t2i_api_key.setEchoMode(password_echo_mode())
+        self.t2i_api_key.setPlaceholderText("空欄なら OPENAI_API_KEY")
+        t2i_form.addRow("API Key", self.t2i_api_key)
+
+        self.t2i_size = QComboBox()
+        self.t2i_size.addItem("自動 (キャンバス縦横比に合わせる)", "auto")
+        self.t2i_size.addItem("1024 x 1024 (正方形 1:1)", "1024x1024")
+        self.t2i_size.addItem("1792 x 1024 (横長 16:9)", "1792x1024")
+        self.t2i_size.addItem("1024 x 1792 (縦長 9:16)", "1024x1792")
+        self.t2i_size.addItem("512 x 512 (SD 1.5 互換)", "512x512")
+        t2i_form.addRow("生成サイズ", self.t2i_size)
+
+        self.t2i_negative_prompt = QLineEdit()
+        self.t2i_negative_prompt.setPlaceholderText("例: low quality, worst quality, deformed, blurry")
+        self.t2i_negative_prompt.setToolTip("SD WebUI などネガティブプロンプト対応エンジンに送信する除外キーワード")
+        t2i_form.addRow("ネガティブ指示", self.t2i_negative_prompt)
+
+        t2i_layout.addLayout(t2i_form)
+        tab_ai_layout.addWidget(self.t2i_settings)
+
+        self.llm_settings = QGroupBox("OpenAI 互換 LLM / Vision 詳細設定")
         llm_layout = QVBoxLayout(self.llm_settings)
 
         # クイックプロファイル選択
@@ -1852,6 +1896,11 @@ class AIStrokePainterDocker(DockWidget):
                     return
 
         restore("planner_mode", lambda value: set_combo("planner_mode", value))
+        restore("t2i_provider", lambda value: set_combo("t2i_provider", value))
+        restore("t2i_endpoint", lambda value: set_text("t2i_endpoint", value))
+        restore("t2i_model", lambda value: set_text("t2i_model", value))
+        restore("t2i_size", lambda value: set_combo("t2i_size", value))
+        restore("t2i_negative_prompt", lambda value: set_text("t2i_negative_prompt", value))
         restore("base_url", lambda value: set_text("base_url", value))
         restore("model", lambda value: set_text("model", value))
         restore("timeout_sec", lambda value: set_number("timeout_sec", value, int))
@@ -1895,6 +1944,21 @@ class AIStrokePainterDocker(DockWidget):
             w = _get_attr(self, "planner_mode")
             if w is not None and hasattr(w, "currentData"):
                 settings.setValue("planner_mode", w.currentData() or "offline")
+            w = _get_attr(self, "t2i_provider")
+            if w is not None and hasattr(w, "currentData"):
+                settings.setValue("t2i_provider", w.currentData() or "openai")
+            w = _get_attr(self, "t2i_endpoint")
+            if w is not None and hasattr(w, "text"):
+                settings.setValue("t2i_endpoint", w.text())
+            w = _get_attr(self, "t2i_model")
+            if w is not None and hasattr(w, "text"):
+                settings.setValue("t2i_model", w.text())
+            w = _get_attr(self, "t2i_size")
+            if w is not None and hasattr(w, "currentData"):
+                settings.setValue("t2i_size", w.currentData() or "auto")
+            w = _get_attr(self, "t2i_negative_prompt")
+            if w is not None and hasattr(w, "text"):
+                settings.setValue("t2i_negative_prompt", w.text())
             w = _get_attr(self, "base_url")
             if w is not None and hasattr(w, "text"):
                 settings.setValue("base_url", w.text())
@@ -2250,23 +2314,40 @@ class AIStrokePainterDocker(DockWidget):
 
     def _update_planner_settings_state(self, *_args: Any) -> None:
         is_openai = self._is_openai_compatible_mode()
-        box = _get_attr(self, "llm_settings")
-        if box is not None and hasattr(box, "setEnabled"):
-            box.setEnabled(is_openai)
+        is_t2i = self._is_t2i_mode()
+
+        t2i_box = _get_attr(self, "t2i_settings")
+        if t2i_box is not None and hasattr(t2i_box, "setEnabled"):
+            t2i_box.setEnabled(is_t2i)
+
+        llm_box = _get_attr(self, "llm_settings")
+        if llm_box is not None and hasattr(llm_box, "setEnabled"):
+            llm_box.setEnabled(is_openai)
+
         ref = _get_attr(self, "auto_refine")
         if ref is not None and hasattr(ref, "setEnabled"):
             ref.setEnabled(is_openai)
             if not is_openai and hasattr(ref, "setChecked"):
                 ref.setChecked(False)
+
         goal = _get_attr(self, "goal_mode")
         if goal is not None and hasattr(goal, "setEnabled"):
             goal.setEnabled(is_openai)
             if not is_openai and hasattr(goal, "setChecked"):
                 goal.setChecked(False)
+
         iters = _get_attr(self, "iterations")
         if iters is not None and hasattr(iters, "setEnabled"):
             iters.setEnabled(is_openai)
         self._update_seed_controls_state()
+
+    def _is_t2i_mode(self) -> bool:
+        mode_w = _get_attr(self, "planner_mode")
+        if mode_w is None:
+            return False
+        mode_data = mode_w.currentData() if hasattr(mode_w, "currentData") else None
+        mode_text = mode_w.currentText() if hasattr(mode_w, "currentText") else ""
+        return mode_data == "t2i_stroke" or "画像生成" in mode_text
 
     def _is_openai_compatible_mode(self) -> bool:
         mode_w = _get_attr(self, "planner_mode")
@@ -2274,11 +2355,49 @@ class AIStrokePainterDocker(DockWidget):
             return False
         mode_data = mode_w.currentData() if hasattr(mode_w, "currentData") else None
         mode_text = mode_w.currentText() if hasattr(mode_w, "currentText") else ""
-        idx = mode_w.currentIndex() if hasattr(mode_w, "currentIndex") else 0
-        return mode_data == "openai_compatible" or "OpenAI" in mode_text or idx == 1
+        return mode_data == "openai_compatible" or "OpenAI" in mode_text
 
     def _planner(self) -> PlannerPort:
+        is_t2i = self._is_t2i_mode()
         is_openai = self._is_openai_compatible_mode()
+
+        if is_t2i:
+            prov_w = _get_attr(self, "t2i_provider")
+            ep_w = _get_attr(self, "t2i_endpoint")
+            m_w = _get_attr(self, "t2i_model")
+            k_w = _get_attr(self, "t2i_api_key")
+            sz_w = _get_attr(self, "t2i_size")
+            neg_w = _get_attr(self, "t2i_negative_prompt")
+
+            prov_val = (
+                (prov_w.currentData() or "openai")
+                if prov_w is not None and hasattr(prov_w, "currentData")
+                else "openai"
+            )
+            ep_val = (
+                ep_w.text().strip()
+                if ep_w is not None and hasattr(ep_w, "text")
+                else "https://api.openai.com/v1/images/generations"
+            )
+            m_val = m_w.text().strip() if m_w is not None and hasattr(m_w, "text") else "dall-e-3"
+            k_val = k_w.text().strip() if k_w is not None and hasattr(k_w, "text") else ""
+            sz_val = (sz_w.currentData() or "auto") if sz_w is not None and hasattr(sz_w, "currentData") else "auto"
+            neg_val = neg_w.text().strip() if neg_w is not None and hasattr(neg_w, "text") else ""
+
+            self._log_debug(
+                f"[エンジン選択] AI 画像生成 (Text-to-Image -> Stroke) [Provider: {prov_val}, Endpoint: {_safe_endpoint_label(ep_val)}, Model: {m_val}, Size: {sz_val}]"
+            )
+            return ImageGenerationPlanner(
+                ImageGeneratorSettings(
+                    provider=prov_val,
+                    endpoint_url=ep_val,
+                    api_key=k_val or os.environ.get("OPENAI_API_KEY", ""),
+                    model=m_val,
+                    size=sz_val if sz_val != "auto" else "1024x1024",
+                    negative_prompt=neg_val,
+                ),
+                log_callback=self._log_debug,
+            )
 
         if not is_openai:
             self._log_debug("[エンジン選択] プロシージャル (オフライン)")
@@ -2369,6 +2488,7 @@ class AIStrokePainterDocker(DockWidget):
             "shading_density",
             "enable_flats",
             "image_color_mode",
+            "t2i_settings",
             "llm_settings",
             "save_json",
             "save_svg_chk",

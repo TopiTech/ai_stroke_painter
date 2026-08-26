@@ -819,6 +819,14 @@ def operation_from_dict(
         "watercolor_wash",
         "rose_bloom",
         "wildflower",
+        "cloud_cluster",
+        "cumulus_clouds",
+        "cloud",
+        "character_face",
+        "anime_face",
+        "portrait",
+        "magic_circle",
+        "cyber_city",
     ):
         macro_name = str(value.get("name", kind if kind != "macro" else "flower_cluster")).strip().lower()
         raw_center = value.get("center", (0.5, 0.5))
@@ -2414,6 +2422,155 @@ def _compile_macro(
                 layer_name="Flats",
                 opacity=0.75,
             )
+        )
+
+    # -------------------------------------------------------------------------
+    # 5. 雲・積乱雲・もくもく雲 (Cloud Cluster / Cumulus Clouds)
+    # -------------------------------------------------------------------------
+    if any(k in name for k in ("cloud", "cumulus", "sky_cloud")):
+        cloud_colors = list(operation.colors) if operation.colors else ["#8ca6c7", "#bfd4ea", "#f0f5fb", "#ffffff"]
+        c_shadow = cloud_colors[0]
+        c_mid = cloud_colors[1] if len(cloud_colors) > 1 else "#e0ecf8"
+        c_body = cloud_colors[2] if len(cloud_colors) > 2 else "#ffffff"
+        c_hl = cloud_colors[-1]
+
+        # 雲を構成する球体クラスタのオフセット定義 (底面フラット・上部ふんわり)
+        puffs = [
+            (-0.35, 0.05, 0.45),
+            (-0.15, -0.15, 0.60),
+            (0.12, -0.22, 0.65),
+            (0.38, -0.05, 0.48),
+            (0.00, 0.02, 0.55),
+            (-0.25, -0.05, 0.50),
+            (0.25, -0.12, 0.52),
+        ]
+
+        # 1. 雲底のシャドウ層 (Cloud Bottom Shadow - Flats/Shading)
+        shadow_pts: list[tuple[float, float]] = []
+        for p_ox, p_oy, _p_r in puffs:
+            px = cx + p_ox * r
+            py = cy + (p_oy + 0.12) * r
+            shadow_pts.append((px, py))
+        shadow_pts.sort(key=lambda pt: pt[0])
+        s_spline = _catmull_rom_spline(shadow_pts, 6)
+        strokes.append(
+            _create_macro_stroke(
+                stroke_id=uid("cloud_shadow_base"),
+                points=[(x, y, 0.75) for x, y in s_spline],
+                profile="watercolor",
+                color=c_shadow,
+                size_px=max(25.0, r * 0.55),
+                layer_name="Shading",
+                opacity=0.65,
+            )
+        )
+
+        # 2. 雲のふんわり本体ボリューム (Flats)
+        for idx, (p_ox, p_oy, p_r) in enumerate(puffs):
+            if len(strokes) >= limit:
+                break
+            px = cx + p_ox * r
+            py = cy + p_oy * r
+            puff_radius = p_r * r
+            circ_pts = [
+                (
+                    px + math.cos(deg) * puff_radius * (1.0 + rng.uniform(-0.06, 0.06)),
+                    py + math.sin(deg) * puff_radius * (1.0 + rng.uniform(-0.06, 0.06)),
+                )
+                for deg in (0.0, math.pi * 0.5, math.pi, math.pi * 1.5, math.pi * 2.0)
+            ]
+            c_spline = _catmull_rom_spline(circ_pts, 6)
+            # 中間トーン
+            strokes.append(
+                _create_macro_stroke(
+                    stroke_id=uid("cloud_body_mid", idx),
+                    points=[(x, y, 0.85) for x, y in c_spline],
+                    profile="watercolor",
+                    color=c_mid,
+                    size_px=max(20.0, puff_radius * 0.70),
+                    layer_name="Flats",
+                    opacity=0.75,
+                )
+            )
+            # 明るいホワイト本体
+            strokes.append(
+                _create_macro_stroke(
+                    stroke_id=uid("cloud_body_bright", idx),
+                    points=[(x, y - puff_radius * 0.15, 0.90) for x, y in c_spline],
+                    profile="watercolor",
+                    color=c_body,
+                    size_px=max(16.0, puff_radius * 0.58),
+                    layer_name="Flats",
+                    opacity=0.88,
+                )
+            )
+
+        # 3. 雲頂の輝くリムハイライト (Highlights)
+        top_puffs = sorted(puffs[:4], key=lambda p: p[0])
+        hl_pts: list[tuple[float, float]] = []
+        for p_ox, p_oy, p_r in top_puffs:
+            px = cx + p_ox * r
+            py = cy + (p_oy - p_r * 0.85) * r
+            hl_pts.append((px, py))
+        if len(hl_pts) >= 2 and len(strokes) < limit:
+            hl_spline = _catmull_rom_spline(hl_pts, 8)
+            strokes.append(
+                _create_macro_stroke(
+                    stroke_id=uid("cloud_rim_highlight"),
+                    points=[
+                        (x, y, 0.4 + 0.55 * math.sin(i / max(1, len(hl_spline) - 1) * math.pi))
+                        for i, (x, y) in enumerate(hl_spline)
+                    ],
+                    profile="gpen",
+                    color=c_hl,
+                    size_px=max(3.0, scale * 0.0045),
+                    layer_name="Highlights",
+                    opacity=0.92,
+                )
+            )
+
+        return strokes
+
+    # -------------------------------------------------------------------------
+    # 6. アニメ・キャラクター顔 / ポートレート (Character Face / Anime Portrait)
+    # -------------------------------------------------------------------------
+    if any(k in name for k in ("character", "portrait", "face", "girl", "boy", "anime_face")):
+        from .procedural.character import generate_character_strokes
+
+        # プロシージャル人物エンジンを呼び出し、要求サイズと位置にマッピング
+        char_strokes = generate_character_strokes(
+            prompt=operation.name,
+            seed=program.seed,
+            count=min(limit, 120),
+            width=w,
+            height=h,
+            palette_name=program.metadata.get("palette", "anime"),
+        )
+        return char_strokes
+
+    # -------------------------------------------------------------------------
+    # 7. 幾何学・都市・魔法陣 (Magic Circle / Cyber City)
+    # -------------------------------------------------------------------------
+    if any(k in name for k in ("magic_circle", "rune", "magic")):
+        from .procedural.manga_fx import generate_manga_fx_strokes
+
+        return generate_manga_fx_strokes(
+            prompt="magic circle",
+            seed=program.seed,
+            count=min(limit, 80),
+            width=w,
+            height=h,
+        )
+
+    if any(k in name for k in ("city", "cyber", "skyline", "building")):
+        from .procedural.geometry import generate_geometry_strokes
+
+        return generate_geometry_strokes(
+            prompt="cyberpunk city",
+            seed=program.seed,
+            count=min(limit, 100),
+            width=w,
+            height=h,
         )
 
     return strokes

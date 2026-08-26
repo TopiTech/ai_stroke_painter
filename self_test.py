@@ -7654,6 +7654,153 @@ class PreviewDiscrepancyFixTests(unittest.TestCase):
             self.assertEqual(getattr(worker_instance, "height", None), 1080.0)
 
 
+class ImageGeneratorAndPlannerTests(unittest.TestCase):
+    """Text-to-Image 画像生成クライアント、新マクロ、ImageGenerationPlanner の包括的検証。"""
+
+    def test_image_generator_settings_defaults(self) -> None:
+        from .image_generator import ImageGeneratorSettings
+
+        s = ImageGeneratorSettings()
+        self.assertEqual(s.provider, "openai")
+        self.assertEqual(s.model, "dall-e-3")
+        self.assertEqual(s.size, "1024x1024")
+
+    def test_image_generator_openai_call(self) -> None:
+        from .image_generator import ImageGeneratorClient, ImageGeneratorSettings
+
+        client = ImageGeneratorClient(ImageGeneratorSettings(api_key="sk-fake-key"))
+        # 1x1 PNG transparent
+        fake_png_b64 = (
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+        )
+        fake_response = json.dumps({"data": [{"b64_json": fake_png_b64}]}).encode("utf-8")
+
+        class FakeHTTPResponse:
+            def __init__(self, data: bytes) -> None:
+                self._data = data
+                self.status = 200
+
+            def read(self) -> bytes:
+                return self._data
+
+            def __enter__(self) -> FakeHTTPResponse:
+                return self
+
+            def __exit__(self, *args: Any) -> None:
+                pass
+
+        with patch("ai_stroke_painter.image_generator.build_opener") as mock_opener:
+            mock_inst = mock_opener.return_value
+            mock_inst.open.return_value = FakeHTTPResponse(fake_response)
+
+            img_bytes = client.generate_image("fantasy anime landscape")
+            self.assertGreater(len(img_bytes), 10)
+            self.assertTrue(img_bytes.startswith(b"\x89PNG") or img_bytes.startswith(b"\xff\xd8"))
+
+    def test_image_generation_planner_execution(self) -> None:
+        from .image_generator import ImageGeneratorSettings
+        from .planner import ImageGenerationPlanner
+
+        class FakeColor:
+            def __init__(self, value: int) -> None:
+                self.value = value
+
+            def red(self) -> int:
+                return self.value
+
+            def green(self) -> int:
+                return self.value
+
+            def blue(self) -> int:
+                return self.value
+
+            def alpha(self) -> int:
+                return 255
+
+        class FakeImage:
+            Format_ARGB32 = 5
+
+            def loadFromData(self, _data: bytes) -> bool:  # noqa: N802
+                return True
+
+            def width(self) -> int:
+                return 20
+
+            def height(self) -> int:
+                return 10
+
+            def scaled(self, _width: int, _height: int) -> Any:
+                return self
+
+            def convertToFormat(self, _format: Any) -> Any:  # noqa: N802
+                return self
+
+            def pixelColor(self, x: int, _y: int) -> FakeColor:  # noqa: N802
+                return FakeColor(20 if x < 10 else 240)
+
+        fake_png = b"\x89PNG\r\n\x1a\n" + (b"\x00" * 8) + (20).to_bytes(4, "big") + (10).to_bytes(4, "big")
+
+        planner = ImageGenerationPlanner(ImageGeneratorSettings(api_key="sk-fake-key"))
+        planner.image_converter.qimage_cls = FakeImage
+        with patch.object(planner.image_client, "generate_image", return_value=fake_png):
+            plan = planner.plan(
+                prompt="fantasy anime mountain",
+                seed=42,
+                count=20,
+                width=800,
+                height=600,
+            )
+            self.assertIsNotNone(plan)
+            self.assertEqual(plan.prompt, "AI Generated: fantasy anime mountain")
+            self.assertEqual(plan.metadata.get("generator"), "text_to_image_to_stroke")
+
+    def test_new_macro_operations_compilation(self) -> None:
+        from .stroke_program import (
+            MacroOperation,
+            ProgramBrush,
+            StrokeProgram,
+            compile_stroke_program,
+        )
+
+        cloud_macro = MacroOperation(
+            id="cloud_1",
+            layer="Flats",
+            name="cloud_cluster",
+            brush=ProgramBrush(profile="watercolor", color="#ffffff", size=0.1),
+            center=(0.5, 0.3),
+            radius=0.25,
+            colors=("#8ca6c7", "#bfd4ea", "#ffffff", "#ffffff"),
+        )
+        face_macro = MacroOperation(
+            id="face_1",
+            layer="Lineart",
+            name="character_face",
+            brush=ProgramBrush(profile="gpen", color="#1c1018", size=0.005),
+            center=(0.5, 0.5),
+            radius=0.3,
+        )
+        magic_macro = MacroOperation(
+            id="magic_1",
+            layer="Highlights",
+            name="magic_circle",
+            brush=ProgramBrush(profile="gpen", color="#00ffff", size=0.003),
+            center=(0.5, 0.5),
+            radius=0.35,
+        )
+
+        prog = StrokeProgram(
+            prompt="anime magic girl with clouds",
+            seed=42,
+            canvas_width=1000,
+            canvas_height=1000,
+            operations=(cloud_macro, face_macro, magic_macro),
+        )
+        plan = compile_stroke_program(prog)
+        self.assertGreater(len(plan.strokes), 15)
+        layer_set = {s.layer_name for s in plan.strokes}
+        self.assertTrue("Flats" in layer_set or "Lineart" in layer_set)
+
+
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))
     result = unittest.TextTestRunner(verbosity=2).run(suite)

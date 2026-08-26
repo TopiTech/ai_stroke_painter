@@ -746,8 +746,8 @@ class ImageStrokeConverter:
                     spline,
                     profile_type="gpen",
                     base_pressure=0.85,
-                    color="#1a1a1a" if (rng.random() > 0.3 and color_mode != "palette") else col,
-                    size_px=rng.uniform(3.5, 6.0),
+                    color="#1a1a1a" if (rng.random() > 0.25 and color_mode != "palette") else col,
+                    size_px=rng.uniform(3.0, 5.5),
                     layer_name="Lineart",
                     rng=rng,
                     width=target_width,
@@ -864,16 +864,16 @@ class ImageStrokeConverter:
                         continue
                     fx = offset_x + x * fit_scale
                     fy = offset_y + y * fit_scale
-                    f_stroke = [(fx - fit_scale * 2, fy), (fx + fit_scale * flat_step * 0.8, fy)]
+                    f_stroke = [(fx - fit_scale * flat_step * 0.3, fy), (fx + fit_scale * flat_step * 1.1, fy)]
                     strokes.append(
                         create_stroke(
                             f_stroke,
                             profile_type="brush",
-                            base_pressure=0.75,
+                            base_pressure=0.80,
                             color=color_map[y][x],
-                            size_px=fit_scale * flat_step * 0.9,
+                            size_px=fit_scale * flat_step * 1.30,
                             layer_name="Flats",
-                            opacity=0.85,
+                            opacity=0.88,
                             rng=rng,
                             width=target_width,
                             height=target_height,

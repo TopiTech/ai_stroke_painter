@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 import math
-from typing import Any
+from typing import Any, cast
 
 from .domain import DrawingPlan
 from .image_converter import ImageStrokeConverter
@@ -146,6 +147,103 @@ class RuleBasedPlanner(PlannerPort):
                 "max_iterations": max_iterations,
                 "palette": palette_name,
                 "brush_profile": brush_profile,
+                "goal_reached": is_final,
+                "completion_score": 1.0 if is_final else float(iteration) / float(max_iterations),
+            },
+            canvas_width=valid_width,
+            canvas_height=valid_height,
+            goal_reached=is_final,
+            completion_score=1.0 if is_final else float(iteration) / float(max_iterations),
+        )
+
+
+class ImageGenerationPlanner(PlannerPort):
+    """Text-to-Image 画像生成 AI と ImageStrokeConverter を連携させた高品質イラスト Planner。"""
+
+    def __init__(
+        self,
+        settings: Any | None = None,
+        log_callback: Any | None = None,
+    ) -> None:
+        from .image_generator import ImageGeneratorClient, ImageGeneratorSettings
+
+        self.settings = settings or ImageGeneratorSettings()
+        self.log_callback = log_callback
+        self.image_client = ImageGeneratorClient(self.settings, log_callback=self._log)
+        self.image_converter = ImageStrokeConverter()
+
+    def _log(self, message: str) -> None:
+        if self.log_callback:
+            self.log_callback(message)
+
+    def plan(
+        self,
+        prompt: str,
+        seed: int,
+        count: int | None = None,
+        width: float = 1000.0,
+        height: float = 1000.0,
+        image_data: bytes | None = None,
+        canvas_image: bytes | None = None,
+        iteration: int = 1,
+        max_iterations: int = 1,
+        palette_name: str = "anime",
+        brush_profile: str = "auto",
+        edge_threshold: float = 0.18,
+        shading_density: str = "medium",
+        enable_flats: bool = True,
+        color_mode: str = "original",
+        auto_count: bool = False,
+        cancelled: Any | None = None,
+        **kwargs: Any,
+    ) -> DrawingPlan:
+        valid_prompt, valid_seed, valid_count, valid_width, valid_height = validate_plan_request(
+            prompt, seed, count, width, height, auto_count=auto_count
+        )
+        iteration, max_iterations = validate_iterations(iteration, max_iterations)
+        is_final = iteration >= max_iterations
+
+        cancel_fn: Callable[[], bool] | None = cast(Callable[[], bool], cancelled) if callable(cancelled) else None
+        target_aspect = valid_width / max(1.0, valid_height)
+
+        if not image_data:
+            self._log(
+                f"Text-to-Image 画像生成を開始します (Prompt: '{valid_prompt[:60]}...', Aspect: {target_aspect:.2f})"
+            )
+            image_data = self.image_client.generate_image(
+                valid_prompt,
+                cancel_check=cancel_fn,
+                target_aspect=target_aspect,
+            )
+            self._log("画像生成が完了しました。手描きストロークへ自動分解中...")
+
+        image_plan = self.image_converter.convert_image_to_plan(
+            image_bytes=image_data,
+            prompt=valid_prompt,
+            seed=valid_seed,
+            count=valid_count,
+            target_width=valid_width,
+            target_height=valid_height,
+            edge_threshold=edge_threshold,
+            shading_density=shading_density,
+            enable_flats=enable_flats,
+            color_mode=color_mode,
+            palette_name=palette_name,
+            brush_profile=brush_profile,
+        )
+
+        return DrawingPlan(
+            prompt=f"AI Generated: {valid_prompt}",
+            seed=valid_seed,
+            strokes=image_plan.strokes,
+            title="AI Generated Illustration",
+            iteration=iteration,
+            layers=image_plan.layers,
+            metadata={
+                **dict(image_plan.metadata),
+                "generator": "text_to_image_to_stroke",
+                "iteration": iteration,
+                "max_iterations": max_iterations,
                 "goal_reached": is_final,
                 "completion_score": 1.0 if is_final else float(iteration) / float(max_iterations),
             },
