@@ -301,6 +301,8 @@ class DrawingPlan:
     def __post_init__(self) -> None:
         if not isinstance(self.prompt, str):
             raise PlanValidationError("prompt は文字列である必要があります")
+        if len(self.prompt) > 100_000:
+            raise PlanValidationError("prompt は 100,000 文字以下である必要があります")
         object.__setattr__(self, "seed", _non_negative_int(self.seed, "seed"))
         raw_strokes: Any = self.strokes
         if isinstance(raw_strokes, (str, bytes)) or not isinstance(raw_strokes, Sequence):

@@ -36,6 +36,9 @@ def _canvas_dimensions(plan: DrawingPlan) -> tuple[float, float]:
     )
 
 
+MAX_COVERAGE_RADIUS_CELLS = 4
+
+
 def _estimated_coverage(plan: DrawingPlan, width: float, height: float, grid_size: int) -> float:
     occupied: set[tuple[int, int]] = set()
     cell_width = width / grid_size
@@ -44,10 +47,11 @@ def _estimated_coverage(plan: DrawingPlan, width: float, height: float, grid_siz
     for stroke in plan.strokes:
         if stroke.is_eraser or stroke.opacity <= 0.02:
             continue
-        radius_cells = max(0, min(grid_size, math.ceil((stroke.size_px * 0.5) / min(cell_width, cell_height))))
+        raw_radius = math.ceil((stroke.size_px * 0.5) / min(cell_width, cell_height))
+        radius_cells = max(0, min(MAX_COVERAGE_RADIUS_CELLS, min(grid_size, raw_radius)))
         for first, second in zip(stroke.points, stroke.points[1:], strict=False):
             length = math.hypot(second.x - first.x, second.y - first.y)
-            sample_count = max(1, min(256, math.ceil(length / max(diagonal * 0.45, 1.0))))
+            sample_count = max(1, min(64, math.ceil(length / max(diagonal * 0.45, 1.0))))
             for sample in range(sample_count + 1):
                 phase = sample / sample_count
                 x = first.x + (second.x - first.x) * phase
@@ -77,7 +81,7 @@ def evaluate_plan_quality(plan: DrawingPlan, *, grid_size: int = 40) -> PlanQual
     width, height = _canvas_dimensions(plan)
     coverage = _estimated_coverage(plan, width, height, grid_size) if plan.strokes else 0.0
     # FX/Highlights の短い発光ダッシュや粒子は均一圧が意図的なので、主線と陰影だけを評価する。
-    expressive = [stroke for stroke in plan.strokes if stroke.layer_name in {"Lineart", "Shading"}]
+    expressive = [stroke for stroke in plan.strokes if stroke.layer_name.lower() in {"lineart", "shading"}]
     dynamic_count = sum(
         1
         for stroke in expressive

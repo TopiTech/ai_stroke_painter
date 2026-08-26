@@ -11,11 +11,17 @@ from .image_converter import ImageStrokeConverter
 from .ports import PlannerPort
 from .procedural import generate_procedural_plan
 
+MAX_CANVAS_DIMENSION = 16384
+MAX_IMAGE_DATA_BYTES = 25 * 1024 * 1024
+
 
 def _valid_dimension(value: Any, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 2:
         raise ValueError(f"{name} は 2 以上の有限数である必要があります")
-    return float(value)
+    dimension = float(value)
+    if dimension > MAX_CANVAS_DIMENSION:
+        raise ValueError(f"{name} は {MAX_CANVAS_DIMENSION} 以下である必要があります")
+    return dimension
 
 
 def validate_plan_request(
@@ -30,6 +36,8 @@ def validate_plan_request(
     """Planner 実装で共通の入力契約を検証する。count=None は各実装の品質予算へ委ねる。"""
     if not isinstance(prompt, str):
         raise ValueError("prompt は文字列である必要があります")
+    if not prompt.strip():
+        raise ValueError("prompt は空でない文字列である必要があります")
     if len(prompt) > 20_000:
         raise ValueError("prompt は 20,000 文字以下である必要があります")
     if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
@@ -39,6 +47,9 @@ def validate_plan_request(
         if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 500:
             raise ValueError("count は 1 から 500 の整数または None である必要があります")
         valid_count = count
+    elif auto_count and count is not None and count not in (0, "auto"):
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 500:
+            raise ValueError("count は 1 から 500 の整数または None である必要があります")
     return prompt, seed, valid_count, _valid_dimension(width, "width"), _valid_dimension(height, "height")
 
 
@@ -83,8 +94,11 @@ class RuleBasedPlanner(PlannerPort):
         iteration, max_iterations = validate_iterations(iteration, max_iterations)
         is_final = iteration >= max_iterations
 
+        if image_data is not None and len(image_data) > MAX_IMAGE_DATA_BYTES:
+            raise ValueError(f"参照画像が上限 ({MAX_IMAGE_DATA_BYTES // (1024 * 1024)}MB) を超えています")
+
         # 参照画像が渡されている場合は画像ストローク変換を実行
-        if image_data:
+        if image_data is not None and len(image_data) > 0:
             image_plan = self.image_converter.convert_image_to_plan(
                 image_bytes=image_data,
                 prompt=valid_prompt,
@@ -120,7 +134,7 @@ class RuleBasedPlanner(PlannerPort):
             )
 
         # 自律反復改善（イテレーション）時のプロシージャル描画計画
-        generation_seed = valid_seed + (iteration - 1) * 1000
+        generation_seed = (valid_seed + (iteration - 1) * 1000) & 0x7FFFFFFF
         plan = generate_procedural_plan(
             prompt=valid_prompt,
             seed=generation_seed,
@@ -206,9 +220,18 @@ class ImageGenerationPlanner(PlannerPort):
         cancel_fn: Callable[[], bool] | None = cast(Callable[[], bool], cancelled) if callable(cancelled) else None
         target_aspect = valid_width / max(1.0, valid_height)
 
-        if not image_data:
+        if image_data is not None and len(image_data) > MAX_IMAGE_DATA_BYTES:
+            raise ValueError(f"参照画像が上限 ({MAX_IMAGE_DATA_BYTES // (1024 * 1024)}MB) を超えています")
+
+        if cancel_fn is not None and cancel_fn():
+            from .image_generator import ImageGenerationError as _CancelErr
+
+            raise _CancelErr("画像生成がキャンセルされました")
+
+        if image_data is None or len(image_data) == 0:
+            sanitized_prompt = valid_prompt.replace("\n", " ").replace("\r", " ")[:60]
             self._log(
-                f"Text-to-Image 画像生成を開始します (Prompt: '{valid_prompt[:60]}...', Aspect: {target_aspect:.2f})"
+                f"Text-to-Image 画像生成を開始します (Prompt: '{sanitized_prompt}...', Aspect: {target_aspect:.2f})"
             )
             image_data = self.image_client.generate_image(
                 valid_prompt,

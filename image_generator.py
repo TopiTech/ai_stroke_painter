@@ -106,12 +106,31 @@ def _read_bounded_stream(
     cancel_check: Callable[[], bool] | None = None,
 ) -> bytes:
     if getattr(response, "headers", None) is None:
-        # 単純な互換transport／テストdoubleは1回read契約の場合がある
-        raw = cast(bytes, response.read())
-        if len(raw) > max_bytes:
-            raise ImageGenerationError(f"画像生成 API の応答が上限 ({max_bytes} bytes) を超えています")
-        return raw
-    chunks: list[bytes] = []
+        chunks: list[bytes] = []
+        received = 0
+        while received <= max_bytes:
+            if cancel_check is not None and cancel_check():
+                raise ImageGenerationError("画像データの受信をキャンセルしました")
+            try:
+                part = cast(bytes, response.read(64 * 1024))
+            except TypeError:
+                part = cast(bytes, response.read())
+                if not part:
+                    break
+                if len(part) + received > max_bytes:
+                    raise ImageGenerationError(
+                        f"画像生成 API の応答が上限 ({max_bytes} bytes) を超えています"
+                    ) from None
+                chunks.append(part)
+                break
+            if not part:
+                break
+            chunks.append(part)
+            received += len(part)
+            if received > max_bytes:
+                raise ImageGenerationError(f"画像生成 API の応答が上限 ({max_bytes} bytes) を超えています")
+        return b"".join(chunks)
+    chunks = []
     received_bytes = 0
     while received_bytes <= max_bytes:
         if cancel_check is not None and cancel_check():
@@ -127,7 +146,7 @@ def _read_bounded_stream(
     return b"".join(chunks)
 
 
-def _validate_endpoint_url(url_str: str, api_key: str = "") -> str:
+def _validate_endpoint_url(url_str: str, _api_key: str = "") -> str:
     url = url_str.strip()
     if not url:
         raise ImageGenerationError("エンドポイント URL が空です")
@@ -142,7 +161,7 @@ def _validate_endpoint_url(url_str: str, api_key: str = "") -> str:
         raise ImageGenerationError("エンドポイント URL にホスト名が含まれていません")
 
     is_loopback = False
-    if hostname in ("localhost", "127.0.0.1", "::1"):
+    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "::"):
         is_loopback = True
     else:
         try:
@@ -290,7 +309,9 @@ class ImageGeneratorClient:
                 b64_str = first_item["b64_json"]
                 if not isinstance(b64_str, str):
                     raise ImageGenerationError("b64_json は文字列である必要があります")
-                image_bytes = base64.b64decode(b64_str)
+                if len(b64_str) > MAX_IMAGE_RESPONSE_BYTES * 2:
+                    raise ImageGenerationError("画像データが上限を超えています")
+                image_bytes = base64.b64decode(b64_str, validate=True)
                 return sanitize_reference_image(image_bytes, max_dimension=1024)
             elif "url" in first_item:
                 raw_url = first_item["url"]
@@ -374,7 +395,9 @@ class ImageGeneratorClient:
 
             if "," in b64_str:
                 b64_str = b64_str.split(",", 1)[1]
-            image_bytes = base64.b64decode(b64_str)
+            if len(b64_str) > MAX_IMAGE_RESPONSE_BYTES * 2:
+                raise ImageGenerationError("画像データが上限を超えています")
+            image_bytes = base64.b64decode(b64_str, validate=True)
             return sanitize_reference_image(image_bytes, max_dimension=1024)
 
         except ImageGenerationError:

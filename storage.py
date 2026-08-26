@@ -26,13 +26,34 @@ def app_data_dir() -> Path:
     return output
 
 
+def _resolve_output_dir(directory: str | Path | None) -> Path:
+    if directory is None:
+        return app_data_dir()
+    requested = Path(directory)
+    if requested.is_absolute():
+        resolved = requested.resolve()
+        if ".." in Path(directory).parts:
+            raise ValueError(f"保存先に親ディレクトリ参照を含めることはできません: {directory}")
+        return resolved
+    output = (app_data_dir() / requested).resolve()
+    allowed = app_data_dir().resolve()
+    try:
+        output.relative_to(allowed)
+    except ValueError as exc:
+        if output != allowed:
+            raise ValueError(f"保存先は {allowed} 配下である必要があります: {output}") from exc
+    return output
+
+
 def save_plan(plan: DrawingPlan, directory: str | Path | None = None) -> Path:
     """同時保存でも上書きせず、作成した JSON のパスを返す。"""
     if not isinstance(plan, DrawingPlan):
         raise TypeError("plan は DrawingPlan である必要があります")
-    output = Path(directory) if directory is not None else app_data_dir()
+    output = _resolve_output_dir(directory)
     output.mkdir(parents=True, exist_ok=True)
     contents = json.dumps(plan.as_dict(), ensure_ascii=False, indent=2) + "\n"
+    if len(contents.encode("utf-8")) > MAX_PLAN_FILE_BYTES:
+        raise ValueError(f"計画 JSON が上限 ({MAX_PLAN_FILE_BYTES // (1024 * 1024)}MB) を超えています")
     timestamp = time.time_ns()
     for suffix in range(1000):
         name = f"plan_{timestamp}{'' if suffix == 0 else f'_{suffix}'}.json"
@@ -50,9 +71,11 @@ def save_svg(plan: DrawingPlan, directory: str | Path | None = None) -> Path:
     """計画を SVG ベクターファイルとして保存する。"""
     if not isinstance(plan, DrawingPlan):
         raise TypeError("plan は DrawingPlan である必要があります")
-    output = Path(directory) if directory is not None else app_data_dir()
+    output = _resolve_output_dir(directory)
     output.mkdir(parents=True, exist_ok=True)
     contents = plan.to_svg()
+    if len(contents.encode("utf-8")) > MAX_PLAN_FILE_BYTES:
+        raise ValueError(f"SVG が上限 ({MAX_PLAN_FILE_BYTES // (1024 * 1024)}MB) を超えています")
     timestamp = time.time_ns()
     for suffix in range(1000):
         name = f"artwork_{timestamp}{'' if suffix == 0 else f'_{suffix}'}.svg"
@@ -88,9 +111,11 @@ def save_program(program: StrokeProgram, directory: str | Path | None = None) ->
     """編集可能な高水準 StrokeProgram を上書きせず JSON 保存する。"""
     if not isinstance(program, StrokeProgram):
         raise TypeError("program は StrokeProgram である必要があります")
-    output = Path(directory) if directory is not None else app_data_dir()
+    output = _resolve_output_dir(directory)
     output.mkdir(parents=True, exist_ok=True)
     contents = json.dumps(program.as_dict(), ensure_ascii=False, indent=2) + "\n"
+    if len(contents.encode("utf-8")) > MAX_PLAN_FILE_BYTES:
+        raise ValueError(f"プログラム JSON が上限 ({MAX_PLAN_FILE_BYTES // (1024 * 1024)}MB) を超えています")
     timestamp = time.time_ns()
     for suffix in range(1000):
         name = f"program_{timestamp}{'' if suffix == 0 else f'_{suffix}'}.json"

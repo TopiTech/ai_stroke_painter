@@ -122,7 +122,11 @@ class JsonLineNativeStrokeBridge(NativeStrokeBridgePort):
                 break
             newline = chunk.find(b"\n")
             if newline >= 0:
-                chunks.append(chunk[:newline])
+                sliced = chunk[:newline]
+                chunks.append(sliced)
+                total += len(sliced)
+                if total > MAX_BRIDGE_RESPONSE_BYTES:
+                    raise NativeBridgeProtocolError("Native Bridge 応答が上限を超えています")
                 break
             chunks.append(chunk)
             total += len(chunk)
@@ -141,7 +145,11 @@ class JsonLineNativeStrokeBridge(NativeStrokeBridgePort):
             raise NativeBridgeProtocolError("Native Bridge 応答はオブジェクトである必要があります")
         if response.get("ok") is not True:
             error = response.get("error", "unknown native bridge error")
-            raise NativeBridgeProtocolError(f"Native Bridge が描画を拒否しました: {str(error)[:300]}")
+            error_text = error if isinstance(error, str) else str(error)
+            raise NativeBridgeProtocolError(f"Native Bridge が描画を拒否しました: {error_text[:300]}")
+        protocol_version = response.get("protocol_version")
+        if protocol_version is not None and protocol_version != NATIVE_BRIDGE_PROTOCOL_VERSION:
+            raise NativeBridgeProtocolError("Native Bridge プロトコルバージョンが不一致です")
         accepted = response.get("accepted_point_count")
         if isinstance(accepted, bool) or not isinstance(accepted, int) or accepted != len(stroke.points):
             raise NativeBridgeProtocolError("Native Bridge の受理点数が要求と一致しません")
@@ -151,8 +159,10 @@ class JsonLineNativeStrokeBridge(NativeStrokeBridgePort):
 def discover_native_bridge() -> JsonLineNativeStrokeBridge | None:
     """環境変数が完全に設定された場合だけ bridge を有効化する。"""
     raw_port = os.environ.get("AI_STROKE_BRIDGE_PORT", "").strip()
-    token = os.environ.get("AI_STROKE_BRIDGE_TOKEN", "")
+    token = os.environ.get("AI_STROKE_BRIDGE_TOKEN", "").strip()
     if not raw_port and not token:
+        return None
+    if not raw_port or not token:
         return None
     try:
         port = int(raw_port)

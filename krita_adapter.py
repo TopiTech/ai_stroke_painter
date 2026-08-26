@@ -399,10 +399,14 @@ class KritaCanvasAdapter(CanvasPort):
                         qbuf: Any = QBuffer(ba)
                         mode = write_only_open_mode(QIODevice)
                         qbuf.open(mode)
-                        qimage.save(qbuf, "PNG")
-                        data = ba.data() if hasattr(ba, "data") else b""
-                        if data:
-                            return bytes(data)
+                        try:
+                            qimage.save(qbuf, "PNG")
+                            data: Any = ba.data() if hasattr(ba, "data") else b""
+                            if data:
+                                return bytes(data)
+                        finally:
+                            with contextlib.suppress(Exception):
+                                qbuf.close()
             except Exception:
                 pass
 
@@ -788,6 +792,8 @@ def _estimated_pixel_bytes(node: Any, width: int, height: int) -> int:
 def _plan_snapshot_bounds(document: Any, plan: DrawingPlan, size_multiplier: float) -> tuple[int, int, int, int]:
     width = int(document.width())
     height = int(document.height())
+    if not plan.strokes:
+        return 0, 0, max(1, width), max(1, height)
     max_radius = max(stroke.size_px * size_multiplier * 1.5 + 4.0 for stroke in plan.strokes)
     min_x = max(0, math.floor(min(point.x for stroke in plan.strokes for point in stroke.points) - max_radius))
     min_y = max(0, math.floor(min(point.y for stroke in plan.strokes for point in stroke.points) - max_radius))
@@ -813,9 +819,14 @@ def _capture_layer_snapshot(
             x, y, width, height = bounds
         if width <= 0 or height <= 0:
             raise ValueError("invalid document dimensions")
-        if _estimated_pixel_bytes(node, width, height) > MAX_ACTIVE_LAYER_SNAPSHOT_BYTES:
-            raise RuntimeError("snapshot exceeds safety budget")
+        estimated = _estimated_pixel_bytes(node, width, height)
+        if estimated > MAX_ACTIVE_LAYER_SNAPSHOT_BYTES:
+            raise RuntimeError(
+                f"アクティブレイヤーのスナップショットが上限 ({MAX_ACTIVE_LAYER_SNAPSHOT_BYTES // (1024 * 1024)}MB) を超えるため安全に描画できません"
+            )
         pixels = pixel_data(x, y, width, height)
+    except RuntimeError:
+        raise
     except Exception as exc:
         raise RuntimeError("アクティブレイヤーのロールバック用スナップショットを取得できません") from exc
     if pixels is None:

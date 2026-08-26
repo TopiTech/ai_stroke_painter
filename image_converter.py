@@ -205,11 +205,14 @@ def _image_dimensions_from_header(data: bytes) -> tuple[int, int] | None:
 
 def _hex_to_rgb(hex_str: str) -> tuple[int, int, int]:
     h = hex_str.lstrip("#")
-    if len(h) in (3, 4):
-        return int(h[0] * 2, 16), int(h[1] * 2, 16), int(h[2] * 2, 16)
-    if len(h) in (6, 8):
-        return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return (0, 0, 0)
+    try:
+        if len(h) in (3, 4):
+            return int(h[0] * 2, 16), int(h[1] * 2, 16), int(h[2] * 2, 16)
+        if len(h) in (6, 8):
+            return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except ValueError:
+        pass
+    raise ValueError(f"不正な HEX カラー: {hex_str!r}")
 
 
 def _srgb_channel_to_linear(value: float) -> float:
@@ -240,7 +243,10 @@ def _find_closest_palette_color(r: int, g: int, b: int, palette_hex_list: list[s
     min_dist_sq = float("inf")
     source_l, source_a, source_b = _rgb_to_oklab(r, g, b)
     for p_hex in palette_hex_list:
-        pr, pg, pb = _hex_to_rgb(p_hex)
+        try:
+            pr, pg, pb = _hex_to_rgb(p_hex)
+        except ValueError:
+            continue
         palette_l, palette_a, palette_b = _rgb_to_oklab(pr, pg, pb)
         # 色相を保ちつつ、明度の破綻も避ける知覚距離。
         dist_sq = 1.15 * (source_l - palette_l) ** 2 + (source_a - palette_a) ** 2 + (source_b - palette_b) ** 2
@@ -281,7 +287,10 @@ def _infer_best_palette_for_image(
         hexes = list(color_palette(name).values())
         oklab_colors: list[tuple[float, float, float]] = []
         for h in hexes:
-            rgb_t = _hex_to_rgb(h)
+            try:
+                rgb_t = _hex_to_rgb(h)
+            except ValueError:
+                continue
             oklab_colors.append(_rgb_to_oklab(*rgb_t))
         candidate_palettes.append((name, oklab_colors))
 
