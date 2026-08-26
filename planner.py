@@ -99,10 +99,11 @@ class RuleBasedPlanner(PlannerPort):
 
         # 参照画像が渡されている場合は画像ストローク変換を実行
         if image_data is not None and len(image_data) > 0:
+            generation_seed = (valid_seed + (iteration - 1) * 1000) & 0x7FFFFFFF
             image_plan = self.image_converter.convert_image_to_plan(
                 image_bytes=image_data,
                 prompt=valid_prompt,
-                seed=valid_seed,
+                seed=generation_seed,
                 count=valid_count,
                 target_width=valid_width,
                 target_height=valid_height,
@@ -115,7 +116,7 @@ class RuleBasedPlanner(PlannerPort):
             )
             return DrawingPlan(
                 prompt=image_plan.prompt,
-                seed=image_plan.seed,
+                seed=valid_seed,
                 strokes=image_plan.strokes,
                 title=image_plan.title,
                 iteration=iteration,

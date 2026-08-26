@@ -29,7 +29,7 @@ class NativeBridgeProtocolError(RuntimeError):
 
 def _local_host(host: str) -> bool:
     normalized = host.strip().lower().rstrip(".")
-    if normalized == "localhost":
+    if normalized == "localhost" or normalized.endswith(".localhost"):
         return True
     try:
         return ipaddress.ip_address(normalized).is_loopback
@@ -160,8 +160,6 @@ def discover_native_bridge() -> JsonLineNativeStrokeBridge | None:
     """環境変数が完全に設定された場合だけ bridge を有効化する。"""
     raw_port = os.environ.get("AI_STROKE_BRIDGE_PORT", "").strip()
     token = os.environ.get("AI_STROKE_BRIDGE_TOKEN", "").strip()
-    if not raw_port and not token:
-        return None
     if not raw_port or not token:
         return None
     try:

@@ -659,8 +659,14 @@ class PlanWorker(QObject):
                 session_goal_met = False
                 if self.goal_mode:
                     session_plans.append(current_plan)
-                    cumulative_goal_plan = combine_drawing_plans(session_plans)
-                    session_goal_met = _is_plan_goal_reached(cumulative_goal_plan)
+                    try:
+                        cumulative_goal_plan = combine_drawing_plans(session_plans, auto_rescale=True)
+                        session_goal_met = _is_plan_goal_reached(cumulative_goal_plan)
+                    except Exception as exc:
+                        self.debug_log.emit(
+                            f"[Goal判定警告] 累積計画の統合に失敗したため現ステップのみで判定します: {exc}"
+                        )
+                        session_goal_met = _is_plan_goal_reached(current_plan)
                     if session_goal_met:
                         goal_metadata = dict(current_plan.metadata)
                         goal_metadata["session_goal_reached"] = True
@@ -3131,6 +3137,11 @@ class AIStrokePainterDocker(DockWidget):
 
     def _reset_run_state(self, commit_session: bool = False) -> None:
         self._finish_canvas_session(commit_session)
+        if not commit_session:
+            prev_w = _get_attr(self, "preview")
+            if prev_w is not None and hasattr(prev_w, "clear_plan"):
+                with contextlib.suppress(Exception):
+                    prev_w.clear_plan()
         prog = _get_attr(self, "progress")
         if prog is not None and hasattr(prog, "setRange"):
             prog.setRange(0, 1)

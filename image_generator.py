@@ -136,7 +136,17 @@ def _read_bounded_stream(
         if cancel_check is not None and cancel_check():
             raise ImageGenerationError("画像データの受信をキャンセルしました")
         read_size = min(64 * 1024, max_bytes + 1 - received_bytes)
-        chunk = cast(bytes, response.read(read_size))
+        try:
+            chunk = cast(bytes, response.read(read_size))
+        except TypeError:
+            chunk = cast(bytes, response.read())
+            if not chunk:
+                break
+            if len(chunk) + received_bytes > max_bytes:
+                raise ImageGenerationError(f"画像生成 API の応答が上限 ({max_bytes} bytes) を超えています") from None
+            chunks.append(chunk)
+            received_bytes += len(chunk)
+            break
         if not chunk:
             break
         chunks.append(chunk)
@@ -161,7 +171,7 @@ def _validate_endpoint_url(url_str: str, _api_key: str = "") -> str:
         raise ImageGenerationError("エンドポイント URL にホスト名が含まれていません")
 
     is_loopback = False
-    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "::"):
+    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "::") or hostname.endswith(".localhost"):
         is_loopback = True
     else:
         try:

@@ -988,9 +988,10 @@ class OpenAICompatiblePlanner(PlannerPort):
         try:
             from .procedural import generate_procedural_plan
 
+            fallback_seed = (valid_seed + (iteration - 1) * 1000) & 0x7FFFFFFF
             fallback_plan = generate_procedural_plan(
                 prompt=valid_prompt,
-                seed=valid_seed,
+                seed=fallback_seed,
                 count=valid_count,
                 width=valid_width,
                 height=valid_height,
@@ -1000,9 +1001,11 @@ class OpenAICompatiblePlanner(PlannerPort):
             self._log(
                 f"緊急救済成功: プロシージャル描画計画を生成しました (ストローク数: {len(fallback_plan.strokes)})"
             )
+            is_final = iteration >= max_iterations
+            comp_score = 1.0 if is_final else float(iteration) / float(max_iterations)
             return DrawingPlan(
                 prompt=fallback_plan.prompt,
-                seed=fallback_plan.seed,
+                seed=valid_seed,
                 strokes=fallback_plan.strokes,
                 title=fallback_plan.title,
                 iteration=iteration,
@@ -1011,9 +1014,13 @@ class OpenAICompatiblePlanner(PlannerPort):
                     **dict(fallback_plan.metadata),
                     "planner_fallback": "procedural",
                     "fallback_reason": str(last_error or "LLM response could not be parsed")[:500],
+                    "goal_reached": is_final,
+                    "completion_score": comp_score,
                 },
                 canvas_width=valid_width,
                 canvas_height=valid_height,
+                goal_reached=is_final,
+                completion_score=comp_score,
             )
         except Exception as fb_exc:
             if last_error is not None:

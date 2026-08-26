@@ -926,10 +926,13 @@ def _process_events() -> None:
 
 def _parse_hex_rgb(hex_str: str) -> tuple[float, float, float] | None:
     h = hex_str.lstrip("#")
-    if len(h) in (3, 4):
-        return int(h[0] * 2, 16) / 255.0, int(h[1] * 2, 16) / 255.0, int(h[2] * 2, 16) / 255.0
-    if len(h) in (6, 8):
-        return int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0
+    try:
+        if len(h) in (3, 4):
+            return int(h[0] * 2, 16) / 255.0, int(h[1] * 2, 16) / 255.0, int(h[2] * 2, 16) / 255.0
+        if len(h) in (6, 8):
+            return int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0
+    except ValueError:
+        return None
     return None
 
 

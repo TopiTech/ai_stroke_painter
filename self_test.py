@@ -8131,6 +8131,270 @@ class ImageGeneratorAndPlannerTests(unittest.TestCase):
         self.assertIn("キャンセル", str(cancel_ctx.exception))
 
 
+class CodeReviewEnhancementTests(unittest.TestCase):
+    """コードレビューに基づく堅牢性・セキュリティ・ゴールモード・多様性修正の検証。"""
+
+    def test_domain_split_color_alpha_robustness(self) -> None:
+        from .domain import split_color_alpha
+
+        self.assertEqual(split_color_alpha("#123"), ("#123", 1.0))
+        self.assertEqual(split_color_alpha("#1234"), ("#123", int("44", 16) / 255.0))
+        self.assertEqual(split_color_alpha("#11223380"), ("#112233", int("80", 16) / 255.0))
+        # 不正な alpha 桁でも例外にならずフォールバックすること
+        self.assertEqual(split_color_alpha("#123z"), ("#123z", 1.0))
+        self.assertEqual(split_color_alpha("#112233zz"), ("#112233zz", 1.0))
+
+    def test_krita_adapter_parse_hex_rgb_robustness(self) -> None:
+        from .krita_adapter import _parse_hex_rgb
+
+        self.assertEqual(_parse_hex_rgb("#fff"), (1.0, 1.0, 1.0))
+        self.assertEqual(_parse_hex_rgb("#000000"), (0.0, 0.0, 0.0))
+        # 不正な hex 文字列で例外にならず None を返すこと
+        self.assertIsNone(_parse_hex_rgb("#zzz"))
+        self.assertIsNone(_parse_hex_rgb("#fffffg"))
+        self.assertIsNone(_parse_hex_rgb("#12"))
+        self.assertIsNone(_parse_hex_rgb(""))
+
+    def test_native_bridge_local_host_and_discovery(self) -> None:
+        from .native_bridge import _local_host, discover_native_bridge
+
+        self.assertTrue(_local_host("localhost"))
+        self.assertTrue(_local_host("sub.localhost"))
+        self.assertTrue(_local_host("127.0.0.1"))
+        self.assertTrue(_local_host("::1"))
+        self.assertFalse(_local_host("8.8.8.8"))
+        self.assertFalse(_local_host("example.com"))
+
+        with patch.dict("os.environ", {"AI_STROKE_BRIDGE_PORT": "9000", "AI_STROKE_BRIDGE_TOKEN": ""}):
+            self.assertIsNone(discover_native_bridge())
+        with patch.dict("os.environ", {"AI_STROKE_BRIDGE_PORT": "", "AI_STROKE_BRIDGE_TOKEN": "token"}):
+            self.assertIsNone(discover_native_bridge())
+
+    def test_image_generator_loopback_validation_and_stream_type_error(self) -> None:
+        from .image_generator import _read_bounded_stream, _validate_endpoint_url
+
+        self.assertEqual(
+            _validate_endpoint_url("http://local.localhost:8000/sdapi/v1/txt2img"),
+            "http://local.localhost:8000/sdapi/v1/txt2img",
+        )
+
+        class FakeResponseWithHeadersNoArgRead:
+            def __init__(self, data: bytes) -> None:
+                self._data = data
+                self.headers = {"Content-Type": "image/png"}
+
+            def read(self, *args: Any) -> bytes:
+                if args:
+                    raise TypeError("read() takes no arguments")
+                d = self._data
+                self._data = b""
+                return d
+
+        resp = FakeResponseWithHeadersNoArgRead(b"\x89PNGfakeimage")
+        result = _read_bounded_stream(resp, max_bytes=1000)
+        self.assertEqual(result, b"\x89PNGfakeimage")
+
+    def test_rule_based_planner_image_data_iteration_diversity(self) -> None:
+        from .domain import combine_drawing_plans
+        from .planner import RuleBasedPlanner
+
+        class FakeColor:
+            def __init__(self, val: int) -> None:
+                self._val = val
+
+            def red(self) -> int:
+                return self._val
+
+            def green(self) -> int:
+                return self._val
+
+            def blue(self) -> int:
+                return self._val
+
+            def alpha(self) -> int:
+                return 255
+
+        class FakeImage:
+            def __init__(self, *args: Any) -> None:
+                pass
+
+            def width(self) -> int:
+                return 20
+
+            def height(self) -> int:
+                return 10
+
+            def loadFromData(self, _data: bytes) -> bool:  # noqa: N802
+                return True
+
+            def scaled(self, _width: int, _height: int) -> Any:
+                return self
+
+            def convertToFormat(self, _format: Any) -> Any:  # noqa: N802
+                return self
+
+            def pixelColor(self, x: int, _y: int) -> FakeColor:  # noqa: N802
+                return FakeColor(20 if x < 10 else 240)
+
+        fake_png = b"\x89PNG\r\n\x1a\n" + (b"\x00" * 8) + (20).to_bytes(4, "big") + (10).to_bytes(4, "big")
+        planner = RuleBasedPlanner()
+        planner.image_converter.qimage_cls = FakeImage
+
+        plan1 = planner.plan(
+            prompt="cat",
+            seed=42,
+            count=15,
+            width=400,
+            height=300,
+            image_data=fake_png,
+            iteration=1,
+            max_iterations=2,
+        )
+        plan2 = planner.plan(
+            prompt="cat",
+            seed=42,
+            count=15,
+            width=400,
+            height=300,
+            image_data=fake_png,
+            iteration=2,
+            max_iterations=2,
+        )
+
+        # seed は統合のため共通であること
+        self.assertEqual(plan1.seed, 42)
+        self.assertEqual(plan2.seed, 42)
+        # 反復が異なればストロークIDや座標等が多様化されること
+        strokes1_ids = [s.id for s in plan1.strokes]
+        strokes2_ids = [s.id for s in plan2.strokes]
+        self.assertNotEqual(strokes1_ids, strokes2_ids)
+        # combine_drawing_plans が正常に統合できること
+        combined = combine_drawing_plans([plan1, plan2])
+        self.assertEqual(len(combined.strokes), len(plan1.strokes) + len(plan2.strokes))
+
+    def test_llm_planner_fallback_goal_score_and_seed(self) -> None:
+        from .llm_planner import LLMPlannerError, OpenAICompatiblePlanner, OpenAICompatibleSettings
+
+        settings = OpenAICompatibleSettings(
+            base_url="http://127.0.0.1:8080/v1",
+            model="mock-model",
+            fallback_to_procedural=True,
+        )
+        planner = OpenAICompatiblePlanner(settings=settings)
+
+        with patch.object(
+            planner, "_post_with_parameter_fallback", side_effect=LLMPlannerError("Simulated LLM Failure")
+        ):
+            plan1 = planner.plan(
+                "sakura landscape", seed=100, count=20, width=800, height=600, iteration=1, max_iterations=2
+            )
+            plan2 = planner.plan(
+                "sakura landscape", seed=100, count=20, width=800, height=600, iteration=2, max_iterations=2
+            )
+
+        self.assertEqual(plan1.seed, 100)
+        self.assertEqual(plan2.seed, 100)
+        self.assertFalse(plan1.goal_reached)
+        self.assertEqual(plan1.completion_score, 0.5)
+        self.assertTrue(plan2.goal_reached)
+        self.assertEqual(plan2.completion_score, 1.0)
+        self.assertEqual(plan2.metadata["planner_fallback"], "procedural")
+        self.assertTrue(plan2.metadata["goal_reached"])
+        self.assertEqual(plan2.metadata["completion_score"], 1.0)
+        self.assertNotEqual([s.id for s in plan1.strokes], [s.id for s in plan2.strokes])
+
+    def test_docker_plan_worker_goal_mode_auto_rescale_and_resilience(self) -> None:
+        from .docker import PlanWorker
+        from .domain import DrawingPlan, Stroke, StrokePoint
+        from .ports import PlannerPort
+
+        def _make_dummy_plan(prompt: str, seed: int, w: float, h: float, score: float, goal: bool) -> DrawingPlan:
+            return DrawingPlan(
+                prompt=prompt,
+                seed=seed,
+                strokes=[
+                    Stroke(
+                        id=f"s_{w}_{score}",
+                        points=[
+                            StrokePoint(10.0, 10.0, 0.5, 0),
+                            StrokePoint(20.0, 20.0, 0.8, 10),
+                            StrokePoint(30.0, 30.0, 0.5, 20),
+                        ],
+                        brush_preset="Basic-5 Size",
+                        color="#000000",
+                        size_px=5.0,
+                        layer_name="Lineart",
+                    )
+                ],
+                title="Dummy",
+                iteration=1,
+                layers=["Lineart"],
+                canvas_width=w,
+                canvas_height=h,
+                goal_reached=goal,
+                completion_score=score,
+            )
+
+        class MockStepPlanner(PlannerPort):
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def plan(self, *args: Any, **kwargs: Any) -> DrawingPlan:
+                self.calls += 1
+                if self.calls == 1:
+                    return _make_dummy_plan("goal test", 1, 800.0, 600.0, 0.5, False)
+                return _make_dummy_plan("goal test", 1, 1000.0, 1000.0, 0.95, True)
+
+        worker = PlanWorker(
+            planner=MockStepPlanner(),
+            prompt="goal test",
+            seed=1,
+            count=10,
+            width=1000.0,
+            height=1000.0,
+            max_iterations=10,
+            goal_mode=True,
+        )
+
+        plans_emitted: list[DrawingPlan] = []
+        worker.plan_ready.connect(plans_emitted.append)
+        worker.notify_render_done()
+
+        with (
+            patch.object(worker._render_done_event, "wait", return_value=True),
+            patch("ai_stroke_painter.docker._is_plan_goal_reached", side_effect=[False, True]),
+        ):
+            worker.run()
+
+        self.assertFalse(worker.is_cancelled())
+        self.assertEqual(len(plans_emitted), 2)
+        self.assertTrue(plans_emitted[1].metadata.get("session_goal_reached", False))
+
+    def test_docker_reset_run_state_clears_preview_on_rollback(self) -> None:
+        from .docker import AIStrokePainterDocker
+
+        docker = AIStrokePainterDocker.__new__(AIStrokePainterDocker)
+
+        class DummyPreview:
+            def __init__(self) -> None:
+                self.cleared = False
+
+            def clear_plan(self) -> None:
+                self.cleared = True
+
+        preview = DummyPreview()
+        docker.preview = cast(Any, preview)
+        docker._canvas_session_open = False
+
+        docker._reset_run_state(commit_session=False)
+        self.assertTrue(preview.cleared)
+
+        # commit_session=True の時はクリアされないこと
+        preview.cleared = False
+        docker._reset_run_state(commit_session=True)
+        self.assertFalse(preview.cleared)
+
+
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
