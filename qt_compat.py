@@ -512,12 +512,32 @@ if not HAS_QT:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__()
             self.currentChanged = _FakeSignal()
+            self._tabs: list[tuple[QWidget, str]] = []
+            self._current_index: int = 0
 
-        def addTab(self, *args: Any) -> None:
-            pass
+        def addTab(self, widget: Any, label: str = "") -> int:
+            self._tabs.append((widget, label))
+            return len(self._tabs) - 1
 
-        def setCurrentIndex(self, *args: Any) -> None:
-            pass
+        def count(self) -> int:
+            return len(self._tabs)
+
+        def currentIndex(self) -> int:
+            return self._current_index
+
+        def setCurrentIndex(self, index: int) -> None:
+            self._current_index = index
+            self.currentChanged.emit(index)
+
+        def tabText(self, index: int) -> str:
+            if 0 <= index < len(self._tabs):
+                return self._tabs[index][1]
+            return ""
+
+        def widget(self, index: int) -> Any:
+            if 0 <= index < len(self._tabs):
+                return self._tabs[index][0]
+            return None
 
     class QCheckBox(QWidget):  # type: ignore[no-redef]
         def __init__(self, text: str = "", *args: Any, **kwargs: Any) -> None:

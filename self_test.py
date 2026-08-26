@@ -3703,6 +3703,38 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertTrue(docker.auto_refine.isEnabled())
         self.assertTrue(docker.iterations.isEnabled())
 
+    def test_openai_mode_disables_seed_controls(self) -> None:
+        docker = AIStrokePainterDocker()
+
+        # オフライン (プロシージャル) モード: auto_seed 有効、seed は not auto_seed.isChecked()
+        docker.planner_mode.setCurrentIndex(0)
+        docker.auto_seed.setChecked(False)
+        docker._update_planner_settings_state()
+        self.assertTrue(docker.auto_seed.isEnabled())
+        self.assertTrue(docker.seed.isEnabled())
+
+        # auto_seed をチェックすると seed は無効化される
+        docker.auto_seed.setChecked(True)
+        self.assertTrue(docker.auto_seed.isEnabled())
+        self.assertFalse(docker.seed.isEnabled())
+
+        # OpenAI 互換モードへ切り替え: seed / auto_seed 共にブラックアウト（無効化）
+        docker.planner_mode.setCurrentIndex(1)
+        docker._update_planner_settings_state()
+        self.assertFalse(docker.auto_seed.isEnabled())
+        self.assertFalse(docker.seed.isEnabled())
+
+        # OpenAI 互換モード中は auto_seed のトグルが走っても seed は無効のまま
+        docker.auto_seed.setChecked(False)
+        self.assertFalse(docker.auto_seed.isEnabled())
+        self.assertFalse(docker.seed.isEnabled())
+
+        # オフラインモードに戻すと復帰
+        docker.planner_mode.setCurrentIndex(0)
+        docker._update_planner_settings_state()
+        self.assertTrue(docker.auto_seed.isEnabled())
+        self.assertTrue(docker.seed.isEnabled())
+
     def test_builtin_preset_enables_auto_quality_budget(self) -> None:
         docker = AIStrokePainterDocker()
         docker.auto_count.setChecked(False)
@@ -7343,6 +7375,49 @@ class PaletteAutoModeTests(unittest.TestCase):
         self.assertGreater(docker.palette_combo.count(), 0)
         self.assertEqual(docker.palette_combo.itemData(0), "auto")
         self.assertEqual(docker.palette_combo.itemText(0), "自動 (Auto)")
+
+    def test_docker_tabs_and_ui_enhancements(self) -> None:
+        from .docker import AIStrokePainterDocker
+
+        docker = AIStrokePainterDocker()
+        self.assertTrue(hasattr(docker, "tabs"))
+        self.assertEqual(docker.tabs.count(), 4)
+        tab_titles = [docker.tabs.tabText(i) for i in range(4)]
+        self.assertIn("🎨 生成・描画", tab_titles[0])
+        self.assertIn("🖼️ 参照画像", tab_titles[1])
+        self.assertIn("🤖 AI設定", tab_titles[2])
+        self.assertIn("⚙️ レイヤー・詳細", tab_titles[3])
+
+        self.assertTrue(hasattr(docker, "prompt_history_combo"))
+        self.assertTrue(hasattr(docker, "clear_prompt_btn"))
+        self.assertTrue(hasattr(docker, "profile_openai_btn"))
+        self.assertTrue(hasattr(docker, "profile_ollama_btn"))
+        self.assertTrue(hasattr(docker, "profile_lmstudio_btn"))
+        self.assertTrue(hasattr(docker, "profile_deepseek_btn"))
+
+    def test_docker_prompt_tags_and_clear(self) -> None:
+        from .docker import AIStrokePainterDocker
+
+        docker = AIStrokePainterDocker()
+        docker.prompt.setPlainText("cute cat")
+        docker._add_prompt_tag("anime style")
+        self.assertEqual(docker.prompt.toPlainText(), "cute cat, anime style")
+
+        docker._clear_prompt()
+        self.assertEqual(docker.prompt.toPlainText(), "")
+
+    def test_docker_llm_profiles(self) -> None:
+        from .docker import AIStrokePainterDocker
+
+        docker = AIStrokePainterDocker()
+        docker._apply_llm_profile("openai")
+        self.assertEqual(docker.base_url.text(), "https://api.openai.com/v1")
+        self.assertEqual(docker.model.text(), "gpt-4o")
+        self.assertEqual(docker.max_tokens.value(), 16384)
+
+        docker._apply_llm_profile("ollama")
+        self.assertEqual(docker.base_url.text(), "http://127.0.0.1:11434/v1")
+        self.assertEqual(docker.model.text(), "llama3.2-vision")
 
 
 def run() -> bool:

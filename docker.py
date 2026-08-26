@@ -57,6 +57,7 @@ from .qt_compat import (
     QScrollArea,
     QSettings,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
     antialiasing_render_hint,
@@ -797,8 +798,14 @@ class AIStrokePainterDocker(DockWidget):
         self._applying_pending = False
         self._closing = False
 
-        container = QWidget()
-        root_layout = QVBoxLayout(container)
+        # --- 4タブ構成のドックコンテナ ---
+        self.tabs = QTabWidget()
+
+        # ==========================================
+        # タブ 1: 🎨 生成・描画 (Main)
+        # ==========================================
+        tab_main = QWidget()
+        tab_main_layout = QVBoxLayout(tab_main)
 
         # 1. プリセットクイック選択 & カスタムプリセット管理
         preset_box = QGroupBox("クイック・プリセット & カスタム保存")
@@ -827,69 +834,49 @@ class AIStrokePainterDocker(DockWidget):
         preset_row2.addWidget(self.export_preset_btn)
         preset_row2.addWidget(self.import_preset_btn)
         preset_layout.addLayout(preset_row2)
+        tab_main_layout.addWidget(preset_box)
 
-        root_layout.addWidget(preset_box)
+        # 2. プロンプト入力欄 & 履歴 & クイックタグ
+        prompt_box = QGroupBox("描画指示 (Prompt)")
+        prompt_layout = QVBoxLayout(prompt_box)
 
-        # 2. プロンプト入力欄
-        root_layout.addWidget(QLabel("描画指示 (Prompt)"))
+        prompt_hdr = QHBoxLayout()
+        prompt_hdr.addWidget(QLabel("プロンプト:"))
+        self.prompt_history_combo = QComboBox()
+        self._populate_prompt_history()
+        self.prompt_history_combo.currentIndexChanged.connect(self._on_prompt_history_selected)
+        prompt_hdr.addWidget(self.prompt_history_combo)
+
+        self.clear_prompt_btn = QPushButton("✖ クリア")
+        self.clear_prompt_btn.setToolTip("プロンプト入力欄をクリアします")
+        self.clear_prompt_btn.clicked.connect(self._clear_prompt)
+        prompt_hdr.addWidget(self.clear_prompt_btn)
+        prompt_layout.addLayout(prompt_hdr)
+
         self.prompt = QPlainTextEdit("anime girl portrait, delicate eyes, flowing hair")
         self.prompt.setMaximumHeight(65)
-        root_layout.addWidget(self.prompt)
+        prompt_layout.addWidget(self.prompt)
 
-        # 3. 参照画像 (Image-to-Stroke) パネル
-        image_box = QGroupBox("参照画像 & 画像解析設定 (Image-to-Stroke)")
-        image_layout = QVBoxLayout(image_box)
+        # クイックタグ行
+        quick_tags_layout = QHBoxLayout()
+        quick_tags_layout.addWidget(QLabel("タグ追加:"))
+        quick_tags: list[tuple[str, str]] = [
+            ("アニメ調", "anime style, vibrant colors"),
+            ("繊細な線画", "delicate clean lineart, fine details"),
+            ("水彩風", "soft watercolor illustration, subtle gradients"),
+            ("サイバー", "cyberpunk neon lights, high contrast"),
+            ("集中線", "manga focus speed lines"),
+            ("幾何学", "sacred geometry intricate patterns"),
+        ]
+        for tag_label, tag_val in quick_tags:
+            tag_btn = QPushButton(f"+ {tag_label}")
+            tag_btn.setToolTip(f"プロンプトに '{tag_val}' を追加します")
+            tag_btn.clicked.connect(lambda _chk=False, val=tag_val: self._add_prompt_tag(val))
+            quick_tags_layout.addWidget(tag_btn)
+        prompt_layout.addLayout(quick_tags_layout)
+        tab_main_layout.addWidget(prompt_box)
 
-        img_btn_row = QHBoxLayout()
-        self.load_image_btn = QPushButton("画像を選択...")
-        self.clear_image_btn = QPushButton("クリア")
-        self.clear_image_btn.setEnabled(False)
-        self.image_status_label = QLabel("画像なし")
-        img_btn_row.addWidget(self.load_image_btn)
-        img_btn_row.addWidget(self.clear_image_btn)
-        img_btn_row.addWidget(self.image_status_label)
-        self.load_image_btn.clicked.connect(self._select_reference_image)
-        self.clear_image_btn.clicked.connect(self._clear_reference_image)
-        image_layout.addLayout(img_btn_row)
-        self.image_privacy_label = QLabel(
-            "LLM / Vision モードでは、参照画像を最大1024pxへ縮小し、位置・作者等のメタデータを除去して外部APIへ送信します。"
-        )
-        self.image_privacy_label.setWordWrap(True)
-        image_layout.addWidget(self.image_privacy_label)
-
-        img_params_layout = QFormLayout()
-        self.edge_threshold = QDoubleSpinBox()
-        self.edge_threshold.setRange(0.02, 0.50)
-        self.edge_threshold.setSingleStep(0.02)
-        self.edge_threshold.setDecimals(2)
-        self.edge_threshold.setValue(0.18)
-        self.edge_threshold.setToolTip("エッジ抽出感度 (値が小さいほど微細な線・テクスチャを抽出)")
-        img_params_layout.addRow("エッジ感度", self.edge_threshold)
-
-        self.shading_density = QComboBox()
-        self.shading_density.addItem("標準 (Medium)", "medium")
-        self.shading_density.addItem("高密度 (High)", "high")
-        self.shading_density.addItem("低密度 (Low)", "low")
-        self.shading_density.addItem("オフ / なし (Off)", "off")
-        img_params_layout.addRow("陰影ハッチング", self.shading_density)
-
-        img_opt_row = QHBoxLayout()
-        self.enable_flats = QCheckBox("下塗り描画")
-        self.enable_flats.setChecked(True)
-        self.enable_flats.setToolTip("元画像のカラーブロックによる下塗りストロークを生成します")
-        img_opt_row.addWidget(self.enable_flats)
-
-        self.image_color_mode = QComboBox()
-        self.image_color_mode.addItem("元画像カラー", "original")
-        self.image_color_mode.addItem("選択パレット適用", "palette")
-        self.image_color_mode.setToolTip("画像の色をそのまま使うか、指定パレットの色に近似マッピングするかを選択します")
-        img_opt_row.addWidget(self.image_color_mode)
-        img_params_layout.addRow("カラーモード", img_opt_row)
-
-        image_layout.addLayout(img_params_layout)
-        root_layout.addWidget(image_box)
-
-        # 4. 基本生成パラメータ (Seed, 本数, パレット, ブラシスタイル, 段階的改善)
+        # 3. 生成パラメータ & スタイル (Seed, 本数, パレット, ブラシスタイル, 段階的改善)
         gen_box = QGroupBox("生成パラメータ & スタイル")
         gen_layout = QVBoxLayout(gen_box)
 
@@ -898,11 +885,12 @@ class AIStrokePainterDocker(DockWidget):
         self.seed = QSpinBox()
         self.seed.setRange(0, 2147483647)
         self.seed.setValue(42)
+        self.seed.setToolTip("プロシージャル生成時に使用する乱数シードです (OpenAI互換モデル時は無効)")
         params_row1.addWidget(self.seed)
 
         self.auto_seed = QCheckBox("Auto")
-        self.auto_seed.setToolTip("描画実行時にランダムなシード値を自動生成して適用します")
-        self.auto_seed.toggled.connect(lambda chk: self.seed.setEnabled(not chk))
+        self.auto_seed.setToolTip("描画実行時にランダムなシード値を自動生成して適用します (OpenAI互換モデル時は無効)")
+        self.auto_seed.toggled.connect(self._update_seed_controls_state)
         params_row1.addWidget(self.auto_seed)
 
         params_row1.addWidget(QLabel("本数"))
@@ -969,72 +957,117 @@ class AIStrokePainterDocker(DockWidget):
         self.iterations.setValue(3)
         refine_layout.addWidget(self.iterations)
         gen_layout.addLayout(refine_layout)
+        tab_main_layout.addWidget(gen_box)
 
-        root_layout.addWidget(gen_box)
+        # 4. ベクタープレビュー
+        self.preview = PreviewWidget(self)
+        tab_main_layout.addWidget(self.preview)
+        tab_main_layout.addStretch(1)
 
-        # 5. 🖌️ ブラシ・描画 & レイヤーカスタマイズ
-        brush_box = QGroupBox("🖌️ ブラシ・描画 & レイヤー設定")
-        brush_form = QFormLayout(brush_box)
+        scroll_main = QScrollArea(self)
+        scroll_main.setWidgetResizable(True)
+        scroll_main.setWidget(tab_main)
+        self.tabs.addTab(scroll_main, "🎨 生成・描画")
 
-        scale_row = QHBoxLayout()
-        self.brush_size_multiplier = QDoubleSpinBox()
-        self.brush_size_multiplier.setRange(0.1, 5.0)
-        self.brush_size_multiplier.setSingleStep(0.1)
-        self.brush_size_multiplier.setDecimals(2)
-        self.brush_size_multiplier.setValue(1.0)
-        self.brush_size_multiplier.setSuffix(" x")
-        self.brush_size_multiplier.setToolTip("ストロークの太さを一括スケーリングします")
-        scale_row.addWidget(QLabel("太さ倍率:"))
-        scale_row.addWidget(self.brush_size_multiplier)
+        # ==========================================
+        # タブ 2: 🖼️ 参照画像 (Image-to-Stroke)
+        # ==========================================
+        tab_image = QWidget()
+        tab_image_layout = QVBoxLayout(tab_image)
 
-        self.opacity_multiplier = QSpinBox()
-        self.opacity_multiplier.setRange(10, 100)
-        self.opacity_multiplier.setSingleStep(5)
-        self.opacity_multiplier.setValue(100)
-        self.opacity_multiplier.setSuffix(" %")
-        self.opacity_multiplier.setToolTip("ストローク全体の不透明度を一括スケーリングします")
-        scale_row.addWidget(QLabel("不透明度:"))
-        scale_row.addWidget(self.opacity_multiplier)
-        brush_form.addRow("描画スケーリング", scale_row)
+        image_box = QGroupBox("参照画像 & 画像解析設定 (Image-to-Stroke)")
+        image_layout = QVBoxLayout(image_box)
 
-        layer_row = QHBoxLayout()
-        self.layer_mode = QComboBox()
-        self.layer_mode.addItem("マルチレイヤー分割 (Draft/Flats/Lineart/etc)", "multi_layer")
-        self.layer_mode.addItem("現在のアクティブレイヤーに直接描画", "active_layer")
-        self.layer_mode.addItem("単一の新規レイヤーにまとめて描画", "single_layer")
-        self.layer_mode.setToolTip(
-            "マルチレイヤーが推奨です。アクティブレイヤー直接描画は安全な取消のため画素スナップショットを取得します。"
+        img_btn_row = QHBoxLayout()
+        self.load_image_btn = QPushButton("画像を選択...")
+        self.clear_image_btn = QPushButton("クリア")
+        self.clear_image_btn.setEnabled(False)
+        self.image_status_label = QLabel("画像なし")
+        img_btn_row.addWidget(self.load_image_btn)
+        img_btn_row.addWidget(self.clear_image_btn)
+        img_btn_row.addWidget(self.image_status_label)
+        self.load_image_btn.clicked.connect(self._select_reference_image)
+        self.clear_image_btn.clicked.connect(self._clear_reference_image)
+        image_layout.addLayout(img_btn_row)
+        self.image_privacy_label = QLabel(
+            "LLM / Vision モードでは、参照画像を最大1024pxへ縮小し、位置・作者等のメタデータを除去して外部APIへ送信します。"
         )
-        layer_row.addWidget(self.layer_mode)
-        brush_form.addRow("レイヤー出力", layer_row)
+        self.image_privacy_label.setWordWrap(True)
+        image_layout.addWidget(self.image_privacy_label)
 
-        config_row = QHBoxLayout()
-        self.layer_prefix = QLineEdit("AI Artwork")
-        self.layer_prefix.setPlaceholderText("レイヤー名 / グループ名")
-        config_row.addWidget(QLabel("名前:"))
-        config_row.addWidget(self.layer_prefix)
+        img_params_layout = QFormLayout()
+        self.edge_threshold = QDoubleSpinBox()
+        self.edge_threshold.setRange(0.02, 0.50)
+        self.edge_threshold.setSingleStep(0.02)
+        self.edge_threshold.setDecimals(2)
+        self.edge_threshold.setValue(0.18)
+        self.edge_threshold.setToolTip("エッジ抽出感度 (値が小さいほど微細な線・テクスチャを抽出)")
+        img_params_layout.addRow("エッジ感度", self.edge_threshold)
 
-        self.event_interval = QSpinBox()
-        self.event_interval.setRange(5, 100)
-        self.event_interval.setValue(30)
-        self.event_interval.setToolTip(
-            "何線分ごとに画面イベントを処理するか (値が小さいほどリアルタイム、大きいほど高速)"
-        )
-        config_row.addWidget(QLabel("画面更新間隔（線分）:"))
-        config_row.addWidget(self.event_interval)
-        brush_form.addRow("キャンバス設定", config_row)
+        self.shading_density = QComboBox()
+        self.shading_density.addItem("標準 (Medium)", "medium")
+        self.shading_density.addItem("高密度 (High)", "high")
+        self.shading_density.addItem("低密度 (Low)", "low")
+        self.shading_density.addItem("オフ / なし (Off)", "off")
+        img_params_layout.addRow("陰影ハッチング", self.shading_density)
 
-        root_layout.addWidget(brush_box)
+        img_opt_row = QHBoxLayout()
+        self.enable_flats = QCheckBox("下塗り描画")
+        self.enable_flats.setChecked(True)
+        self.enable_flats.setToolTip("元画像のカラーブロックによる下塗りストロークを生成します")
+        img_opt_row.addWidget(self.enable_flats)
 
-        # 6. Planner 選択 & LLM 設定
-        root_layout.addWidget(QLabel("Planner エンジン"))
+        self.image_color_mode = QComboBox()
+        self.image_color_mode.addItem("元画像カラー", "original")
+        self.image_color_mode.addItem("選択パレット適用", "palette")
+        self.image_color_mode.setToolTip("画像の色をそのまま使うか、指定パレットの色に近似マッピングするかを選択します")
+        img_opt_row.addWidget(self.image_color_mode)
+        img_params_layout.addRow("カラーモード", img_opt_row)
+
+        image_layout.addLayout(img_params_layout)
+        tab_image_layout.addWidget(image_box)
+        tab_image_layout.addStretch(1)
+
+        scroll_image = QScrollArea(self)
+        scroll_image.setWidgetResizable(True)
+        scroll_image.setWidget(tab_image)
+        self.tabs.addTab(scroll_image, "🖼️ 参照画像")
+
+        # ==========================================
+        # タブ 3: 🤖 AI設定 (AI Planner)
+        # ==========================================
+        tab_ai = QWidget()
+        tab_ai_layout = QVBoxLayout(tab_ai)
+
+        engine_box = QGroupBox("Planner エンジン")
+        engine_layout = QVBoxLayout(engine_box)
         self.planner_mode = QComboBox()
         self.planner_mode.addItem("プロシージャル (オフライン 高品質)", "offline")
         self.planner_mode.addItem("OpenAI 互換 LLM / Vision", "openai_compatible")
-        root_layout.addWidget(self.planner_mode)
+        engine_layout.addWidget(self.planner_mode)
+        tab_ai_layout.addWidget(engine_box)
 
         self.llm_settings = QGroupBox("OpenAI 互換 API 詳細設定")
-        llm_form = QFormLayout(self.llm_settings)
+        llm_layout = QVBoxLayout(self.llm_settings)
+
+        # クイックプロファイル選択
+        profile_box = QGroupBox("クイック設定プロファイル")
+        profile_row = QHBoxLayout(profile_box)
+        self.profile_openai_btn = QPushButton("OpenAI (gpt-4o)")
+        self.profile_openai_btn.clicked.connect(lambda: self._apply_llm_profile("openai"))
+        self.profile_ollama_btn = QPushButton("Ollama (ローカル)")
+        self.profile_ollama_btn.clicked.connect(lambda: self._apply_llm_profile("ollama"))
+        self.profile_lmstudio_btn = QPushButton("LM Studio")
+        self.profile_lmstudio_btn.clicked.connect(lambda: self._apply_llm_profile("lmstudio"))
+        self.profile_deepseek_btn = QPushButton("DeepSeek")
+        self.profile_deepseek_btn.clicked.connect(lambda: self._apply_llm_profile("deepseek"))
+        profile_row.addWidget(self.profile_openai_btn)
+        profile_row.addWidget(self.profile_ollama_btn)
+        profile_row.addWidget(self.profile_lmstudio_btn)
+        profile_row.addWidget(self.profile_deepseek_btn)
+        llm_layout.addWidget(profile_box)
+
+        llm_form = QFormLayout()
         self.base_url = QLineEdit("https://api.openai.com/v1")
         llm_form.addRow("Base URL", self.base_url)
         self.model = QLineEdit("gpt-4o")
@@ -1109,13 +1142,78 @@ class AIStrokePainterDocker(DockWidget):
         self.test_conn_btn = QPushButton("API 接続テスト")
         self.test_conn_btn.clicked.connect(self._test_api_connection)
         llm_form.addRow("", self.test_conn_btn)
-        root_layout.addWidget(self.llm_settings)
+        llm_layout.addLayout(llm_form)
 
-        # 7. ベクタープレビュー
-        self.preview = PreviewWidget(self)
-        root_layout.addWidget(self.preview)
+        tab_ai_layout.addWidget(self.llm_settings)
+        tab_ai_layout.addStretch(1)
 
-        # 8. 保存オプション & デバッグモード & 設定初期化
+        scroll_ai = QScrollArea(self)
+        scroll_ai.setWidgetResizable(True)
+        scroll_ai.setWidget(tab_ai)
+        self.tabs.addTab(scroll_ai, "🤖 AI設定")
+
+        # ==========================================
+        # タブ 4: ⚙️ レイヤー・詳細 (Settings & Debug)
+        # ==========================================
+        tab_settings = QWidget()
+        tab_settings_layout = QVBoxLayout(tab_settings)
+
+        # ブラシ・描画 & レイヤー設定
+        brush_box = QGroupBox("🖌️ ブラシ・描画 & レイヤー設定")
+        brush_form = QFormLayout(brush_box)
+
+        scale_row = QHBoxLayout()
+        self.brush_size_multiplier = QDoubleSpinBox()
+        self.brush_size_multiplier.setRange(0.1, 5.0)
+        self.brush_size_multiplier.setSingleStep(0.1)
+        self.brush_size_multiplier.setDecimals(2)
+        self.brush_size_multiplier.setValue(1.0)
+        self.brush_size_multiplier.setSuffix(" x")
+        self.brush_size_multiplier.setToolTip("ストロークの太さを一括スケーリングします")
+        scale_row.addWidget(QLabel("太さ倍率:"))
+        scale_row.addWidget(self.brush_size_multiplier)
+
+        self.opacity_multiplier = QSpinBox()
+        self.opacity_multiplier.setRange(10, 100)
+        self.opacity_multiplier.setSingleStep(5)
+        self.opacity_multiplier.setValue(100)
+        self.opacity_multiplier.setSuffix(" %")
+        self.opacity_multiplier.setToolTip("ストローク全体の不透明度を一括スケーリングします")
+        scale_row.addWidget(QLabel("不透明度:"))
+        scale_row.addWidget(self.opacity_multiplier)
+        brush_form.addRow("描画スケーリング", scale_row)
+
+        layer_row = QHBoxLayout()
+        self.layer_mode = QComboBox()
+        self.layer_mode.addItem("マルチレイヤー分割 (Draft/Flats/Lineart/etc)", "multi_layer")
+        self.layer_mode.addItem("現在のアクティブレイヤーに直接描画", "active_layer")
+        self.layer_mode.addItem("単一の新規レイヤーにまとめて描画", "single_layer")
+        self.layer_mode.setToolTip(
+            "マルチレイヤーが推奨です。アクティブレイヤー直接描画は安全な取消のため画素スナップショットを取得します。"
+        )
+        layer_row.addWidget(self.layer_mode)
+        brush_form.addRow("レイヤー出力", layer_row)
+
+        config_row = QHBoxLayout()
+        self.layer_prefix = QLineEdit("AI Artwork")
+        self.layer_prefix.setPlaceholderText("レイヤー名 / グループ名")
+        config_row.addWidget(QLabel("名前:"))
+        config_row.addWidget(self.layer_prefix)
+
+        self.event_interval = QSpinBox()
+        self.event_interval.setRange(5, 100)
+        self.event_interval.setValue(30)
+        self.event_interval.setToolTip(
+            "何線分ごとに画面イベントを処理するか (値が小さいほどリアルタイム、大きいほど高速)"
+        )
+        config_row.addWidget(QLabel("画面更新間隔（線分）:"))
+        config_row.addWidget(self.event_interval)
+        brush_form.addRow("キャンバス設定", config_row)
+        tab_settings_layout.addWidget(brush_box)
+
+        # 保存 & 動作オプション
+        save_box = QGroupBox("保存 & 動作オプション")
+        save_box_layout = QVBoxLayout(save_box)
         save_layout = QHBoxLayout()
         self.save_json = QCheckBox("計画 JSON 保存")
         self.save_json.setChecked(True)
@@ -1123,13 +1221,15 @@ class AIStrokePainterDocker(DockWidget):
         self.save_svg_chk.setChecked(True)
         save_layout.addWidget(self.save_json)
         save_layout.addWidget(self.save_svg_chk)
-        root_layout.addLayout(save_layout)
+        save_box_layout.addLayout(save_layout)
 
         self.confirm_before_apply = QCheckBox("適用前にプレビューを確認")
         self.confirm_before_apply.setChecked(True)
         self.confirm_before_apply.setToolTip("生成計画を確認してから「キャンバスへ適用」を押す安全モード")
-        root_layout.addWidget(self.confirm_before_apply)
+        save_box_layout.addWidget(self.confirm_before_apply)
+        tab_settings_layout.addWidget(save_box)
 
+        # デバッグ & 設定リセット
         debug_toggle_layout = QHBoxLayout()
         self.debug_mode_chk = QCheckBox("🐞 デバッグモード (詳細ログを表示)")
         self.debug_mode_chk.setChecked(False)
@@ -1138,9 +1238,9 @@ class AIStrokePainterDocker(DockWidget):
         self.reset_defaults_btn = QPushButton("🔄 初期設定に戻す")
         self.reset_defaults_btn.clicked.connect(self._reset_to_defaults)
         debug_toggle_layout.addWidget(self.reset_defaults_btn)
-        root_layout.addLayout(debug_toggle_layout)
+        tab_settings_layout.addLayout(debug_toggle_layout)
 
-        # 9. デバッグログパネル
+        # デバッグログパネル
         self.debug_box = QGroupBox("デバッグログ (リアルタイム通信・処理ログ)")
         debug_box_layout = QVBoxLayout(self.debug_box)
         self.debug_log_edit = QPlainTextEdit()
@@ -1167,9 +1267,17 @@ class AIStrokePainterDocker(DockWidget):
         self.debug_mode_chk.toggled.connect(self._toggle_debug_panel)
 
         self.debug_box.setVisible(False)
-        root_layout.addWidget(self.debug_box)
+        tab_settings_layout.addWidget(self.debug_box)
+        tab_settings_layout.addStretch(1)
 
-        # 10. 描画・停止ボタン
+        scroll_settings = QScrollArea(self)
+        scroll_settings.setWidgetResizable(True)
+        scroll_settings.setWidget(tab_settings)
+        self.tabs.addTab(scroll_settings, "⚙️ レイヤー・詳細")
+
+        # ==========================================
+        # 下部固定アクションバー (Execution Controls)
+        # ==========================================
         self.run_btn = QPushButton("プレビュー生成")
         self.apply_btn = QPushButton("キャンバスへ適用")
         self.apply_btn.setEnabled(False)
@@ -1180,20 +1288,16 @@ class AIStrokePainterDocker(DockWidget):
         btn_layout.addWidget(self.apply_btn)
         btn_layout.addWidget(self.stop_btn)
 
-        # 11. プログレスバー & ステータス
+        # プログレスバー & ステータス
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
         self.status = QLabel("待機中: プロンプトまたはプリセットを選んで描画を開始してください")
         self.status.setWordWrap(True)
 
-        root_layout.addStretch(1)
-        scroll_area = QScrollArea(self)
-        scroll_area.setWidgetResizable(True)
-        scroll_area.setWidget(container)
         dock_container = QWidget(self)
         dock_layout = QVBoxLayout(dock_container)
-        dock_layout.addWidget(scroll_area)
+        dock_layout.addWidget(self.tabs)
         dock_layout.addLayout(btn_layout)
         dock_layout.addWidget(self.progress)
         dock_layout.addWidget(self.status)
@@ -1210,6 +1314,128 @@ class AIStrokePainterDocker(DockWidget):
         self.brush_size_multiplier.valueChanged.connect(self._update_preview_multipliers)
         self.opacity_multiplier.valueChanged.connect(self._update_preview_multipliers)
         self._update_planner_settings_state()
+
+    def _clear_prompt(self) -> None:
+        """プロンプト入力欄を初期化・クリアする。"""
+        prompt_w = _get_attr(self, "prompt")
+        if prompt_w is not None and hasattr(prompt_w, "clear"):
+            prompt_w.clear()
+
+    def _populate_prompt_history(self) -> None:
+        """QSettings から直近のプロンプト履歴を読み込みコンボボックスを初期化する。"""
+        combo = _get_attr(self, "prompt_history_combo")
+        if combo is None or not hasattr(combo, "clear"):
+            return
+        combo.clear()
+        combo.addItem("📋 履歴から選択...", "")
+        if callable(QSettings):
+            with contextlib.suppress(Exception):
+                settings: Any = QSettings("AIStrokePainter", "DockerSettings")
+                raw = settings.value("prompt_history_json")
+                if raw:
+                    history = json.loads(str(raw))
+                    if isinstance(history, list):
+                        for item in history:
+                            if isinstance(item, str) and item.strip():
+                                short_label = item[:35] + ("..." if len(item) > 35 else "")
+                                combo.addItem(f"🕒 {short_label}", item)
+
+    def _save_prompt_to_history(self, prompt_text: str) -> None:
+        """成功または実行されたプロンプトを履歴リストの先頭に保存する（最大10件）。"""
+        text = prompt_text.strip()
+        if not text or not callable(QSettings):
+            return
+        with contextlib.suppress(Exception):
+            settings: Any = QSettings("AIStrokePainter", "DockerSettings")
+            raw = settings.value("prompt_history_json")
+            loaded: Any = json.loads(str(raw)) if raw else []
+            history: list[str] = [str(x) for x in loaded] if isinstance(loaded, list) else []
+            if text in history:
+                history.remove(text)
+            history.insert(0, text)
+            history = history[:10]
+            settings.setValue("prompt_history_json", json.dumps(history, ensure_ascii=False))
+            if hasattr(settings, "sync"):
+                settings.sync()
+            self._populate_prompt_history()
+
+    def _on_prompt_history_selected(self, index: int) -> None:
+        """履歴コンボボックスからプロンプトが選択されたら入力欄へ展開する。"""
+        combo = _get_attr(self, "prompt_history_combo")
+        if combo is None or index <= 0 or not hasattr(combo, "itemData"):
+            return
+        data = combo.itemData(index)
+        if data and isinstance(data, str):
+            prompt_w = _get_attr(self, "prompt")
+            if prompt_w is not None and hasattr(prompt_w, "setPlainText"):
+                prompt_w.setPlainText(data)
+
+    def _add_prompt_tag(self, tag: str) -> None:
+        """プロンプト入力欄の末尾に指定されたタグキーワードを追加する。"""
+        prompt_w = _get_attr(self, "prompt")
+        if prompt_w is None or not hasattr(prompt_w, "toPlainText") or not hasattr(prompt_w, "setPlainText"):
+            return
+        current = prompt_w.toPlainText().strip()
+        if current:
+            if tag not in current:
+                prompt_w.setPlainText(f"{current}, {tag}")
+        else:
+            prompt_w.setPlainText(tag)
+
+    def _apply_llm_profile(self, profile_key: str) -> None:
+        """各LLMプロバイダ向けの推奨プリセットを一括適用する。"""
+        profiles: dict[str, dict[str, Any]] = {
+            "openai": {
+                "base_url": "https://api.openai.com/v1",
+                "model": "gpt-4o",
+                "max_tokens": 16384,
+                "reasoning_effort": "medium",
+                "temperature": 0.70,
+            },
+            "ollama": {
+                "base_url": "http://127.0.0.1:11434/v1",
+                "model": "llama3.2-vision",
+                "max_tokens": 8192,
+                "reasoning_effort": "none",
+                "temperature": 0.70,
+            },
+            "lmstudio": {
+                "base_url": "http://127.0.0.1:1234/v1",
+                "model": "qwen2.5-coder-7b-instruct",
+                "max_tokens": 8192,
+                "reasoning_effort": "none",
+                "temperature": 0.70,
+            },
+            "deepseek": {
+                "base_url": "https://api.deepseek.com/v1",
+                "model": "deepseek-chat",
+                "max_tokens": 8192,
+                "reasoning_effort": "none",
+                "temperature": 0.70,
+            },
+        }
+        cfg = profiles.get(profile_key)
+        if not cfg:
+            return
+        if hasattr(self, "planner_mode") and hasattr(self.planner_mode, "count"):
+            for i in range(self.planner_mode.count()):
+                if self.planner_mode.itemData(i) == "openai_compatible":
+                    self.planner_mode.setCurrentIndex(i)
+                    break
+        if hasattr(self, "base_url") and hasattr(self.base_url, "setText"):
+            self.base_url.setText(cfg["base_url"])
+        if hasattr(self, "model") and hasattr(self.model, "setText"):
+            self.model.setText(cfg["model"])
+        if hasattr(self, "max_tokens") and hasattr(self.max_tokens, "setValue"):
+            self.max_tokens.setValue(cfg["max_tokens"])
+        if hasattr(self, "temperature") and hasattr(self.temperature, "setValue"):
+            self.temperature.setValue(cfg["temperature"])
+        if hasattr(self, "reasoning_effort") and hasattr(self.reasoning_effort, "count"):
+            for i in range(self.reasoning_effort.count()):
+                if self.reasoning_effort.itemData(i) == cfg["reasoning_effort"]:
+                    self.reasoning_effort.setCurrentIndex(i)
+                    break
+        self._log_debug(f"[LLMプロファイル適用] '{profile_key}' の推奨設定を適用しました")
 
     def canvasChanged(self, canvas: Any) -> None:  # noqa: N802
         """Kritaからキャンバス切り替えイベント通知を受け取る (DockWidgetの必須抽象メソッド)。"""
@@ -1980,6 +2206,26 @@ class AIStrokePainterDocker(DockWidget):
             btn.setEnabled(True)
         self._connection_worker = None
 
+    def _update_seed_controls_state(self, *_args: Any) -> None:
+        is_openai = self._is_openai_compatible_mode()
+        auto_seed_w = _get_attr(self, "auto_seed")
+        seed_w = _get_attr(self, "seed")
+        if is_openai:
+            if auto_seed_w is not None and hasattr(auto_seed_w, "setEnabled"):
+                auto_seed_w.setEnabled(False)
+            if seed_w is not None and hasattr(seed_w, "setEnabled"):
+                seed_w.setEnabled(False)
+        else:
+            if auto_seed_w is not None and hasattr(auto_seed_w, "setEnabled"):
+                auto_seed_w.setEnabled(True)
+            auto_chk = (
+                bool(auto_seed_w.isChecked())
+                if auto_seed_w is not None and hasattr(auto_seed_w, "isChecked")
+                else False
+            )
+            if seed_w is not None and hasattr(seed_w, "setEnabled"):
+                seed_w.setEnabled(not auto_chk)
+
     def _update_planner_settings_state(self, *_args: Any) -> None:
         is_openai = self._is_openai_compatible_mode()
         box = _get_attr(self, "llm_settings")
@@ -1998,6 +2244,7 @@ class AIStrokePainterDocker(DockWidget):
         iters = _get_attr(self, "iterations")
         if iters is not None and hasattr(iters, "setEnabled"):
             iters.setEnabled(is_openai)
+        self._update_seed_controls_state()
 
     def _is_openai_compatible_mode(self) -> bool:
         mode_w = _get_attr(self, "planner_mode")
@@ -2073,9 +2320,15 @@ class AIStrokePainterDocker(DockWidget):
             "export_preset_btn",
             "import_preset_btn",
             "prompt",
+            "prompt_history_combo",
+            "clear_prompt_btn",
             "load_image_btn",
             "clear_image_btn",
             "planner_mode",
+            "profile_openai_btn",
+            "profile_ollama_btn",
+            "profile_lmstudio_btn",
+            "profile_deepseek_btn",
             "seed",
             "auto_seed",
             "count",
@@ -2106,17 +2359,16 @@ class AIStrokePainterDocker(DockWidget):
                 widget.setEnabled(enabled)
         if enabled:
             self._update_planner_settings_state()
-            for toggle_name, value_name in (("auto_seed", "seed"), ("auto_count", "count")):
-                toggle = _get_attr(self, toggle_name)
-                value_widget = _get_attr(self, value_name)
-                if (
-                    toggle is not None
-                    and hasattr(toggle, "isChecked")
-                    and toggle.isChecked()
-                    and value_widget is not None
-                    and hasattr(value_widget, "setEnabled")
-                ):
-                    value_widget.setEnabled(False)
+            count_toggle = _get_attr(self, "auto_count")
+            count_widget = _get_attr(self, "count")
+            if (
+                count_toggle is not None
+                and hasattr(count_toggle, "isChecked")
+                and count_toggle.isChecked()
+                and count_widget is not None
+                and hasattr(count_widget, "setEnabled")
+            ):
+                count_widget.setEnabled(False)
 
     def cancel(self) -> None:
         self._cancel = True
@@ -2151,6 +2403,9 @@ class AIStrokePainterDocker(DockWidget):
             return
 
         self._save_settings()
+        prompt_w = _get_attr(self, "prompt")
+        if prompt_w is not None and hasattr(prompt_w, "toPlainText"):
+            self._save_prompt_to_history(prompt_w.toPlainText())
         self._active_doc = document
         self._active_view = active_view
         self._cancel = False
@@ -2186,7 +2441,9 @@ class AIStrokePainterDocker(DockWidget):
 
         is_openai = self._is_openai_compatible_mode()
         auto_seed = (
-            bool(auto_seed_w.isChecked()) if auto_seed_w is not None and hasattr(auto_seed_w, "isChecked") else False
+            bool(auto_seed_w.isChecked())
+            if auto_seed_w is not None and hasattr(auto_seed_w, "isChecked") and not is_openai
+            else False
         )
         auto_count = (
             bool(auto_count_w.isChecked()) if auto_count_w is not None and hasattr(auto_count_w, "isChecked") else False
