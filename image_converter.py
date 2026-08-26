@@ -318,6 +318,90 @@ def _infer_best_palette_for_image(
 _EDGE_NEIGHBORS = ((-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1))
 
 
+def _zhang_suen_thinning(mask: list[list[bool]], max_iters: int = 8) -> list[list[bool]]:
+    """Zhang-Suen 細線化アルゴリズムにより、太いエッジを1ピクセル幅の中心骨格線（Centerline）へ圧縮する。"""
+    h = len(mask)
+    if h < 3:
+        return mask
+    w = len(mask[0])
+    if w < 3:
+        return mask
+
+    thinned = [row[:] for row in mask]
+
+    for _ in range(max_iters):
+        # Step 1
+        to_remove_step1: list[tuple[int, int]] = []
+        for y in range(1, h - 1):
+            row_curr = thinned[y]
+            row_prev = thinned[y - 1]
+            row_next = thinned[y + 1]
+            for x in range(1, w - 1):
+                if not row_curr[x]:
+                    continue
+                p2 = 1 if row_prev[x] else 0
+                p3 = 1 if row_prev[x + 1] else 0
+                p4 = 1 if row_curr[x + 1] else 0
+                p5 = 1 if row_next[x + 1] else 0
+                p6 = 1 if row_next[x] else 0
+                p7 = 1 if row_next[x - 1] else 0
+                p8 = 1 if row_curr[x - 1] else 0
+                p9 = 1 if row_prev[x - 1] else 0
+
+                b = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9
+                if not (2 <= b <= 6):
+                    continue
+
+                seq = (p2, p3, p4, p5, p6, p7, p8, p9, p2)
+                a = sum(1 for i in range(8) if seq[i] == 0 and seq[i + 1] == 1)
+                if a != 1:
+                    continue
+
+                if p2 * p4 * p6 == 0 and p4 * p6 * p8 == 0:
+                    to_remove_step1.append((x, y))
+
+        for x, y in to_remove_step1:
+            thinned[y][x] = False
+
+        # Step 2
+        to_remove_step2: list[tuple[int, int]] = []
+        for y in range(1, h - 1):
+            row_curr = thinned[y]
+            row_prev = thinned[y - 1]
+            row_next = thinned[y + 1]
+            for x in range(1, w - 1):
+                if not row_curr[x]:
+                    continue
+                p2 = 1 if row_prev[x] else 0
+                p3 = 1 if row_prev[x + 1] else 0
+                p4 = 1 if row_curr[x + 1] else 0
+                p5 = 1 if row_next[x + 1] else 0
+                p6 = 1 if row_next[x] else 0
+                p7 = 1 if row_next[x - 1] else 0
+                p8 = 1 if row_curr[x - 1] else 0
+                p9 = 1 if row_prev[x - 1] else 0
+
+                b = p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9
+                if not (2 <= b <= 6):
+                    continue
+
+                seq = (p2, p3, p4, p5, p6, p7, p8, p9, p2)
+                a = sum(1 for i in range(8) if seq[i] == 0 and seq[i + 1] == 1)
+                if a != 1:
+                    continue
+
+                if p2 * p4 * p8 == 0 and p2 * p6 * p8 == 0:
+                    to_remove_step2.append((x, y))
+
+        for x, y in to_remove_step2:
+            thinned[y][x] = False
+
+        if not to_remove_step1 and not to_remove_step2:
+            break
+
+    return thinned
+
+
 def _trace_edge_paths(edge_mask: list[list[bool]], max_paths: int) -> list[list[tuple[int, int]]]:
     """8近傍で連結したエッジを、連続する決定論的な点列へ変換する。"""
     remaining = {(x, y) for y, row in enumerate(edge_mask) for x, is_edge in enumerate(row) if is_edge}
@@ -751,9 +835,14 @@ class ImageStrokeConverter:
                     edge_mask[ny][nx] = True
                     edge_queue.append((nx, ny))
 
+        # エッジを細線化（Zhang-Suen Thinning）して中心線（Centerline）を抽出し、二重線を解消
+        thinned_edge_mask = _zhang_suen_thinning(edge_mask)
+
         # エッジを連結し、輪郭に沿う連続ストロークを構築する（微小ノイズパスはフィルタ）。
         max_paths = min(max(20, (count * 3) if count is not None else 180), MAX_PLAN_STROKES)
-        raw_edge_paths = _trace_edge_paths(edge_mask, max_paths=max_paths)
+        raw_edge_paths = _trace_edge_paths(thinned_edge_mask, max_paths=max_paths)
+        if not raw_edge_paths:
+            raw_edge_paths = _trace_edge_paths(edge_mask, max_paths=max_paths)
         # 1ピクセルのみの微小孤立ノイズをカットし、意味のある輪郭線のみを保持
         edge_paths = [p for p in raw_edge_paths if len(p) >= 2 or len(raw_edge_paths) <= 10]
         if not edge_paths and raw_edge_paths:

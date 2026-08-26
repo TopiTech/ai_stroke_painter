@@ -18,6 +18,9 @@ class PlanQualityReport:
     estimated_paint_calls: int
     score: float
     issues: tuple[str, ...]
+    color_harmony_score: float = 1.0
+    line_cleanliness_score: float = 1.0
+    layer_balance_score: float = 1.0
 
 
 def _stroke_length(stroke: Stroke) -> float:
@@ -122,6 +125,19 @@ def evaluate_plan_quality(plan: DrawingPlan, *, grid_size: int = 40) -> PlanQual
         issues.append("短い断片ストロークが多すぎます")
     if out_of_bounds:
         issues.append("キャンバス外の点が含まれています")
+    # 色彩調和度・線画クリーン度・レイヤーバランスの算出
+    unique_colors = len({stroke.color.lower() for stroke in plan.strokes if not stroke.is_eraser})
+    color_harmony = min(1.0, 0.5 + 0.5 * (unique_colors / 4.0)) if unique_colors > 0 else 0.5
+
+    lineart_strokes = [s for s in plan.strokes if s.layer_name.lower() == "lineart"]
+    if lineart_strokes:
+        smooth_line_count = sum(1 for s in lineart_strokes if len(s.points) >= 3)
+        line_cleanliness = min(1.0, 0.4 + 0.6 * (smooth_line_count / len(lineart_strokes)))
+    else:
+        line_cleanliness = 1.0
+
+    layer_balance = min(1.0, layer_count / 3.0) if layer_count > 0 else 0.5
+
     return PlanQualityReport(
         coverage=coverage,
         layer_count=layer_count,
@@ -131,4 +147,7 @@ def evaluate_plan_quality(plan: DrawingPlan, *, grid_size: int = 40) -> PlanQual
         estimated_paint_calls=estimated_calls,
         score=max(0.0, min(1.0, score)),
         issues=tuple(issues),
+        color_harmony_score=round(color_harmony, 3),
+        line_cleanliness_score=round(line_cleanliness, 3),
+        layer_balance_score=round(layer_balance, 3),
     )

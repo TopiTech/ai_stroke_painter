@@ -30,6 +30,7 @@ from .image_converter import MAX_ENCODED_IMAGE_BYTES, sanitize_reference_image
 from .planner import validate_iterations, validate_plan_request
 from .ports import PlannerPort
 from .procedural.base import pressure_profile, recolor_strokes_to_palette, sample_strokes_by_priority
+from .prompt_analyzer import analyze_prompt
 from .stroke_program import (
     MAX_OPERATION_POINTS,
     MAX_PROGRAM_OPERATIONS,
@@ -437,6 +438,7 @@ class OpenAICompatibleSettings:
     vision_resolution: int = 512
     max_retries: int = 2
     fallback_to_procedural: bool = False
+    autonomy_mode: str = "creative"  # "creative" (default: max autonomy), "balanced", "template"
 
     def __post_init__(self) -> None:
         if not isinstance(self.base_url, str) or not self.base_url.strip():
@@ -521,6 +523,12 @@ class OpenAICompatibleSettings:
             raise ValueError("max_retries は 1 から 10 の整数である必要があります")
         if not isinstance(self.fallback_to_procedural, bool):
             raise ValueError("fallback_to_procedural は真偽値である必要があります")
+        if not isinstance(self.autonomy_mode, str) or self.autonomy_mode.strip().lower() not in (
+            "creative",
+            "balanced",
+            "template",
+        ):
+            raise ValueError("autonomy_mode は 'creative', 'balanced', 'template' のいずれかである必要があります")
 
     @property
     def endpoint_url(self) -> str:
@@ -783,6 +791,7 @@ class OpenAICompatiblePlanner(PlannerPort):
             prompt=valid_prompt,
             palette_name=palette_name,
             brush_profile=brush_profile,
+            autonomy_mode=self.settings.autonomy_mode,
         )
         if self.settings.custom_system_prompt.strip():
             system_content += f"\n\n[USER CUSTOM INSTRUCTIONS]\n{self.settings.custom_system_prompt.strip()}"
@@ -848,6 +857,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                         prompt=valid_prompt,
                         palette_name=palette_name,
                         brush_profile=brush_profile,
+                        autonomy_mode=self.settings.autonomy_mode,
                     )
                     + f"\n\n[FEEDBACK FROM PREVIOUS ATTEMPT]\nPrevious attempt failed: {err_summary}.{len_advice}\n"
                     "CRITICAL: Output ONLY a single valid raw JSON object for the StrokeProgram schema, beginning with '{'. Do not use Markdown fences, preamble, or commentary."
@@ -1315,6 +1325,7 @@ def _system_instruction(
     prompt: str = "",
     palette_name: str = "auto",
     brush_profile: str = "auto",
+    autonomy_mode: str = "creative",
 ) -> str:
     """プロフェッショナルなデジタルイラスト作画戦略・レイヤー階層・空間アンカー・4層ライティングを含む高品質プロンプト。"""
     min_dim = min(width, height)
@@ -1345,8 +1356,16 @@ def _system_instruction(
     hl_glint_sz = "2.0 to 3.5 px (eye specular glints) / 6 to 16 px (hair halo & rim light)"
 
     prompt_lower = prompt.lower()
+    sem = analyze_prompt(prompt)
     has_sakura = any(keyword in prompt_lower for keyword in ("sakura", "桜", "cherry blossom"))
     domain_guidance = ""
+
+    # 時間帯に応じた空のカラーパレット動的決定
+    sky_gradient_colors = "['#2b5c8f', '#5c93cf', '#eef6ff']"
+    if sem.environment.time_of_day == "sunset" or sem.lighting.tone == "sunset":
+        sky_gradient_colors = "['#4a1c40', '#962d3e', '#d25938', '#f8a846', '#fae19c']"
+    elif sem.environment.time_of_day == "night" or sem.lighting.tone == "night":
+        sky_gradient_colors = "['#050811', '#0d1527', '#1a2942', '#2c4365']"
 
     if any(
         k in prompt_lower
@@ -1369,31 +1388,43 @@ def _system_instruction(
             "wave",
         ]
     ):
+        if autonomy_mode == "template":
+            spatial_anchors = (
+                "=== SPATIAL COMPOSITION ANCHORS (Rule of Thirds & 3-Tier Depth) ===\n"
+                "  - Zenith Sky: y=0.00 to 0.35 (Sky gradient wash)\n"
+                "  - Distant Horizon & Peaks: y=0.45 to 0.62 (Atmospheric silhouettes)\n"
+                "  - Main Hero Element (Sakura Tree / Lake): Trunk base at x=0.30 to 0.45, y=0.45 to 0.85; Canopy at y=0.20 to 0.55\n"
+                "  - Foreground Ground / Petal Swarm: y=0.75 to 1.00 (Vibrant terrain with atmospheric accents)\n\n"
+            )
+        else:
+            spatial_anchors = (
+                "=== SPATIAL COMPOSITION & DEPTH (Rule of Thirds & 3-Tier Depth) ===\n"
+                "  - Autonomy & Perspective: Compose atmospheric depth with full creative freedom over horizon placement and camera framing.\n"
+                "  - Tier 1 (Background): Atmospheric sky wash, distant mountain silhouette, cloud formations.\n"
+                "  - Tier 2 (Midground): Hero elements (trees, lakes, ridges, architecture) with organic volumetric shapes.\n"
+                "  - Tier 3 (Foreground): Expressive ground terrain, water flow, or atmospheric accents.\n\n"
+            )
         domain_guidance = (
             "\n[DOMAIN ART DIRECTION: Landscape, Mountains, Clouds & Sakura Trees]\n"
-            "=== SPATIAL COMPOSITION ANCHORS (Rule of Thirds & 3-Tier Depth) ===\n"
-            "  - Zenith Sky: y=0.00 to 0.35 (Deep blue/sunset orange wash)\n"
-            "  - Distant Horizon & Peaks: y=0.45 to 0.62 (Atmospheric blue-gray silhouettes)\n"
-            "  - Main Hero Element (Sakura Tree / Lake): Trunk base at x=0.30 to 0.45, y=0.45 to 0.85; Canopy at y=0.20 to 0.55\n"
-            "  - Foreground Ground / Petal Swarm: y=0.75 to 1.00 (Vibrant green/earth tones with scattered drifting petals)\n\n"
+            f"{spatial_anchors}"
             "1. Layer 'Flats' (Complete Seamless Coverage & Base Volumes):\n"
-            f"   - Sky Gradient: Use 'gradient_fill' with colors [zenith, horizon] (e.g. ['#2b5c8f', '#5c93cf', '#eef6ff'], style: 'linear', angle_deg: 90) or paint multiple dense overlapping horizontal sweep strokes (size_px: {flats_sz}, brush: 'Airbrush Soft'). Leave NO white canvas gaps.\n"
+            f"   - Sky Gradient: Use 'gradient_fill' with colors {sky_gradient_colors} (style: 'linear', angle_deg: 90) or paint multiple dense overlapping horizontal sweep strokes (size_px: {flats_sz}, brush: 'Airbrush Soft'). Leave NO white canvas gaps.\n"
             f"   - Distant & Midground Mountains: Paint sweeping mountain silhouettes with fill (style: 'directional', angle_deg: 25) or (size_px: {flats_sz}, brush: 'Basic-5 Size'). "
-            "Use atmospheric perspective (distant peaks in soft blue-gray #6f829d, nearer peaks in deep pine/slate #283e50).\n"
-            f"   - Rolling Hills & Ground: Dense green terrain wash (#4e7d58, #72a37c, #9ec4a5) with organic curving strokes. NEVER use orthogonal wireframe grid hatching on ground.\n"
-            f"   - Sakura Blossom Canopy Clumps: Use fill (style: 'contour') for puffy, billowing clouds of pink foliage masses (size_px: {flats_sz}, brush: 'Wet Textured Soft' or 'Basic-5 Size') "
+            "Use atmospheric perspective (distant peaks in soft haze, nearer peaks in deeper tone).\n"
+            f"   - Rolling Hills & Ground: Dense terrain wash with organic curving strokes. NEVER use orthogonal wireframe grid hatching on ground.\n"
+            f"   - Sakura Blossom Canopy Clumps: Use fill (style: 'contour') for puffy, billowing clouds of foliage masses (size_px: {flats_sz}, brush: 'Wet Textured Soft' or 'Basic-5 Size') "
             "arranged above and around branches (colors: #ff9ebb, #ffb8cd, #ffd6e5). Overlap multiple puffy clusters to create huge 3D volume.\n"
             "2. Layer 'Shading' (3D Depth, Occlusion & Mountain Crags):\n"
-            f"   - Mountain Ridges & Shadow Facets: Carve dramatic shadow slopes along mountain ridge lines (size_px: {form_shad_sz}, opacity: 0.6-0.8, brush: 'Dry Bristles', colors: #1a2733, #223445).\n"
-            f"   - Cloud Undersides: Paint soft purplish shadow bulges under cloud masses with fill (style: 'contour', size_px: {form_shad_sz}, opacity: 0.5-0.7, colors: #92a4bc, #7b8ea7).\n"
-            f"   - Blossom Canopy Deep Shadows: Paint deep magenta/purple-pink core shadows underneath blossom clusters with fill (style: 'contour', size_px: {detail_shad_sz}, colors: #a3436a, #842f53).\n"
+            f"   - Mountain Ridges & Shadow Facets: Carve dramatic shadow slopes along mountain ridge lines (size_px: {form_shad_sz}, opacity: 0.6-0.8, brush: 'Dry Bristles').\n"
+            f"   - Cloud Undersides: Paint soft purplish shadow bulges under cloud masses with fill (style: 'contour', size_px: {form_shad_sz}, opacity: 0.5-0.7).\n"
+            f"   - Blossom Canopy Deep Shadows: Paint deep core shadows underneath foliage clusters with fill (style: 'contour', size_px: {detail_shad_sz}).\n"
             "3. Layer 'Lineart' (Organic Tree Anatomy & Crisp Ridge Contours):\n"
-            f"   - Majestic Sakura Tree Trunk & Branches: Draw powerful, organic twisting tree trunks with S-curves and wide root flares (role: 'outline', size_px: {main_line_sz}, brush: 'Ink-3 Gpen', colors: #342017, #24140d). "
+            f"   - Majestic Sakura Tree Trunk & Branches: Draw powerful, organic twisting tree trunks using ribbon or path with S-curves and wide root flares (role: 'outline', size_px: {main_line_sz}, brush: 'Ink-3 Gpen', colors: #342017, #24140d). "
             f"Branch hierarchically! Main thick trunk -> major bending limbs -> tapering fine secondary branches (role: 'detail', size_px: {detail_line_sz}, pressure: 0.2->0.8->0.1) threading through the pink blossom canopy.\n"
             f"   - Mountain Crests & Sharp Contours: Outline sharp jagged crags and crisp cloud rim curves (role: 'outline', size_px: {main_line_sz}, brush: 'Ink-3 Gpen').\n"
-            "4. Layer 'Highlights' & 'FX' (Light Accents & Falling Petal Blizzard):\n"
-            f"   - Falling Petal Blizzard: Use particle operations with 'shape': 'petal' or scatter individual curved petal strokes drifting on wind (size_px: {detail_line_sz}, colors: #ffffff, #ffe6f0, #ffd0e2) across foreground and midground.\n"
-            f"   - Luminous Rim Lighting & Cloud Edges: Pure glowing white/pale-gold rim highlights on sunny mountain peaks and top cloud rims (size_px: {hl_glint_sz}, colors: #ffffff, #fffde6).\n"
+            "4. Layer 'Highlights' & 'FX' (Light Accents & Atmosphere):\n"
+            f"   - Atmospheric Accents: Use particle operations with 'shape': 'petal' or scatter fine drifting strokes (size_px: {detail_line_sz}) across foreground.\n"
+            f"   - Luminous Rim Lighting & Cloud Edges: Pure glowing rim highlights on sunny mountain peaks and top cloud rims (size_px: {hl_glint_sz}).\n"
         )
         if not has_sakura:
             domain_guidance = (
@@ -1402,18 +1433,17 @@ def _system_instruction(
                 )
                 .replace("Sakura Tree / Lake", "Tree / Lake")
                 .replace(" / Petal Swarm", "")
-                .replace(" with scattered drifting petals", "")
                 .replace("   - Sakura Blossom Canopy Clumps:", "   - Foliage Canopy Clumps:")
                 .replace("pink foliage", "foliage")
                 .replace("pink blossom canopy", "tree canopy")
                 .replace("Blossom Canopy Deep Shadows", "Foliage Canopy Deep Shadows")
                 .replace("Majestic Sakura Tree", "Majestic Foreground Tree")
                 .replace(
-                    "4. Layer 'Highlights' & 'FX' (Light Accents & Falling Petal Blizzard):\n",
+                    "4. Layer 'Highlights' & 'FX' (Light Accents & Atmosphere):\n",
                     "4. Layer 'Highlights' & 'FX' (Subject-appropriate Light and Atmosphere):\n",
                 )
                 .replace(
-                    f"   - Falling Petal Blizzard: Use particle operations with 'shape': 'petal' or scatter individual curved petal strokes drifting on wind (size_px: {detail_line_sz}, colors: #ffffff, #ffe6f0, #ffd0e2) across foreground and midground.\n",
+                    f"   - Atmospheric Accents: Use particle operations with 'shape': 'petal' or scatter fine drifting strokes (size_px: {detail_line_sz}) across foreground.\n",
                     "   - Use sparse subject-appropriate atmospheric accents; do not add petals unless requested.\n",
                 )
             )
@@ -1434,24 +1464,64 @@ def _system_instruction(
             "顔",
         ]
     ):
+        char_hair_color = sem.character.hair_color or "#36222c"
+        char_eye_color = sem.character.eye_color or "#3b82f6"
+        char_style_dir = (
+            f"   - HAIR STYLE DIRECTIVE: Must draw hair in '{sem.character.hair_style.upper()}' style with distinct clump volumes.\n"
+            if sem.character.hair_style != "default"
+            else ""
+        )
+        char_exp_dir = (
+            f"   - FACIAL EXPRESSION DIRECTIVE: Expression must be '{sem.character.expression.upper()}'. Shape eyebrows and mouth accordingly.\n"
+            if sem.character.expression != "default"
+            else ""
+        )
+        char_cos_dir = (
+            f"   - COSTUME DIRECTIVE: Clothing must clearly be '{sem.character.costume.upper()}'.\n"
+            if sem.character.costume != "default"
+            else ""
+        )
+        char_acc_dir = (
+            f"   - ACCESSORIES DIRECTIVE: MUST render {', '.join(a.upper() for a in sem.character.accessories)}!\n"
+            if sem.character.accessories
+            else ""
+        )
+
+        if autonomy_mode == "template":
+            facial_anchors = (
+                "=== STRICT SPATIAL FACIAL ANCHORS (Proportions & Golden Coordinates) ===\n"
+                "  - Face Center X: 0.50 (Symmetric and well-centered)\n"
+                "  - Head Crown & Hair Top: y = 0.12 to 0.18\n"
+                "  - Eyebrows: y = 0.38 to 0.42 (Left Brow x=0.34-0.45, Right Brow x=0.55-0.66)\n"
+                "  - Eyes & Lashes (CRITICAL): y = 0.44 to 0.49 (Left Eye Center x=0.38, Right Eye Center x=0.62, Width=0.12)\n"
+                "  - Nose Tip: y = 0.56 to 0.59, x = 0.50 (Tiny subtle dot or hook, NEVER a heavy vertical black bar)\n"
+                "  - Lips / Mouth: y = 0.64 to 0.67, x = 0.46 to 0.54 (Delicate curved upper lip line with corner nodes)\n"
+                "  - Chin V-Curve: y = 0.74 to 0.78, x = 0.50\n"
+                "  - Ears: y = 0.44 to 0.58 (Aligned between eye line and nose tip)\n"
+                "  - Neck & Clavicles: Neck y=0.74 to 0.85; Collarbones y=0.85 to 0.89; Shoulders x=0.20 to 0.80\n\n"
+            )
+        else:
+            facial_anchors = (
+                "=== CREATIVE ANATOMY & DYNAMIC COMPOSITION (Proportions & Golden Coordinates) ===\n"
+                "  - Framing & Angle: Full autonomy over camera perspective (bust portrait, close-up, dynamic 3/4 view, high/low angle, expressive tilt).\n"
+                "  - Proportional Harmony: Maintain natural relative facial planes suited to your chosen angle and head tilt.\n"
+                "  - Eye Spacing: Place expressive eyes with ~1 eye-width between them along the facial eyeline.\n"
+                "  - Nose Tip: Tiny subtle dot or delicate hook at nose tip with soft shading (NEVER a heavy vertical black bar).\n"
+                "  - Lips / Mouth: Delicate curved upper lip line with cupid's bow, subtle corner nodes, and soft bottom lip gloss.\n"
+                "  - Chin & Jawline: Elegant, smooth jawline and chin contour matching the character's perspective.\n\n"
+            )
+
         domain_guidance = (
             "\n[DOMAIN ART DIRECTION: Anime / Manga Character Portrait (Exquisite 3D Anatomy & Facial Planes)]\n"
-            "=== STRICT SPATIAL FACIAL ANCHORS (Proportions & Golden Coordinates) ===\n"
-            "  - Face Center X: 0.50 (Symmetric and well-centered)\n"
-            "  - Head Crown & Hair Top: y = 0.12 to 0.18\n"
-            "  - Eyebrows: y = 0.38 to 0.42 (Left Brow x=0.34-0.45, Right Brow x=0.55-0.66)\n"
-            "  - Eyes & Lashes (CRITICAL): y = 0.44 to 0.49 (Left Eye Center x=0.38, Right Eye Center x=0.62, Width=0.12)\n"
-            "  - Nose Tip: y = 0.56 to 0.59, x = 0.50 (Tiny subtle dot or hook, NEVER a heavy vertical black bar)\n"
-            "  - Lips / Mouth: y = 0.64 to 0.67, x = 0.46 to 0.54 (Delicate curved upper lip line with corner nodes)\n"
-            "  - Chin V-Curve: y = 0.74 to 0.78, x = 0.50\n"
-            "  - Ears: y = 0.44 to 0.58 (Aligned between eye line and nose tip)\n"
-            "  - Neck & Clavicles: Neck y=0.74 to 0.85; Collarbones y=0.85 to 0.89; Shoulders x=0.20 to 0.80\n\n"
+            f"{facial_anchors}"
             "1. Layer 'Flats' (Flawless Base Volumes & 3-Layer Hair):\n"
             f"   - Skin Base: Smooth complete coverage of face, ears, neck, and shoulders with fill (style: 'wash', size_px: {flats_sz}, color: #fff0e6 / #fef2ea).\n"
-            f"   - Inner/Back Hair Mass: Deep darker hair silhouette behind neck and shoulders (size_px: {flats_sz}, brush: 'Basic-5 Size').\n"
-            f"   - Main Hair Silhouette: Volumetric hair masses framing head with distinct clump volumes (size_px: {flats_sz}, brush: 'Basic-5 Size').\n"
+            f"   - Inner/Back Hair Mass: Deep darker hair silhouette behind neck and shoulders with base color '{char_hair_color}' (size_px: {flats_sz}, brush: 'Basic-5 Size').\n"
+            f"   - Main Hair Silhouette: Volumetric hair masses framing head using fill or dynamic ribbon with distinct clump volumes using '{char_hair_color}' (size_px: {flats_sz}, brush: 'Basic-5 Size').\n"
+            f"{char_style_dir}"
             "   - Sclera (Whites of eyes): Clean bright base (#f8f9fa, size_px: 12-20px) under eye sockets.\n"
-            "   - Iris Base: Expressive oval discs for irises with fill (style: 'radial', size_px: 15-28px, colors: #e84a75 / #3b82f6 / #8b5cf6).\n"
+            f"   - Iris Base: Expressive oval discs for irises with fill (style: 'radial', size_px: 15-28px, color: '{char_eye_color}').\n"
+            f"{char_cos_dir}"
             "2. Layer 'Shading' (3D Facial Planes, 4-Tier Lighting & Ambient Occlusion):\n"
             "   - Forehead & Temples Shading: Soft form shadow on forehead edges and temples (Airbrush Soft, size_px: 30-60px, opacity: 0.35).\n"
             "   - Bangs Cast Shadow: Soft cast shadow directly beneath front hair strands onto the forehead (color: #e09f90, size_px: 8-16px, opacity: 0.50).\n"
@@ -1463,6 +1533,8 @@ def _system_instruction(
             "   - Clavicle (Collarbone) Hollows: Delicate hollow shadows above and below collarbone ridges (#e09f90, size_px: 6-12px, opacity: 0.50).\n"
             f"   - Hair Under-Lock Shadows: Use fill (style: 'directional', angle_deg: 45) for deep shadow crevices between hair strands (size_px: {detail_shad_sz}, opacity: 0.55-0.75).\n"
             "3. Layer 'Lineart' (EXQUISITE MICRO-DETAILS - Must use 1.2 to 3.0 px for facial features!):\n"
+            f"{char_exp_dir}"
+            f"{char_acc_dir}"
             "   - Upper Eyelashes (CRUCIAL): Bold sweeping arch with sharp tapered outer flick + 2-3 delicate lash strand flicks tapering outward at corner (size_px: 1.5 to 2.4 px).\n"
             "   - Inner Canthus & Double Eyelid: Subtle inner eye corner accent line + graceful arched double eyelid crease (size_px: 1.4 to 2.0 px, color: #7a5850, pressure: 0.35).\n"
             "   - Iris Outer Ring & Pupil Core: Crisp circular iris contour, deep pupil core, and 2-3 delicate radial iris texture strokes (size_px: 1.5 to 2.4 px).\n"
@@ -1472,7 +1544,7 @@ def _system_instruction(
             "   - Lips / Mouth: Delicate upper lip line with cupid's bow and corner modiolus nodes (size_px: 1.8 to 2.5 px, color: #a3384c, pressure: 0.2 -> 0.8 -> 0.2).\n"
             "   - Ear Anatomy Contours: Outer helix curve, inner antihelix, and tragus lines (size_px: 2.2 to 3.5 px, color: #321c22).\n"
             f"   - Jawline, Chin & Neck: Elegant, smooth V/U-curve chin, slender neck lines, and sharp clavicle contours (size_px: {main_line_sz}, color: #321c22).\n"
-            "   - Flowing Hair Strands & Micro Flyaways: Primary clump contours + fine secondary tapering sub-strands + playful split tips and delicate stray flyaway strands (size_px: 1.2 to 2.5 px).\n"
+            "   - Flowing Hair Strands & Micro Flyaways: Primary clump contours + fine secondary tapering sub-strands + playful split tips and delicate stray flyaway strands using path or ribbon (size_px: 1.2 to 2.5 px).\n"
             "4. Layer 'Highlights' (5-Point Specular Accents & Angel Halo):\n"
             "   - Eye Specular Glints: 1 crisp bright main glint + 1 secondary reflective glint + 1 micro-sparkle dot near pupil (size_px: 1.8 to 3.5 px, color: #ffffff, preset: 'Ink-3 Gpen').\n"
             "   - Iris Crescent Light: Luminous light arc on bottom half of iris (#8bc34a / #64b5f6 / #f48fb1, size_px: 2.0 to 3.0 px, opacity: 0.85).\n"
@@ -1588,9 +1660,10 @@ def _system_instruction(
     visual_feedback_section = (
         "\n=== AUTOMATIC VISUAL FEEDBACK & CRITIQUE ===\n"
         "In multi-step mode, inspect the attached canvas capture image. Check for:\n"
-        "  1. White canvas gaps or unpainted regions -> fill them in Flats/Shading.\n"
-        "  2. Low contrast or flat lighting -> add deep Ambient Occlusion (AO) on Shading.\n"
-        "  3. Missing facial landmarks or contour clarity -> reinforce with precision Lineart.\n"
+        f"  1. PROMPT FIDELITY: Verify if requested subject features ({sem.character.hair_style}, {sem.character.expression}, {sem.character.costume}) and environment ({sem.environment.setting}, {sem.environment.time_of_day}) are fully visible! Add any missing motifs immediately.\n"
+        "  2. White canvas gaps or unpainted regions -> fill them in Flats/Shading.\n"
+        "  3. Low contrast or flat lighting -> add deep Ambient Occlusion (AO) on Shading.\n"
+        "  4. Missing facial landmarks or contour clarity -> reinforce with precision Lineart.\n"
         "Keep `request_canvas_image` false; the field remains only for schema compatibility.\n"
     )
 
@@ -1601,9 +1674,10 @@ def _system_instruction(
     )
 
     return (
-        "You are an elite master digital painter directing layer-by-layer drawing plans for Krita. "
-        "Create a rich, complete, painterly illustration by generating multi-layered strokes from back to front.\n"
+        "You are an autonomous AI master digital painter directing layer-by-layer drawing plans for Krita. "
+        "Create a rich, complete, painterly illustration by generating multi-layered strokes from back to front with full creative autonomy.\n"
         f"{reasoning_guide}\n\n"
+        f"{sem.to_directive_text()}\n\n"
         "=== DIGITAL PAINTING METHODOLOGY & BRUSH PRESETS ===\n"
         "Available Brush Presets:\n"
         "  - 'Airbrush Soft': Smooth sky gradients, soft blush, and ambient shading.\n"
@@ -1649,7 +1723,7 @@ def _system_instruction(
         f"{progressive_section}"
         f"{visual_feedback_section}\n"
         "=== OUTPUT SCHEMA: STROKE PROGRAM V2 ===\n"
-        "Return one compact JSON object. Coordinates are normalized 0.0-1.0. Prefer macro/fill/hatch/particles over hundreds of repeated raw points:\n"
+        "Return one compact JSON object. Coordinates are normalized 0.0-1.0. Directly create the scene using expressive primitives (fill/hatch/particles, ribbon, path):\n"
         "```json\n"
         "{\n"
         '  "schema_version": 2,\n'
@@ -1661,31 +1735,31 @@ def _system_instruction(
         '  "completion_score": 0.85,\n'
         f'  "canvas": {{"width": {width:.0f}, "height": {height:.0f}}},\n'
         '  "operations": [\n'
-        '    {"kind":"macro","id":"sky_wash","layer":"Flats","name":"watercolor_wash","bounds":[0.0,0.0,1.0,0.55],"colors":["#2b5c8f","#5c93cf","#eef6ff"],"brush":{"profile":"watercolor"}},\n'
-        '    {"kind":"macro","id":"mountains","layer":"Flats","name":"mountain_range","center":[0.5,0.52],"colors":["#6f829d","#4a5568","#283e50"],"brush":{"profile":"watercolor"}},\n'
-        '    {"kind":"macro","id":"tree_trunk","layer":"Lineart","name":"branch_tree","center":[0.38,0.78],"radius":0.35,"colors":["#342017"],"brush":{"profile":"gpen"}},\n'
-        '    {"kind":"macro","id":"blossoms","layer":"Flats","name":"flower_cluster","center":[0.38,0.48],"radius":0.28,"colors":["#ffb8cd","#ffd6e5","#a3436a"],"params":{"petal_type":"sakura"},"brush":{"profile":"watercolor"}},\n'
-        '    {"kind":"path","id":"accent_branch","layer":"Lineart","points":[[0.35,0.65,0.2],[0.42,0.58,0.85],[0.50,0.55,0.1]],"smooth":true,"brush":{"profile":"gpen","color":"#24140d","size":0.004}},\n'
+        '    {"kind":"gradient_fill","id":"sky_wash","layer":"Flats","polygon":[[0.0,0.0],[1.0,0.0],[1.0,0.55],[0.0,0.55]],"colors":["#2b5c8f","#5c93cf","#eef6ff"],"style":"linear","angle_deg":90.0,"spacing":0.55,"brush":{"profile":"watercolor"}},\n'
+        '    {"kind":"fill","id":"mountains","layer":"Flats","polygon":[[0.0,0.55],[0.25,0.38],[0.55,0.48],[0.82,0.35],[1.0,0.52],[1.0,0.68],[0.0,0.68]],"brush":{"profile":"watercolor","color":"#4a5568","size":0.04},"style":"contour"},\n'
+        '    {"kind":"ribbon","id":"tree_trunk","layer":"Lineart","spine":[[0.38,0.85],[0.36,0.66],[0.42,0.48]],"width_start":0.035,"width_mid":0.022,"width_end":0.008,"taper_profile":"taper_end","brush":{"profile":"brush","color":"#342017"}},\n'
+        '    {"kind":"fill","id":"blossoms","layer":"Flats","polygon":[[0.28,0.42],[0.40,0.28],[0.60,0.34],[0.56,0.52],[0.36,0.54]],"brush":{"profile":"watercolor","color":"#ffb8cd","size":0.05},"style":"wash"},\n'
+        '    {"kind":"path","id":"accent_branch","layer":"Lineart","points":[[0.35,0.65,0.2],[0.42,0.58,0.85],[0.50,0.55,0.1]],"smooth":true,"role":"outline","brush":{"profile":"gpen","color":"#24140d","size":0.004}},\n'
         '    {"kind":"particles","id":"falling_petals","layer":"FX","shape":"petal","bounds":[0.1,0.2,0.9,0.9],"count":16,"length":0.015,"angle_deg":75,"angle_jitter":30,"brush":{"profile":"watercolor","color":"#ffe6f0","size":0.003}}\n'
         "  ]\n"
         "}\n"
         "```\n"
-        "=== CRITICAL RULES & ANTI-PATTERNS ===\n"
-        "1. Operation kinds:\n"
-        "   - macro: (STRONGLY RECOMMENDED for motifs and subjects! 'character_face', 'cloud_cluster', 'cumulus_clouds', 'flower_cluster', 'sakura_canopy', 'branch_tree', 'mountain_range', 'watercolor_wash', 'magic_circle', 'cyber_city')\n"
-        "   - path: (2-12 organic spline control points with tapering pressure [x,y,pressure]. Do NOT output raw chaotic random paths)\n"
-        "   - fill: (3+ polygon points, styles: 'wash' (organic watercolor flow), 'contour', 'radial', 'directional')\n"
-        "   - hatch: (polygon, angle_deg, spacing, only for manga screen-tones)\n"
-        "   - particles: (bounds/count, shape: 'petal'/'sparkle'/'drift'/'bokeh'/'line')\n"
+        "=== CRITICAL RULES & ARTISTIC AUTONOMY ===\n"
+        "1. Operation kinds (Autonomous Direct Creation):\n"
+        "   - fill: (3+ polygon points, styles: 'wash' (organic watercolor flow), 'contour', 'radial', 'directional' - ideal for shape blocking, skin, hair masses, shadows)\n"
+        "   - gradient_fill: (3+ polygon points, multi-color gradient wash with style: 'linear'/'radial'/'wash' - ideal for skies and lighting washes)\n"
+        "   - ribbon: (2+ spine points, dynamic tapered strokes - ideal for hair strands, cloth folds, branches, calligraphic lines)\n"
+        "   - path: (2-12 organic spline control points with tapering pressure [x,y,pressure] and role: 'outline'/'hair'/'detail'/'eye'/'crevice' - ideal for expressive lineart and delicate facial features)\n"
+        "   - hatch: (polygon, angle_deg, spacing, cross - for manga screentones and stylized crosshatching)\n"
+        "   - particles: (bounds/count, shape: 'petal'/'sparkle'/'drift'/'bokeh'/'line'/'star' - for atmospheric accents)\n"
+        "   - macro: (optional procedural helper: 'flower_cluster', 'branch_tree', 'mountain_range', 'character_face', etc.)\n"
         "2. Brush profiles: auto, gpen, marupen, brush, marker, pencil, watercolor, airbrush, eraser.\n"
-        "3. Anti-Patterns (STRICTLY FORBIDDEN):\n"
-        "   - NEVER draw giant sweeping loops, random zig-zags, or arbitrary abstract lines across the canvas.\n"
-        "   - NEVER draw plain rectangular boxes, wireframe border frames, or blind-curtain horizontal stripes across the entire canvas.\n"
-        "   - NEVER use straight lines or coarse parallel stripes to depict trees, flowers, or mountains. Use macro primitives or curved paths instead.\n"
-        "   - NEVER use hatch for smooth 3D shading, foliage, clouds, or landscape (causes artificial wireframe/zebra stripes). Use watercolor/airbrush wash or contour fill.\n"
-        "   - NEVER draw isolated mathematical parabolic arcs across trees as fake highlights.\n"
-        "   - NEVER draw solid white (#ffffff) normal brush strokes on Shading layer (which multiplies). For highlights, use Highlights/FX layers; for erasing, set is_eraser: true.\n"
-        "4. Composition: Establish rich background washes and volume with macro/fill, then form shadows on Shading, then precise contours on Lineart and sparse particle accents on FX.\n"
+        "3. Quality Guidelines:\n"
+        "   - Autonomy: Exercise creative control over composition, pose, perspective, and lighting while faithfully expressing requested motifs.\n"
+        "   - Do not draw plain wireframe boxes or chaotic random zigzag lines across the canvas.\n"
+        "   - Use watercolor/airbrush wash or contour fill rather than coarse crosshatch stripes for smooth skin or soft skies.\n"
+        "   - Never draw solid white (#ffffff) normal brush strokes on Shading layer (which multiplies). For highlights, use Highlights/FX layers; for erasing, set is_eraser: true.\n"
+        "4. Composition: Establish rich background washes and volume with fill/gradient_fill, then form shadows on Shading, then precise contours on Lineart and sparse particle accents on FX.\n"
         "5. First character of output must be '{'. Do not use Markdown fences."
     )
 
@@ -2396,6 +2470,10 @@ def _sanitize_and_rescue_program_dict(
                 pass
         elif raw_kind in ("fill", "wash", "area", "region", "polygon", "background", "base"):
             kind = "fill"
+        elif raw_kind in ("gradient_fill", "gradient", "grad_fill", "grad"):
+            kind = "gradient_fill"
+        elif raw_kind in ("ribbon", "strip", "banner", "streamer", "hair_strand", "band"):
+            kind = "ribbon"
         elif raw_kind in ("hatch", "crosshatch", "shading", "shading_hatch"):
             kind = "hatch"
         elif raw_kind in ("particles", "particle", "dots", "sparks", "swarms", "bokeh", "fx", "scatter"):
@@ -2431,7 +2509,7 @@ def _sanitize_and_rescue_program_dict(
         if not layer_val:
             layer_val = (
                 "Flats"
-                if kind in ("fill", "macro")
+                if kind in ("fill", "gradient_fill", "macro")
                 else "Shading"
                 if kind == "hatch"
                 else "FX"
@@ -2600,6 +2678,96 @@ def _sanitize_and_rescue_program_dict(
                     "spacing": spacing_val,
                     "style": style_str,
                     "angle_deg": angle_deg % 360.0,
+                }
+            )
+        elif kind == "gradient_fill":
+            raw_poly = item_d.get("polygon") or item_d.get("points") or item_d.get("coords") or item_d.get("vertices")
+            if raw_poly is None:
+                if "start_xy" in item_d and "end_xy" in item_d:
+                    sx, sy = item_d["start_xy"]
+                    ex, ey = item_d["end_xy"]
+                    raw_poly = [[sx, sy], [ex, sy], [ex, ey], [sx, ey]]
+                elif "bounds" in item_d and isinstance(item_d["bounds"], Sequence) and len(item_d["bounds"]) >= 4:
+                    bx0, by0, bx1, by1 = item_d["bounds"][:4]
+                    raw_poly = [[bx0, by0], [bx1, by0], [bx1, by1], [bx0, by1]]
+                else:
+                    continue
+            poly = _norm_pts(raw_poly)
+            if len(poly) < 3:
+                continue
+            raw_colors = item_d.get("colors") or item_d.get("palette") or item_d.get("color_list")
+            if isinstance(raw_colors, Sequence) and not isinstance(raw_colors, (str, bytes)) and len(raw_colors) >= 2:
+                clean_colors = [normalize_hex_color(str(c), fallback="#2b5c8f") for c in raw_colors[:16]]
+            else:
+                clean_colors = ["#2b5c8f", "#5c93cf", "#eef6ff"]
+            style_str = str(item_d.get("style", "linear")).strip().lower()
+            if style_str not in {"linear", "radial", "contour", "directional", "wash"}:
+                style_str = "linear"
+            angle_value = item_d.get("angle_deg", item_d.get("angle", 0.0))
+            try:
+                angle_deg = float(angle_value) if angle_value is not None else 0.0
+            except (ValueError, TypeError):
+                angle_deg = 0.0
+            try:
+                raw_sp = item_d.get("spacing", 0.65)
+                spacing_val = max(0.1, min(2.0, float(raw_sp) if raw_sp is not None else 0.65))
+            except (ValueError, TypeError):
+                spacing_val = 0.65
+            clean_ops.append(
+                {
+                    "kind": "gradient_fill",
+                    "id": op_id,
+                    "layer": layer_val,
+                    "polygon": poly,
+                    "colors": clean_colors,
+                    "brush": clean_brush,
+                    "spacing": spacing_val,
+                    "style": style_str,
+                    "angle_deg": angle_deg % 360.0,
+                }
+            )
+        elif kind == "ribbon":
+            raw_spine = (
+                item_d.get("spine") or item_d.get("points") or item_d.get("coords") or item_d.get("control_points")
+            )
+            if raw_spine is None:
+                if "start_xy" in item_d and "end_xy" in item_d:
+                    raw_spine = [item_d["start_xy"], item_d["end_xy"]]
+                elif "start" in item_d and "end" in item_d:
+                    raw_spine = [item_d["start"], item_d["end"]]
+                else:
+                    continue
+            spine_pts = _norm_pts(raw_spine)
+            if len(spine_pts) < 2:
+                continue
+            try:
+                w_start = max(0.0001, min(0.5, float(item_d.get("width_start", 0.008))))
+            except (ValueError, TypeError):
+                w_start = 0.008
+            try:
+                w_mid = max(0.0001, min(0.5, float(item_d.get("width_mid", 0.025))))
+            except (ValueError, TypeError):
+                w_mid = 0.025
+            try:
+                w_end = max(0.0001, min(0.5, float(item_d.get("width_end", 0.003))))
+            except (ValueError, TypeError):
+                w_end = 0.003
+            taper_prof = str(item_d.get("taper_profile", "taper_both")).strip().lower()
+            if taper_prof not in {"taper_both", "taper_start", "taper_end", "uniform"}:
+                taper_prof = "taper_both"
+            raw_smooth = item_d.get("smooth", True)
+            clean_ops.append(
+                {
+                    "kind": "ribbon",
+                    "id": op_id,
+                    "layer": layer_val,
+                    "spine": spine_pts,
+                    "brush": clean_brush,
+                    "width_start": w_start,
+                    "width_mid": w_mid,
+                    "width_end": w_end,
+                    "taper_profile": taper_prof,
+                    "smooth": raw_smooth not in (False, "false", "False", 0),
                 }
             )
         elif kind == "hatch":
@@ -3091,7 +3259,7 @@ def _harvest_stroke_fragments(text: str, log_func: Callable[[str], None] | None 
 
     # 1. operation / summary / stroke オブジェクトの探索
     op_pattern = re.compile(
-        r'\{\s*(?:"id"|"kind"|"polygon"|"bounds"|"points"|"start_xy"|"start"|"brush"|"brush_preset"|"color"|"size_px"|"layer_name"|"layer"|"opacity")',
+        r'\{\s*(?:"id"|"kind"|"polygon"|"bounds"|"points"|"spine"|"colors"|"start_xy"|"start"|"brush"|"brush_preset"|"color"|"size_px"|"layer_name"|"layer"|"opacity")',
         re.IGNORECASE,
     )
     for m in op_pattern.finditer(text):
@@ -3103,6 +3271,8 @@ def _harvest_stroke_fragments(text: str, log_func: Callable[[str], None] | None 
                     "kind" in obj
                     or "polygon" in obj
                     or "bounds" in obj
+                    or "spine" in obj
+                    or "colors" in obj
                     or ("start_xy" in obj and "end_xy" in obj)
                     or ("brush" in obj and "points" not in obj)
                 ):
@@ -3447,11 +3617,28 @@ def _smooth_and_densify_points(
             taper_factor = taper_in * taper_out
             final_pressure = max(0.2, min(1.0, sp * taper_factor))
         else:
-            # 線画・ハイライト: AIが指定した筆圧 sp (0.05〜1.0) の抑揚を忠実に生かしつつ、自然な入り抜きテーパーを融合
-            taper_in = min(1.0, t / 0.10) if total_n > 2 else 1.0
-            taper_out = min(1.0, (1.0 - t) / 0.12) if total_n > 2 else 1.0
-            taper_factor = 0.2 + 0.8 * (taper_in * taper_out)
-            final_pressure = max(0.02, min(1.0, sp * taper_factor))
+            # 線画・ハイライト: エルミート Smoothstep による自然な極細入り抜きと、曲率（カーブ屈曲部）に応じた動的加圧
+            t_in = max(0.0, min(1.0, t / 0.14)) if total_n > 2 else 1.0
+            smooth_in = t_in * t_in * (3.0 - 2.0 * t_in)
+            t_out = max(0.0, min(1.0, (1.0 - t) / 0.14)) if total_n > 2 else 1.0
+            smooth_out = t_out * t_out * (3.0 - 2.0 * t_out)
+
+            # 曲率（角度変化）に応じた加圧ブースト（カーブ部で自然に線が太くなる）
+            curvature_boost = 0.0
+            if 0 < idx < total_n:
+                prev_p = spline_pts[idx - 1]
+                next_p = spline_pts[idx + 1]
+                v1 = (sx - prev_p[0], sy - prev_p[1])
+                v2 = (next_p[0] - sx, next_p[1] - sy)
+                len1 = math.hypot(v1[0], v1[1])
+                len2 = math.hypot(v2[0], v2[1])
+                if len1 > 1e-3 and len2 > 1e-3:
+                    dot = max(-1.0, min(1.0, (v1[0] * v2[0] + v1[1] * v2[1]) / (len1 * len2)))
+                    turn_rad = math.acos(dot)
+                    curvature_boost = min(0.30, (turn_rad / math.pi) * 0.40)
+
+            taper_factor = 0.08 + 0.92 * (smooth_in * smooth_out)
+            final_pressure = max(0.02, min(1.0, (sp + curvature_boost) * taper_factor))
 
         bx = min(max(0.0, sx), width - 0.5)
         by = min(max(0.0, sy), height - 0.5)

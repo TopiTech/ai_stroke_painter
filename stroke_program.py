@@ -2559,16 +2559,84 @@ def _compile_macro(
     if any(k in name for k in ("character", "portrait", "face", "girl", "boy", "anime_face")):
         from .procedural.character import generate_character_strokes
 
-        # プロシージャル人物エンジンを呼び出し、要求サイズと位置にマッピング
-        char_strokes = generate_character_strokes(
-            prompt=operation.name,
-            seed=program.seed,
-            count=min(limit, 120),
+        # プロンプト、マクロ名、マクロパラメータを統合して属性を完全伝達
+        params_str = " ".join(f"{k} {v}" for k, v in operation.params.items() if isinstance(v, (str, int, float, bool)))
+        combined_prompt = f"{program.prompt} {operation.name} {params_str}".strip()
+        pal = program.metadata.get("palette", "anime")
+
+        raw_char_strokes = generate_character_strokes(
+            prompt=combined_prompt,
+            seed=program.seed + (operation_hash % 1000),
+            count=min(limit, 150),
             width=w,
             height=h,
-            palette_name=program.metadata.get("palette", "anime"),
+            palette_name=pal,
         )
-        return char_strokes
+
+        # マクロの center / radius に基づくスマート座標配置（Shift & Scale）
+        std_cx = w * 0.5
+        std_cy = h * 0.47
+        std_scale = min(w, h) * 0.85
+        target_scale = operation.radius * 2.0 * min(w, h)
+        scale_ratio = target_scale / max(1.0, std_scale) if operation.radius != 0.2 else 1.0
+        target_cx = cx
+        target_cy = cy
+
+        need_transform = (
+            abs(operation.center[0] - 0.5) > 0.01
+            or abs(operation.center[1] - 0.5) > 0.01
+            or abs(operation.radius - 0.2) > 0.01
+        )
+        if need_transform:
+            transformed: list[Stroke] = []
+            for st in raw_char_strokes:
+                new_points = [
+                    StrokePoint(
+                        x=target_cx + (pt.x - std_cx) * scale_ratio,
+                        y=target_cy + (pt.y - std_cy) * scale_ratio,
+                        pressure=pt.pressure,
+                        time_ms=pt.time_ms,
+                    )
+                    for pt in st.points
+                ]
+                transformed.append(
+                    replace(
+                        st,
+                        points=tuple(new_points),
+                        size_px=max(1.0, st.size_px * scale_ratio),
+                    )
+                )
+            return transformed
+        return raw_char_strokes
+
+    # -------------------------------------------------------------------------
+    # 6.5. 衣服のシワ・落ち影 (Clothing Folds / Drapery AO)
+    # -------------------------------------------------------------------------
+    if any(k in name for k in ("fold", "crease", "clothing", "drapery")):
+        fold_col = operation.colors[0] if operation.colors else "#1f2233"
+        f_strokes: list[Stroke] = []
+        for f_idx in range(min(limit, 8)):
+            ang_fold = math.radians(f_idx * 45.0 + rng.uniform(-10.0, 10.0))
+            f_len = r * (0.4 + rng.uniform(0.0, 0.4))
+            p_start = (cx + math.cos(ang_fold) * r * 0.2, cy + math.sin(ang_fold) * r * 0.2)
+            p_mid = (
+                p_start[0] + math.cos(ang_fold + 0.3) * f_len * 0.5,
+                p_start[1] + math.sin(ang_fold + 0.3) * f_len * 0.5,
+            )
+            p_end = (p_start[0] + math.cos(ang_fold) * f_len, p_start[1] + math.sin(ang_fold) * f_len)
+            f_pts = _catmull_rom_spline([p_start, p_mid, p_end], 6)
+            f_strokes.append(
+                _create_macro_stroke(
+                    stroke_id=uid("fold", f_idx),
+                    points=[(x, y, 0.85) for x, y in f_pts],
+                    profile="gpen",
+                    color=fold_col,
+                    size_px=max(2.0, scale * 0.004),
+                    layer_name="Shading",
+                    opacity=0.65,
+                )
+            )
+        return f_strokes
 
     # -------------------------------------------------------------------------
     # 7. 幾何学・都市・魔法陣 (Magic Circle / Cyber City)

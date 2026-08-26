@@ -22,9 +22,39 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .image_converter import sanitize_reference_image
+from .prompt_analyzer import analyze_prompt
 
 DEFAULT_OPENAI_IMAGES_URL = "https://api.openai.com/v1/images/generations"
 DEFAULT_SD_WEBUI_URL = "http://127.0.0.1:7860/sdapi/v1/txt2img"
+
+
+def enrich_prompt_for_illustration(prompt: str) -> str:
+    """ユーザープロンプトの意図・被写体を保持しつつ、高精細イラスト生成AI向けにエンリッチする。"""
+    clean_p = prompt.strip()
+    if not clean_p:
+        return clean_p
+    sem = analyze_prompt(clean_p)
+    elements: list[str] = [clean_p]
+
+    # 画風とクオリティ修飾子の付与
+    if sem.art_style == "anime":
+        elements.append("masterpiece, highly detailed anime illustration, crisp lineart, vibrant colors")
+    elif sem.art_style == "watercolor":
+        elements.append("masterpiece, transparent watercolor illustration, delicate brushstrokes, soft painterly wash")
+    elif sem.art_style == "manga":
+        elements.append("masterpiece, manga ink lineart, dramatic screen tone, high contrast monochrome")
+    elif sem.art_style == "cyberpunk":
+        elements.append("masterpiece, cyberpunk aesthetic, neon glow, cinematic sci-fi lighting, detailed cityscape")
+    else:
+        elements.append("masterpiece, best quality, professional digital illustration, sharp focus")
+
+    # 時間帯・ライティングのエンリッチ
+    if sem.environment.time_of_day == "sunset":
+        elements.append("golden hour sunset lighting, warm rim light, atmospheric dusk glow")
+    elif sem.environment.time_of_day == "night":
+        elements.append("night starlight ambiance, deep blue shadows, dramatic lighting")
+
+    return ", ".join(elements)
 
 
 class ImageGenerationError(RuntimeError):
@@ -280,15 +310,22 @@ class ImageGeneratorClient:
         if cancel_check and cancel_check():
             raise ImageGenerationError("画像生成がキャンセルされました")
 
-        self._log(f"画像生成リクエスト開始 [Provider: {provider}, Model: {self.settings.model}]...")
+        enriched_p = enrich_prompt_for_illustration(prompt)
+        self._log(
+            f"画像生成リクエスト開始 [Provider: {provider}, Model: {self.settings.model}] (高品質イラストプロンプト適用)..."
+        )
 
         if provider == "openai" or "openai.com" in endpoint:
-            return self._call_openai_images(endpoint, prompt, target_aspect=target_aspect, cancel_check=cancel_check)
+            return self._call_openai_images(
+                endpoint, enriched_p, target_aspect=target_aspect, cancel_check=cancel_check
+            )
         elif provider == "sd_webui" or "/sdapi/" in endpoint:
-            return self._call_sd_webui(endpoint, prompt, cancel_check=cancel_check)
+            return self._call_sd_webui(endpoint, enriched_p, cancel_check=cancel_check)
         else:
             # 汎用/OpenAI互換リクエストを試行
-            return self._call_openai_images(endpoint, prompt, target_aspect=target_aspect, cancel_check=cancel_check)
+            return self._call_openai_images(
+                endpoint, enriched_p, target_aspect=target_aspect, cancel_check=cancel_check
+            )
 
     def _call_openai_images(
         self,

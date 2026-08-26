@@ -11,6 +11,7 @@ import re
 import uuid
 
 from ..domain import Stroke
+from ..prompt_analyzer import analyze_prompt
 from .base import (
     catmull_rom_spline,
     color_palette,
@@ -20,6 +21,18 @@ from .base import (
     generate_highlight_stroke,
     sample_strokes_by_priority,
 )
+
+
+def _adjust_color_luminance(hex_str: str, factor: float) -> str:
+    """指定された16進カラーの輝度を調整する（factor < 1.0 で暗く、factor > 1.0 で明るく）。"""
+    h = hex_str.lstrip("#")
+    if len(h) == 6:
+        try:
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            return f"#{max(0, min(255, round(r * factor))):02x}{max(0, min(255, round(g * factor))):02x}{max(0, min(255, round(b * factor))):02x}"
+        except ValueError:
+            pass
+    return hex_str
 
 
 def generate_character_strokes(
@@ -34,8 +47,12 @@ def generate_character_strokes(
     rng = random.Random(seed)
     colors = color_palette(palette_name)
     normalized_prompt = prompt.casefold()
-    masculine_subject = bool(re.search(r"\b(?:boy|male|man|men|gentleman|hero)\b", normalized_prompt)) or any(
-        keyword in normalized_prompt for keyword in ("少年", "男の子", "男性", "男子", "青年", "ヒーロー")
+    sem = analyze_prompt(prompt)
+
+    masculine_subject = (
+        sem.character.gender == "male"
+        or bool(re.search(r"\b(?:boy|male|man|men|gentleman|hero)\b", normalized_prompt))
+        or any(keyword in normalized_prompt for keyword in ("少年", "男の子", "男性", "男子", "青年", "ヒーロー"))
     )
 
     cx = width * 0.5
@@ -1145,15 +1162,45 @@ def generate_character_strokes(
         )
     )
 
-    # (E) 口 (Mouth - 上品な微笑みラインと口角の結節点)
-    mouth_curve = catmull_rom_spline(
-        [
-            (cx - scale * 0.052, mouth_y),
-            (cx, mouth_y + scale * 0.010),
-            (cx + scale * 0.052, mouth_y),
-        ],
-        samples_per_segment=6,
-    )
+    # (E) 口 (Mouth - 表情に応じたラインと口角の結節点)
+    if sem.character.expression == "smile":
+        mouth_curve = catmull_rom_spline(
+            [
+                (cx - scale * 0.054, mouth_y - scale * 0.007),
+                (cx - scale * 0.026, mouth_y + scale * 0.012),
+                (cx, mouth_y + scale * 0.014),
+                (cx + scale * 0.026, mouth_y + scale * 0.012),
+                (cx + scale * 0.054, mouth_y - scale * 0.007),
+            ],
+            samples_per_segment=6,
+        )
+    elif sem.character.expression == "sad":
+        mouth_curve = catmull_rom_spline(
+            [
+                (cx - scale * 0.048, mouth_y + scale * 0.008),
+                (cx, mouth_y - scale * 0.004),
+                (cx + scale * 0.048, mouth_y + scale * 0.008),
+            ],
+            samples_per_segment=6,
+        )
+    elif sem.character.expression == "serious":
+        mouth_curve = catmull_rom_spline(
+            [
+                (cx - scale * 0.042, mouth_y),
+                (cx, mouth_y - scale * 0.002),
+                (cx + scale * 0.042, mouth_y),
+            ],
+            samples_per_segment=6,
+        )
+    else:
+        mouth_curve = catmull_rom_spline(
+            [
+                (cx - scale * 0.052, mouth_y),
+                (cx, mouth_y + scale * 0.010),
+                (cx + scale * 0.052, mouth_y),
+            ],
+            samples_per_segment=6,
+        )
     strokes.append(
         create_stroke(
             mouth_curve,
@@ -1325,18 +1372,193 @@ def generate_character_strokes(
         )
     )
 
+    # (G) 装飾品 - メガネ (Accessories: Glasses)
+    if "glasses" in sem.character.accessories:
+        frame_col = "#2a2228" if not masculine_subject else "#1e2229"
+        eye_w_g = scale * 0.082
+        eye_h_g = scale * 0.062
+        for side, side_name in ((-1.0, "l"), (1.0, "r")):
+            gcx = cx + side * eye_offset_x
+            gcy = eye_y + scale * 0.005
+            # オーバルフレーム
+            glass_pts = [
+                (gcx + math.cos(ang) * eye_w_g, gcy + math.sin(ang) * eye_h_g)
+                for ang in [i * (math.pi * 2 / 12) for i in range(13)]
+            ]
+            glass_spline = catmull_rom_spline(glass_pts, samples_per_segment=4)
+            strokes.append(
+                create_stroke(
+                    glass_spline,
+                    profile_type="marupen",
+                    base_pressure=0.88,
+                    color=frame_col,
+                    size_px=2.8,
+                    layer_name="Lineart",
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid(f"glasses_rim_{side_name}"),
+                )
+            )
+            # レンズの斜め光彩反射ハイライト
+            strokes.append(
+                create_stroke(
+                    [(gcx - eye_w_g * 0.45, gcy - eye_h_g * 0.45), (gcx + eye_w_g * 0.25, gcy + eye_h_g * 0.25)],
+                    profile_type="marupen",
+                    base_pressure=0.75,
+                    color="#ffffff",
+                    size_px=2.0,
+                    layer_name="Highlights",
+                    opacity=0.65,
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid(f"glasses_glint_{side_name}"),
+                )
+            )
+        # 左右フレームを繋ぐブリッジ線
+        bridge_pts = catmull_rom_spline(
+            [
+                (cx - eye_offset_x + eye_w_g, eye_y + scale * 0.002),
+                (cx, eye_y - scale * 0.003),
+                (cx + eye_offset_x - eye_w_g, eye_y + scale * 0.002),
+            ],
+            samples_per_segment=5,
+        )
+        strokes.append(
+            create_stroke(
+                bridge_pts,
+                profile_type="marupen",
+                base_pressure=0.9,
+                color=frame_col,
+                size_px=2.6,
+                layer_name="Lineart",
+                rng=rng,
+                width=width,
+                height=height,
+                stroke_id=uid("glasses_bridge"),
+            )
+        )
+
     # =========================================================================
     # 5. 髪型 (3-Layer Hair Volume - 後頭部・サイド・前髪束・後れ毛)
     # =========================================================================
     # (A) 後頭部・後ろ髪 (Back Hair Strands)
-    back_hair_count = 7 if not masculine_subject else 4
+    is_twintails = sem.character.hair_style == "twintails"
+    is_short_or_bob = sem.character.hair_style in ("bob", "short")
+
+    if is_twintails:
+        # ツインテール描画: 左右の頭部横から外側に広がり胸元へ下りるダイナミックな2大毛束
+        for side, side_name in ((-1.0, "l"), (1.0, "r")):
+            root_x = cx + side * scale * 0.22
+            root_y = cy - scale * 0.16
+            # 結び目リボン/ヘアゴム
+            knot_pts = [
+                (root_x - scale * 0.02, root_y - scale * 0.015),
+                (root_x + scale * 0.02, root_y + scale * 0.015),
+                (root_x, root_y),
+            ]
+            strokes.append(
+                create_stroke(
+                    knot_pts,
+                    profile_type="gpen",
+                    base_pressure=0.95,
+                    color=colors.get("cloth_main", "#ff4081"),
+                    size_px=5.0,
+                    layer_name="Lineart",
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid(f"twintail_knot_{side_name}"),
+                )
+            )
+            # ツインテール下塗り (Flats)
+            for t_i in range(3):
+                t_off = (t_i - 1.0) * scale * 0.025
+                tail_flat_pts = catmull_rom_spline(
+                    [
+                        (root_x, root_y),
+                        (root_x + side * scale * (0.16 + t_off), cy + scale * 0.02),
+                        (root_x + side * scale * (0.18 + t_off), cy + scale * 0.22),
+                        (root_x + side * scale * 0.06, cy + scale * 0.44),
+                    ],
+                    samples_per_segment=8,
+                )
+                strokes.append(
+                    create_stroke(
+                        tail_flat_pts,
+                        profile_type="marker",
+                        base_pressure=0.9,
+                        color=colors["hair_main"],
+                        size_px=14.0,
+                        layer_name="Flats",
+                        opacity=0.88,
+                        rng=rng,
+                        width=width,
+                        height=height,
+                        stroke_id=uid(f"twintail_flat_{side_name}", t_i),
+                    )
+                )
+            # ツインテール輪郭・毛流れ (Lineart)
+            for t_i in range(4):
+                t_off = (t_i - 1.5) * scale * 0.02
+                tail_line_pts = catmull_rom_spline(
+                    [
+                        (root_x + t_off * 0.5, root_y),
+                        (root_x + side * scale * (0.17 + t_off), cy + scale * 0.03),
+                        (root_x + side * scale * (0.19 + t_off), cy + scale * 0.24),
+                        (root_x + side * scale * (0.07 + t_off * 0.4), cy + scale * 0.45),
+                    ],
+                    samples_per_segment=9,
+                )
+                strokes.append(
+                    create_stroke(
+                        tail_line_pts,
+                        profile_type="gpen",
+                        base_pressure=0.92,
+                        color=colors["hair_shadow"] if t_i % 2 == 0 else colors["hair_main"],
+                        size_px=5.5,
+                        layer_name="Lineart",
+                        rng=rng,
+                        width=width,
+                        height=height,
+                        stroke_id=uid(f"twintail_line_{side_name}", t_i),
+                    )
+                )
+            # ツインテールハイライト (Highlights)
+            tail_hl_pts = catmull_rom_spline(
+                [
+                    (root_x + side * scale * 0.12, cy - scale * 0.04),
+                    (root_x + side * scale * 0.17, cy + scale * 0.08),
+                    (root_x + side * scale * 0.15, cy + scale * 0.18),
+                ],
+                samples_per_segment=7,
+            )
+            strokes.append(
+                create_stroke(
+                    tail_hl_pts,
+                    profile_type="marupen",
+                    base_pressure=0.8,
+                    color=colors["hair_highlight"],
+                    size_px=3.5,
+                    layer_name="Highlights",
+                    opacity=0.85,
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid(f"twintail_hl_{side_name}"),
+                )
+            )
+
+    back_hair_count = 3 if is_short_or_bob else (4 if is_twintails else (7 if not masculine_subject else 4))
+    back_hair_reach = 0.08 if is_short_or_bob else (0.28 if is_twintails else (0.42 if not masculine_subject else 0.15))
     for i in range(back_hair_count):
         p_offset = (i - (back_hair_count - 1) / 2) * scale * 0.075
         back_hair = catmull_rom_spline(
             [
                 (cx + p_offset * 0.6, cy - scale * 0.28),
                 (cx + p_offset * 1.1, cy + scale * 0.05),
-                (cx + p_offset * 1.3, cy + scale * (0.42 if not masculine_subject else 0.15)),
+                (cx + p_offset * 1.3, cy + scale * back_hair_reach),
             ],
             samples_per_segment=8,
         )

@@ -1206,6 +1206,15 @@ class AIStrokePainterDocker(DockWidget):
         self.custom_instructions.setToolTip("システムプロンプトに追加されるユーザー独自の描画指示")
         llm_form.addRow("追加カスタム指示", self.custom_instructions)
 
+        self.autonomy_mode = QComboBox()
+        self.autonomy_mode.addItem("クリエイティブ (高自由度・構図自律決定)", "creative")
+        self.autonomy_mode.addItem("バランス (プロンプト重視・柔軟作画)", "balanced")
+        self.autonomy_mode.addItem("テンプレート準拠 (固定構図・固定比率)", "template")
+        self.autonomy_mode.setToolTip(
+            "LLMによるイラスト作画の自律度。クリエイティブでは構図やポーズ、直接プリミティブ作画を最大限に解放します"
+        )
+        llm_form.addRow("作画の自律度", self.autonomy_mode)
+
         self.fallback_to_procedural = QCheckBox("API失敗時にオフライン生成へフォールバック")
         self.fallback_to_procedural.setChecked(False)
         self.fallback_to_procedural.setToolTip("有効時のみ、LLM生成に失敗した場合にプロシージャル描画へ切り替えます")
@@ -1947,6 +1956,7 @@ class AIStrokePainterDocker(DockWidget):
         restore("top_p", lambda value: set_number("top_p", value, float))
         restore("vision_res", lambda value: set_combo("vision_res", value, int))
         restore("custom_instructions", lambda value: set_text("custom_instructions", value))
+        restore("autonomy_mode", lambda value: set_combo("autonomy_mode", value))
         restore("fallback_to_procedural", lambda value: set_checked("fallback_to_procedural", value))
         restore("prompt", lambda value: set_text("prompt", value, plain=True))
         restore("seed", lambda value: set_number("seed", value, int))
@@ -2023,6 +2033,9 @@ class AIStrokePainterDocker(DockWidget):
             w = _get_attr(self, "custom_instructions")
             if w is not None and hasattr(w, "text"):
                 settings.setValue("custom_instructions", w.text())
+            w = _get_attr(self, "autonomy_mode")
+            if w is not None and hasattr(w, "currentData"):
+                settings.setValue("autonomy_mode", w.currentData() or "creative")
             w = _get_attr(self, "fallback_to_procedural")
             if w is not None and hasattr(w, "isChecked"):
                 settings.setValue("fallback_to_procedural", w.isChecked())
@@ -2273,6 +2286,7 @@ class AIStrokePainterDocker(DockWidget):
             temp_w = _get_attr(self, "temperature")
             top_w = _get_attr(self, "top_p")
             cust_w = _get_attr(self, "custom_instructions")
+            auto_w = _get_attr(self, "autonomy_mode")
             vres_w = _get_attr(self, "vision_res")
 
             base_url_val = b_w.text() if b_w is not None and hasattr(b_w, "text") else ""
@@ -2284,6 +2298,11 @@ class AIStrokePainterDocker(DockWidget):
             temp_val = float(temp_w.value()) if temp_w is not None and hasattr(temp_w, "value") else 0.7
             top_p_val = float(top_w.value()) if top_w is not None and hasattr(top_w, "value") else 1.0
             custom_val = cust_w.text().strip() if cust_w is not None and hasattr(cust_w, "text") else ""
+            autonomy_val = (
+                str(auto_w.currentData() or "creative")
+                if auto_w is not None and hasattr(auto_w, "currentData")
+                else "creative"
+            )
             vres_val = (
                 int(vres_w.currentData() or 512) if vres_w is not None and hasattr(vres_w, "currentData") else 512
             )
@@ -2299,6 +2318,7 @@ class AIStrokePainterDocker(DockWidget):
                     temperature=temp_val,
                     top_p=top_p_val,
                     custom_system_prompt=custom_val,
+                    autonomy_mode=autonomy_val,
                     vision_resolution=vres_val,
                 ),
             )
@@ -2456,6 +2476,7 @@ class AIStrokePainterDocker(DockWidget):
         temp_w = _get_attr(self, "temperature")
         top_w = _get_attr(self, "top_p")
         cust_w = _get_attr(self, "custom_instructions")
+        auto_w = _get_attr(self, "autonomy_mode")
         vres_w = _get_attr(self, "vision_res")
         fallback_w = _get_attr(self, "fallback_to_procedural")
 
@@ -2468,10 +2489,15 @@ class AIStrokePainterDocker(DockWidget):
         temp_val = float(temp_w.value()) if temp_w is not None and hasattr(temp_w, "value") else 0.70
         top_p_val = float(top_w.value()) if top_w is not None and hasattr(top_w, "value") else 1.0
         custom_val = cust_w.text().strip() if cust_w is not None and hasattr(cust_w, "text") else ""
+        autonomy_val = (
+            str(auto_w.currentData() or "creative")
+            if auto_w is not None and hasattr(auto_w, "currentData")
+            else "creative"
+        )
         vres = int(vres_w.currentData() or 512) if vres_w is not None and hasattr(vres_w, "currentData") else 512
 
         self._log_debug(
-            f"[エンジン選択] OpenAI 互換 API (Base URL: {_safe_endpoint_label(base_url_val)}, Model: {model_val}, MaxTokens: {max_tokens_val}, ReasoningEffort: {effort_val}, Temp: {temp_val:.2f}, TopP: {top_p_val:.2f}, VisionRes: {vres})"
+            f"[エンジン選択] OpenAI 互換 API (Base URL: {_safe_endpoint_label(base_url_val)}, Model: {model_val}, Autonomy: {autonomy_val}, MaxTokens: {max_tokens_val}, ReasoningEffort: {effort_val}, Temp: {temp_val:.2f}, TopP: {top_p_val:.2f}, VisionRes: {vres})"
         )
         return OpenAICompatiblePlanner(
             OpenAICompatibleSettings(
@@ -2484,6 +2510,7 @@ class AIStrokePainterDocker(DockWidget):
                 temperature=temp_val,
                 top_p=top_p_val,
                 custom_system_prompt=custom_val,
+                autonomy_mode=autonomy_val,
                 vision_resolution=vres,
                 fallback_to_procedural=(
                     fallback_w.isChecked() if fallback_w is not None and hasattr(fallback_w, "isChecked") else False
@@ -2533,6 +2560,7 @@ class AIStrokePainterDocker(DockWidget):
             "image_color_mode",
             "t2i_settings",
             "llm_settings",
+            "autonomy_mode",
             "save_json",
             "save_svg_chk",
             "confirm_before_apply",

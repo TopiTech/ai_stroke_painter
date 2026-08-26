@@ -1674,6 +1674,94 @@ class OpenAICompatiblePlannerTests(unittest.TestCase):
         self.assertIn("Step 3/3", step3)
         self.assertIn("FINAL", step3)
 
+    def test_autonomy_mode_system_instruction_and_settings(self) -> None:
+        from ai_stroke_painter.llm_planner import OpenAICompatibleSettings, _system_instruction
+
+        # Settings validation
+        cfg_creative = OpenAICompatibleSettings("https://example.test/v1", "model", autonomy_mode="creative")
+        self.assertEqual(cfg_creative.autonomy_mode, "creative")
+
+        cfg_balanced = OpenAICompatibleSettings("https://example.test/v1", "model", autonomy_mode="balanced")
+        self.assertEqual(cfg_balanced.autonomy_mode, "balanced")
+
+        cfg_template = OpenAICompatibleSettings("https://example.test/v1", "model", autonomy_mode="template")
+        self.assertEqual(cfg_template.autonomy_mode, "template")
+
+        with self.assertRaises(ValueError):
+            OpenAICompatibleSettings("https://example.test/v1", "model", autonomy_mode="unsupported_mode")
+
+        # System instruction in creative mode
+        inst_creative = _system_instruction(
+            iteration=1,
+            max_iterations=1,
+            prompt="anime girl portrait with delicate eyes",
+            autonomy_mode="creative",
+        )
+        self.assertIn("CREATIVE ANATOMY & DYNAMIC COMPOSITION", inst_creative)
+        self.assertNotIn("Face Center X: 0.50", inst_creative)
+        self.assertIn("full creative autonomy", inst_creative)
+
+        # System instruction in template mode
+        inst_template = _system_instruction(
+            iteration=1,
+            max_iterations=1,
+            prompt="anime girl portrait with delicate eyes",
+            autonomy_mode="template",
+        )
+        self.assertIn("STRICT SPATIAL FACIAL ANCHORS", inst_template)
+        self.assertIn("Face Center X: 0.50", inst_template)
+
+    def test_rescue_and_harvest_ribbon_and_gradient_fill(self) -> None:
+        from ai_stroke_painter.llm_planner import _harvest_stroke_fragments, _sanitize_and_rescue_program_dict
+
+        raw_prog = {
+            "schema_version": 2,
+            "prompt": "sunset ribbon and sky",
+            "operations": [
+                {
+                    "kind": "gradient_fill",
+                    "id": "sky_grad",
+                    "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.0, 0.5]],
+                    "colors": ["#4a1c40", "#f8a846"],
+                    "style": "linear",
+                    "angle_deg": 90.0,
+                },
+                {
+                    "kind": "ribbon",
+                    "id": "hair_ribbon",
+                    "spine": [[0.3, 0.2], [0.35, 0.5], [0.4, 0.8]],
+                    "width_start": 0.01,
+                    "width_mid": 0.03,
+                    "width_end": 0.005,
+                    "taper_profile": "taper_both",
+                },
+            ],
+        }
+        rescued = _sanitize_and_rescue_program_dict(raw_prog, 1000.0, 1000.0)
+        self.assertEqual(len(rescued["operations"]), 2)
+        op_grad = rescued["operations"][0]
+        self.assertEqual(op_grad["kind"], "gradient_fill")
+        self.assertEqual(op_grad["colors"], ["#4a1c40", "#f8a846"])
+        self.assertEqual(op_grad["style"], "linear")
+
+        op_ribbon = rescued["operations"][1]
+        self.assertEqual(op_ribbon["kind"], "ribbon")
+        self.assertEqual(len(op_ribbon["spine"]), 3)
+        self.assertAlmostEqual(op_ribbon["width_mid"], 0.03)
+
+        # Harvest from truncated / unclosed text
+        broken_text = (
+            "Here is the art program:\n"
+            '{"id":"sky_op","kind":"gradient_fill","polygon":[[0,0],[1,0],[1,0.6],[0,0.6]],"colors":["#112233","#ffffff"]}\n'
+            '{"id":"ribbon_op","kind":"ribbon","spine":[[0.2,0.3],[0.5,0.7]],"width_start":0.01}\n'
+        )
+        harvested = _harvest_stroke_fragments(broken_text)
+        self.assertIsNotNone(harvested)
+        assert harvested is not None
+        self.assertEqual(len(harvested["operations"]), 2)
+        self.assertEqual(harvested["operations"][0]["kind"], "gradient_fill")
+        self.assertEqual(harvested["operations"][1]["kind"], "ribbon")
+
     def test_multi_stage_conversation_history_and_visual_feedback(self) -> None:
         received_payloads: list[dict[str, Any]] = []
 
@@ -8576,6 +8664,61 @@ class CodeReviewEnhancementTests(unittest.TestCase):
         with patch("ai_stroke_painter.docker._safe_get_open_filename", return_value=("", "")):
             docker._select_reference_image()  # Must not raise
             self.assertIsNone(docker._image_bytes)
+
+
+class PromptAnalyzerTests(unittest.TestCase):
+    """プロンプト意味解析およびイラストプロンプト自動エンリッチの単体テスト。"""
+
+    def test_semantic_prompt_analyzer_english(self) -> None:
+        from .prompt_analyzer import analyze_prompt
+
+        sem = analyze_prompt(
+            "a cute smiling anime girl with blonde twintails and blue eyes wearing sailor uniform and glasses at sunset"
+        )
+        self.assertEqual(sem.character.gender, "female")
+        self.assertEqual(sem.character.hair_style, "twintails")
+        self.assertEqual(sem.character.hair_color, "#e7bd55")
+        self.assertEqual(sem.character.eye_color, "#4776d0")
+        self.assertEqual(sem.character.expression, "smile")
+        self.assertEqual(sem.character.costume, "sailor")
+        self.assertIn("glasses", sem.character.accessories)
+        self.assertEqual(sem.environment.time_of_day, "sunset")
+        self.assertEqual(sem.art_style, "anime")
+        self.assertIn("TWINTAILS", sem.to_directive_text())
+        self.assertIn("SUNSET", sem.to_directive_text())
+
+    def test_semantic_prompt_analyzer_japanese(self) -> None:
+        from .prompt_analyzer import analyze_prompt
+
+        sem = analyze_prompt("夕暮れの教室にいる黒髪ショートの笑顔の女子高生、メガネ着用")
+        self.assertEqual(sem.character.gender, "female")
+        self.assertEqual(sem.character.hair_style, "short")
+        self.assertEqual(sem.character.hair_color, "#292632")
+        self.assertEqual(sem.character.expression, "smile")
+        self.assertEqual(sem.character.costume, "school_uniform")
+        self.assertIn("glasses", sem.character.accessories)
+        self.assertEqual(sem.environment.setting, "classroom")
+        self.assertEqual(sem.environment.time_of_day, "sunset")
+
+    def test_unspecified_attributes_do_not_force_defaults(self) -> None:
+        from .prompt_analyzer import analyze_prompt
+
+        sem = analyze_prompt("a warrior standing on a mountain peak")
+        self.assertEqual(sem.character.gender, "unspecified")
+        self.assertEqual(sem.character.view_angle, "auto")
+        self.assertIsNone(sem.character.hair_color)
+        self.assertIsNone(sem.character.eye_color)
+        directive = sem.to_directive_text()
+        self.assertNotIn("Gender: female", directive)
+        self.assertNotIn("Angle/Perspective: front", directive)
+        self.assertIn("Creative Autonomy", directive)
+
+    def test_prompt_enrichment_for_image_generation(self) -> None:
+        from .image_generator import enrich_prompt_for_illustration
+
+        enriched = enrich_prompt_for_illustration("anime girl smiling at sunset")
+        self.assertIn("masterpiece", enriched)
+        self.assertIn("golden hour sunset lighting", enriched)
 
 
 def run() -> bool:

@@ -23,6 +23,7 @@ PACKAGE_FILES = (
     "native_bridge.py",
     "planner.py",
     "ports.py",
+    "prompt_analyzer.py",
     "quality.py",
     "quality_check.py",
     "qt_compat.py",
