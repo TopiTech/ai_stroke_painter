@@ -1958,7 +1958,7 @@ def _sanitize_json_text(text: str) -> str:
     s = re.sub(r"([{,]\s*)([a-zA-Z_][a-zA-Z0-9_-]*)\s*:", r'\1"\2":', s)
 
     # 7. 数値末尾の単位サフィックス除去 (e.g. "size": 200px -> "size": 200, "angle": 30deg -> 30, "opacity": 50% -> 0.5)
-    s = re.sub(r"(:\s*-?\d+(?:\.\d+)?)\s*%\b", lambda m: f": {float(m.group(1).split(':')[1].strip()) / 100.0}", s)
+    s = re.sub(r"(:\s*-?\d+(?:\.\d+)?)\s*%(?!\w)", lambda m: f": {float(m.group(1).split(':')[1].strip()) / 100.0}", s)
     s = re.sub(r"(:\s*-?\d+(?:\.\d+)?)\s*(?:px|pt|deg|rad)\b", r"\1", s)
 
     # 8. 安全なシングルクォートキー・値の変換（単語内アポストロフィ don't / let's 等の破壊防止）

@@ -1875,6 +1875,27 @@ class AIStrokePainterDocker(DockWidget):
         w = _get_attr(self, "custom_instructions")
         if w is not None and hasattr(w, "setText"):
             w.setText("")
+        w = _get_attr(self, "autonomy_mode")
+        if w is not None and hasattr(w, "setCurrentIndex"):
+            w.setCurrentIndex(0)
+        w = _get_attr(self, "t2i_provider")
+        if w is not None and hasattr(w, "setCurrentIndex"):
+            w.setCurrentIndex(0)
+        w = _get_attr(self, "t2i_endpoint")
+        if w is not None and hasattr(w, "setText"):
+            w.setText("https://api.openai.com/v1/images/generations")
+        w = _get_attr(self, "t2i_model")
+        if w is not None and hasattr(w, "setText"):
+            w.setText("dall-e-3")
+        w = _get_attr(self, "t2i_api_key")
+        if w is not None and hasattr(w, "clear"):
+            w.clear()
+        w = _get_attr(self, "t2i_size")
+        if w is not None and hasattr(w, "setCurrentIndex"):
+            w.setCurrentIndex(0)
+        w = _get_attr(self, "t2i_negative_prompt")
+        if w is not None and hasattr(w, "setText"):
+            w.setText("")
         w = _get_attr(self, "fallback_to_procedural")
         if w is not None and hasattr(w, "setChecked"):
             w.setChecked(False)
@@ -2728,10 +2749,6 @@ class AIStrokePainterDocker(DockWidget):
                 prev_w_initial.clear_plan()
 
         try:
-            canvas_port = _get_attr(self, "canvas_port")
-            if canvas_port is not None and hasattr(canvas_port, "begin_render_session"):
-                canvas_port.begin_render_session(document)
-                self._canvas_session_open = True
             planner = self._planner()
             prompt_w = _get_attr(self, "prompt")
             seed_w = _get_attr(self, "seed")
@@ -2951,6 +2968,14 @@ class AIStrokePainterDocker(DockWidget):
 
             if self.is_cancelled():
                 return
+
+            if (
+                not bool(_get_attr(self, "_canvas_session_open", False))
+                and cp is not None
+                and hasattr(cp, "begin_render_session")
+            ):
+                cp.begin_render_session(document)
+                self._canvas_session_open = True
 
             paths: list[str] = []
             export_errors: list[str] = []

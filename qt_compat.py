@@ -394,6 +394,9 @@ if not HAS_QT:
         def setText(self, text: str) -> None:
             self._text = text
 
+        def clear(self) -> None:
+            self._text = ""
+
         def setPlaceholderText(self, *args: Any) -> None:
             pass
 

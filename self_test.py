@@ -8721,6 +8721,131 @@ class PromptAnalyzerTests(unittest.TestCase):
         self.assertIn("golden hour sunset lighting", enriched)
 
 
+class SeniorReviewRegressionTests(unittest.TestCase):
+    """自律レビューで特定された実害・運用リスク (R1-R4) に対する回帰テスト。"""
+
+    _app: Any = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if hasattr(QApplication, "instance"):
+            cls._app = QApplication.instance()
+            if cls._app is None:
+                with contextlib.suppress(Exception):
+                    cls._app = QApplication(["test", "-platform", "offscreen"])
+
+    def test_r1_session_starts_only_on_actual_apply(self) -> None:
+        """R1: プレビュー確認待機中はUndoマクロが開かず、適用時に初めて開始されること。"""
+        docker = AIStrokePainterDocker()
+        docker.confirm_before_apply.setChecked(True)
+
+        session_begun: list[bool] = []
+
+        class FakePort:
+            def begin_render_session(self, doc: Any) -> None:
+                session_begun.append(True)
+
+            def render(self, *args: Any, **kwargs: Any) -> int:
+                return 1
+
+        docker.canvas_port = FakePort()  # type: ignore[assignment]
+        plan = DrawingPlan(
+            prompt="test",
+            seed=42,
+            strokes=(
+                Stroke(
+                    id="s1",
+                    points=(
+                        StrokePoint(x=10.0, y=10.0, pressure=0.5, time_ms=0),
+                        StrokePoint(x=20.0, y=20.0, pressure=0.5, time_ms=10),
+                    ),
+                    brush_preset="gpen",
+                    color="#000000",
+                    size_px=2.0,
+                    layer_name="Lineart",
+                ),
+            ),
+            canvas_width=100.0,
+            canvas_height=100.0,
+            iteration=1,
+        )
+
+        class FakeDoc:
+            def width(self) -> int:
+                return 100
+
+            def height(self) -> int:
+                return 100
+
+        docker._active_doc = FakeDoc()
+        # 計画準備完了 -> プレビュー確認待ちになる
+        docker._on_plan_ready(plan)
+        self.assertIsNotNone(docker._pending_plan)
+        self.assertEqual(len(session_begun), 0, "プレビュー確認待機中にセッションが開かれてはならない")
+
+        # 適用ボタン押下
+        docker._apply_pending_plan()
+        self.assertEqual(len(session_begun), 1, "適用時に初めてセッションが開始される必要がある")
+
+    def test_r2_sanitize_json_text_percent_suffix(self) -> None:
+        """R2: _sanitize_json_text がカンマや空白直前のパーセント単位を除去・変換できること。"""
+        from .llm_planner import _sanitize_json_text
+
+        raw_json = '{\n  "opacity": 50%,\n  "size": 20px,\n  "ratio": 100%,\n  "sub": 25.5%\n}'
+        sanitized = _sanitize_json_text(raw_json)
+        self.assertNotIn("%", sanitized)
+        parsed = json.loads(sanitized)
+        self.assertAlmostEqual(parsed["opacity"], 0.5)
+        self.assertEqual(parsed["size"], 20)
+        self.assertAlmostEqual(parsed["ratio"], 1.0)
+        self.assertAlmostEqual(parsed["sub"], 0.255)
+
+    def test_r3_reset_to_defaults_resets_t2i_and_autonomy(self) -> None:
+        """R3: _reset_to_defaults が T2I 設定 6 項目および autonomy_mode を初期値に戻すこと。"""
+        docker = AIStrokePainterDocker()
+        docker.t2i_provider.setCurrentIndex(1)
+        docker.t2i_endpoint.setText("http://127.0.0.1:7860/sdapi/v1/txt2img")
+        docker.t2i_model.setText("custom-model")
+        docker.t2i_api_key.setText("secret-key")
+        docker.t2i_size.setCurrentIndex(2)
+        docker.t2i_negative_prompt.setText("ugly, blurry")
+        docker.autonomy_mode.setCurrentIndex(2)
+
+        with patch("ai_stroke_painter.docker._confirm", return_value=True):
+            docker._reset_to_defaults()
+
+        self.assertEqual(docker.t2i_provider.currentIndex(), 0)
+        self.assertEqual(docker.t2i_endpoint.text(), "https://api.openai.com/v1/images/generations")
+        self.assertEqual(docker.t2i_model.text(), "dall-e-3")
+        self.assertEqual(docker.t2i_api_key.text(), "")
+        self.assertEqual(docker.t2i_size.currentIndex(), 0)
+        self.assertEqual(docker.t2i_negative_prompt.text(), "")
+        self.assertEqual(docker.autonomy_mode.currentIndex(), 0)
+
+    def test_r4_capture_layer_snapshot_avoids_full_bytes_copy(self) -> None:
+        """R4: _capture_layer_snapshot が不要な bytes コピーを回避し上限チェックを行うこと。"""
+        from .krita_adapter import MAX_ACTIVE_LAYER_SNAPSHOT_BYTES, _capture_layer_snapshot
+
+        class FakeDoc:
+            def width(self) -> int:
+                return 100
+
+            def height(self) -> int:
+                return 100
+
+        class FakeNode:
+            def pixelData(self, x: int, y: int, w: int, h: int) -> bytes:
+                # 許容上限 + 1 バイト
+                return b"\x00" * (MAX_ACTIVE_LAYER_SNAPSHOT_BYTES + 1)
+
+            def setPixelData(self, pixels: bytes, x: int, y: int, w: int, h: int) -> None:
+                pass
+
+        with self.assertRaises(RuntimeError) as ctx:
+            _capture_layer_snapshot(FakeDoc(), FakeNode())
+        self.assertIn("上限を超えています", str(ctx.exception))
+
+
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))
     result = unittest.TextTestRunner(verbosity=2).run(suite)

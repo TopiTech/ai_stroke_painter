@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sized
 import contextlib
 from dataclasses import dataclass
 import hashlib
 import math
 import re
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
 from .brushes import brush_definition, infer_brush_profile
 from .domain import LAYER_RENDER_ORDER, Stroke, split_color_alpha
@@ -832,7 +832,8 @@ def _capture_layer_snapshot(
     if pixels is None:
         raise RuntimeError("アクティブレイヤーのロールバック用スナップショットが空です")
     with contextlib.suppress(TypeError, ValueError):
-        if len(bytes(cast(Any, pixels))) > MAX_ACTIVE_LAYER_SNAPSHOT_BYTES:
+        pixel_len = len(pixels) if isinstance(pixels, Sized) else getattr(pixels, "size", lambda: 0)()
+        if pixel_len > MAX_ACTIVE_LAYER_SNAPSHOT_BYTES:
             raise RuntimeError("アクティブレイヤーのスナップショットが安全なメモリ上限を超えています")
     return _LayerSnapshot(node=node, pixels=pixels, x=x, y=y, width=width, height=height)
 
