@@ -443,7 +443,49 @@ class ParticleOperation:
         object.__setattr__(self, "shape", self.shape.strip().lower())
 
 
-ProgramOperation: TypeAlias = PathOperation | FillOperation | HatchOperation | ParticleOperation
+@dataclass(frozen=True)
+class MacroOperation:
+    """花房・樹木分岐・山並み・水彩ウォッシュ等のプロシージャル高水準アート・プリミティブ。"""
+
+    id: str
+    name: str
+    brush: ProgramBrush = field(default_factory=lambda: ProgramBrush(profile="brush"))
+    layer: str = "Flats"
+    center: tuple[float, float] = (0.5, 0.5)
+    radius: float = 0.2
+    bounds: tuple[float, float, float, float] = (0.0, 0.0, 1.0, 1.0)
+    polygon: Sequence[ProgramPoint] = ()
+    colors: Sequence[str] = ()
+    params: Mapping[str, Any] = field(default_factory=dict)
+    kind: Literal["macro"] = "macro"
+
+    def __post_init__(self) -> None:
+        _validate_operation_common(self.id, self.layer, self.brush)
+        if not isinstance(self.name, str) or not self.name.strip():
+            raise PlanValidationError("macro name は空でない文字列である必要があります")
+        object.__setattr__(self, "name", self.name.strip().lower())
+        if len(self.center) != 2:
+            raise PlanValidationError("macro center は x,y の2要素である必要があります")
+        cx, cy = (_unit(v, "macro center") for v in self.center)
+        object.__setattr__(self, "center", (cx, cy))
+        radius = _finite(self.radius, "macro radius")
+        if not 0.001 <= radius <= 2.0:
+            raise PlanValidationError("macro radius は 0.001 から 2.0 の範囲である必要があります")
+        object.__setattr__(self, "radius", radius)
+        if len(self.bounds) != 4:
+            raise PlanValidationError("macro bounds は x0,y0,x1,y1 の4要素である必要があります")
+        x0, y0, x1, y1 = (_unit(v, "macro bounds") for v in self.bounds)
+        if x1 <= x0 or y1 <= y0:
+            raise PlanValidationError("macro bounds の終点は始点より大きい必要があります")
+        object.__setattr__(self, "bounds", (x0, y0, x1, y1))
+        object.__setattr__(self, "polygon", tuple(self.polygon))
+        object.__setattr__(self, "colors", tuple(normalize_hex_color(c) for c in self.colors))
+        if not isinstance(self.params, Mapping):
+            raise PlanValidationError("macro params はオブジェクトである必要があります")
+        object.__setattr__(self, "params", dict(self.params))
+
+
+ProgramOperation: TypeAlias = PathOperation | FillOperation | HatchOperation | ParticleOperation | MacroOperation
 
 
 def _validate_operation_common(operation_id: str, layer: str, brush: ProgramBrush) -> None:
@@ -596,6 +638,101 @@ def operation_from_dict(
             angle_jitter=value.get("angle_jitter", 35.0),
             shape=value.get("shape", "petal"),
         )
+    if kind in (
+        "macro",
+        "flower_cluster",
+        "sakura_canopy",
+        "branch_tree",
+        "mountain_range",
+        "watercolor_wash",
+        "rose_bloom",
+        "wildflower",
+    ):
+        macro_name = str(value.get("name", kind if kind != "macro" else "flower_cluster")).strip().lower()
+        raw_center = value.get("center", (0.5, 0.5))
+        if isinstance(raw_center, Sequence) and not isinstance(raw_center, (str, bytes)) and len(raw_center) >= 2:
+            try:
+                cx_val = float(raw_center[0])
+                cy_val = float(raw_center[1])
+                if cx_val > 1.0 and canvas_w > 1.0:
+                    cx_val /= canvas_w
+                if cy_val > 1.0 and canvas_h > 1.0:
+                    cy_val /= canvas_h
+                center_tuple = (max(0.0, min(1.0, cx_val)), max(0.0, min(1.0, cy_val)))
+            except (ValueError, TypeError):
+                center_tuple = (0.5, 0.5)
+        else:
+            center_tuple = (0.5, 0.5)
+
+        raw_radius = value.get("radius", value.get("r", 0.2))
+        try:
+            r_num = float(raw_radius)
+            if r_num > 1.0 and min(canvas_w, canvas_h) > 1.0:
+                r_num /= min(canvas_w, canvas_h)
+            radius_val = max(0.001, min(2.0, r_num))
+        except (ValueError, TypeError):
+            radius_val = 0.2
+
+        raw_bounds = value.get("bounds", (0.0, 0.0, 1.0, 1.0))
+        if isinstance(raw_bounds, Sequence) and not isinstance(raw_bounds, (str, bytes)) and len(raw_bounds) >= 4:
+            try:
+                b_x0, b_y0, b_x1, b_y1 = (
+                    float(raw_bounds[0]),
+                    float(raw_bounds[1]),
+                    float(raw_bounds[2]),
+                    float(raw_bounds[3]),
+                )
+                if b_x0 > 1.0 and canvas_w > 1.0:
+                    b_x0 /= canvas_w
+                if b_y0 > 1.0 and canvas_h > 1.0:
+                    b_y0 /= canvas_h
+                if b_x1 > 1.0 and canvas_w > 1.0:
+                    b_x1 /= canvas_w
+                if b_y1 > 1.0 and canvas_h > 1.0:
+                    b_y1 /= canvas_h
+                b_x0, b_y0, b_x1, b_y1 = (
+                    max(0.0, min(1.0, b_x0)),
+                    max(0.0, min(1.0, b_y0)),
+                    max(0.0, min(1.0, b_x1)),
+                    max(0.0, min(1.0, b_y1)),
+                )
+                if b_x1 <= b_x0:
+                    b_x1 = min(1.0, b_x0 + 0.1)
+                if b_y1 <= b_y0:
+                    b_y1 = min(1.0, b_y0 + 0.1)
+                bounds_tuple = (b_x0, b_y0, b_x1, b_y1)
+            except (ValueError, TypeError):
+                bounds_tuple = (0.0, 0.0, 1.0, 1.0)
+        else:
+            bounds_tuple = (0.0, 0.0, 1.0, 1.0)
+
+        raw_colors = value.get("colors", ())
+        colors_tuple: tuple[str, ...] = (
+            tuple(normalize_hex_color(c) for c in raw_colors if isinstance(c, (str, int)))
+            if isinstance(raw_colors, Sequence) and not isinstance(raw_colors, (str, bytes))
+            else ()
+        )
+
+        return MacroOperation(
+            id=operation_id,
+            name=macro_name,
+            brush=(
+                ProgramBrush.from_dict(value["brush"])
+                if "brush" in value
+                else ProgramBrush(profile="watercolor" if "wash" in macro_name else "brush")
+            ),
+            layer=value.get("layer", value.get("layer_name", "Flats")),
+            center=center_tuple,
+            radius=radius_val,
+            bounds=bounds_tuple,
+            polygon=(
+                _points_from(value.get("polygon", ()), "macro polygon", canvas_w=canvas_w, canvas_h=canvas_h)
+                if "polygon" in value
+                else ()
+            ),
+            colors=colors_tuple,
+            params=dict(value.get("params", {})) if isinstance(value.get("params"), Mapping) else {},
+        )
     raise PlanValidationError(f"未対応の operation kind: {kind}")
 
 
@@ -621,7 +758,7 @@ class StrokeProgram:
         if not 1 <= len(operations) <= MAX_PROGRAM_OPERATIONS:
             raise PlanValidationError(f"operations は1から{MAX_PROGRAM_OPERATIONS}件必要です")
         if any(
-            not isinstance(operation, (PathOperation, FillOperation, HatchOperation, ParticleOperation))
+            not isinstance(operation, (PathOperation, FillOperation, HatchOperation, ParticleOperation, MacroOperation))
             for operation in operations
         ):
             raise PlanValidationError("operations に未対応の値があります")
@@ -705,7 +842,7 @@ class StrokeProgram:
                 elif isinstance(operation, HatchOperation):
                     item["angle_deg"] = operation.angle_deg
                     item["cross"] = operation.cross
-            else:
+            elif isinstance(operation, ParticleOperation):
                 item.update(
                     bounds=list(operation.bounds),
                     count=operation.count,
@@ -713,6 +850,16 @@ class StrokeProgram:
                     angle_deg=operation.angle_deg,
                     angle_jitter=operation.angle_jitter,
                     shape=operation.shape,
+                )
+            elif isinstance(operation, MacroOperation):
+                item.update(
+                    name=operation.name,
+                    center=list(operation.center),
+                    radius=operation.radius,
+                    bounds=list(operation.bounds),
+                    polygon=[point.as_list() for point in operation.polygon],
+                    colors=list(operation.colors),
+                    params=dict(operation.params),
                 )
             operations.append(item)
         return {
@@ -986,15 +1133,24 @@ def _compile_fill_directional(
             second_rot = _rotate((second_x, y), center, angle)
             seg_len = math.hypot(second_rot[0] - first_rot[0], second_rot[1] - first_rot[1])
             if operation.style in {"wash", "feathered", "directional"} and seg_len > 4.0:
-                p1_x = first_rot[0] + (second_rot[0] - first_rot[0]) * 0.12
-                p1_y = first_rot[1] + (second_rot[1] - first_rot[1]) * 0.12
-                p2_x = second_rot[0] - (second_rot[0] - first_rot[0]) * 0.12
-                p2_y = second_rot[1] - (second_rot[1] - first_rot[1]) * 0.12
+                mid_x = (first_rot[0] + second_rot[0]) * 0.5
+                mid_y = (first_rot[1] + second_rot[1]) * 0.5
+                # 微細な有機的たわみ（水彩ストロークの手描き感）
+                dx = second_rot[0] - first_rot[0]
+                dy = second_rot[1] - first_rot[1]
+                perp_x = -dy / max(1e-5, seg_len) * min(3.0, seg_len * 0.04)
+                perp_y = dx / max(1e-5, seg_len) * min(3.0, seg_len * 0.04)
+                jitter_sign = 1.0 if row % 2 == 0 else -1.0
+                p1_x = first_rot[0] + dx * 0.25 + perp_x * jitter_sign
+                p1_y = first_rot[1] + dy * 0.25 + perp_y * jitter_sign
+                p2_x = first_rot[0] + dx * 0.75 - perp_x * jitter_sign
+                p2_y = first_rot[1] + dy * 0.75 - perp_y * jitter_sign
                 pts = [
-                    (first_rot[0], first_rot[1], 0.75),
-                    (p1_x, p1_y, 0.95),
-                    (p2_x, p2_y, 0.95),
-                    (second_rot[0], second_rot[1], 0.75),
+                    (first_rot[0], first_rot[1], 0.45),
+                    (p1_x, p1_y, 0.90),
+                    (mid_x, mid_y, 0.95),
+                    (p2_x, p2_y, 0.90),
+                    (second_rot[0], second_rot[1], 0.45),
                 ]
             else:
                 pts = [(first_rot[0], first_rot[1], 1.0), (second_rot[0], second_rot[1], 1.0)]
@@ -1026,6 +1182,15 @@ def _compile_fill_directional(
                     [(first_rot[0], first_rot[1], 1.0), (second_rot[0], second_rot[1], 1.0)],
                 )
             )
+
+    # 水彩ウォッシュ時のウェットエッジ（絵の具溜まり輪郭線）
+    if operation.style in {"wash", "feathered"} and len(strokes) < limit and len(polygon) >= 3:
+        closed_poly = list(polygon)
+        if closed_poly[0] != closed_poly[-1]:
+            closed_poly.append(closed_poly[0])
+        spline_edge = _catmull_rom_spline(closed_poly, samples_per_segment=4)
+        edge_pts = [(ex, ey, 0.65) for ex, ey in spline_edge]
+        strokes.append(_make_stroke(program, operation, len(strokes), edge_pts))
 
     return strokes
 
@@ -1062,13 +1227,18 @@ def _compile_fill(program: StrokeProgram, operation: FillOperation, limit: int) 
             first_x, second_x = (end_x, start_x) if row % 2 else (start_x, end_x)
             seg_len = abs(second_x - first_x)
             if operation.style in {"wash", "feathered"} and seg_len > 4.0:
-                p1_x = first_x + (second_x - first_x) * 0.12
-                p2_x = second_x - (second_x - first_x) * 0.12
+                mid_x = (first_x + second_x) * 0.5
+                dy_jitter = min(2.5, seg_len * 0.03) * (1.0 if row % 2 == 0 else -1.0)
+                p1_x = first_x + (second_x - first_x) * 0.25
+                p1_y = y + dy_jitter
+                p2_x = first_x + (second_x - first_x) * 0.75
+                p2_y = y - dy_jitter
                 pts = [
-                    (first_x, y, 0.75),
-                    (p1_x, y, 0.95),
-                    (p2_x, y, 0.95),
-                    (second_x, y, 0.75),
+                    (first_x, y, 0.45),
+                    (p1_x, p1_y, 0.90),
+                    (mid_x, y, 0.95),
+                    (p2_x, p2_y, 0.90),
+                    (second_x, y, 0.45),
                 ]
             else:
                 pts = [(first_x, y, 1.0), (second_x, y, 1.0)]
@@ -1098,6 +1268,15 @@ def _compile_fill(program: StrokeProgram, operation: FillOperation, limit: int) 
                     [(start_x, mid_y, 1.0), (end_x, mid_y, 1.0)],
                 )
             )
+
+    # 水彩ウォッシュ時のウェットエッジ（絵の具溜まり輪郭線）
+    if operation.style in {"wash", "feathered"} and len(strokes) < limit and len(polygon) >= 3:
+        closed_poly = list(polygon)
+        if closed_poly[0] != closed_poly[-1]:
+            closed_poly.append(closed_poly[0])
+        spline_edge = _catmull_rom_spline(closed_poly, samples_per_segment=4)
+        edge_pts = [(ex, ey, 0.65) for ex, ey in spline_edge]
+        strokes.append(_make_stroke(program, operation, len(strokes), edge_pts))
 
     return strokes
 
@@ -1333,6 +1512,420 @@ def _compile_fill_to_budget(program: StrokeProgram, operation: FillOperation, li
     return _compile_fill(program, adjusted, limit)
 
 
+def _create_macro_stroke(
+    stroke_id: str,
+    points: Sequence[tuple[float, float, float] | tuple[float, float]],
+    profile: str,
+    color: str,
+    size_px: float,
+    layer_name: str,
+    opacity: float = 1.0,
+    is_eraser: bool = False,
+) -> Stroke:
+    stroke_points: list[StrokePoint] = []
+    for idx, pt in enumerate(points):
+        x = float(pt[0])
+        y = float(pt[1])
+        pressure = float(pt[2]) if len(pt) >= 3 else 0.8
+        stroke_points.append(StrokePoint(x=x, y=y, pressure=max(0.05, min(1.0, pressure)), time_ms=idx * 15))
+    return Stroke(
+        id=stroke_id,
+        points=tuple(stroke_points),
+        brush_preset=brush_preset_for_profile(profile),
+        color=normalize_hex_color(color),
+        size_px=max(0.5, size_px),
+        layer_name=layer_name,
+        opacity=max(0.0, min(1.0, opacity)),
+        is_eraser=is_eraser,
+    )
+
+
+def _compile_macro(
+    program: StrokeProgram,
+    operation: MacroOperation,
+    limit: int,
+) -> list[Stroke]:
+    """プロシージャル・セマンティック・マクロを高品位なストローク群へコンパイルする。"""
+    w = program.canvas_width
+    h = program.canvas_height
+    scale = min(w, h)
+    name = operation.name.lower()
+    cx = operation.center[0] * w
+    cy = operation.center[1] * h
+    r = operation.radius * scale
+    rng = random.Random(program.seed + (abs(hash(operation.id)) % 100000))
+    strokes: list[Stroke] = []
+
+    def uid(sub: str, idx: int = 0) -> str:
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/macro/{program.seed}/{operation.id}/{sub}/{idx}"))
+
+    # -------------------------------------------------------------------------
+    # 1. 花・桜・バラ・野花 (Flower / Sakura / Rose / Wildflower)
+    # -------------------------------------------------------------------------
+    if any(k in name for k in ("flower", "sakura", "rose", "blossom", "wildflower", "botanical")):
+        is_sakura = "sakura" in name or "blossom" in name
+        is_rose = "rose" in name
+        is_wildflower = "wildflower" in name or "meadow" in name or "garden" in name
+
+        base_colors = (
+            list(operation.colors)
+            if operation.colors
+            else (
+                ["#ffb8cd", "#ffd6e5", "#ff9ebb"]
+                if is_sakura
+                else ["#e05370", "#d62246", "#f28b9d"]
+                if is_rose
+                else ["#d95d8a", "#e9a13a", "#8b6fc0"]
+            )
+        )
+        # 花房のベース（ふんわりした3層の重なり円弧スプライン）
+        for b_i in range(3):
+            if len(strokes) >= limit:
+                break
+            b_r = r * (0.4 + b_i * 0.25)
+            b_ang = b_i * 1.8
+            b_cx = cx + math.cos(b_ang) * r * 0.15
+            b_cy = cy + math.sin(b_ang) * r * 0.15
+            pts_circ = [
+                (
+                    b_cx + math.cos(deg) * b_r * (1.0 + rng.uniform(-0.08, 0.08)),
+                    b_cy + math.sin(deg) * b_r * (1.0 + rng.uniform(-0.08, 0.08)),
+                )
+                for deg in (0.0, math.pi * 0.5, math.pi, math.pi * 1.5, math.pi * 2.0)
+            ]
+            spline_circ = _catmull_rom_spline(pts_circ, samples_per_segment=6)
+            pts_with_p = [(sx, sy, 0.75 + rng.uniform(-0.1, 0.1)) for sx, sy in spline_circ]
+            strokes.append(
+                _create_macro_stroke(
+                    stroke_id=uid("flower_base", b_i),
+                    points=pts_with_p,
+                    profile="watercolor",
+                    color=base_colors[b_i % len(base_colors)],
+                    size_px=max(12.0, r * 0.45),
+                    layer_name="Flats",
+                    opacity=0.60,
+                )
+            )
+
+        # 花弁の有機的スプライン
+        if is_rose:
+            petal_layers = 4
+            for p_layer in range(petal_layers):
+                petals_in_layer = 4 + p_layer * 2
+                r_layer = r * (0.2 + p_layer * 0.18)
+                for p_idx in range(petals_in_layer):
+                    if len(strokes) >= limit:
+                        break
+                    base_ang = (p_idx / petals_in_layer) * math.pi * 2.0 + p_layer * 0.6
+                    p0 = (cx + math.cos(base_ang) * r_layer * 0.8, cy + math.sin(base_ang) * r_layer * 0.8)
+                    p1 = (cx + math.cos(base_ang + 0.3) * r_layer * 1.2, cy + math.sin(base_ang + 0.3) * r_layer * 1.2)
+                    p2 = (cx + math.cos(base_ang + 0.6) * r_layer * 1.1, cy + math.sin(base_ang + 0.6) * r_layer * 1.1)
+                    p3 = (cx + math.cos(base_ang + 0.9) * r_layer * 0.8, cy + math.sin(base_ang + 0.9) * r_layer * 0.8)
+                    petal_spline = _catmull_rom_spline([p0, p1, p2, p3], 6)
+                    col = base_colors[(p_layer + p_idx) % len(base_colors)]
+                    pts_p = [
+                        (sx, sy, 0.3 + 0.6 * math.sin(i / max(1, len(petal_spline) - 1) * math.pi))
+                        for i, (sx, sy) in enumerate(petal_spline)
+                    ]
+                    strokes.append(
+                        _create_macro_stroke(
+                            stroke_id=uid("rose_petal", p_layer * 10 + p_idx),
+                            points=pts_p,
+                            profile="gpen" if p_layer > 1 else "brush",
+                            color=col,
+                            size_px=max(2.5, scale * 0.005),
+                            layer_name="Lineart" if p_layer > 1 else "Flats",
+                            opacity=0.85,
+                        )
+                    )
+        else:
+            num_petals = 5 if is_sakura else 6
+            for p_i in range(num_petals):
+                if len(strokes) >= limit:
+                    break
+                p_ang = (p_i / num_petals) * math.pi * 2.0 + rng.uniform(-0.1, 0.1)
+                p_len = r * (0.65 + rng.uniform(0.0, 0.35))
+                tip_x = cx + math.cos(p_ang) * p_len
+                tip_y = cy + math.sin(p_ang) * p_len
+                side_w = p_len * 0.38
+                perp_ang = p_ang + math.pi * 0.5
+                c1_x = cx + math.cos(p_ang) * p_len * 0.45 + math.cos(perp_ang) * side_w
+                c1_y = cy + math.sin(p_ang) * p_len * 0.45 + math.sin(perp_ang) * side_w
+                c2_x = cx + math.cos(p_ang) * p_len * 0.45 - math.cos(perp_ang) * side_w
+                c2_y = cy + math.sin(p_ang) * p_len * 0.45 - math.sin(perp_ang) * side_w
+
+                petal_pts = _catmull_rom_spline([(cx, cy), (c1_x, c1_y), (tip_x, tip_y), (c2_x, c2_y), (cx, cy)], 6)
+                pts_with_p = [
+                    (sx, sy, 0.4 + 0.55 * math.sin(idx / max(1, len(petal_pts) - 1) * math.pi))
+                    for idx, (sx, sy) in enumerate(petal_pts)
+                ]
+                strokes.append(
+                    _create_macro_stroke(
+                        stroke_id=uid("petal_stroke", p_i),
+                        points=pts_with_p,
+                        profile="watercolor",
+                        color=base_colors[p_i % len(base_colors)],
+                        size_px=max(4.0, p_len * 0.35),
+                        layer_name="Flats",
+                        opacity=0.75,
+                    )
+                )
+
+                strokes.append(
+                    _create_macro_stroke(
+                        stroke_id=uid("petal_line", p_i),
+                        points=[(sx, sy, max(0.15, p * 0.8)) for sx, sy, p in pts_with_p],
+                        profile="gpen",
+                        color="#3a1c28" if is_sakura else "#4a2a35",
+                        size_px=max(1.5, scale * 0.0028),
+                        layer_name="Lineart",
+                        opacity=0.85,
+                    )
+                )
+
+        # 花芯・めしべ
+        if len(strokes) < limit:
+            center_pts = _catmull_rom_spline(
+                [
+                    (cx - r * 0.08, cy - r * 0.08),
+                    (cx + r * 0.08, cy - r * 0.06),
+                    (cx + r * 0.06, cy + r * 0.08),
+                    (cx - r * 0.08, cy + r * 0.06),
+                    (cx - r * 0.08, cy - r * 0.08),
+                ],
+                4,
+            )
+            strokes.append(
+                _create_macro_stroke(
+                    stroke_id=uid("flower_center"),
+                    points=[(x, y, 0.95) for x, y in center_pts],
+                    profile="marupen",
+                    color="#ffd700" if is_sakura or is_wildflower else "#ffdd88",
+                    size_px=max(2.5, r * 0.18),
+                    layer_name="Highlights",
+                    opacity=0.95,
+                )
+            )
+
+        # 茎
+        if (operation.params.get("has_stem", True) or is_wildflower) and len(strokes) < limit:
+            stem_end_y = min(h, cy + r * 2.2)
+            stem_pts = _catmull_rom_spline(
+                [
+                    (cx, cy + r * 0.2),
+                    (cx + rng.uniform(-r * 0.2, r * 0.2), cy + r * 1.1),
+                    (cx + rng.uniform(-r * 0.1, r * 0.1), stem_end_y),
+                ],
+                6,
+            )
+            strokes.append(
+                _create_macro_stroke(
+                    stroke_id=uid("flower_stem"),
+                    points=[(x, y, 0.8) for x, y in stem_pts],
+                    profile="brush",
+                    color="#3f7f58",
+                    size_px=max(2.5, scale * 0.005),
+                    layer_name="Lineart",
+                    opacity=0.85,
+                )
+            )
+
+        return strokes
+
+    # -------------------------------------------------------------------------
+    # 2. 樹木・桜の木・枝分かれ (Branch Tree / Trunk / Canopy)
+    # -------------------------------------------------------------------------
+    if any(k in name for k in ("tree", "branch", "trunk", "wood")):
+        root_x = cx
+        root_y = min(h * 0.98, cy + r)
+        tree_h = max(30.0, r * 1.8)
+        top_y = root_y - tree_h
+
+        # 主幹
+        trunk_pts = _catmull_rom_spline(
+            [
+                (root_x, root_y),
+                (root_x - scale * 0.02, root_y - tree_h * 0.35),
+                (root_x + scale * 0.015, root_y - tree_h * 0.65),
+                (root_x - scale * 0.01, top_y),
+            ],
+            8,
+        )
+        pts_trunk_p = [
+            (x, y, max(0.2, 1.0 - (i / max(1, len(trunk_pts) - 1)) * 0.75)) for i, (x, y) in enumerate(trunk_pts)
+        ]
+        strokes.append(
+            _create_macro_stroke(
+                stroke_id=uid("trunk_main"),
+                points=pts_trunk_p,
+                profile="gpen",
+                color=operation.colors[0] if operation.colors else "#342017",
+                size_px=max(5.0, scale * 0.018),
+                layer_name="Lineart",
+                opacity=0.95,
+            )
+        )
+
+        # 大枝
+        bough_configs = [
+            (-1.0, 0.45, 0.40, 0.30),
+            (1.0, 0.60, 0.45, 0.25),
+            (-1.0, 0.78, 0.35, 0.20),
+            (1.0, 0.88, 0.25, 0.15),
+        ]
+        for b_idx, (side, h_frac, spread, curve) in enumerate(bough_configs):
+            if len(strokes) >= limit:
+                break
+            b_start_y = root_y - tree_h * h_frac
+            b_start_x = root_x + side * scale * 0.01
+            b_mid_x = b_start_x + side * scale * spread * 0.55
+            b_mid_y = b_start_y - scale * curve * 0.5
+            b_end_x = b_start_x + side * scale * spread
+            b_end_y = b_start_y - scale * curve
+            b_pts = _catmull_rom_spline(
+                [
+                    (b_start_x, b_start_y),
+                    (b_mid_x, b_mid_y),
+                    (b_end_x, b_end_y),
+                ],
+                6,
+            )
+            b_pts_p = [(x, y, max(0.15, 0.85 - (i / max(1, len(b_pts) - 1)) * 0.65)) for i, (x, y) in enumerate(b_pts)]
+            strokes.append(
+                _create_macro_stroke(
+                    stroke_id=uid("tree_bough", b_idx),
+                    points=b_pts_p,
+                    profile="gpen",
+                    color="#342017",
+                    size_px=max(3.0, scale * 0.009),
+                    layer_name="Lineart",
+                    opacity=0.90,
+                )
+            )
+
+        # 樹冠の花房
+        if operation.params.get("foliage", True):
+            blossom_colors = (
+                ["#ffb8cd", "#ff9ebb", "#ffd6e5"]
+                if "sakura" in name or "pink" in str(operation.colors)
+                else ["#4e7d58", "#72a37c", "#9ec4a5"]
+            )
+            cluster_centers = [
+                (root_x - scale * 0.15, root_y - tree_h * 0.70, scale * 0.12),
+                (root_x + scale * 0.18, root_y - tree_h * 0.75, scale * 0.14),
+                (root_x - scale * 0.05, top_y - scale * 0.04, scale * 0.16),
+                (root_x + scale * 0.08, root_y - tree_h * 0.55, scale * 0.11),
+            ]
+            for c_i, (cc_x, cc_y, cc_r) in enumerate(cluster_centers):
+                if len(strokes) >= limit:
+                    break
+                c_pts = [
+                    (
+                        cc_x + math.cos(deg) * cc_r * (1.0 + rng.uniform(-0.1, 0.1)),
+                        cc_y + math.sin(deg) * cc_r * (1.0 + rng.uniform(-0.1, 0.1)),
+                    )
+                    for deg in (0.0, math.pi * 0.5, math.pi, math.pi * 1.5, math.pi * 2.0)
+                ]
+                c_spline = _catmull_rom_spline(c_pts, 6)
+                strokes.append(
+                    _create_macro_stroke(
+                        stroke_id=uid("tree_foliage", c_i),
+                        points=[(x, y, 0.8) for x, y in c_spline],
+                        profile="watercolor",
+                        color=blossom_colors[c_i % len(blossom_colors)],
+                        size_px=max(15.0, cc_r * 0.6),
+                        layer_name="Flats",
+                        opacity=0.65,
+                    )
+                )
+
+        return strokes
+
+    # -------------------------------------------------------------------------
+    # 3. 山岳・山並み (Mountain Range / Peaks)
+    # -------------------------------------------------------------------------
+    if any(k in name for k in ("mountain", "peak", "ridge", "hill")):
+        base_y = cy if operation.center[1] != 0.5 else h * 0.58
+        m_colors = list(operation.colors) if operation.colors else ["#6f829d", "#4a5568", "#283e50"]
+        layers = min(3, len(m_colors))
+        for m_layer in range(layers):
+            if len(strokes) >= limit:
+                break
+            layer_base_y = base_y + m_layer * scale * 0.08
+            steps = 8
+            m_pts = [(0.0, layer_base_y)]
+            for s_i in range(1, steps):
+                sx = (s_i / steps) * w
+                sy = layer_base_y - (rng.uniform(0.06, 0.20) * scale) / (m_layer + 1)
+                m_pts.append((sx, sy))
+            m_pts.append((w, layer_base_y))
+            m_spline = _catmull_rom_spline(m_pts, 8)
+
+            strokes.append(
+                _create_macro_stroke(
+                    stroke_id=uid("mountain_base", m_layer),
+                    points=[(x, y, 0.85) for x, y in m_spline],
+                    profile="watercolor",
+                    color=m_colors[m_layer % len(m_colors)],
+                    size_px=max(20.0, scale * 0.08),
+                    layer_name="Flats",
+                    opacity=0.75,
+                )
+            )
+            strokes.append(
+                _create_macro_stroke(
+                    stroke_id=uid("mountain_ridge", m_layer),
+                    points=[(x, y, 0.7) for x, y in m_spline],
+                    profile="gpen",
+                    color="#1a2733",
+                    size_px=max(2.0, scale * 0.0035 - m_layer * 0.5),
+                    layer_name="Lineart",
+                    opacity=0.85,
+                )
+            )
+
+        return strokes
+
+    # -------------------------------------------------------------------------
+    # 4. 水彩ウォッシュ (Watercolor Wash / Sky / Ground)
+    # -------------------------------------------------------------------------
+    x0, y0, x1, y1 = (
+        operation.bounds[0] * w,
+        operation.bounds[1] * h,
+        operation.bounds[2] * w,
+        operation.bounds[3] * h,
+    )
+    wash_colors = list(operation.colors) if operation.colors else ["#2b5c8f", "#5c93cf", "#b8d8f8", "#eef6ff"]
+    rows = max(2, min(limit, len(wash_colors)))
+    for r_i in range(rows):
+        if len(strokes) >= limit:
+            break
+        curr_y = y0 + (r_i / max(1, rows - 1)) * (y1 - y0)
+        c_col = wash_colors[r_i % len(wash_colors)]
+        w_pts = _catmull_rom_spline(
+            [
+                (x0, curr_y),
+                (x0 + (x1 - x0) * 0.33, curr_y + scale * rng.uniform(-0.02, 0.02)),
+                (x0 + (x1 - x0) * 0.67, curr_y + scale * rng.uniform(-0.02, 0.02)),
+                (x1, curr_y),
+            ],
+            6,
+        )
+        strokes.append(
+            _create_macro_stroke(
+                stroke_id=uid("wash_band", r_i),
+                points=[(x, y, 0.8) for x, y in w_pts],
+                profile="watercolor",
+                color=c_col,
+                size_px=max(25.0, (y1 - y0) / max(1, rows - 1) * 1.3),
+                layer_name="Flats",
+                opacity=0.60,
+            )
+        )
+
+    return strokes
+
+
 def compile_stroke_program(
     program: StrokeProgram,
     count: int | None = None,
@@ -1373,8 +1966,10 @@ def compile_stroke_program(
             other_strokes.extend(_compile_path(program, operation))
         elif isinstance(operation, HatchOperation):
             other_strokes.extend(_compile_hatch(program, operation, operation_budget))
-        else:
+        elif isinstance(operation, ParticleOperation):
             other_strokes.extend(_compile_particles(program, operation, operation_budget))
+        elif isinstance(operation, MacroOperation):
+            other_strokes.extend(_compile_macro(program, operation, operation_budget))
 
     if count is None:
         strokes = [*fill_strokes, *other_strokes]

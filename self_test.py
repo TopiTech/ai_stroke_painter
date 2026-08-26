@@ -7057,6 +7057,106 @@ class ExtendedCustomizationTests(unittest.TestCase):
         signal.emit(7)
         self.assertEqual(received, [])
 
+    def test_macro_operation_compilation_and_rescue(self) -> None:
+        """MacroOperation（flower_cluster, branch_tree, mountain_range, watercolor_wash）のパース、シリアライズ、コンパイル、LLM救済を包括的に検証。"""
+        from ai_stroke_painter.llm_planner import _sanitize_and_rescue_program_dict
+        from ai_stroke_painter.stroke_program import (
+            MacroOperation,
+            ProgramBrush,
+            StrokeProgram,
+            compile_stroke_program,
+        )
+
+        # 1. MacroOperation 直接生成とコンパイル
+        macro_flower = MacroOperation(
+            id="flower_1",
+            layer="Flats",
+            name="flower_cluster",
+            brush=ProgramBrush(profile="watercolor", color="#ffb8cd", size=0.05),
+            center=(0.5, 0.4),
+            radius=0.25,
+            colors=("#ffb8cd", "#ffd6e5", "#a3436a"),
+        )
+        macro_tree = MacroOperation(
+            id="tree_1",
+            layer="Lineart",
+            name="branch_tree",
+            brush=ProgramBrush(profile="gpen", color="#342017", size=0.005),
+            center=(0.4, 0.7),
+            radius=0.35,
+        )
+        macro_mountain = MacroOperation(
+            id="mountain_1",
+            layer="Flats",
+            name="mountain_range",
+            brush=ProgramBrush(profile="watercolor", color="#6f829d", size=0.08),
+            center=(0.5, 0.55),
+            colors=("#6f829d", "#4a5568", "#283e50"),
+        )
+        macro_wash = MacroOperation(
+            id="wash_1",
+            layer="Flats",
+            name="watercolor_wash",
+            brush=ProgramBrush(profile="watercolor", color="#2b5c8f", size=0.15),
+            bounds=(0.0, 0.0, 1.0, 0.45),
+            colors=("#2b5c8f", "#5c93cf", "#eef6ff"),
+        )
+
+        program = StrokeProgram(
+            prompt="sakura mountain landscape",
+            seed=42,
+            canvas_width=1000,
+            canvas_height=1000,
+            operations=(macro_wash, macro_mountain, macro_tree, macro_flower),
+        )
+        self.assertEqual(len(program.operations), 4)
+
+        # 辞書シリアライズ・デシリアライズ検証
+        p_dict = program.as_dict()
+        loaded = StrokeProgram.from_dict(p_dict)
+        self.assertEqual(len(loaded.operations), 4)
+        first_op = loaded.operations[0]
+        self.assertIsInstance(first_op, MacroOperation)
+        assert isinstance(first_op, MacroOperation)
+        self.assertEqual(first_op.name, "watercolor_wash")
+
+        # コンパイル検証
+        plan = compile_stroke_program(program)
+        self.assertGreater(len(plan.strokes), 10)
+        # 各レイヤーにストロークが分配されていることを確認
+        layer_names = {s.layer_name for s in plan.strokes}
+        self.assertIn("Flats", layer_names)
+        self.assertIn("Lineart", layer_names)
+        self.assertIn("Highlights", layer_names)
+
+        # 2. LLM レスポンスの辞書からの救済検証
+        raw_llm_payload = {
+            "prompt": "sakura and mountains",
+            "canvas": {"width": 1000, "height": 1000},
+            "operations": [
+                {
+                    "kind": "macro",
+                    "name": "flower_cluster",
+                    "layer": "Flats",
+                    "center": [0.5, 0.4],
+                    "radius": 0.2,
+                    "colors": ["#ff9999", "#ffcccc"],
+                    "brush": {"profile": "watercolor", "color": "#ff9999", "size": 0.05},
+                },
+                {
+                    "kind": "tree",
+                    "name": "branch_tree",
+                    "layer": "Lineart",
+                    "center": [0.4, 0.7],
+                    "radius": 0.3,
+                },
+            ],
+        }
+        rescued = _sanitize_and_rescue_program_dict(raw_llm_payload, 1000, 1000)
+        self.assertEqual(len(rescued["operations"]), 2)
+        self.assertEqual(rescued["operations"][0]["kind"], "macro")
+        self.assertEqual(rescued["operations"][1]["kind"], "macro")
+
 
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))

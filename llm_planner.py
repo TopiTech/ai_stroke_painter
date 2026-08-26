@@ -199,6 +199,67 @@ def _get_stroke_program_json_schema() -> dict[str, Any]:
             ],
             "additionalProperties": False,
         },
+        {
+            "type": "object",
+            "properties": {
+                **common_properties,
+                "kind": {"type": "string", "enum": ["macro"]},
+                "name": {
+                    "type": "string",
+                    "enum": [
+                        "flower_cluster",
+                        "sakura_canopy",
+                        "branch_tree",
+                        "mountain_range",
+                        "watercolor_wash",
+                        "rose_bloom",
+                        "wildflower",
+                    ],
+                },
+                "center": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 2,
+                    "maxItems": 2,
+                },
+                "radius": {"type": "number"},
+                "bounds": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 4,
+                    "maxItems": 4,
+                },
+                "colors": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+                "params": {
+                    "type": "object",
+                    "properties": {
+                        "petal_type": {"type": "string"},
+                        "has_stem": {"type": "boolean"},
+                        "foliage": {"type": "boolean"},
+                        "layers": {"type": "integer"},
+                        "style": {"type": "string"},
+                    },
+                    "required": [],
+                    "additionalProperties": False,
+                },
+            },
+            "required": [
+                "kind",
+                "id",
+                "layer",
+                "name",
+                "brush",
+                "center",
+                "radius",
+                "bounds",
+                "colors",
+                "params",
+            ],
+            "additionalProperties": False,
+        },
     ]
     return {
         "name": "stroke_program",
@@ -1499,7 +1560,7 @@ def _system_instruction(
         f"{progressive_section}"
         f"{visual_feedback_section}\n"
         "=== OUTPUT SCHEMA: STROKE PROGRAM V2 ===\n"
-        "Return one compact JSON object. Coordinates are normalized 0.0-1.0. Prefer fill/hatch/particles over hundreds of repeated paths:\n"
+        "Return one compact JSON object. Coordinates are normalized 0.0-1.0. Prefer macro/fill/hatch/particles over hundreds of repeated raw points:\n"
         "```json\n"
         "{\n"
         '  "schema_version": 2,\n'
@@ -1511,30 +1572,31 @@ def _system_instruction(
         '  "completion_score": 0.85,\n'
         f'  "canvas": {{"width": {width:.0f}, "height": {height:.0f}}},\n'
         '  "operations": [\n'
-        '    {"kind":"fill","id":"base","layer":"Flats","style":"wash","polygon":[[0.05,0.05],[0.95,0.05],[0.95,0.95],[0.05,0.95]],"brush":{"profile":"marker","color":"#3a7bd5","size":0.10}},\n'
-        '    {"kind":"fill","id":"form-shadow","layer":"Shading","style":"contour","polygon":[[0.2,0.2],[0.8,0.2],[0.7,0.8],[0.25,0.75]],"brush":{"profile":"watercolor","color":"#203050","size":0.04,"opacity":0.55}},\n'
-        '    {"kind":"path","id":"contour","layer":"Lineart","points":[[0.25,0.8,0.15],[0.5,0.2,0.95],[0.75,0.8,0.1]],"smooth":true,"brush":{"profile":"gpen","color":"#2c1810","size":0.005}},\n'
-        '    {"kind":"particles","id":"accents","layer":"FX","shape":"sparkle","bounds":[0.05,0.05,0.95,0.95],"count":12,"length":0.012,"angle_deg":90,"angle_jitter":35,"brush":{"profile":"gpen","color":"#ffffff","size":0.002}}\n'
+        '    {"kind":"macro","id":"sky_wash","layer":"Flats","name":"watercolor_wash","bounds":[0.0,0.0,1.0,0.55],"colors":["#2b5c8f","#5c93cf","#eef6ff"],"brush":{"profile":"watercolor"}},\n'
+        '    {"kind":"macro","id":"mountains","layer":"Flats","name":"mountain_range","center":[0.5,0.52],"colors":["#6f829d","#4a5568","#283e50"],"brush":{"profile":"watercolor"}},\n'
+        '    {"kind":"macro","id":"tree_trunk","layer":"Lineart","name":"branch_tree","center":[0.38,0.78],"radius":0.35,"colors":["#342017"],"brush":{"profile":"gpen"}},\n'
+        '    {"kind":"macro","id":"blossoms","layer":"Flats","name":"flower_cluster","center":[0.38,0.48],"radius":0.28,"colors":["#ffb8cd","#ffd6e5","#a3436a"],"params":{"petal_type":"sakura"},"brush":{"profile":"watercolor"}},\n'
+        '    {"kind":"path","id":"accent_branch","layer":"Lineart","points":[[0.35,0.65,0.2],[0.42,0.58,0.85],[0.50,0.55,0.1]],"smooth":true,"brush":{"profile":"gpen","color":"#24140d","size":0.004}},\n'
+        '    {"kind":"particles","id":"falling_petals","layer":"FX","shape":"petal","bounds":[0.1,0.2,0.9,0.9],"count":16,"length":0.015,"angle_deg":75,"angle_jitter":30,"brush":{"profile":"watercolor","color":"#ffe6f0","size":0.003}}\n'
         "  ]\n"
         "}\n"
         "```\n"
         "=== CRITICAL RULES & ANTI-PATTERNS ===\n"
         "1. Operation kinds:\n"
-        "   - path: (2+ points, control points with pressure)\n"
-        "   - fill: (3+ polygon points, styles: 'wash' (smooth gradient), 'contour' (form-following concentric curves), 'radial' (center rays for eyes/bursts), 'directional' (angle-aligned sweeps), 'scanline' (crisp flats))\n"
+        "   - macro: (HIGHLY RECOMMENDED for natural motifs! 'flower_cluster', 'sakura_canopy', 'branch_tree', 'mountain_range', 'watercolor_wash')\n"
+        "   - path: (2-12 organic spline control points with tapering pressure [x,y,pressure])\n"
+        "   - fill: (3+ polygon points, styles: 'wash' (organic watercolor flow), 'contour', 'radial', 'directional')\n"
         "   - hatch: (polygon, angle_deg, spacing, only for manga screen-tones)\n"
         "   - particles: (bounds/count, shape: 'petal'/'sparkle'/'drift'/'bokeh'/'line')\n"
-        "2. Brush profiles: auto, gpen, marupen, brush, marker, pencil, watercolor, airbrush, eraser. Size defaults to a canvas ratio; use size_mode='px' only for deliberately fixed pixel sizes.\n"
+        "2. Brush profiles: auto, gpen, marupen, brush, marker, pencil, watercolor, airbrush, eraser.\n"
         "3. Anti-Patterns (STRICTLY FORBIDDEN):\n"
-        "   - NEVER use hatch for smooth 3D shading, foliage, clouds, or landscape (causes artificial wireframe/coarse zebra stripes). Use fill with style 'wash' / 'contour' and 'watercolor' / 'airbrush' instead.\n"
-        "   - NEVER use cross: true on ground, terrain, grass, or natural foliage.\n"
-        "   - NEVER draw isolated mathematical parabolic/bezier arc paths across foliage clumps or mountain peaks as fake highlights.\n"
-        "   - NEVER draw flat rectangular fog/mist bars cutting across the scenery; use soft curved wash strokes on Flats/Shading.\n"
+        "   - NEVER draw plain rectangular boxes, wireframe border frames, or blind-curtain horizontal stripes across the entire canvas.\n"
+        "   - NEVER use straight lines or coarse parallel stripes to depict trees, flowers, or mountains. Use macro primitives or curved paths instead.\n"
+        "   - NEVER use hatch for smooth 3D shading, foliage, clouds, or landscape (causes artificial wireframe/zebra stripes). Use watercolor/airbrush wash or contour fill.\n"
+        "   - NEVER draw isolated mathematical parabolic arcs across trees as fake highlights.\n"
         "   - NEVER draw solid white (#ffffff) normal brush strokes on Shading layer (which multiplies). For highlights, use Highlights/FX layers; for erasing, set is_eraser: true.\n"
-        "4. Composition: Establish large coherent silhouettes with fill, then soft form shadows on Shading with fill/contour, then tapered contour paths on Lineart and sparse particle accents on FX.\n"
-        "5. Curves: Give path 2-12 meaningful control points [x,y,pressure]; the compiler creates continuous smooth geometry with ink pooling at corners.\n"
-        "6. Goal Evaluation: Set goal_reached true only when the artwork is fully finished and composition, values, edges, and requested details are complete.\n"
-        "7. First character of output must be '{'. Do not use Markdown fences."
+        "4. Composition: Establish rich background washes and volume with macro/fill, then form shadows on Shading, then precise contours on Lineart and sparse particle accents on FX.\n"
+        "5. First character of output must be '{'. Do not use Markdown fences."
     )
 
 
@@ -2240,6 +2302,20 @@ def _sanitize_and_rescue_program_dict(
             kind = "hatch"
         elif raw_kind in ("particles", "particle", "dots", "sparks", "swarms", "bokeh", "fx", "scatter"):
             kind = "particles"
+        elif raw_kind in (
+            "macro",
+            "flower_cluster",
+            "sakura_canopy",
+            "branch_tree",
+            "mountain_range",
+            "watercolor_wash",
+            "rose_bloom",
+            "wildflower",
+            "tree",
+            "flower",
+            "mountain",
+        ):
+            kind = "macro"
         else:
             kind = "path"
 
@@ -2257,7 +2333,7 @@ def _sanitize_and_rescue_program_dict(
         if not layer_val:
             layer_val = (
                 "Flats"
-                if kind == "fill"
+                if kind in ("fill", "macro")
                 else "Shading"
                 if kind == "hatch"
                 else "FX"
@@ -2511,6 +2587,68 @@ def _sanitize_and_rescue_program_dict(
                     "angle_deg": p_angle,
                     "angle_jitter": p_jitter,
                     "shape": shape_str,
+                }
+            )
+        elif kind == "macro":
+            macro_n = str(item_d.get("name") or (raw_kind if raw_kind != "macro" else "flower_cluster")).strip().lower()
+            raw_c = item_d.get("center") or (0.5, 0.5)
+            try:
+                cx = float(raw_c[0]) if isinstance(raw_c, Sequence) and len(raw_c) >= 2 else 0.5
+                cy = float(raw_c[1]) if isinstance(raw_c, Sequence) and len(raw_c) >= 2 else 0.5
+                if cx > 1.0 and w > 1.0:
+                    cx = cx / w
+                if cy > 1.0 and h > 1.0:
+                    cy = cy / h
+                c_tuple = [max(0.0, min(1.0, cx)), max(0.0, min(1.0, cy))]
+            except (ValueError, TypeError):
+                c_tuple = [0.5, 0.5]
+            try:
+                raw_r = float(item_d.get("radius") or item_d.get("r") or 0.2)
+                if raw_r > 1.0 and min(w, h) > 1.0:
+                    raw_r = raw_r / min(w, h)
+                r_val = max(0.001, min(2.0, raw_r))
+            except (ValueError, TypeError):
+                r_val = 0.2
+            raw_b = item_d.get("bounds", (0.0, 0.0, 1.0, 1.0))
+            if isinstance(raw_b, Sequence) and len(raw_b) >= 4:
+                try:
+                    b_x0, b_y0, b_x1, b_y1 = float(raw_b[0]), float(raw_b[1]), float(raw_b[2]), float(raw_b[3])
+                    if b_x0 > 1.0 and w > 1.0:
+                        b_x0 = b_x0 / w
+                    if b_y0 > 1.0 and h > 1.0:
+                        b_y0 = b_y0 / h
+                    if b_x1 > 1.0 and w > 1.0:
+                        b_x1 = b_x1 / w
+                    if b_y1 > 1.0 and h > 1.0:
+                        b_y1 = b_y1 / h
+                    b_floats = [
+                        max(0.0, min(1.0, b_x0)),
+                        max(0.0, min(1.0, b_y0)),
+                        max(0.0, min(1.0, b_x1)),
+                        max(0.0, min(1.0, b_y1)),
+                    ]
+                except (ValueError, TypeError):
+                    b_floats = [0.0, 0.0, 1.0, 1.0]
+            else:
+                b_floats = [0.0, 0.0, 1.0, 1.0]
+            raw_cols = item_d.get("colors", ())
+            cols_list = (
+                [normalize_hex_color(c) for c in raw_cols if isinstance(c, (str, int))]
+                if isinstance(raw_cols, Sequence)
+                else []
+            )
+            clean_ops.append(
+                {
+                    "kind": "macro",
+                    "id": op_id,
+                    "name": macro_n,
+                    "layer": layer_val,
+                    "brush": clean_brush,
+                    "center": c_tuple,
+                    "radius": r_val,
+                    "bounds": b_floats,
+                    "colors": cols_list,
+                    "params": dict(item_d.get("params", {})) if isinstance(item_d.get("params"), Mapping) else {},
                 }
             )
 
