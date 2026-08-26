@@ -141,6 +141,7 @@ class RuleBasedPlanner(PlannerPort):
             iteration=iteration,
             layers=plan.layers,
             metadata={
+                **dict(plan.metadata),
                 "iteration": iteration,
                 "max_iterations": max_iterations,
                 "palette": palette_name,

@@ -118,6 +118,25 @@ def pressure_profile(
         p = base * (0.3 + 0.7 * taper_in * taper_out) + bleed
     elif ptype == "airbrush":
         p = base * math.sin(t * math.pi) ** 0.5
+    elif ptype == "oil_paint":
+        taper_in = _smoothstep(0.0, 0.12, t)
+        taper_out = _smoothstep(1.0, 0.80, t)
+        impasto = 0.08 * math.sin(t * math.pi * 4.0)
+        p = base * (0.45 + 0.55 * taper_in * taper_out) + impasto
+    elif ptype == "pastel":
+        taper_in = _smoothstep(0.0, 0.10, t)
+        taper_out = _smoothstep(1.0, 0.85, t)
+        grit = rng.uniform(-0.08, 0.08) if rng is not None else 0.0
+        p = base * (0.5 + 0.5 * taper_in * taper_out) + grit
+    elif ptype == "screentone":
+        p = base * (0.75 + 0.25 * math.sin(t * math.pi * 8.0))
+    elif ptype == "glaze":
+        taper_in = _smoothstep(0.0, 0.20, t)
+        taper_out = _smoothstep(1.0, 0.75, t)
+        p = base * 0.65 * taper_in * taper_out
+    elif ptype == "splatter":
+        burst = rng.uniform(0.2, 1.0) if rng is not None else 0.8
+        p = base * burst
     else:  # soft / default
         p = base * math.sin(t * math.pi)
 
@@ -279,75 +298,125 @@ def color_palette(name: str) -> dict[str, str]:
             "lineart": "#4a4e69",
             "skin_base": "#fff0f3",
             "skin_shadow": "#ffccd5",
+            "skin_ao": "#d49fa8",
+            "skin_sss": "#ff8fa3",
             "hair_main": "#c8b6ff",
             "hair_shadow": "#9d8df1",
+            "hair_ao": "#6a5acd",
             "hair_highlight": "#ffffff",
             "eye_dark": "#3d348b",
             "eye_light": "#72efdd",
+            "eye_crescent": "#b8f2e6",
             "highlight": "#ffffff",
+            "rim_light": "#ffffff",
             "cloth_main": "#b8f2e6",
             "cloth_shadow": "#90e0ef",
             "fx": "#ffd166",
+            "sky_zenith": "#b3cde0",
+            "sky_horizon": "#fff0f3",
+            "cloud_shadow": "#dcd6f7",
+            "mountain_distant": "#c8b6ff",
+            "mountain_near": "#9d8df1",
         },
         "watercolor": {
             "draft": "#90a4ae",
             "lineart": "#2c3e50",
             "skin_base": "#fdf2e9",
             "skin_shadow": "#f5cba7",
+            "skin_ao": "#d35400",
+            "skin_sss": "#e67e22",
             "hair_main": "#5dade2",
             "hair_shadow": "#2e86c1",
+            "hair_ao": "#1b4f72",
             "hair_highlight": "#ebf5fb",
             "eye_dark": "#1b4f72",
             "eye_light": "#48c9b0",
+            "eye_crescent": "#a3e4d7",
             "highlight": "#ffffff",
+            "rim_light": "#fdf2e9",
             "cloth_main": "#a569bd",
             "cloth_shadow": "#7d3c98",
             "fx": "#f7dc6f",
+            "sky_zenith": "#2980b9",
+            "sky_horizon": "#ebf5fb",
+            "cloud_shadow": "#bdc3c7",
+            "mountain_distant": "#7fb3d5",
+            "mountain_near": "#2471a3",
         },
         "retro_pop": {
             "draft": "#00d2ff",
             "lineart": "#1a0826",
             "skin_base": "#ffeaa7",
             "skin_shadow": "#fab1a0",
+            "skin_ao": "#e17055",
+            "skin_sss": "#ff7675",
             "hair_main": "#ff7675",
             "hair_shadow": "#d63031",
+            "hair_ao": "#8c1515",
             "hair_highlight": "#fff275",
             "eye_dark": "#2d3436",
             "eye_light": "#00cec9",
+            "eye_crescent": "#55efc4",
             "highlight": "#ffffff",
+            "rim_light": "#ffeaa7",
             "cloth_main": "#6c5ce7",
             "cloth_shadow": "#4834d4",
             "fx": "#fdcb6e",
+            "sky_zenith": "#0984e3",
+            "sky_horizon": "#74b9ff",
+            "cloud_shadow": "#a29bfe",
+            "mountain_distant": "#6c5ce7",
+            "mountain_near": "#2d3436",
         },
         "dark_fantasy": {
             "draft": "#535c68",
             "lineart": "#130f40",
             "skin_base": "#f5f6fa",
             "skin_shadow": "#dcdde1",
+            "skin_ao": "#718093",
+            "skin_sss": "#e84118",
             "hair_main": "#30336b",
             "hair_shadow": "#130f40",
+            "hair_ao": "#080620",
             "hair_highlight": "#7ed6df",
             "eye_dark": "#191919",
             "eye_light": "#eb4d4b",
+            "eye_crescent": "#ff7979",
             "highlight": "#e056fd",
+            "rim_light": "#7ed6df",
             "cloth_main": "#2c2c54",
             "cloth_shadow": "#1e1e38",
             "fx": "#f0932b",
+            "sky_zenith": "#130f40",
+            "sky_horizon": "#30336b",
+            "cloud_shadow": "#1e1e38",
+            "mountain_distant": "#2c2c54",
+            "mountain_near": "#130f40",
         },
         "sepia": {
             "draft": "#bcaaa4",
             "lineart": "#3e2723",
             "skin_base": "#efebe9",
             "skin_shadow": "#d7ccc8",
+            "skin_ao": "#8d6e63",
+            "skin_sss": "#a1887f",
             "hair_main": "#5d4037",
             "hair_shadow": "#3e2723",
+            "hair_ao": "#211512",
             "hair_highlight": "#f5f5f5",
             "eye_dark": "#271610",
             "eye_light": "#8d6e63",
+            "eye_crescent": "#bcaaa4",
             "highlight": "#ffffff",
+            "rim_light": "#efebe9",
             "cloth_main": "#6d4c41",
             "cloth_shadow": "#4e342e",
             "fx": "#a1887f",
+            "sky_zenith": "#4e342e",
+            "sky_horizon": "#d7ccc8",
+            "cloud_shadow": "#8d6e63",
+            "mountain_distant": "#6d4c41",
+            "mountain_near": "#3e2723",
         },
         "botanical": {
             "draft": "#95d5b2",
@@ -401,6 +470,8 @@ def color_palette(name: str) -> dict[str, str]:
 
 def recolor_strokes_to_palette(strokes: list[Stroke], palette_name: str) -> list[Stroke]:
     """既存モチーフの明暗・色相関係を保ちながら、選択パレット内の色へ量子化する。"""
+    if palette_name.lower().strip() == "auto":
+        return list(strokes)
 
     def rgb(value: str) -> tuple[int, int, int] | None:
         raw = value.lstrip("#")

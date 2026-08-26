@@ -280,6 +280,45 @@ class PlannerAndStorageTests(unittest.TestCase):
         self.assertEqual(len(limited.strokes), 20)
         self.assertIn("Lineart", limited.layers)
 
+    def test_stroke_program_v3_primitives_gradient_fill_and_ribbon(self) -> None:
+        raw_program = {
+            "schema_version": 2,
+            "prompt": "v3 primitives test",
+            "seed": 42,
+            "canvas": {"width": 500, "height": 500},
+            "operations": [
+                {
+                    "kind": "gradient_fill",
+                    "id": "sky_grad",
+                    "polygon": [[0.0, 0.0], [1.0, 0.0], [1.0, 0.5], [0.0, 0.5]],
+                    "colors": ["#2b5c8f", "#eef6ff"],
+                    "style": "linear",
+                    "angle_deg": 90,
+                },
+                {
+                    "kind": "ribbon",
+                    "id": "hair_strand",
+                    "spine": [[0.3, 0.2, 0.9], [0.4, 0.5, 0.8], [0.35, 0.8, 0.2]],
+                    "width_start": 0.01,
+                    "width_mid": 0.03,
+                    "width_end": 0.005,
+                    "taper_profile": "taper_both",
+                },
+                {
+                    "kind": "path",
+                    "id": "hero_outline",
+                    "points": [[0.2, 0.3], [0.5, 0.2], [0.8, 0.3]],
+                    "role": "outline",
+                },
+            ],
+        }
+        program = StrokeProgram.from_dict(raw_program)
+        self.assertEqual(StrokeProgram.from_dict(program.as_dict()), program)
+        plan = compile_stroke_program(program)
+        self.assertTrue(len(plan.strokes) >= 3)
+        self.assertIn("Flats", plan.layers)
+        self.assertIn("Lineart", plan.layers)
+
     def test_stroke_program_dense_path_compilation_respects_point_limit(self) -> None:
         dense_points = [ProgramPoint(i / 250.0, i / 250.0, 0.8) for i in range(250)]
         dense_program = StrokeProgram(
@@ -7156,6 +7195,154 @@ class ExtendedCustomizationTests(unittest.TestCase):
         self.assertEqual(len(rescued["operations"]), 2)
         self.assertEqual(rescued["operations"][0]["kind"], "macro")
         self.assertEqual(rescued["operations"][1]["kind"], "macro")
+
+
+class PaletteAutoModeTests(unittest.TestCase):
+    """パレット自動選択 (Auto モード) の推定・プロシージャル生成・LLM連携・画像変換・UI統合の検証。"""
+
+    _app: Any = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if hasattr(QApplication, "instance"):
+            cls._app = QApplication.instance()
+            if cls._app is None and callable(QApplication):
+                with contextlib.suppress(Exception):
+                    cls._app = QApplication(["test", "-platform", "offscreen"])
+
+    def test_infer_palette_from_prompt_keywords(self) -> None:
+        from .procedural import infer_palette_from_prompt
+
+        test_cases = [
+            ("japanese sumi-e ink wash pine tree on mountain cliff", "sumie"),
+            ("和風水墨画の松と竹林", "sumie"),
+            ("cyberpunk city skyline with neon buildings", "cyberpunk"),
+            ("サイバーパンクの近未来都市", "cyberpunk"),
+            ("delicate watercolor wildflower garden with soft petals", "watercolor"),
+            ("透明水彩の野花", "watercolor"),
+            ("blooming rose with stem and organic leaves", "botanical"),
+            ("ボタニカルな薔薇の花束", "botanical"),
+            ("fantasy sakura landscape with mountains and clouds", "nature"),
+            ("大自然の山と海と森林", "nature"),
+            ("cute pastel fairy with ribbon", "pastel"),
+            ("ゆめかわパステルの少女", "pastel"),
+            ("80s retro pop disco synthwave", "retro_pop"),
+            ("80年代レトロポップ", "retro_pop"),
+            ("gothic dark fantasy vampire in darkness", "dark_fantasy"),
+            ("漆黒の魔界ダークファンタジー", "dark_fantasy"),
+            ("vintage antique pocket watch in sepia", "sepia"),
+            ("古写真セピア調", "sepia"),
+            ("intense manga focus radial speed lines", "monochrome"),
+            ("白黒の集中線と線画", "monochrome"),
+            ("cyber gold golden dragon statue", "cyber_gold"),
+            ("黄金のサイバーゴールド", "cyber_gold"),
+            ("anime girl portrait, delicate eyes", "anime"),
+            ("美少女アニメキャラクター", "anime"),
+        ]
+        for prompt, expected_palette in test_cases:
+            inferred = infer_palette_from_prompt(prompt)
+            self.assertEqual(
+                inferred,
+                expected_palette,
+                f"Prompt '{prompt}' should infer palette '{expected_palette}', but got '{inferred}'",
+            )
+
+    def test_infer_palette_from_prompt_fallbacks(self) -> None:
+        from .procedural import infer_palette_from_prompt
+
+        self.assertEqual(infer_palette_from_prompt("mountain lake"), "nature")
+        self.assertEqual(infer_palette_from_prompt("building structure"), "cyberpunk")
+        self.assertEqual(infer_palette_from_prompt("dragon beast"), "nature")
+        self.assertEqual(infer_palette_from_prompt("magic spell"), "monochrome")
+        self.assertEqual(infer_palette_from_prompt(""), "anime")
+
+    def test_procedural_generation_with_auto_palette(self) -> None:
+        from .procedural import generate_procedural_plan
+        from .procedural.base import color_palette
+
+        plan = generate_procedural_plan(
+            "japanese sumi-e ink wash pine tree",
+            seed=42,
+            count=30,
+            width=800,
+            height=600,
+            palette_name="auto",
+        )
+        self.assertEqual(plan.metadata.get("palette"), "auto")
+        self.assertEqual(plan.metadata.get("resolved_palette"), "sumie")
+        self.assertGreater(len(plan.strokes), 0)
+        sumie_colors = {c.lower() for c in color_palette("sumie").values()}
+        for stroke in plan.strokes:
+            self.assertIn(
+                stroke.color.lower(),
+                sumie_colors,
+                f"Stroke color {stroke.color} not in sumie palette",
+            )
+
+    def test_rule_based_planner_with_auto_palette(self) -> None:
+        from .planner import RuleBasedPlanner
+
+        planner = RuleBasedPlanner()
+        plan = planner.plan(
+            "vintage antique pocket watch in sepia",
+            seed=10,
+            count=25,
+            width=600,
+            height=600,
+            palette_name="auto",
+        )
+        self.assertEqual(plan.metadata.get("palette"), "auto")
+        self.assertEqual(plan.metadata.get("resolved_palette"), "sepia")
+
+    def test_llm_planner_system_prompt_and_constraints_with_auto_palette(self) -> None:
+        from .domain import DrawingPlan, Stroke, StrokePoint
+        from .llm_planner import _apply_llm_style_constraints, _system_instruction
+
+        sys_prompt = _system_instruction(prompt="test", palette_name="auto")
+        self.assertIn("=== PALETTE DIRECTION: AUTO ===", sys_prompt)
+
+        test_plan = DrawingPlan(
+            prompt="test",
+            seed=1,
+            strokes=[
+                Stroke(
+                    id="s1",
+                    points=[StrokePoint(10, 10, 0.5, 0), StrokePoint(20, 20, 0.5, 10)],
+                    brush_preset="Basic-5 Size",
+                    color="#123456",
+                    size_px=5.0,
+                    layer_name="Lineart",
+                    opacity=1.0,
+                )
+            ],
+            title="Test",
+            iteration=1,
+            layers=["Lineart"],
+            canvas_width=800,
+            canvas_height=600,
+        )
+        constrained = _apply_llm_style_constraints(test_plan, brush_profile="auto", palette_name="auto")
+        self.assertEqual(constrained.strokes[0].color, "#123456")
+        self.assertEqual(constrained.metadata["style_constraints"]["palette"], "auto")
+        self.assertFalse(constrained.metadata["style_constraints"]["palette_locked"])
+
+    def test_image_converter_auto_palette_inference(self) -> None:
+        from .image_converter import _infer_best_palette_for_image
+
+        # モノクロに近い画素群
+        mono_pixels = [(20, 20, 20), (128, 128, 128), (240, 240, 240)] * 10
+        self.assertEqual(_infer_best_palette_for_image(mono_pixels), "monochrome")
+
+        # プロンプト指定がある場合の優先
+        self.assertEqual(_infer_best_palette_for_image(mono_pixels, "japanese sumi-e"), "sumie")
+
+    def test_docker_palette_combo_has_auto_option(self) -> None:
+        from .docker import AIStrokePainterDocker
+
+        docker = AIStrokePainterDocker()
+        self.assertGreater(docker.palette_combo.count(), 0)
+        self.assertEqual(docker.palette_combo.itemData(0), "auto")
+        self.assertEqual(docker.palette_combo.itemText(0), "自動 (Auto)")
 
 
 def run() -> bool:

@@ -33,6 +33,7 @@ __all__ = [
     "generate_manga_fx_strokes",
     "generate_procedural_plan",
     "generate_procedural_program",
+    "infer_palette_from_prompt",
 ]
 
 AUTO_PROCEDURAL_STROKE_BUDGET = 500
@@ -166,6 +167,287 @@ def _prompt_category(prompt: str) -> str:
         if scores[best_subject] > 0:
             return best_subject
     return "fx" if scores["fx"] > 0 else "character"
+
+
+def infer_palette_from_prompt(prompt: str) -> str:
+    """自然言語プロンプトの内容・画風・主題から最適なカラーパレットを自律的に推定する。"""
+    normalized = prompt.casefold()
+
+    def contains_keyword(keyword: str) -> bool:
+        if any(ord(character) > 127 for character in keyword):
+            return keyword in normalized
+        suffix = r"(?:s|es)?" if " " not in keyword and "-" not in keyword else ""
+        return re.search(rf"(?<![a-z0-9]){re.escape(keyword)}{suffix}(?![a-z0-9])", normalized) is not None
+
+    style_keywords: dict[str, tuple[str, ...]] = {
+        "sumie": (
+            "sumie",
+            "sumi-e",
+            "ink wash",
+            "suibokuga",
+            "pine tree",
+            "zen",
+            "水墨画",
+            "水墨",
+            "墨絵",
+            "墨",
+            "毛筆",
+            "枯山水",
+            "竹林",
+            "松",
+        ),
+        "cyber_gold": (
+            "cyber gold",
+            "cybergold",
+            "cyber_gold",
+            "golden dragon",
+            "gold leaf",
+            "luxury gold",
+            "サイバーゴールド",
+            "金箔",
+            "黄金",
+        ),
+        "cyberpunk": (
+            "cyberpunk",
+            "cyber",
+            "neon",
+            "sci-fi",
+            "scifi",
+            "futuristic",
+            "synthwave",
+            "matrix",
+            "サイバーパンク",
+            "サイバー",
+            "ネオン",
+            "近未来",
+            "電脳",
+        ),
+        "watercolor": (
+            "watercolor",
+            "watercolour",
+            "aquarelle",
+            "wet on wet",
+            "soft wash",
+            "水彩",
+            "透明水彩",
+            "水彩画",
+            "滲み",
+        ),
+        "botanical": (
+            "botanical",
+            "wildflower",
+            "wildflowers",
+            "rose",
+            "roses",
+            "flower",
+            "flowers",
+            "bouquet",
+            "plant",
+            "plants",
+            "floral",
+            "herbal",
+            "leaves",
+            "petals",
+            "ボタニカル",
+            "野花",
+            "草花",
+            "薔薇",
+            "バラ",
+            "花束",
+            "花柄",
+            "植物",
+        ),
+        "nature": (
+            "nature",
+            "landscape",
+            "mountain",
+            "mountains",
+            "forest",
+            "ocean",
+            "sea",
+            "wave",
+            "hokusai",
+            "sakura",
+            "cherry blossom",
+            "meadow",
+            "cliff",
+            "自然",
+            "風景",
+            "山",
+            "海",
+            "森",
+            "桜",
+            "大自然",
+            "アースカラー",
+            "浮世絵",
+        ),
+        "pastel": (
+            "pastel",
+            "yumekawa",
+            "fairy",
+            "dreamy",
+            "cute",
+            "kawaii",
+            "sweet",
+            "cotton candy",
+            "ribbon",
+            "パステル",
+            "ゆめかわ",
+            "ファンシー",
+            "メルヘン",
+            "ふんわり",
+            "かわいい",
+            "可愛い",
+        ),
+        "retro_pop": (
+            "retro pop",
+            "retro_pop",
+            "80s",
+            "eighties",
+            "vintage pop",
+            "city pop",
+            "disco",
+            "レトロポップ",
+            "80年代",
+            "昭和レトロ",
+            "シティポップ",
+        ),
+        "dark_fantasy": (
+            "dark fantasy",
+            "dark_fantasy",
+            "gothic",
+            "vampire",
+            "horror",
+            "demon",
+            "shadow",
+            "darkness",
+            "abyss",
+            "blood",
+            "cursed",
+            "ダークファンタジー",
+            "ゴシック",
+            "ホラー",
+            "暗黒",
+            "漆黒",
+            "魔界",
+            "深淵",
+            "吸血鬼",
+        ),
+        "sepia": (
+            "sepia",
+            "antique",
+            "vintage",
+            "old photo",
+            "nostalgic",
+            "parchment",
+            "historical",
+            "セピア",
+            "アンティーク",
+            "ヴィンテージ",
+            "古写真",
+            "古風",
+            "ノスタルジック",
+            "セピア調",
+        ),
+        "monochrome": (
+            "monochrome",
+            "monoral",
+            "black and white",
+            "b&w",
+            "grayscale",
+            "sketch",
+            "lineart",
+            "speed lines",
+            "focus lines",
+            "crosshatch",
+            "manga lines",
+            "モノクロ",
+            "白黒",
+            "グレースケール",
+            "線画",
+            "集中線",
+            "流線",
+            "カケアミ",
+            "漫画原稿",
+        ),
+        "anime": (
+            "anime",
+            "manga",
+            "girl",
+            "boy",
+            "hero",
+            "heroine",
+            "portrait",
+            "character",
+            "アニメ",
+            "美少女",
+            "美少年",
+            "キャラクター",
+        ),
+    }
+
+    medium_keywords: dict[str, tuple[str, ...]] = {
+        "sumie": ("sumie", "sumi-e", "ink wash", "suibokuga", "水墨画", "水墨", "墨絵"),
+        "cyber_gold": ("cyber gold", "cybergold", "cyber_gold", "サイバーゴールド"),
+        "cyberpunk": ("cyberpunk", "サイバーパンク"),
+        "watercolor": ("watercolor", "watercolour", "aquarelle", "水彩", "透明水彩", "水彩画"),
+        "botanical": ("botanical", "ボタニカル"),
+        "pastel": ("pastel", "yumekawa", "パステル", "ゆめかわ"),
+        "retro_pop": ("retro pop", "retro_pop", "80s", "eighties", "レトロポップ", "80年代"),
+        "dark_fantasy": ("dark fantasy", "dark_fantasy", "gothic", "ダークファンタジー", "ゴシック"),
+        "sepia": ("sepia", "セピア", "セピア調"),
+        "monochrome": (
+            "monochrome",
+            "monoral",
+            "grayscale",
+            "speed lines",
+            "focus lines",
+            "モノクロ",
+            "白黒",
+            "グレースケール",
+            "集中線",
+        ),
+    }
+
+    scores: dict[str, int] = {}
+    for palette_key, kws in style_keywords.items():
+        score = sum(1 for kw in kws if contains_keyword(kw))
+        med_kws = medium_keywords.get(palette_key, ())
+        med_score = sum(3 for kw in med_kws if contains_keyword(kw))
+        total_score = score + med_score
+        if total_score > 0:
+            scores[palette_key] = total_score
+
+    if scores:
+        priority_order = (
+            "sumie",
+            "cyber_gold",
+            "cyberpunk",
+            "watercolor",
+            "dark_fantasy",
+            "sepia",
+            "retro_pop",
+            "monochrome",
+            "botanical",
+            "pastel",
+            "nature",
+            "anime",
+        )
+        return max(
+            scores.keys(),
+            key=lambda p: (scores[p], -priority_order.index(p) if p in priority_order else -999),
+        )
+
+    category = _prompt_category(prompt)
+    if category == "landscape":
+        return "nature"
+    if category == "geometry":
+        return "cyberpunk"
+    if category == "creature":
+        return "nature"
+    if category == "fx":
+        return "monochrome"
+    return "anime"
 
 
 def _ellipse_points(cx: float, cy: float, rx: float, ry: float, count: int = 18) -> tuple[ProgramPoint, ...]:
@@ -319,8 +601,10 @@ def generate_procedural_program(
 ) -> StrokeProgram:
     """自然言語プロンプトの意図を自動解析し、最適なプロシージャルイラスト計画を生成する。"""
     category = _prompt_category(prompt)
-    base_colors = color_palette(palette_name)
-    effective_colors = _prompt_palette(prompt, palette_name)
+    is_auto_palette = not palette_name or palette_name.strip().lower() == "auto"
+    resolved_palette = infer_palette_from_prompt(prompt) if is_auto_palette else palette_name.strip().lower()
+    base_colors = color_palette(resolved_palette)
+    effective_colors = _prompt_palette(prompt, resolved_palette)
 
     # カテゴリ判定
     if category == "fx":
@@ -330,13 +614,13 @@ def generate_procedural_program(
         strokes = generate_geometry_strokes(prompt, seed, None, width, height)
         title = "Geometric / City Artwork"
     elif category == "landscape":
-        strokes = generate_landscape_strokes(prompt, seed, None, width, height, palette_name)
+        strokes = generate_landscape_strokes(prompt, seed, None, width, height, resolved_palette)
         title = "Landscape Artwork"
     elif category == "creature":
         strokes = generate_creature_strokes(prompt, seed, None, width, height)
         title = "Creature Artwork"
     else:
-        strokes = generate_character_strokes(prompt, seed, None, width, height, palette_name)
+        strokes = generate_character_strokes(prompt, seed, None, width, height, resolved_palette)
         title = "Character Portrait"
 
     # 主役と舞台を排他的にせず、混合プロンプトでは軽量な環境輪郭を主役の背後へ追加する。
@@ -349,7 +633,7 @@ def generate_procedural_program(
         keyword in prompt_lower for keyword in ("city", "building", "skyline", "street", "都市", "街", "ビル")
     )
     if category in {"character", "creature"} and has_landscape_environment:
-        environment = generate_landscape_strokes(prompt, seed + 3_571, None, width, height, palette_name)
+        environment = generate_landscape_strokes(prompt, seed + 3_571, None, width, height, resolved_palette)
         strokes = [stroke for stroke in environment if stroke.layer_name in {"Lineart", "Shading"}] + strokes
     if category in {"character", "creature"} and has_geometry_environment:
         environment = generate_geometry_strokes(prompt, seed + 4_267, None, width, height)
@@ -363,7 +647,7 @@ def generate_procedural_program(
         strokes.extend(generate_manga_fx_strokes(prompt, seed + 7_919, None, width, height))
 
     # 歴史的に固定色を持つ風景・動物・幾何・FXも、UIで選んだパレットへ確実に収める。
-    strokes = recolor_strokes_to_palette(strokes, palette_name)
+    strokes = recolor_strokes_to_palette(strokes, resolved_palette)
 
     color_replacements = {
         base_colors[key]: effective_colors[key]
@@ -447,6 +731,9 @@ def generate_procedural_program(
             **dict(legacy_program.metadata),
             "generator": "procedural_v2",
             "prompt_category": category,
+            "palette": palette_name,
+            "resolved_palette": resolved_palette,
+            "effective_palette": resolved_palette,
             "requested_count": count,
             "overlay": category == "fx",
         },

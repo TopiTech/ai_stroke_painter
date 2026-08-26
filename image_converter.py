@@ -10,6 +10,7 @@ from typing import Any
 import uuid
 
 from .domain import MAX_PLAN_STROKES, DrawingPlan, Stroke
+from .procedural import infer_palette_from_prompt
 from .procedural.base import catmull_rom_spline, color_palette, create_stroke, sample_strokes_by_priority
 from .qt_compat import QBuffer, QByteArray, QImage, QIODevice, argb32_image_format, write_only_open_mode
 from .stroke_program import compile_stroke_program, drawing_plan_to_stroke_program
@@ -249,6 +250,62 @@ def _find_closest_palette_color(r: int, g: int, b: int, palette_hex_list: list[s
     return best_color
 
 
+def _infer_best_palette_for_image(
+    pixels: list[tuple[int, int, int]],
+    prompt: str = "",
+) -> str:
+    """プロンプトおよび画像画素の色彩統計から最適なカラーパレットを自動選択する。"""
+    if prompt:
+        prompt_palette = infer_palette_from_prompt(prompt)
+        if prompt_palette != "anime":
+            return prompt_palette
+    if not pixels:
+        return "anime"
+
+    candidate_names = (
+        "anime",
+        "monochrome",
+        "cyberpunk",
+        "nature",
+        "pastel",
+        "watercolor",
+        "retro_pop",
+        "dark_fantasy",
+        "sepia",
+        "botanical",
+        "sumie",
+        "cyber_gold",
+    )
+    candidate_palettes: list[tuple[str, list[tuple[float, float, float]]]] = []
+    for name in candidate_names:
+        hexes = list(color_palette(name).values())
+        oklab_colors: list[tuple[float, float, float]] = []
+        for h in hexes:
+            rgb_t = _hex_to_rgb(h)
+            oklab_colors.append(_rgb_to_oklab(*rgb_t))
+        candidate_palettes.append((name, oklab_colors))
+
+    sample_stride = max(1, len(pixels) // 100)
+    sample_oklabs = [_rgb_to_oklab(*px) for px in pixels[::sample_stride]]
+    if not sample_oklabs:
+        return "anime"
+
+    best_palette = "anime"
+    min_total_dist = float("inf")
+    for name, pal_oklabs in candidate_palettes:
+        if not pal_oklabs:
+            continue
+        total_dist = 0.0
+        for sl, sa, sb in sample_oklabs:
+            best_pixel_dist = min(1.15 * (sl - pl) ** 2 + (sa - pa) ** 2 + (sb - pb) ** 2 for pl, pa, pb in pal_oklabs)
+            total_dist += best_pixel_dist
+        if total_dist < min_total_dist:
+            min_total_dist = total_dist
+            best_palette = name
+
+    return best_palette
+
+
 _EDGE_NEIGHBORS = ((-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1))
 
 
@@ -317,6 +374,36 @@ def _trace_edge_paths(edge_mask: list[list[bool]], max_paths: int) -> list[list[
 
     paths.sort(key=lambda path: (-len(path), path[0][1], path[0][0]))
     return paths
+
+
+def _rdp_simplify(points: list[tuple[float, float]], epsilon: float) -> list[tuple[float, float]]:
+    """Ramer-Douglas-Peucker (RDP) アルゴリズムによる点列の幾何学的単純化。"""
+    if len(points) < 3:
+        return list(points)
+
+    dmax = 0.0
+    index = 0
+    p1 = points[0]
+    p2 = points[-1]
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    line_len = math.hypot(dx, dy)
+
+    for i in range(1, len(points) - 1):
+        p = points[i]
+        if line_len > 1e-6:
+            d = abs(dy * p[0] - dx * p[1] + p2[0] * p1[1] - p2[1] * p1[0]) / line_len
+        else:
+            d = math.hypot(p[0] - p1[0], p[1] - p1[1])
+        if d > dmax:
+            index = i
+            dmax = d
+
+    if dmax > epsilon:
+        rec_results1 = _rdp_simplify(points[: index + 1], epsilon)
+        rec_results2 = _rdp_simplify(points[index:], epsilon)
+        return rec_results1[:-1] + rec_results2
+    return [points[0], points[-1]]
 
 
 class ImageStrokeConverter:
@@ -399,6 +486,7 @@ class ImageStrokeConverter:
             color_mode=color_mode,
             palette_name=palette_name,
             brush_profile=brush_profile,
+            prompt=prompt,
         )
 
         if not strokes:
@@ -411,7 +499,7 @@ class ImageStrokeConverter:
             title="Image Reference Art",
             iteration=1,
             layers=["Flats", "Shading", "Lineart", "Highlights"],
-            metadata={"generator": "image_to_stroke"},
+            metadata={"generator": "image_to_stroke", "palette": palette_name, "color_mode": color_mode},
             canvas_width=target_width,
             canvas_height=target_height,
         )
@@ -436,6 +524,7 @@ class ImageStrokeConverter:
         color_mode: str = "original",
         palette_name: str = "anime",
         brush_profile: str = "auto",
+        prompt: str = "",
     ) -> list[Stroke]:
         # 細部を固定160pxへ潰さず、長辺と総画素の二重予算で解析解像度を適応させる。
         source_w = qimg.width()
@@ -458,7 +547,20 @@ class ImageStrokeConverter:
         if hasattr(scaled, "convertToFormat") and argb32_format is not None:
             scaled = scaled.convertToFormat(argb32_format)
 
-        palette_hexes = list(color_palette(palette_name).values()) if color_mode == "palette" else []
+        if color_mode == "palette":
+            is_auto_palette = not palette_name or palette_name.strip().lower() == "auto"
+            if is_auto_palette:
+                sample_pixels: list[tuple[int, int, int]] = []
+                for y in range(grid_h):
+                    for x in range(grid_w):
+                        px = scaled.pixelColor(x, y)
+                        sample_pixels.append((px.red(), px.green(), px.blue()))
+                resolved_palette = _infer_best_palette_for_image(sample_pixels, prompt)
+            else:
+                resolved_palette = palette_name.strip().lower()
+            palette_hexes = list(color_palette(resolved_palette).values())
+        else:
+            palette_hexes = []
 
         # 輝度マップとカラーマップの構築
         luminance_map: list[list[float]] = []
@@ -629,14 +731,16 @@ class ImageStrokeConverter:
             edge_paths = raw_edge_paths
 
         for i, pixel_path in enumerate(edge_paths):
-            sample_step = max(1, math.ceil(len(pixel_path) / 24))
-            control_pixels = pixel_path[::sample_step]
-            if control_pixels[-1] != pixel_path[-1]:
-                control_pixels.append(pixel_path[-1])
-            controls = [(offset_x + px * fit_scale, offset_y + py * fit_scale) for px, py in control_pixels]
+            raw_controls = [(offset_x + px * fit_scale, offset_y + py * fit_scale) for px, py in pixel_path]
+            simplified = _rdp_simplify(raw_controls, epsilon=max(1.0, fit_scale * 0.75))
+            if len(simplified) > 24:
+                sample_step = max(1, math.ceil(len(simplified) / 24))
+                simplified = simplified[::sample_step]
+                if simplified[-1] != raw_controls[-1]:
+                    simplified.append(raw_controls[-1])
             mid_x, mid_y = pixel_path[len(pixel_path) // 2]
             col = color_map[mid_y][mid_x]
-            spline = catmull_rom_spline(controls, 2) if len(controls) >= 3 else controls
+            spline = catmull_rom_spline(simplified, 4) if len(simplified) >= 3 else simplified
             strokes.append(
                 create_stroke(
                     spline,

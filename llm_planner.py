@@ -135,8 +135,12 @@ def _get_stroke_program_json_schema() -> dict[str, Any]:
                 "points": {"type": "array", "items": point_schema, "minItems": 2},
                 "closed": {"type": "boolean"},
                 "smooth": {"type": "boolean"},
+                "role": {
+                    "type": "string",
+                    "enum": ["auto", "outline", "detail", "accent", "crevice", "hair", "eye", "hatch"],
+                },
             },
-            "required": ["kind", "id", "layer", "points", "brush", "closed", "smooth"],
+            "required": ["kind", "id", "layer", "points", "brush", "closed", "smooth", "role"],
             "additionalProperties": False,
         },
         {
@@ -153,6 +157,52 @@ def _get_stroke_program_json_schema() -> dict[str, Any]:
                 "angle_deg": {"type": "number"},
             },
             "required": ["kind", "id", "layer", "polygon", "brush", "style", "spacing", "angle_deg"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                **common_properties,
+                "kind": {"type": "string", "enum": ["gradient_fill"]},
+                "polygon": {"type": "array", "items": point_schema, "minItems": 3},
+                "colors": {"type": "array", "items": {"type": "string"}},
+                "style": {
+                    "type": "string",
+                    "enum": ["linear", "radial", "contour", "directional", "wash"],
+                },
+                "spacing": {"type": "number"},
+                "angle_deg": {"type": "number"},
+            },
+            "required": ["kind", "id", "layer", "polygon", "colors", "brush", "style", "spacing", "angle_deg"],
+            "additionalProperties": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                **common_properties,
+                "kind": {"type": "string", "enum": ["ribbon"]},
+                "spine": {"type": "array", "items": point_schema, "minItems": 2},
+                "width_start": {"type": "number"},
+                "width_mid": {"type": "number"},
+                "width_end": {"type": "number"},
+                "taper_profile": {
+                    "type": "string",
+                    "enum": ["taper_both", "taper_start", "taper_end", "uniform"],
+                },
+                "smooth": {"type": "boolean"},
+            },
+            "required": [
+                "kind",
+                "id",
+                "layer",
+                "spine",
+                "brush",
+                "width_start",
+                "width_mid",
+                "width_end",
+                "taper_profile",
+                "smooth",
+            ],
             "additionalProperties": False,
         },
         {
@@ -183,7 +233,7 @@ def _get_stroke_program_json_schema() -> dict[str, Any]:
                 "length": {"type": "number"},
                 "angle_deg": {"type": "number"},
                 "angle_jitter": {"type": "number"},
-                "shape": {"type": "string", "enum": ["petal", "line", "sparkle", "drift", "bokeh"]},
+                "shape": {"type": "string", "enum": ["petal", "line", "sparkle", "drift", "bokeh", "splatter", "star"]},
             },
             "required": [
                 "kind",
@@ -1233,7 +1283,7 @@ def _system_instruction(
     width: float = 1000.0,
     height: float = 1000.0,
     prompt: str = "",
-    palette_name: str = "anime",
+    palette_name: str = "auto",
     brush_profile: str = "auto",
 ) -> str:
     """プロフェッショナルなデジタルイラスト作画戦略・レイヤー階層・空間アンカー・4層ライティングを含む高品質プロンプト。"""
@@ -1297,8 +1347,7 @@ def _system_instruction(
             "  - Main Hero Element (Sakura Tree / Lake): Trunk base at x=0.30 to 0.45, y=0.45 to 0.85; Canopy at y=0.20 to 0.55\n"
             "  - Foreground Ground / Petal Swarm: y=0.75 to 1.00 (Vibrant green/earth tones with scattered drifting petals)\n\n"
             "1. Layer 'Flats' (Complete Seamless Coverage & Base Volumes):\n"
-            f"   - Sky Gradient: Paint multiple dense overlapping horizontal sweep strokes (size_px: {flats_sz}, brush: 'Airbrush Soft' or 'Basic-5 Size') "
-            "from deep blue zenith (#2b5c8f) down to clear sky (#5c93cf), horizon haze (#b8d8f8), and soft white (#eef6ff). Leave NO white canvas gaps.\n"
+            f"   - Sky Gradient: Use 'gradient_fill' with colors [zenith, horizon] (e.g. ['#2b5c8f', '#5c93cf', '#eef6ff'], style: 'linear', angle_deg: 90) or paint multiple dense overlapping horizontal sweep strokes (size_px: {flats_sz}, brush: 'Airbrush Soft'). Leave NO white canvas gaps.\n"
             f"   - Distant & Midground Mountains: Paint sweeping mountain silhouettes with fill (style: 'directional', angle_deg: 25) or (size_px: {flats_sz}, brush: 'Basic-5 Size'). "
             "Use atmospheric perspective (distant peaks in soft blue-gray #6f829d, nearer peaks in deep pine/slate #283e50).\n"
             f"   - Rolling Hills & Ground: Dense green terrain wash (#4e7d58, #72a37c, #9ec4a5) with organic curving strokes. NEVER use orthogonal wireframe grid hatching on ground.\n"
@@ -1309,9 +1358,9 @@ def _system_instruction(
             f"   - Cloud Undersides: Paint soft purplish shadow bulges under cloud masses with fill (style: 'contour', size_px: {form_shad_sz}, opacity: 0.5-0.7, colors: #92a4bc, #7b8ea7).\n"
             f"   - Blossom Canopy Deep Shadows: Paint deep magenta/purple-pink core shadows underneath blossom clusters with fill (style: 'contour', size_px: {detail_shad_sz}, colors: #a3436a, #842f53).\n"
             "3. Layer 'Lineart' (Organic Tree Anatomy & Crisp Ridge Contours):\n"
-            f"   - Majestic Sakura Tree Trunk & Branches: Draw powerful, organic twisting tree trunks with S-curves and wide root flares (size_px: {main_line_sz}, brush: 'Ink-3 Gpen', colors: #342017, #24140d). "
-            f"Branch hierarchically! Main thick trunk -> major bending limbs -> tapering fine secondary branches (size_px: {detail_line_sz}, pressure: 0.2->0.8->0.1) threading through the pink blossom canopy.\n"
-            f"   - Mountain Crests & Sharp Contours: Outline sharp jagged crags and crisp cloud rim curves (size_px: {main_line_sz}, brush: 'Ink-3 Gpen').\n"
+            f"   - Majestic Sakura Tree Trunk & Branches: Draw powerful, organic twisting tree trunks with S-curves and wide root flares (role: 'outline', size_px: {main_line_sz}, brush: 'Ink-3 Gpen', colors: #342017, #24140d). "
+            f"Branch hierarchically! Main thick trunk -> major bending limbs -> tapering fine secondary branches (role: 'detail', size_px: {detail_line_sz}, pressure: 0.2->0.8->0.1) threading through the pink blossom canopy.\n"
+            f"   - Mountain Crests & Sharp Contours: Outline sharp jagged crags and crisp cloud rim curves (role: 'outline', size_px: {main_line_sz}, brush: 'Ink-3 Gpen').\n"
             "4. Layer 'Highlights' & 'FX' (Light Accents & Falling Petal Blizzard):\n"
             f"   - Falling Petal Blizzard: Use particle operations with 'shape': 'petal' or scatter individual curved petal strokes drifting on wind (size_px: {detail_line_sz}, colors: #ffffff, #ffe6f0, #ffd0e2) across foreground and midground.\n"
             f"   - Luminous Rim Lighting & Cloud Edges: Pure glowing white/pale-gold rim highlights on sunny mountain peaks and top cloud rims (size_px: {hl_glint_sz}, colors: #ffffff, #fffde6).\n"
@@ -1552,9 +1601,19 @@ def _system_instruction(
         '   - Add path operations with `"brush":{"profile":"eraser","is_eraser":true,...}` to sculpt contours, fix color bleeds, or carve highlights.\n'
         "   - Any size_px target in the art direction must be encoded as brush.size with brush.size_mode='px'; preset names map to brush.preset_hint. Prefer ratio sizes for resolution independence.\n\n"
         f"{aspect_info}"
-        f"=== PALETTE DIRECTION: {palette_name.upper()} ===\n"
-        f"Harmonize colors to match the '{palette_name}' aesthetic: prioritize cohesive color theory (warm lights, cool shadows, vibrant SSS accents), distinct value contrast, and radiant specular highlights.\n"
-        f"=== BRUSH OVERRIDE: {brush_profile.upper()} ===\n"
+        + (
+            "=== PALETTE DIRECTION: AUTO ===\n"
+            "Choose a cohesive, subject-appropriate color palette that harmonizes the scene: "
+            "prioritize cohesive color theory (warm lights, cool shadows, vibrant SSS accents), "
+            "distinct value contrast, and radiant specular highlights.\n"
+            if not palette_name or palette_name.strip().lower() == "auto"
+            else (
+                f"=== PALETTE DIRECTION: {palette_name.upper()} ===\n"
+                f"Harmonize colors to match the '{palette_name}' aesthetic: prioritize cohesive color theory "
+                f"(warm lights, cool shadows, vibrant SSS accents), distinct value contrast, and radiant specular highlights.\n"
+            )
+        )
+        + f"=== BRUSH OVERRIDE: {brush_profile.upper()} ===\n"
         f"The UI-selected brush profile is '{brush_profile}'. Use it for normal operations; eraser operations remain erasers.\n"
         f"{domain_guidance}"
         f"{progressive_section}"
@@ -3526,7 +3585,8 @@ def _apply_llm_style_constraints(
 ) -> DrawingPlan:
     """UI で選んだブラシとパレットを、モデルの自由記述より優先して確実に適用する。"""
     normalized_profile = canonical_brush_profile(brush_profile)
-    recolored = recolor_strokes_to_palette(list(plan.strokes), palette_name)
+    is_auto_palette = not palette_name or palette_name.strip().lower() == "auto"
+    recolored = list(plan.strokes) if is_auto_palette else recolor_strokes_to_palette(list(plan.strokes), palette_name)
     constrained: list[Stroke] = []
     for stroke in recolored:
         if normalized_profile == "auto" or stroke.is_eraser:
@@ -3562,7 +3622,7 @@ def _apply_llm_style_constraints(
     metadata["style_constraints"] = {
         "brush_profile": normalized_profile,
         "palette": palette_name,
-        "palette_locked": True,
+        "palette_locked": not is_auto_palette,
     }
     return DrawingPlan(
         prompt=plan.prompt,

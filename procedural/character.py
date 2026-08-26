@@ -515,6 +515,31 @@ def generate_character_strokes(
         )
     )
 
+    # 首落ち影の境界のSSS血色・赤みライン (Subsurface Scattering Flush Border)
+    neck_sss_border = catmull_rom_spline(
+        [
+            (cx - scale * 0.08, jaw_y + scale * 0.015),
+            (cx, jaw_y + scale * 0.065),
+            (cx + scale * 0.08, jaw_y + scale * 0.015),
+        ],
+        samples_per_segment=8,
+    )
+    strokes.append(
+        create_stroke(
+            neck_sss_border,
+            profile_type="airbrush",
+            base_pressure=0.55,
+            color=colors.get("skin_sss", colors["skin_shadow"]),
+            size_px=4.0,
+            layer_name="Shading",
+            opacity=0.45,
+            rng=rng,
+            width=width,
+            height=height,
+            stroke_id=uid("neck_sss_flush"),
+        )
+    )
+
     # (H) 胸鎖乳突筋＆鎖骨の陰影 (Sternocleidomastoid & Clavicle Shading)
     scm_l = catmull_rom_spline(
         [(cx - scale * 0.07, jaw_y + scale * 0.02), (cx - scale * 0.02, cy + scale * 0.38)], samples_per_segment=6

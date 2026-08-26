@@ -551,6 +551,11 @@ if not HAS_QT:
                 return self._items[index][1]
             return None
 
+        def itemText(self, index: int) -> str:
+            if 0 <= index < len(self._items):
+                return self._items[index][0]
+            return ""
+
         def count(self) -> int:
             return len(self._items)
 

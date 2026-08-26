@@ -454,7 +454,7 @@ class PlanWorker(QObject):
         height: float = 1000.0,
         image_data: bytes | None = None,
         max_iterations: int = 1,
-        palette_name: str = "anime",
+        palette_name: str = "auto",
         brush_profile: str = "auto",
         edge_threshold: float = 0.18,
         shading_density: str = "medium",
@@ -920,6 +920,7 @@ class AIStrokePainterDocker(DockWidget):
         style_row = QHBoxLayout()
         style_row.addWidget(QLabel("パレット"))
         self.palette_combo = QComboBox()
+        self.palette_combo.addItem("自動 (Auto)", "auto")
         self.palette_combo.addItem("アニメカラー", "anime")
         self.palette_combo.addItem("モノクロ線画", "monochrome")
         self.palette_combo.addItem("サイバーパンク", "cyberpunk")
@@ -1292,7 +1293,7 @@ class AIStrokePainterDocker(DockWidget):
 
         data = {
             "prompt": prompt_w.toPlainText() if prompt_w is not None and hasattr(prompt_w, "toPlainText") else "",
-            "palette": pal_w.currentData() if pal_w is not None and hasattr(pal_w, "currentData") else "anime",
+            "palette": pal_w.currentData() if pal_w is not None and hasattr(pal_w, "currentData") else "auto",
             "count": count_w.value() if count_w is not None and hasattr(count_w, "value") else 35,
             "brush_profile": prof_w.currentData() if prof_w is not None and hasattr(prof_w, "currentData") else "auto",
             "brush_size": bs_w.value() if bs_w is not None and hasattr(bs_w, "value") else 1.0,
@@ -1690,7 +1691,7 @@ class AIStrokePainterDocker(DockWidget):
                 settings.setValue("auto_count", w.isChecked())
             w = _get_attr(self, "palette_combo")
             if w is not None and hasattr(w, "currentData"):
-                settings.setValue("palette", w.currentData() or "anime")
+                settings.setValue("palette", w.currentData() or "auto")
             w = _get_attr(self, "brush_profile")
             if w is not None and hasattr(w, "currentData"):
                 settings.setValue("brush_profile", w.currentData() or "auto")
@@ -2196,7 +2197,7 @@ class AIStrokePainterDocker(DockWidget):
             if goal_mode
             else (iter_w.value() if iter_w is not None and ref_w is not None and is_openai and ref_w.isChecked() else 1)
         )
-        palette = (pal_w.currentData() or "anime") if pal_w is not None and hasattr(pal_w, "currentData") else "anime"
+        palette = (pal_w.currentData() or "auto") if pal_w is not None and hasattr(pal_w, "currentData") else "auto"
         profile = (prof_w.currentData() or "auto") if prof_w is not None and hasattr(prof_w, "currentData") else "auto"
         size_val = bs_w.value() if bs_w is not None and hasattr(bs_w, "value") else 1.0
         op_val = op_w.value() if op_w is not None and hasattr(op_w, "value") else 100

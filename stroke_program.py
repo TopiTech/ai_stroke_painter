@@ -318,6 +318,7 @@ class PathOperation:
     layer: str = "Lineart"
     closed: bool = False
     smooth: bool = True
+    role: str = "auto"
     kind: Literal["path"] = "path"
 
     def __post_init__(self) -> None:
@@ -330,6 +331,11 @@ class PathOperation:
         object.__setattr__(self, "points", points)
         if not isinstance(self.closed, bool) or not isinstance(self.smooth, bool):
             raise PlanValidationError("path closed/smooth は真偽値である必要があります")
+        if not isinstance(self.role, str):
+            raise PlanValidationError("path role は文字列である必要があります")
+        valid_roles = {"auto", "outline", "detail", "accent", "crevice", "hair", "eye", "hatch"}
+        r_low = self.role.strip().lower()
+        object.__setattr__(self, "role", r_low if r_low in valid_roles else "auto")
 
 
 @dataclass(frozen=True)
@@ -368,6 +374,78 @@ class FillOperation:
             )
         object.__setattr__(self, "style", self.style.strip().lower())
         object.__setattr__(self, "angle_deg", _finite(self.angle_deg, "fill angle_deg") % 360.0)
+
+
+@dataclass(frozen=True)
+class GradientFillOperation:
+    """多色・線形/放射グラデーションで面を滑らかに満たす高品位フィルオペレーション。"""
+
+    id: str
+    polygon: Sequence[ProgramPoint]
+    colors: Sequence[str] = ()
+    brush: ProgramBrush = field(default_factory=lambda: ProgramBrush(profile="watercolor", size=0.04))
+    layer: str = "Flats"
+    spacing: float = 0.65
+    style: str = "linear"
+    angle_deg: float = 0.0
+    kind: Literal["gradient_fill"] = "gradient_fill"
+
+    def __post_init__(self) -> None:
+        _validate_operation_common(self.id, self.layer, self.brush)
+        polygon = tuple(self.polygon)
+        if not 3 <= len(polygon) <= MAX_OPERATION_POINTS:
+            raise PlanValidationError(f"gradient_fill polygon は 3 から {MAX_OPERATION_POINTS} 点必要です")
+        if any(not isinstance(point, ProgramPoint) for point in polygon):
+            raise PlanValidationError("gradient_fill polygon は ProgramPoint である必要があります")
+        object.__setattr__(self, "polygon", polygon)
+        object.__setattr__(
+            self,
+            "colors",
+            tuple(normalize_hex_color(c) for c in self.colors) if self.colors else (self.brush.color, "#ffffff"),
+        )
+        spacing = _finite(self.spacing, "gradient_fill spacing")
+        if not 0.1 <= spacing <= 1.5:
+            raise PlanValidationError("gradient_fill spacing は 0.1 から 1.5 の範囲である必要があります")
+        object.__setattr__(self, "spacing", spacing)
+        st_low = str(self.style).strip().lower()
+        if st_low not in {"linear", "radial", "contour", "directional", "wash"}:
+            st_low = "linear"
+        object.__setattr__(self, "style", st_low)
+        object.__setattr__(self, "angle_deg", _finite(self.angle_deg, "gradient_fill angle_deg") % 360.0)
+
+
+@dataclass(frozen=True)
+class RibbonOperation:
+    """髪の毛束・リボン・布のドレープ等、幅が連続変化する立体ストロークオペレーション。"""
+
+    id: str
+    spine: Sequence[ProgramPoint]
+    brush: ProgramBrush = field(default_factory=lambda: ProgramBrush(profile="brush", size=0.015))
+    layer: str = "Lineart"
+    width_start: float = 0.008
+    width_mid: float = 0.025
+    width_end: float = 0.003
+    taper_profile: str = "taper_both"
+    smooth: bool = True
+    kind: Literal["ribbon"] = "ribbon"
+
+    def __post_init__(self) -> None:
+        _validate_operation_common(self.id, self.layer, self.brush)
+        spine = tuple(self.spine)
+        if not 2 <= len(spine) <= MAX_OPERATION_POINTS:
+            raise PlanValidationError(f"ribbon spine は 2 から {MAX_OPERATION_POINTS} 点必要です")
+        if any(not isinstance(point, ProgramPoint) for point in spine):
+            raise PlanValidationError("ribbon spine は ProgramPoint である必要があります")
+        object.__setattr__(self, "spine", spine)
+        object.__setattr__(self, "width_start", max(0.0005, min(0.5, _finite(self.width_start, "ribbon width_start"))))
+        object.__setattr__(self, "width_mid", max(0.0005, min(0.5, _finite(self.width_mid, "ribbon width_mid"))))
+        object.__setattr__(self, "width_end", max(0.0005, min(0.5, _finite(self.width_end, "ribbon width_end"))))
+        tp_low = str(self.taper_profile).strip().lower()
+        if tp_low not in {"taper_both", "taper_start", "taper_end", "uniform"}:
+            tp_low = "taper_both"
+        object.__setattr__(self, "taper_profile", tp_low)
+        if not isinstance(self.smooth, bool):
+            raise PlanValidationError("ribbon smooth は真偽値である必要があります")
 
 
 @dataclass(frozen=True)
@@ -436,9 +514,11 @@ class ParticleOperation:
             "sparkle",
             "drift",
             "bokeh",
+            "splatter",
+            "star",
         }:
             raise PlanValidationError(
-                "particle shape は petal, line, sparkle, drift, bokeh のいずれかである必要があります"
+                "particle shape は petal, line, sparkle, drift, bokeh, splatter, star のいずれかである必要があります"
             )
         object.__setattr__(self, "shape", self.shape.strip().lower())
 
@@ -485,7 +565,15 @@ class MacroOperation:
         object.__setattr__(self, "params", dict(self.params))
 
 
-ProgramOperation: TypeAlias = PathOperation | FillOperation | HatchOperation | ParticleOperation | MacroOperation
+ProgramOperation: TypeAlias = (
+    PathOperation
+    | FillOperation
+    | GradientFillOperation
+    | RibbonOperation
+    | HatchOperation
+    | ParticleOperation
+    | MacroOperation
+)
 
 
 def _validate_operation_common(operation_id: str, layer: str, brush: ProgramBrush) -> None:
@@ -524,7 +612,7 @@ def operation_from_dict(
     if kind == "path":
         _reject_unknown_keys(
             value,
-            {"kind", "id", "points", "brush", "layer", "layer_name", "closed", "smooth"},
+            {"kind", "id", "points", "brush", "layer", "layer_name", "closed", "smooth", "role"},
             "path operation",
         )
         return PathOperation(
@@ -534,6 +622,7 @@ def operation_from_dict(
             layer=value.get("layer", value.get("layer_name", "Lineart")),
             closed=value.get("closed", False),
             smooth=value.get("smooth", True),
+            role=value.get("role", "auto"),
         )
     if kind == "fill":
         _reject_unknown_keys(
@@ -570,6 +659,89 @@ def operation_from_dict(
             spacing=value.get("spacing", 0.72),
             style=value.get("style", "wash"),
             angle_deg=value.get("angle_deg", value.get("angle", 0.0)),
+        )
+    if kind == "gradient_fill":
+        _reject_unknown_keys(
+            value,
+            {
+                "kind",
+                "id",
+                "polygon",
+                "points",
+                "colors",
+                "brush",
+                "layer",
+                "layer_name",
+                "spacing",
+                "style",
+                "angle_deg",
+                "angle",
+            },
+            "gradient_fill operation",
+        )
+        raw_colors = value.get("colors", ())
+        grad_colors_tuple = (
+            tuple(normalize_hex_color(c) for c in raw_colors if isinstance(c, (str, int)))
+            if isinstance(raw_colors, Sequence) and not isinstance(raw_colors, (str, bytes))
+            else ()
+        )
+        return GradientFillOperation(
+            id=operation_id,
+            polygon=_points_from(
+                value.get("polygon", value.get("points", ())),
+                "gradient_fill polygon",
+                canvas_w=canvas_w,
+                canvas_h=canvas_h,
+            ),
+            colors=grad_colors_tuple,
+            brush=(
+                ProgramBrush.from_dict(value["brush"])
+                if "brush" in value
+                else ProgramBrush(profile="watercolor", size=0.04)
+            ),
+            layer=value.get("layer", value.get("layer_name", "Flats")),
+            spacing=value.get("spacing", 0.65),
+            style=value.get("style", "linear"),
+            angle_deg=value.get("angle_deg", value.get("angle", 0.0)),
+        )
+    if kind == "ribbon":
+        _reject_unknown_keys(
+            value,
+            {
+                "kind",
+                "id",
+                "spine",
+                "points",
+                "brush",
+                "layer",
+                "layer_name",
+                "width_start",
+                "width_mid",
+                "width_end",
+                "taper_profile",
+                "smooth",
+            },
+            "ribbon operation",
+        )
+        return RibbonOperation(
+            id=operation_id,
+            spine=_points_from(
+                value.get("spine", value.get("points", ())),
+                "ribbon spine",
+                canvas_w=canvas_w,
+                canvas_h=canvas_h,
+            ),
+            brush=(
+                ProgramBrush.from_dict(value["brush"])
+                if "brush" in value
+                else ProgramBrush(profile="brush", size=0.015)
+            ),
+            layer=value.get("layer", value.get("layer_name", "Lineart")),
+            width_start=value.get("width_start", 0.008),
+            width_mid=value.get("width_mid", 0.025),
+            width_end=value.get("width_end", 0.003),
+            taper_profile=value.get("taper_profile", "taper_both"),
+            smooth=value.get("smooth", True),
         )
     if kind == "hatch":
         _reject_unknown_keys(
@@ -758,7 +930,18 @@ class StrokeProgram:
         if not 1 <= len(operations) <= MAX_PROGRAM_OPERATIONS:
             raise PlanValidationError(f"operations は1から{MAX_PROGRAM_OPERATIONS}件必要です")
         if any(
-            not isinstance(operation, (PathOperation, FillOperation, HatchOperation, ParticleOperation, MacroOperation))
+            not isinstance(
+                operation,
+                (
+                    PathOperation,
+                    FillOperation,
+                    GradientFillOperation,
+                    RibbonOperation,
+                    HatchOperation,
+                    ParticleOperation,
+                    MacroOperation,
+                ),
+            )
             for operation in operations
         ):
             raise PlanValidationError("operations に未対応の値があります")
@@ -831,17 +1014,32 @@ class StrokeProgram:
                     points=[point.as_list() for point in operation.points],
                     closed=operation.closed,
                     smooth=operation.smooth,
+                    role=operation.role,
                 )
-            elif isinstance(operation, (FillOperation, HatchOperation)):
+            elif isinstance(operation, (FillOperation, HatchOperation, GradientFillOperation)):
                 item["polygon"] = [point.as_list() for point in operation.polygon]
                 item["spacing"] = operation.spacing
                 if isinstance(operation, FillOperation):
                     item["style"] = operation.style
                     if abs(operation.angle_deg) > 1e-3:
                         item["angle_deg"] = operation.angle_deg
+                elif isinstance(operation, GradientFillOperation):
+                    item["style"] = operation.style
+                    item["colors"] = list(operation.colors)
+                    if abs(operation.angle_deg) > 1e-3:
+                        item["angle_deg"] = operation.angle_deg
                 elif isinstance(operation, HatchOperation):
                     item["angle_deg"] = operation.angle_deg
                     item["cross"] = operation.cross
+            elif isinstance(operation, RibbonOperation):
+                item.update(
+                    spine=[point.as_list() for point in operation.spine],
+                    width_start=operation.width_start,
+                    width_mid=operation.width_mid,
+                    width_end=operation.width_end,
+                    taper_profile=operation.taper_profile,
+                    smooth=operation.smooth,
+                )
             elif isinstance(operation, ParticleOperation):
                 item.update(
                     bounds=list(operation.bounds),
@@ -928,6 +1126,30 @@ def _make_stroke(
     )
 
 
+def _interpolate_color_hex(c1: str, c2: str, t: float) -> str:
+    """2つのHEXカラーをRGB空間で補間する。"""
+    t = max(0.0, min(1.0, float(t)))
+    r1, g1, b1 = (int(c1[i : i + 2], 16) for i in (1, 3, 5))
+    r2, g2, b2 = (int(c2[i : i + 2], 16) for i in (1, 3, 5))
+    r = round(r1 + (r2 - r1) * t)
+    g = round(g1 + (g2 - g1) * t)
+    b = round(b1 + (b2 - b1) * t)
+    return f"#{max(0, min(255, r)):02x}{max(0, min(255, g)):02x}{max(0, min(255, b)):02x}"
+
+
+def _multi_color_interpolate(colors: Sequence[str], t: float) -> str:
+    """複数のカラーストップから位置 t (0.0-1.0) の補間色を計算する。"""
+    if not colors:
+        return "#232323"
+    if len(colors) == 1:
+        return colors[0]
+    t = max(0.0, min(1.0, float(t)))
+    scaled = t * (len(colors) - 1)
+    idx = min(len(colors) - 2, int(scaled))
+    fraction = scaled - idx
+    return _interpolate_color_hex(colors[idx], colors[idx + 1], fraction)
+
+
 def _compile_path(program: StrokeProgram, operation: PathOperation) -> list[Stroke]:
     controls = [
         (point.x * program.canvas_width, point.y * program.canvas_height, point.pressure) for point in operation.points
@@ -950,17 +1172,35 @@ def _compile_path(program: StrokeProgram, operation: PathOperation) -> list[Stro
         step = (len(dense) - 1) / float(MAX_OPERATION_POINTS - 1)
         dense = [dense[int(round(i * step))] for i in range(MAX_OPERATION_POINTS - 1)] + [dense[-1]]
 
-    # インテリジェント線画ダイナミクス（スマートテーパリング & 曲率連動インク溜まり）
+    # 階層的線画ダイナミクス（Role連動テーパリング & 曲率インク溜まり & 端点抜き）
     n_pts = len(dense)
+    role = getattr(operation, "role", "auto")
     if not operation.closed and n_pts >= 3:
         modulated_dense: list[tuple[float, float, float]] = []
         for i, (px, py, p_press) in enumerate(dense):
             t_norm = i / max(1, n_pts - 1)
             taper_factor = 1.0
-            if t_norm < 0.15:
-                taper_factor = 0.40 + 0.60 * (t_norm / 0.15)
-            elif t_norm > 0.85:
-                taper_factor = 0.40 + 0.60 * ((1.0 - t_norm) / 0.15)
+            if role == "hair":
+                # 髪の毛: 根元が太く、毛先に向かって鋭くシュッと抜ける
+                taper_factor = 0.85 * (1.0 - t_norm * 0.75) if t_norm > 0.1 else 0.5 + 0.5 * (t_norm / 0.1)
+            elif role == "detail":
+                # 瞳・小鼻・二重等の極細ディテール: 両端を繊細に抜く
+                if t_norm < 0.20:
+                    taper_factor = 0.30 + 0.70 * (t_norm / 0.20)
+                elif t_norm > 0.80:
+                    taper_factor = 0.30 + 0.70 * ((1.0 - t_norm) / 0.20)
+            elif role == "outline":
+                # 主線・外輪郭: しっかりした芯のある線 + 適度な入り抜き
+                if t_norm < 0.10:
+                    taper_factor = 0.55 + 0.45 * (t_norm / 0.10)
+                elif t_norm > 0.90:
+                    taper_factor = 0.55 + 0.45 * ((1.0 - t_norm) / 0.10)
+            else:
+                # 標準 (auto / accent / crevice)
+                if t_norm < 0.15:
+                    taper_factor = 0.40 + 0.60 * (t_norm / 0.15)
+                elif t_norm > 0.85:
+                    taper_factor = 0.40 + 0.60 * ((1.0 - t_norm) / 0.15)
 
             curvature_factor = 1.0
             span = max(1, min(6, n_pts // 5))
@@ -975,13 +1215,141 @@ def _compile_path(program: StrokeProgram, operation: PathOperation) -> list[Stro
                     dot = (v1_x * v2_x + v1_y * v2_y) / (len1 * len2)
                     dot = max(-1.0, min(1.0, dot))
                     if dot < 0.85:
-                        curvature_factor = 1.0 + 0.35 * (0.85 - dot)
+                        accel = 0.45 if role == "outline" else 0.35
+                        curvature_factor = 1.0 + accel * (0.85 - dot)
 
             final_press = max(0.05, min(1.0, p_press * taper_factor * curvature_factor))
             modulated_dense.append((px, py, final_press))
         dense = modulated_dense
 
     return [_make_stroke(program, operation, 0, dense)]
+
+
+def _compile_ribbon(program: StrokeProgram, operation: RibbonOperation, limit: int) -> list[Stroke]:
+    """髪の毛束・リボン・布のドレープ等を立体ストローク群へコンパイルする。"""
+    w = program.canvas_width
+    h = program.canvas_height
+    scale = min(w, h)
+    spine_pts = [(p.x * w, p.y * h, p.pressure) for p in operation.spine]
+    if len(spine_pts) < 2:
+        return []
+
+    if operation.smooth and len(spine_pts) >= 3:
+        coords = [(x, y) for x, y, _p in spine_pts]
+        smooth_coords = _catmull_rom_spline(coords, samples_per_segment=8)
+        dense: list[tuple[float, float, float]] = []
+        max_u = len(spine_pts) - 1
+        for idx, (sx, sy) in enumerate(smooth_coords):
+            u = (idx / max(1, len(smooth_coords) - 1)) * max_u
+            left = min(max_u - 1, int(u))
+            frac = u - left
+            pr = spine_pts[left][2] + (spine_pts[left + 1][2] - spine_pts[left][2]) * frac
+            dense.append((sx, sy, pr))
+    else:
+        dense = spine_pts
+
+    n = len(dense)
+    if n < 2:
+        return []
+
+    w_start = operation.width_start * scale
+    w_mid = operation.width_mid * scale
+    w_end = operation.width_end * scale
+    taper_prof = operation.taper_profile
+
+    # 各点での法線ベクトルと幅の計算
+    left_edge: list[tuple[float, float, float]] = []
+    right_edge: list[tuple[float, float, float]] = []
+    center_ridge: list[tuple[float, float, float]] = []
+
+    for i in range(n):
+        cx, cy, cp = dense[i]
+        t = i / max(1, n - 1)
+        if taper_prof == "taper_both":
+            cur_w = w_start * (1.0 - t) * 0.5 + w_mid * (math.sin(t * math.pi)) + w_end * t * 0.5
+        elif taper_prof == "taper_start":
+            cur_w = w_start * (1.0 - t) + w_end * t
+        elif taper_prof == "taper_end":
+            cur_w = w_mid * (1.0 - t * 0.8) + w_end * t * 0.2
+        else:
+            cur_w = w_mid
+
+        # 接線と法線
+        if i == 0:
+            tx = dense[1][0] - cx
+            ty = dense[1][1] - cy
+        elif i == n - 1:
+            tx = cx - dense[n - 2][0]
+            ty = cy - dense[n - 2][1]
+        else:
+            tx = dense[i + 1][0] - dense[i - 1][0]
+            ty = dense[i + 1][1] - dense[i - 1][1]
+
+        t_len = math.hypot(tx, ty)
+        if t_len > 1e-5:
+            nx = -ty / t_len
+            ny = tx / t_len
+        else:
+            nx, ny = 0.0, 1.0
+
+        half_w = cur_w * 0.5
+        p_val = max(0.1, min(1.0, cp * (0.4 + 0.6 * math.sin(t * math.pi))))
+        left_edge.append((cx + nx * half_w, cy + ny * half_w, p_val))
+        right_edge.append((cx - nx * half_w, cy - ny * half_w, p_val))
+        center_ridge.append((cx, cy, max(0.2, cp)))
+
+    strokes: list[Stroke] = []
+    # 1. リボンのメインボリューム（中心の塗りストローク）
+    brush_sz = max(w_mid * 0.75, operation.brush.size_px(w, h))
+    ribbon_body = replace(
+        operation.brush,
+        size=brush_sz if operation.brush.size_mode == "px" else brush_sz / scale,
+        opacity=min(1.0, operation.brush.opacity * 0.85),
+    )
+    strokes.append(
+        _make_stroke(
+            program,
+            replace(operation, brush=ribbon_body),
+            len(strokes),
+            center_ridge,
+        )
+    )
+
+    # 2. リボンの左右の稜線・輪郭ストローク (Lineart)
+    if len(strokes) < limit:
+        edge_brush = replace(
+            operation.brush,
+            size=max(1.5, scale * 0.003),
+            size_mode="px",
+            opacity=0.9,
+            profile="gpen",
+        )
+        strokes.append(
+            _make_stroke(
+                program,
+                replace(operation, brush=edge_brush, layer="Lineart"),
+                len(strokes),
+                left_edge,
+            )
+        )
+    if len(strokes) < limit:
+        edge_brush_r = replace(
+            operation.brush,
+            size=max(1.5, scale * 0.003),
+            size_mode="px",
+            opacity=0.9,
+            profile="gpen",
+        )
+        strokes.append(
+            _make_stroke(
+                program,
+                replace(operation, brush=edge_brush_r, layer="Lineart"),
+                len(strokes),
+                right_edge,
+            )
+        )
+
+    return strokes
 
 
 def _scanline_segments(polygon: Sequence[tuple[float, float]], y: float) -> list[tuple[float, float]]:
@@ -1926,6 +2294,47 @@ def _compile_macro(
     return strokes
 
 
+def _compile_gradient_fill(
+    program: StrokeProgram,
+    operation: GradientFillOperation,
+    limit: int,
+) -> list[Stroke]:
+    """多色グラデーションスキャンライン塗り。"""
+    w = program.canvas_width
+    h = program.canvas_height
+    poly = [(p.x * w, p.y * h) for p in operation.polygon]
+    if len(poly) < 3:
+        return []
+    center = (sum(p[0] for p in poly) / len(poly), sum(p[1] for p in poly) / len(poly))
+    angle = math.radians(operation.angle_deg)
+    rotated = [_rotate(p, center, -angle) for p in poly]
+    min_y = min(p[1] for p in rotated)
+    max_y = max(p[1] for p in rotated)
+    dy_total = max(1.0, max_y - min_y)
+    spacing_scale = 0.55 if operation.style in {"wash", "linear"} else operation.spacing
+    spacing = max(0.5, operation.brush.size_px(w, h) * spacing_scale)
+    strokes: list[Stroke] = []
+    row = 0
+    y = min_y + spacing * 0.5
+    while y < max_y and len(strokes) < limit:
+        segments = _scanline_segments(rotated, y)
+        if row % 2:
+            segments.reverse()
+        t_pos = (y - min_y) / dy_total
+        cur_color = _multi_color_interpolate(operation.colors, t_pos)
+        colored_brush = replace(operation.brush, color=cur_color)
+        for start_x, end_x in segments:
+            if len(strokes) >= limit:
+                break
+            first_x, second_x = (end_x, start_x) if row % 2 else (start_x, end_x)
+            first_rot = _rotate((first_x, y), center, angle)
+            second_rot = _rotate((second_x, y), center, angle)
+            pts = [(first_rot[0], first_rot[1], 1.0), (second_rot[0], second_rot[1], 1.0)]
+            strokes.append(_make_stroke(program, replace(operation, brush=colored_brush), len(strokes), pts))
+        row += 1
+    return strokes
+
+
 def compile_stroke_program(
     program: StrokeProgram,
     count: int | None = None,
@@ -1945,23 +2354,35 @@ def compile_stroke_program(
     ):
         raise ValueError(f"count は1から{MAX_PLAN_STROKES}またはNoneである必要があります")
     operation_budget = max(1, math.ceil(MAX_PLAN_STROKES / len(program.operations)))
-    fill_operations = [operation for operation in program.operations if isinstance(operation, FillOperation)]
+    fill_operations = [
+        operation for operation in program.operations if isinstance(operation, (FillOperation, GradientFillOperation))
+    ]
     fill_budgets: list[int]
     if count is None:
         fill_budgets = [operation_budget] * len(fill_operations)
     else:
         has_non_fill = len(fill_operations) < len(program.operations)
         reserved = count if not has_non_fill else min(count, max(len(fill_operations), round(count * 0.48)))
-        fill_budgets = _allocate_fill_budgets(fill_operations, reserved)
+        fill_budgets = _allocate_fill_budgets([f for f in fill_operations if isinstance(f, FillOperation)], reserved)
+        if len(fill_budgets) < len(fill_operations):
+            fill_budgets = [max(1, reserved // len(fill_operations))] * len(fill_operations)
 
     fill_index = 0
     fill_strokes: list[Stroke] = []
     other_strokes: list[Stroke] = []
     for operation in program.operations:
         if isinstance(operation, FillOperation):
-            compiled = _compile_fill_to_budget(program, operation, fill_budgets[fill_index])
+            budget = fill_budgets[fill_index] if fill_index < len(fill_budgets) else operation_budget
+            compiled = _compile_fill_to_budget(program, operation, budget)
             fill_index += 1
             fill_strokes.extend(compiled)
+        elif isinstance(operation, GradientFillOperation):
+            budget = fill_budgets[fill_index] if fill_index < len(fill_budgets) else operation_budget
+            compiled = _compile_gradient_fill(program, operation, budget)
+            fill_index += 1
+            fill_strokes.extend(compiled)
+        elif isinstance(operation, RibbonOperation):
+            other_strokes.extend(_compile_ribbon(program, operation, operation_budget))
         elif isinstance(operation, PathOperation):
             other_strokes.extend(_compile_path(program, operation))
         elif isinstance(operation, HatchOperation):
