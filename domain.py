@@ -483,6 +483,7 @@ class DrawingPlan:
         ordered_layers.sort(key=lambda layer: (LAYER_RENDER_ORDER.get(layer, 35), original_order[layer]))
 
         mask_index = 0
+        used_svg_layer_ids: set[str] = set()
         for layer_name in ordered_layers:
             strokes = by_layer.get(layer_name, [])
             if not strokes:
@@ -508,8 +509,15 @@ class DrawingPlan:
             elif layer_mode == "multi_layer" and any(token in lowered_layer for token in ("highlight", "fx", "glow")):
                 # SVGにKritaの線形加算と同一の標準指定はないため、近似screenと元モード名を併記する。
                 blend_attributes = ' style="mix-blend-mode:screen" data-krita-blend-mode="addition"'
-            svg_id_layer_name = re.sub(r"[^\w.-]", "_", _xml_safe_text(layer_name))
-            svg_body.append(f'  <g id="layer_{svg_id_layer_name}"{blend_attributes}>')
+            svg_id_layer_name = re.sub(r"[^\w.-]", "_", _xml_safe_text(layer_name)) or "layer"
+            base_layer_id = f"layer_{svg_id_layer_name}"
+            layer_id = base_layer_id
+            collision_index = 2
+            while layer_id in used_svg_layer_ids:
+                layer_id = f"{base_layer_id}_{collision_index}"
+                collision_index += 1
+            used_svg_layer_ids.add(layer_id)
+            svg_body.append(f'  <g id="{layer_id}"{blend_attributes}>')
             svg_body.extend(f"    {line}" for line in layer_content)
             svg_body.append("  </g>")
 
@@ -653,12 +661,10 @@ def combine_drawing_plans(plans: Sequence[DrawingPlan], *, auto_rescale: bool = 
             pw = plan.canvas_width
             ph = plan.canvas_height
             if (
-                pw is not None
-                and ph is not None
-                and (
-                    not math.isclose(target_w, pw, rel_tol=0.0, abs_tol=1e-6)
-                    or not math.isclose(target_h, ph, rel_tol=0.0, abs_tol=1e-6)
-                )
+                pw is None
+                or ph is None
+                or not math.isclose(target_w, pw, rel_tol=0.0, abs_tol=1e-6)
+                or not math.isclose(target_h, ph, rel_tol=0.0, abs_tol=1e-6)
             ):
                 rescaled_plans.append(plan.scale_to(target_w, target_h, fit_mode="scale"))
             else:

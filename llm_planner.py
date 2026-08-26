@@ -30,7 +30,13 @@ from .image_converter import MAX_ENCODED_IMAGE_BYTES, sanitize_reference_image
 from .planner import validate_iterations, validate_plan_request
 from .ports import PlannerPort
 from .procedural.base import pressure_profile, recolor_strokes_to_palette, sample_strokes_by_priority
-from .stroke_program import StrokeProgram, compile_stroke_program, normalize_hex_color
+from .stroke_program import (
+    MAX_OPERATION_POINTS,
+    MAX_PROGRAM_OPERATIONS,
+    StrokeProgram,
+    compile_stroke_program,
+    normalize_hex_color,
+)
 
 AUTO_LLM_STROKE_BUDGET = 500
 
@@ -107,6 +113,15 @@ def _get_stroke_program_json_schema() -> dict[str, Any]:
         "minItems": 2,
         "maxItems": 3,
     }
+
+    def _geometry_schema(min_items: int) -> dict[str, Any]:
+        return {
+            "type": "array",
+            "items": point_schema,
+            "minItems": min_items,
+            "maxItems": MAX_OPERATION_POINTS,
+        }
+
     brush_schema = {
         "type": "object",
         "properties": {
@@ -132,7 +147,7 @@ def _get_stroke_program_json_schema() -> dict[str, Any]:
             "properties": {
                 **common_properties,
                 "kind": {"type": "string", "enum": ["path"]},
-                "points": {"type": "array", "items": point_schema, "minItems": 2},
+                "points": _geometry_schema(2),
                 "closed": {"type": "boolean"},
                 "smooth": {"type": "boolean"},
                 "role": {
@@ -148,7 +163,7 @@ def _get_stroke_program_json_schema() -> dict[str, Any]:
             "properties": {
                 **common_properties,
                 "kind": {"type": "string", "enum": ["fill"]},
-                "polygon": {"type": "array", "items": point_schema, "minItems": 3},
+                "polygon": _geometry_schema(3),
                 "style": {
                     "type": "string",
                     "enum": ["wash", "scanline", "feathered", "contour", "radial", "directional"],
@@ -164,8 +179,8 @@ def _get_stroke_program_json_schema() -> dict[str, Any]:
             "properties": {
                 **common_properties,
                 "kind": {"type": "string", "enum": ["gradient_fill"]},
-                "polygon": {"type": "array", "items": point_schema, "minItems": 3},
-                "colors": {"type": "array", "items": {"type": "string"}},
+                "polygon": _geometry_schema(3),
+                "colors": {"type": "array", "items": {"type": "string"}, "maxItems": 16},
                 "style": {
                     "type": "string",
                     "enum": ["linear", "radial", "contour", "directional", "wash"],
@@ -181,7 +196,7 @@ def _get_stroke_program_json_schema() -> dict[str, Any]:
             "properties": {
                 **common_properties,
                 "kind": {"type": "string", "enum": ["ribbon"]},
-                "spine": {"type": "array", "items": point_schema, "minItems": 2},
+                "spine": _geometry_schema(2),
                 "width_start": {"type": "number"},
                 "width_mid": {"type": "number"},
                 "width_end": {"type": "number"},
@@ -210,7 +225,7 @@ def _get_stroke_program_json_schema() -> dict[str, Any]:
             "properties": {
                 **common_properties,
                 "kind": {"type": "string", "enum": ["hatch"]},
-                "polygon": {"type": "array", "items": point_schema, "minItems": 3},
+                "polygon": _geometry_schema(3),
                 "spacing": {"type": "number"},
                 "angle_deg": {"type": "number"},
                 "cross": {"type": "boolean"},
@@ -344,6 +359,7 @@ def _get_stroke_program_json_schema() -> dict[str, Any]:
                     "type": "array",
                     "items": {"oneOf": operation_schemas},
                     "minItems": 1,
+                    "maxItems": MAX_PROGRAM_OPERATIONS,
                 },
                 "request_canvas_image": {"type": "boolean"},
             },
@@ -2236,7 +2252,7 @@ def _sanitize_and_rescue_program_dict(
     raw_ops: list[Any] = []
     direct_ops = d.get("operations")
     if isinstance(direct_ops, Sequence) and not isinstance(direct_ops, (str, bytes)):
-        raw_ops.extend(direct_ops)
+        raw_ops.extend(direct_ops[:MAX_PROGRAM_OPERATIONS])
     else:
         for alt_key in (
             "strokes_summary",
@@ -2254,7 +2270,7 @@ def _sanitize_and_rescue_program_dict(
         ):
             cand = d.get(alt_key)
             if isinstance(cand, Sequence) and not isinstance(cand, (str, bytes)) and len(cand) > 0:
-                raw_ops.extend(cand)
+                raw_ops.extend(cand[:MAX_PROGRAM_OPERATIONS])
                 break
 
     # レイヤーネスト構造 (例: {"layers": [{"name": "Flats", "operations": [...]}, ...]}) の展開
@@ -2272,11 +2288,17 @@ def _sanitize_and_rescue_program_dict(
                 )
                 if isinstance(l_ops, Sequence) and not isinstance(l_ops, (str, bytes)):
                     for sub_op in l_ops:
+                        if len(raw_ops) >= MAX_PROGRAM_OPERATIONS:
+                            break
                         if isinstance(sub_op, Mapping):
                             sub_d = dict(sub_op)
                             if l_name and not sub_d.get("layer") and not sub_d.get("layer_name"):
                                 sub_d["layer"] = l_name
                             raw_ops.append(sub_d)
+
+    # Keep compatibility rescue paths subject to the same resource budget as
+    # the strict StrokeProgram parser.
+    raw_ops = raw_ops[:MAX_PROGRAM_OPERATIONS]
 
     clean_ops: list[dict[str, Any]] = []
     seen_ids: set[str] = set()
@@ -2292,7 +2314,9 @@ def _sanitize_and_rescue_program_dict(
             res: list[list[float]] = []
             if not isinstance(raw_point_list, Sequence) or isinstance(raw_point_list, (str, bytes)):
                 return res
-            for pt in raw_point_list:
+            for point_index, pt in enumerate(raw_point_list):
+                if point_index >= MAX_OPERATION_POINTS:
+                    break
                 try:
                     if isinstance(pt, Sequence) and not isinstance(pt, (str, bytes)) and len(pt) >= 2:
                         px = float(pt[0])

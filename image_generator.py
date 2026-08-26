@@ -159,6 +159,29 @@ def _validate_endpoint_url(url_str: str, api_key: str = "") -> str:
     return url
 
 
+def _validate_image_download_url(url_str: str, source_endpoint: str) -> str:
+    """Validate an image URL returned by an API without opening private hosts."""
+    url = _validate_endpoint_url(url_str)
+    source_origin = _url_origin(source_endpoint)
+    target_origin = _url_origin(url)
+    if source_origin is not None and source_origin == target_origin:
+        return url
+
+    parsed = urlsplit(url)
+    hostname = (parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme.lower() != "https":
+        raise ImageGenerationError("API が返した画像 URL は HTTPS または同一オリジンである必要があります")
+    if hostname in {"localhost", "localhost.localdomain"}:
+        raise ImageGenerationError("API が返した画像 URL のローカルホスト接続を拒否しました")
+    try:
+        address = ipaddress.ip_address(hostname)
+    except ValueError:
+        address = None
+    if address is not None and not address.is_global:
+        raise ImageGenerationError("API が返した画像 URL のプライベート／予約済みアドレス接続を拒否しました")
+    return url
+
+
 class ImageGeneratorClient:
     """Text-to-Image 画像生成 API を呼び出し、PNG/JPEG 画像バイトを返すクライアント。"""
 
@@ -273,7 +296,7 @@ class ImageGeneratorClient:
                 raw_url = first_item["url"]
                 if not isinstance(raw_url, str) or not raw_url.strip():
                     raise ImageGenerationError("画像 URL が無効です")
-                validated_img_url = _validate_endpoint_url(raw_url)
+                validated_img_url = _validate_image_download_url(raw_url, endpoint)
                 self._log("画像 URL から画像データをダウンロード中...")
                 img_req = Request(validated_img_url, headers={"User-Agent": "AIStrokePainter/2.0"})
                 with opener.open(img_req, timeout=30.0) as img_resp:

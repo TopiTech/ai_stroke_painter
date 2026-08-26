@@ -6,6 +6,7 @@ import base64
 import contextlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import random
 import subprocess
@@ -54,6 +55,7 @@ from .llm_planner import (
     _endpoint_origin_label,
     _extract_content_from_response,
     _extract_json_object,
+    _get_stroke_program_json_schema,
     _is_reasoning_model,
     _mapping_to_drawing_plan,
     _plan_from_response,
@@ -584,6 +586,35 @@ class PlannerAndStorageTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             planner.plan("invalid iteration", 1, 1, 100, 100, iteration=2, max_iterations=1)
+
+    def test_macro_compilation_is_stable_across_python_hash_seeds(self) -> None:
+        package_parent = Path(__file__).resolve().parent.parent
+        code = (
+            "import json\n"
+            "from ai_stroke_painter.stroke_program import StrokeProgram, compile_stroke_program\n"
+            "program = StrokeProgram.from_dict({\n"
+            "  'schema_version': 2, 'prompt': 'macro', 'seed': 37,\n"
+            "  'canvas': {'width': 640, 'height': 480},\n"
+            "  'operations': [{'kind': 'macro', 'id': 'flower-cluster', 'name': 'flower_cluster',\n"
+            "                   'center': [0.5, 0.5], 'radius': 0.2}]\n"
+            "})\n"
+            "print(json.dumps(compile_stroke_program(program).as_dict(), sort_keys=True))\n"
+        )
+        outputs: list[str] = []
+        for hash_seed in ("1", "2"):
+            env = dict(os.environ)
+            env["PYTHONHASHSEED"] = hash_seed
+            result = subprocess.run(
+                [sys.executable, "-c", code],
+                cwd=package_parent,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            outputs.append(result.stdout)
+        self.assertEqual(outputs[0], outputs[1])
 
     def test_planner_keeps_requested_seed_across_iterations_for_combination(self) -> None:
         planner = RuleBasedPlanner()
@@ -1220,6 +1251,24 @@ class PluginBuildTests(unittest.TestCase):
 
 
 class OpenAICompatiblePlannerTests(unittest.TestCase):
+    def test_stroke_program_schema_and_rescue_path_enforce_resource_limits(self) -> None:
+        schema = _get_stroke_program_json_schema()["schema"]
+        operations_schema = schema["properties"]["operations"]
+        self.assertEqual(operations_schema["maxItems"], 2_000)
+        path_schema = operations_schema["items"]["oneOf"][0]
+        self.assertEqual(path_schema["properties"]["points"]["maxItems"], 1_000)
+
+        oversized_points = [[0.0, 0.0] for _ in range(1_001)]
+        oversized_operations = [
+            {"kind": "path", "id": f"op-{index}", "points": oversized_points if index == 0 else [[0, 0], [1, 1]]}
+            for index in range(2_001)
+        ]
+        rescued = _sanitize_and_rescue_program_dict(
+            {"schema_version": 2, "canvas": {"width": 100, "height": 100}, "operations": oversized_operations}
+        )
+        self.assertEqual(len(rescued["operations"]), 2_000)
+        self.assertEqual(len(rescued["operations"][0]["points"]), 1_000)
+
     def test_v2_stroke_program_response_compiles_with_request_contract(self) -> None:
         response = {
             "schema_version": 2,
@@ -3106,6 +3155,27 @@ class CanvasAdapterTests(unittest.TestCase):
         self.assertTrue(canvas.installed[0].eventFilter(canvas, Event(next(iter(_CANVAS_INPUT_EVENT_TYPES)))))
         self.assertFalse(canvas.installed[0].eventFilter(canvas, Event(object())))
 
+        # セッションを使わない直接 render でも、イベント処理中のキャンバス入力を遮断する。
+        standalone_target = _FakeNode("standalone")
+        standalone_document = _FakeDocument(active=standalone_target)
+        standalone_canvas = Canvas()
+        standalone_adapter = KritaCanvasAdapter(layer_mode="active_layer", event_interval=1)
+        with (
+            patch("ai_stroke_painter.krita_adapter._apply_stroke_style"),
+            patch("ai_stroke_painter.krita_adapter._apply_color_to_krita"),
+            patch("ai_stroke_painter.krita_adapter._process_events") as standalone_process_events,
+        ):
+            standalone_adapter.render(
+                standalone_document,
+                plan,
+                layer_mode="active_layer",
+                view=View(standalone_canvas),
+                event_interval=1,
+            )
+        self.assertTrue(standalone_process_events.called)
+        self.assertEqual(len(standalone_canvas.installed), 1)
+        self.assertEqual(standalone_canvas.removed, standalone_canvas.installed)
+
     def test_active_layer_rollback_uses_standard_node_api_without_macros(self) -> None:
         class StandardApiDocument(_FakeDocument):
             def __getattribute__(self, name: str) -> Any:
@@ -3700,6 +3770,54 @@ class WorkerAndDockerTests(unittest.TestCase):
             self.assertFalse(_confirm(None, "Confirm", "Proceed?"))
         with patch("ai_stroke_painter.docker.QMessageBox.question", return_value=yes):
             self.assertTrue(_confirm(None, "Confirm", "Proceed?"))
+
+    def test_docker_close_waits_for_workers_before_ending_canvas_session(self) -> None:
+        class Status:
+            def __init__(self) -> None:
+                self.text = ""
+
+            def setText(self, value: str) -> None:  # noqa: N802
+                self.text = value
+
+        class SlowWorker:
+            def __init__(self) -> None:
+                self.cancelled = False
+
+            def cancel(self) -> None:
+                self.cancelled = True
+
+            def wait(self, _timeout_ms: int) -> bool:
+                return False
+
+            def isRunning(self) -> bool:  # noqa: N802
+                return True
+
+        class CloseEvent:
+            def __init__(self) -> None:
+                self.ignored = False
+
+            def ignore(self) -> None:
+                self.ignored = True
+
+        docker = AIStrokePainterDocker.__new__(AIStrokePainterDocker)
+        docker.status = Status()
+        slow_worker = SlowWorker()
+        docker._worker = cast(Any, slow_worker)
+        docker._connection_worker = None
+        docker._closing = False
+        event = CloseEvent()
+
+        with (
+            patch.object(AIStrokePainterDocker, "_save_settings"),
+            patch.object(AIStrokePainterDocker, "_finish_canvas_session", return_value=True) as finish_session,
+        ):
+            docker.closeEvent(event)
+
+        self.assertTrue(slow_worker.cancelled)
+        self.assertTrue(event.ignored)
+        self.assertFalse(docker._closing)
+        self.assertIn("終了を待っています", docker.status.text)
+        finish_session.assert_not_called()
 
     def test_debug_endpoint_label_never_exposes_url_credentials(self) -> None:
         label = _safe_endpoint_label("https://alice:secret@example.test:8443/v1/secret-token")
@@ -7100,6 +7218,27 @@ class ExtendedCustomizationTests(unittest.TestCase):
         self.assertEqual(len(merged.strokes), 2)
         self.assertEqual((merged.canvas_width, merged.canvas_height), (200.0, 200.0))
 
+    def test_combine_drawing_plans_auto_rescale_handles_partial_dimensions(self) -> None:
+        points = [StrokePoint(0.0, 0.0, 0.8, 0), StrokePoint(90.0, 90.0, 0.8, 10)]
+        partial = DrawingPlan(
+            "same prompt",
+            1,
+            [Stroke("partial", points)],
+            canvas_width=100.0,
+            canvas_height=None,
+        )
+        target = DrawingPlan(
+            "same prompt",
+            1,
+            [Stroke("target", points)],
+            canvas_width=100.0,
+            canvas_height=200.0,
+        )
+
+        merged = combine_drawing_plans([partial, target], auto_rescale=True)
+        self.assertEqual((merged.canvas_width, merged.canvas_height), (100.0, 200.0))
+        self.assertGreater(merged.strokes[0].points[-1].y, 190.0)
+
     def test_svg_export_sanitizes_layer_element_ids(self) -> None:
         """レイヤー名に空白や記号が含まれていてもXML標準準拠のID属性へサニタイズされることを検証。"""
         import xml.etree.ElementTree as ET
@@ -7111,15 +7250,23 @@ class ExtendedCustomizationTests(unittest.TestCase):
             [
                 Stroke("s1", points, layer_name="AI Strokes (editable)"),
                 Stroke("s2", points, layer_name="Draft / Sketch"),
+                Stroke("s3", points, layer_name="A/B"),
+                Stroke("s4", points, layer_name="A?B"),
             ],
-            layers=["AI Strokes (editable)", "Draft / Sketch"],
+            layers=["AI Strokes (editable)", "Draft / Sketch", "A/B", "A?B"],
         )
         svg_content = plan.to_svg(100, 100)
         self.assertIn('id="layer_AI_Strokes__editable_"', svg_content)
         self.assertIn('id="layer_Draft___Sketch"', svg_content)
+        self.assertIn('id="layer_A_B"', svg_content)
+        self.assertIn('id="layer_A_B_2"', svg_content)
         # XMLとして正しくパース可能であることを確認
         root = ET.fromstring(svg_content)
         self.assertEqual(root.tag.split("}")[-1], "svg")
+        layer_ids = [
+            element.attrib["id"] for element in root.iter() if element.attrib.get("id", "").startswith("layer_")
+        ]
+        self.assertEqual(len(layer_ids), len(set(layer_ids)))
 
     def test_fake_signal_disconnect(self) -> None:
         """ヘッドレス環境用 _FakeSignal の disconnect メソッドの個別解除および一括解除を検証。"""
@@ -7917,6 +8064,14 @@ class ImageGeneratorAndPlannerTests(unittest.TestCase):
             with self.assertRaises(ImageGenerationError) as ctx:
                 client.generate_image("test prompt")
             self.assertIn("HTTPS", str(ctx.exception))
+
+        private_resp = json.dumps({"data": [{"url": "https://127.0.0.1/private.png"}]}).encode("utf-8")
+        with patch("ai_stroke_painter.image_generator.build_opener") as mock_opener:
+            mock_inst = mock_opener.return_value
+            mock_inst.open.return_value = FakeHTTPResponse(private_resp)
+            with self.assertRaises(ImageGenerationError) as ctx:
+                client.generate_image("test prompt")
+            self.assertIn("プライベート", str(ctx.exception))
 
         # 2. HTTPS URL returned is accepted and downloaded safely
         valid_png = base64.b64decode(

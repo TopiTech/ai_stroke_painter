@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+import hashlib
 import math
 import random
 import re
@@ -1945,7 +1946,12 @@ def _compile_macro(
     cx = operation.center[0] * w
     cy = operation.center[1] * h
     r = operation.radius * scale
-    rng = random.Random(program.seed + (abs(hash(operation.id)) % 100000))
+    # ``hash()`` is intentionally randomized between Python processes.  Using it
+    # here made the same seed produce different macro artwork after a restart,
+    # which also made saved/replayed programs impossible to compare reliably.
+    operation_digest = hashlib.blake2s(operation.id.encode("utf-8"), digest_size=8).digest()
+    operation_hash = int.from_bytes(operation_digest, "big")
+    rng = random.Random(program.seed + (operation_hash % 100000))
     strokes: list[Stroke] = []
 
     def uid(sub: str, idx: int = 0) -> str:

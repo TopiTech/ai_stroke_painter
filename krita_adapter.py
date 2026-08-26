@@ -521,14 +521,15 @@ class KritaCanvasAdapter(CanvasPort):
                     layer_cache[first_layer] = current_node
                 current_layer_name = first_layer
 
+            if mode == "active_layer":
+                active_input_guard = _install_canvas_input_guard(target_view)
+                # Do not pump user events into an unguarded direct target.
+                process_events_during_render = active_input_guard is not None
+
             if session_active:
                 self._session_mode = mode
                 if generated_container is not None:
                     self._session_container = generated_container
-                if mode == "active_layer":
-                    active_input_guard = _install_canvas_input_guard(target_view)
-                    # Do not pump user events into an unguarded direct target.
-                    process_events_during_render = active_input_guard is not None
 
             if cancelled():
                 return 0

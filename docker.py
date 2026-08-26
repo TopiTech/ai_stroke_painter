@@ -1511,19 +1511,50 @@ class AIStrokePainterDocker(DockWidget):
         """設定を保存し、バックグラウンド処理と描画セッションを安全に終了する。"""
         self._closing = True
         self._save_settings()
-        worker = _get_attr(self, "_worker")
-        if worker is not None:
-            if hasattr(worker, "cancel"):
-                worker.cancel()
-            if hasattr(worker, "wait"):
-                worker.wait(1_500)
-        connection_worker = _get_attr(self, "_connection_worker")
-        if connection_worker is not None:
-            if hasattr(connection_worker, "cancel"):
-                connection_worker.cancel()
-            if hasattr(connection_worker, "wait"):
-                connection_worker.wait(1_500)
-        self._finish_canvas_session(False)
+        workers_stopped = True
+        for worker_name in ("_worker", "_connection_worker"):
+            worker = _get_attr(self, worker_name)
+            if worker is None:
+                continue
+            cancel = getattr(worker, "cancel", None)
+            if callable(cancel):
+                try:
+                    cancel()
+                except Exception:
+                    workers_stopped = False
+            wait_result: Any = None
+            wait = getattr(worker, "wait", None)
+            if callable(wait):
+                try:
+                    wait_result = wait(1_500)
+                except Exception:
+                    workers_stopped = False
+            is_running = getattr(worker, "isRunning", None)
+            if callable(is_running):
+                try:
+                    if bool(is_running()):
+                        workers_stopped = False
+                except Exception:
+                    workers_stopped = False
+            elif wait_result is False:
+                workers_stopped = False
+
+        if not workers_stopped:
+            self._closing = False
+            status = _get_attr(self, "status")
+            if status is not None and hasattr(status, "setText"):
+                status.setText("バックグラウンド処理の終了を待っています。完了後にもう一度閉じてください。")
+            ignore = getattr(event, "ignore", None)
+            if callable(ignore):
+                ignore()
+            return
+
+        if not self._finish_canvas_session(False):
+            self._closing = False
+            ignore = getattr(event, "ignore", None)
+            if callable(ignore):
+                ignore()
+            return
         with contextlib.suppress(Exception):
             super().closeEvent(event)
 
@@ -2280,13 +2311,19 @@ class AIStrokePainterDocker(DockWidget):
             QMessageBox.critical(self, "接続テスト失敗", str(exc))
 
     def _on_connection_test_succeeded(self, message: str) -> None:
+        if bool(_get_attr(self, "_closing", False)):
+            return
         QMessageBox.information(self, "API 接続テスト", message)
 
     def _on_connection_test_failed(self, message: str) -> None:
+        if bool(_get_attr(self, "_closing", False)):
+            return
         self._log_debug(f"[API 接続テスト失敗] {message}")
         QMessageBox.critical(self, "接続テスト失敗", message)
 
     def _on_connection_test_finished(self) -> None:
+        if bool(_get_attr(self, "_closing", False)):
+            return
         btn = _get_attr(self, "test_conn_btn")
         if btn is not None and hasattr(btn, "setEnabled"):
             btn.setEnabled(True)
@@ -2733,6 +2770,8 @@ class AIStrokePainterDocker(DockWidget):
             self._reset_run_state()
 
     def _on_iteration_progress(self, current: int, total: int, msg: str) -> None:
+        if bool(_get_attr(self, "_closing", False)):
+            return
         st = _get_attr(self, "status")
         if st is not None and hasattr(st, "setText"):
             st.setText(msg)
@@ -2742,6 +2781,8 @@ class AIStrokePainterDocker(DockWidget):
             progress.setValue(max(0, current - 1))
 
     def _on_plan_ready(self, plan: DrawingPlan) -> None:
+        if bool(_get_attr(self, "_closing", False)):
+            return
         active_doc = _get_attr(self, "_active_doc")
         document = active_doc or (Krita.instance().activeDocument() if Krita.instance() is not None else None)
 
@@ -3029,6 +3070,8 @@ class AIStrokePainterDocker(DockWidget):
         self._on_plan_ready(plan)
 
     def _on_plan_failed(self, error_msg: str) -> None:
+        if bool(_get_attr(self, "_closing", False)):
+            return
         self._worker = None
         self._log_debug(f"[計画生成失敗] {error_msg}")
         if not self.is_cancelled():
@@ -3043,6 +3086,8 @@ class AIStrokePainterDocker(DockWidget):
         self._reset_run_state()
 
     def _on_worker_finished(self) -> None:
+        if bool(_get_attr(self, "_closing", False)):
+            return
         worker = _get_attr(self, "_worker")
         worker_is_cancelled = False
         if worker is not None:
