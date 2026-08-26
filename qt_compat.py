@@ -89,7 +89,10 @@ def argb32_image_format(image_cls: Any | None = None) -> Any:
     scoped_value = getattr(scoped, "Format_ARGB32", None)
     if scoped_value is not None:
         return scoped_value
-    return getattr(cls, "Format_ARGB32", None)
+    legacy_value = getattr(cls, "Format_ARGB32", None)
+    if legacy_value is not None:
+        return legacy_value
+    return 4
 
 
 def round_cap_style(qt_cls: Any | None = None) -> Any:
@@ -811,15 +814,38 @@ if not HAS_QT:
         def drawEllipse(self, *args: Any) -> None:
             pass
 
+        def save(self) -> None:
+            pass
+
+        def restore(self) -> None:
+            pass
+
+        def drawImage(self, *args: Any) -> None:
+            pass
+
+        def begin(self, *args: Any) -> bool:
+            return True
+
         def end(self) -> None:
             pass
 
     class QImage:  # type: ignore[no-redef]
+        Format_ARGB32 = 4
+
+        class Format:
+            Format_ARGB32 = 4
+
         def __init__(self, *args: Any) -> None:
+            pass
+
+        def fill(self, *args: Any) -> None:
             pass
 
         def loadFromData(self, *args: Any) -> bool:
             return False
+
+        def save(self, *args: Any) -> bool:
+            return True
 
         def width(self) -> int:
             return 0

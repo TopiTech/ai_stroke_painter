@@ -2283,7 +2283,7 @@ class AIStrokePainterDocker(DockWidget):
         if not is_openai:
             self._log_debug("[エンジン選択] プロシージャル (オフライン)")
             p = _get_attr(self, "planner")
-            return p if p is not None else self.planner
+            return p if isinstance(p, PlannerPort) else RuleBasedPlanner()
 
         b_w = _get_attr(self, "base_url")
         m_w = _get_attr(self, "model")
@@ -2423,6 +2423,17 @@ class AIStrokePainterDocker(DockWidget):
         if view_document is not None and view_document != document:
             QMessageBox.warning(self, "AI Stroke Painter", "アクティブビューと描画対象ドキュメントが一致しません。")
             return
+
+        doc_width: float = 1000.0
+        doc_height: float = 1000.0
+        if hasattr(document, "width") and hasattr(document, "height"):
+            try:
+                w_val: Any = document.width() if callable(document.width) else document.width
+                h_val: Any = document.height() if callable(document.height) else document.height
+                doc_width = float(w_val)
+                doc_height = float(h_val)
+            except Exception:
+                pass
 
         self._save_settings()
         prompt_w = _get_attr(self, "prompt")
@@ -2573,8 +2584,8 @@ class AIStrokePainterDocker(DockWidget):
                 prompt=prompt_val,
                 seed=seed_val,
                 count=count_val,
-                width=float(document.width()),
-                height=float(document.height()),
+                width=doc_width,
+                height=doc_height,
                 image_data=self._image_bytes,
                 max_iterations=max_iters,
                 palette_name=palette,
@@ -2611,6 +2622,33 @@ class AIStrokePainterDocker(DockWidget):
             progress.setValue(max(0, current - 1))
 
     def _on_plan_ready(self, plan: DrawingPlan) -> None:
+        active_doc = _get_attr(self, "_active_doc")
+        document = active_doc or (Krita.instance().activeDocument() if Krita.instance() is not None else None)
+
+        doc_w: float = float(plan.canvas_width or 1000.0)
+        doc_h: float = float(plan.canvas_height or 1000.0)
+        if document is not None and hasattr(document, "width") and hasattr(document, "height"):
+            try:
+                w_val: Any = document.width() if callable(document.width) else document.width
+                h_val: Any = document.height() if callable(document.height) else document.height
+                doc_w = float(w_val)
+                doc_h = float(h_val)
+            except Exception:
+                pass
+
+        # キャンバス解像度と計画寸法の整合（乖離防止）
+        if (
+            plan.canvas_width is not None
+            and plan.canvas_height is not None
+            and (
+                not math.isclose(plan.canvas_width, doc_w, rel_tol=0.01)
+                or not math.isclose(plan.canvas_height, doc_h, rel_tol=0.01)
+            )
+        ):
+            plan = plan.scale_to(doc_w, doc_h, fit_mode="scale")
+        elif plan.canvas_width is None or plan.canvas_height is None:
+            plan = replace(plan, canvas_width=doc_w, canvas_height=doc_h)
+
         resuming_pending = (
             bool(_get_attr(self, "_applying_pending", False)) and _get_attr(self, "_pending_plan") is plan
         )
@@ -2622,7 +2660,7 @@ class AIStrokePainterDocker(DockWidget):
             session_plans = list(_get_attr(self, "_session_plans", []))
             session_plans.append(plan)
             try:
-                cumulative_plan = combine_drawing_plans(session_plans)
+                cumulative_plan = combine_drawing_plans(session_plans, auto_rescale=True)
             except Exception as exc:
                 message = f"反復計画を統合できませんでした: {exc}"
                 self._log_debug(f"[累積計画エラー] {message}")
@@ -2659,26 +2697,6 @@ class AIStrokePainterDocker(DockWidget):
             )
             or "multi_layer"
         )
-
-        active_doc = _get_attr(self, "_active_doc")
-        document = active_doc or (Krita.instance().activeDocument() if Krita.instance() is not None else None)
-
-        has_doc_dims = document is not None and hasattr(document, "width") and hasattr(document, "height")
-        doc_w = float(document.width()) if has_doc_dims else (plan.canvas_width or 1000.0)
-        doc_h = float(document.height()) if has_doc_dims else (plan.canvas_height or 1000.0)
-
-        # キャンバス解像度と計画寸法の整合（乖離防止）
-        if (
-            plan.canvas_width is not None
-            and plan.canvas_height is not None
-            and (
-                not math.isclose(plan.canvas_width, doc_w, rel_tol=0.01)
-                or not math.isclose(plan.canvas_height, doc_h, rel_tol=0.01)
-            )
-        ):
-            plan = plan.scale_to(doc_w, doc_h, fit_mode="scale")
-        elif plan.canvas_width is None or plan.canvas_height is None:
-            plan = replace(plan, canvas_width=doc_w, canvas_height=doc_h)
 
         if not resuming_pending and prev_w is not None and hasattr(prev_w, "set_plan"):
             try:

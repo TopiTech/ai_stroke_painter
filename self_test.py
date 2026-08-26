@@ -7463,13 +7463,16 @@ class PreviewDiscrepancyFixTests(unittest.TestCase):
         prev.set_plan(plan)
 
         if QImage is not None and QPainter is not None and callable(QImage) and callable(QPainter):
-            img = QImage(200, 160, QImage.Format_ARGB32)
-            img.fill(0)
+            fmt = argb32_image_format(QImage)
+            img = QImage(200, 160, fmt) if fmt is not None else QImage(200, 160)
+            if hasattr(img, "fill"):
+                img.fill(0)
             painter = QPainter(img)
             try:
                 prev.paint_to_painter(painter, 200, 160)
             finally:
-                painter.end()
+                if hasattr(painter, "end"):
+                    painter.end()
 
     def test_procedural_prompt_category_anime_landscape(self) -> None:
         from .procedural import _prompt_category
@@ -7479,6 +7482,7 @@ class PreviewDiscrepancyFixTests(unittest.TestCase):
 
     def test_apply_stroke_style_prefix_and_mypaint_exclusion(self) -> None:
         from types import SimpleNamespace
+
         from .krita_adapter import _apply_stroke_style
 
         selected_preset = None
@@ -7518,8 +7522,9 @@ class PreviewDiscrepancyFixTests(unittest.TestCase):
             self.assertIs(selected_preset, fake_basic)
 
     def test_continuous_path_pressure_tolerance(self) -> None:
-        from .krita_adapter import _can_use_continuous_path
         from types import SimpleNamespace
+
+        from .krita_adapter import _can_use_continuous_path
 
         node = SimpleNamespace(paintPath=lambda _p: None)
         stroke_smooth = Stroke(
@@ -7532,6 +7537,121 @@ class PreviewDiscrepancyFixTests(unittest.TestCase):
             brush_preset="Basic-5 Size",
         )
         self.assertTrue(_can_use_continuous_path(node, stroke_smooth))
+
+    def test_docker_run_initializes_canvas_dimensions_and_worker(self) -> None:
+        from types import SimpleNamespace
+
+        from .docker import AIStrokePainterDocker
+
+        docker = AIStrokePainterDocker.__new__(AIStrokePainterDocker)
+        fake_doc = SimpleNamespace(
+            width=lambda: 1920,
+            height=lambda: 1080,
+        )
+        fake_view = SimpleNamespace(
+            document=lambda: fake_doc,
+        )
+        fake_window = SimpleNamespace(
+            activeView=lambda: fake_view,
+        )
+        fake_app = SimpleNamespace(
+            activeDocument=lambda: fake_doc,
+            activeWindow=lambda: fake_window,
+        )
+
+        class _DummyWidget:
+            def __init__(self, val: Any = None) -> None:
+                self._val = val
+                self.canvas_size: tuple[float, float] | None = None
+
+            def toPlainText(self) -> str:
+                return "test prompt"
+
+            def text(self) -> str:
+                return str(self._val) if self._val is not None else ""
+
+            def value(self) -> Any:
+                return self._val if self._val is not None else 1
+
+            def currentData(self) -> Any:
+                return self._val if self._val is not None else "auto"
+
+            def currentText(self) -> str:
+                return str(self._val) if self._val is not None else ""
+
+            def isChecked(self) -> bool:
+                return False
+
+            def setEnabled(self, *args: Any) -> None:
+                pass
+
+            def setRange(self, *args: Any) -> None:
+                pass
+
+            def setText(self, *args: Any) -> None:
+                pass
+
+            def clear_plan(self) -> None:
+                pass
+
+            def set_canvas_size(self, w: float, h: float) -> None:
+                self.canvas_size = (w, h)
+
+        docker.prompt = cast(Any, _DummyWidget("test prompt"))
+        docker.seed = cast(Any, _DummyWidget(42))
+        docker.count = cast(Any, _DummyWidget(30))
+        docker.iterations = cast(Any, _DummyWidget(1))
+        docker.auto_refine = cast(Any, _DummyWidget(False))
+        docker.goal_mode = cast(Any, _DummyWidget(False))
+        docker.auto_seed = cast(Any, _DummyWidget(False))
+        docker.auto_count = cast(Any, _DummyWidget(False))
+        docker.palette_combo = cast(Any, _DummyWidget("anime"))
+        docker.brush_profile = cast(Any, _DummyWidget("auto"))
+        docker.brush_size_multiplier = cast(Any, _DummyWidget(1.0))
+        docker.opacity_multiplier = cast(Any, _DummyWidget(100))
+        docker.layer_mode = cast(Any, _DummyWidget("multi_layer"))
+        docker.layer_prefix = cast(Any, _DummyWidget("AI Artwork"))
+        docker.event_interval = cast(Any, _DummyWidget(30))
+        docker.save_json = cast(Any, _DummyWidget(False))
+        docker.save_svg_chk = cast(Any, _DummyWidget(False))
+        docker.edge_threshold = cast(Any, _DummyWidget(0.18))
+        docker.shading_density = cast(Any, _DummyWidget("medium"))
+        docker.enable_flats = cast(Any, _DummyWidget(True))
+        docker.image_color_mode = cast(Any, _DummyWidget("original"))
+        docker.planner_mode = cast(Any, _DummyWidget("rule_based"))
+        docker.run_btn = cast(Any, _DummyWidget())
+        docker.stop_btn = cast(Any, _DummyWidget())
+        docker.progress = cast(Any, _DummyWidget())
+        docker.status = cast(Any, _DummyWidget())
+        docker.history_combo = cast(Any, _DummyWidget())
+        docker._prompt_history = []
+        prev = _DummyWidget()
+        docker.preview = cast(Any, prev)
+        docker.planner = RuleBasedPlanner()
+        docker._image_bytes = None
+        docker._worker = None
+        docker.canvas_port = cast(Any, None)
+        docker.api_url = cast(Any, _DummyWidget("https://api.openai.com/v1"))
+        docker.api_key = cast(Any, _DummyWidget("sk-test"))
+        docker.model = cast(Any, _DummyWidget("gpt-4o"))
+        docker.temperature = cast(Any, _DummyWidget(0.7))
+        docker.timeout_sec = cast(Any, _DummyWidget(60))
+        docker.vision_res = cast(Any, _DummyWidget(512))
+        docker.confirm_before_apply = cast(Any, _DummyWidget(False))
+        docker.debug_mode_chk = cast(Any, _DummyWidget(False))
+
+        with (
+            patch("ai_stroke_painter.docker.Krita.instance", return_value=fake_app),
+            patch("ai_stroke_painter.docker.PlanWorker.start"),
+            patch.object(AIStrokePainterDocker, "_save_settings", return_value=None),
+            patch.object(AIStrokePainterDocker, "_log_debug", return_value=None),
+        ):
+            docker.run()
+            self.assertEqual(getattr(prev, "canvas_size", None), (1920.0, 1080.0))
+            worker_instance: Any = getattr(docker, "_worker", None)
+            self.assertIsNotNone(worker_instance)
+            self.assertEqual(getattr(worker_instance, "width", None), 1920.0)
+            self.assertEqual(getattr(worker_instance, "height", None), 1080.0)
 
 
 def run() -> bool:
