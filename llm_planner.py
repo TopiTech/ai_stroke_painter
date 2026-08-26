@@ -1177,6 +1177,24 @@ def _system_instruction(
 ) -> str:
     """プロフェッショナルなデジタルイラスト作画戦略・レイヤー階層・空間アンカー・4層ライティングを含む高品質プロンプト。"""
     min_dim = min(width, height)
+    aspect_ratio = width / max(1.0, height)
+    if aspect_ratio >= 1.25:
+        aspect_info = (
+            f"=== TARGET CANVAS: {width:.0f}x{height:.0f} (Landscape Wide, Aspect {aspect_ratio:.2f}:1) ===\n"
+            "Composition Directive: Use cinematic wide layout. Distribute scenery/motifs horizontally across x=0.0-1.0; "
+            "place primary subject landmarks along Rule-of-Thirds vertical zones (x=0.33 or x=0.67).\n\n"
+        )
+    elif aspect_ratio <= 0.80:
+        aspect_info = (
+            f"=== TARGET CANVAS: {width:.0f}x{height:.0f} (Portrait Vertical, Aspect 1:{1.0 / aspect_ratio:.2f}) ===\n"
+            "Composition Directive: Use dynamic vertical layout. Emphasize vertical depth/hierarchy (top zenith to bottom foreground) "
+            "and vertical subject flow (character pose, towering scenery).\n\n"
+        )
+    else:
+        aspect_info = (
+            f"=== TARGET CANVAS: {width:.0f}x{height:.0f} (Balanced Standard, Aspect {aspect_ratio:.2f}:1) ===\n"
+            "Composition Directive: Use harmonious balanced layout with strong central focal anchor and generous surrounding framing.\n\n"
+        )
 
     flats_sz = f"{max(40, round(min_dim * 0.08))} to {max(150, round(min_dim * 0.20))} px"
     form_shad_sz = f"{max(25, round(min_dim * 0.03))} to {max(60, round(min_dim * 0.06))} px"
@@ -1472,6 +1490,7 @@ def _system_instruction(
         "5. Eraser Paths (`brush.is_eraser: true`):\n"
         '   - Add path operations with `"brush":{"profile":"eraser","is_eraser":true,...}` to sculpt contours, fix color bleeds, or carve highlights.\n'
         "   - Any size_px target in the art direction must be encoded as brush.size with brush.size_mode='px'; preset names map to brush.preset_hint. Prefer ratio sizes for resolution independence.\n\n"
+        f"{aspect_info}"
         f"=== PALETTE DIRECTION: {palette_name.upper()} ===\n"
         f"Harmonize colors to match the '{palette_name}' aesthetic: prioritize cohesive color theory (warm lights, cool shadows, vibrant SSS accents), distinct value contrast, and radiant specular highlights.\n"
         f"=== BRUSH OVERRIDE: {brush_profile.upper()} ===\n"

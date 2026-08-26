@@ -494,8 +494,117 @@ class DrawingPlan:
 
         return "\n".join([*svg_header, "  <defs>", *svg_definitions, "  </defs>", *svg_body, "</svg>"])
 
+    def scale_to(
+        self,
+        target_width: float,
+        target_height: float,
+        *,
+        fit_mode: str = "scale",
+        scale_brush_size: bool = True,
+    ) -> DrawingPlan:
+        """指定された解像度およびフィットモードに合わせて座標とストローク太さを変換した新しい計画を生成する。
 
-def combine_drawing_plans(plans: Sequence[DrawingPlan]) -> DrawingPlan:
+        fit_mode:
+            - 'scale' / 'stretch': 縦横それぞれ独立して拡大縮小する。
+            - 'fit' / 'contain': アスペクト比を維持し、余白を中央配置してターゲット内に収める。
+            - 'fill' / 'cover': アスペクト比を維持し、ターゲット全体を覆うように拡大（中央寄せ）。
+            - 'center': スケールを変更せず中央に配置する。
+        """
+        tw = _finite_number(target_width, "target_width")
+        th = _finite_number(target_height, "target_height")
+        if tw <= 0 or th <= 0:
+            raise PlanValidationError("target_width と target_height は正の有限数値である必要があります")
+
+        allowed_modes = {"scale", "stretch", "fit", "contain", "fill", "cover", "center"}
+        if fit_mode not in allowed_modes:
+            raise PlanValidationError(f"未対応の fit_mode: {fit_mode!r} (有効値: {', '.join(sorted(allowed_modes))})")
+
+        inferred_w = max((p.x for s in self.strokes for p in s.points), default=tw)
+        inferred_h = max((p.y for s in self.strokes for p in s.points), default=th)
+        src_w = max(1.0, self.canvas_width if self.canvas_width is not None else inferred_w)
+        src_h = max(1.0, self.canvas_height if self.canvas_height is not None else inferred_h)
+
+        if fit_mode in {"scale", "stretch"}:
+            scale_x = tw / src_w
+            scale_y = th / src_h
+            offset_x = 0.0
+            offset_y = 0.0
+            brush_scale = math.sqrt(scale_x * scale_y)
+        elif fit_mode in {"fit", "contain"}:
+            scale = min(tw / src_w, th / src_h)
+            scale_x = scale
+            scale_y = scale
+            offset_x = (tw - src_w * scale) * 0.5
+            offset_y = (th - src_h * scale) * 0.5
+            brush_scale = scale
+        elif fit_mode in {"fill", "cover"}:
+            scale = max(tw / src_w, th / src_h)
+            scale_x = scale
+            scale_y = scale
+            offset_x = (tw - src_w * scale) * 0.5
+            offset_y = (th - src_h * scale) * 0.5
+            brush_scale = scale
+        else:  # center
+            scale_x = 1.0
+            scale_y = 1.0
+            offset_x = (tw - src_w) * 0.5
+            offset_y = (th - src_h) * 0.5
+            brush_scale = 1.0
+
+        scaled_strokes: list[Stroke] = []
+        for stroke in self.strokes:
+            scaled_points = tuple(
+                StrokePoint(
+                    x=max(0.0, min(tw - 0.5, p.x * scale_x + offset_x)),
+                    y=max(0.0, min(th - 0.5, p.y * scale_y + offset_y)),
+                    pressure=p.pressure,
+                    time_ms=p.time_ms,
+                )
+                for p in stroke.points
+            )
+            new_size = max(0.5, stroke.size_px * brush_scale) if scale_brush_size else stroke.size_px
+            scaled_strokes.append(
+                Stroke(
+                    id=stroke.id,
+                    points=scaled_points,
+                    brush_preset=stroke.brush_preset,
+                    color=stroke.color,
+                    size_px=new_size,
+                    layer_name=stroke.layer_name,
+                    opacity=stroke.opacity,
+                    is_eraser=stroke.is_eraser,
+                )
+            )
+
+        metadata = dict(self.metadata)
+        metadata["scaled_from"] = {
+            "source_width": src_w,
+            "source_height": src_h,
+            "fit_mode": fit_mode,
+            "scale_x": scale_x,
+            "scale_y": scale_y,
+        }
+        return DrawingPlan(
+            prompt=self.prompt,
+            seed=self.seed,
+            strokes=tuple(scaled_strokes),
+            title=self.title,
+            iteration=self.iteration,
+            layers=self.layers,
+            request_canvas_image=self.request_canvas_image,
+            metadata=metadata,
+            canvas_width=tw,
+            canvas_height=th,
+            goal_reached=self.goal_reached,
+            completion_score=self.completion_score,
+        )
+
+    def with_canvas_size(self, width: float, height: float, *, fit_mode: str = "scale") -> DrawingPlan:
+        """指定された解像度へスケーリングした新しい計画を生成する。"""
+        return self.scale_to(width, height, fit_mode=fit_mode)
+
+
+def combine_drawing_plans(plans: Sequence[DrawingPlan], *, auto_rescale: bool = False) -> DrawingPlan:
     """反復ごとの差分計画を、キャンバスへ適用した順序の単一計画へ統合する。"""
     if not isinstance(plans, Sequence) or not plans:
         raise PlanValidationError("plans は1件以上の DrawingPlan 配列である必要があります")
@@ -513,12 +622,34 @@ def combine_drawing_plans(plans: Sequence[DrawingPlan]) -> DrawingPlan:
     for plan in normalized[1:]:
         if plan.prompt != first.prompt or plan.seed != first.seed:
             raise PlanValidationError("異なる prompt または seed の計画は同一セッションとして統合できません")
-    for field_name in ("canvas_width", "canvas_height"):
-        known_values = [getattr(plan, field_name) for plan in normalized if getattr(plan, field_name) is not None]
-        if known_values and any(
-            not math.isclose(known_values[0], value, rel_tol=0.0, abs_tol=1e-6) for value in known_values[1:]
-        ):
-            raise PlanValidationError("キャンバス寸法が異なる計画は統合できません")
+
+    # キャンバス寸法のチェックと必要に応じた自動スケール
+    target_w = first.canvas_width
+    target_h = first.canvas_height
+    if auto_rescale and target_w is not None and target_h is not None:
+        rescaled_plans: list[DrawingPlan] = [first]
+        for plan in normalized[1:]:
+            pw = plan.canvas_width
+            ph = plan.canvas_height
+            if (
+                pw is not None
+                and ph is not None
+                and (
+                    not math.isclose(target_w, pw, rel_tol=0.0, abs_tol=1e-6)
+                    or not math.isclose(target_h, ph, rel_tol=0.0, abs_tol=1e-6)
+                )
+            ):
+                rescaled_plans.append(plan.scale_to(target_w, target_h, fit_mode="scale"))
+            else:
+                rescaled_plans.append(plan)
+        normalized = tuple(rescaled_plans)
+    else:
+        for field_name in ("canvas_width", "canvas_height"):
+            known_values = [getattr(plan, field_name) for plan in normalized if getattr(plan, field_name) is not None]
+            if known_values and any(
+                not math.isclose(known_values[0], value, rel_tol=0.0, abs_tol=1e-6) for value in known_values[1:]
+            ):
+                raise PlanValidationError("キャンバス寸法が異なる計画は統合できません")
 
     merged_strokes: list[Stroke] = []
     used_ids: set[str] = set()

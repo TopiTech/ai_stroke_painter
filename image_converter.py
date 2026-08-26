@@ -415,7 +415,12 @@ class ImageStrokeConverter:
             canvas_width=target_width,
             canvas_height=target_height,
         )
-        return compile_stroke_program(drawing_plan_to_stroke_program(legacy_plan))
+        return compile_stroke_program(
+            drawing_plan_to_stroke_program(legacy_plan),
+            count=count,
+            target_width=target_width,
+            target_height=target_height,
+        )
 
     def _process_qimage(
         self,

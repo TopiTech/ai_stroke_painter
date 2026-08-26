@@ -400,7 +400,8 @@ def generate_procedural_program(
         strokes = profile_strokes
 
     # 固定px値で定義された既存モチーフもキャンバス解像度に追従させる。
-    resolution_scale = max(0.5, min(6.0, min(width, height) / 600.0))
+    # 基準解像度 600px（基準最小辺）に対し、超高解像度（4K/8K）から低解像度まで自然にスケーリング
+    resolution_scale = max(0.35, min(12.0, min(width, height) / 600.0))
     if abs(resolution_scale - 1.0) > 1e-9:
         strokes = [replace(stroke, size_px=stroke.size_px * resolution_scale) for stroke in strokes]
 

@@ -6799,6 +6799,190 @@ class ExtendedCustomizationTests(unittest.TestCase):
         with self.assertRaises(FileNotFoundError):
             load_program(non_existent)
 
+    def test_drawing_plan_scale_to_modes(self) -> None:
+        """DrawingPlan.scale_to の各種 fit_mode (scale, fit, fill, center) における座標・線幅変換を検証。"""
+        stroke = Stroke(
+            id="s1",
+            points=[
+                StrokePoint(100.0, 100.0, 0.8, 0),
+                StrokePoint(500.0, 500.0, 0.9, 10),
+            ],
+            brush_preset="Basic-5 Size",
+            color="#222222",
+            size_px=10.0,
+            layer_name="Lineart",
+        )
+        plan = DrawingPlan(
+            prompt="test scaling",
+            seed=42,
+            strokes=[stroke],
+            canvas_width=1000.0,
+            canvas_height=1000.0,
+        )
+
+        # 1. scale / stretch (非等方スケーリング)
+        scaled = plan.scale_to(2000.0, 3000.0, fit_mode="scale")
+        self.assertEqual((scaled.canvas_width, scaled.canvas_height), (2000.0, 3000.0))
+        p0 = scaled.strokes[0].points[0]
+        p1 = scaled.strokes[0].points[1]
+        self.assertAlmostEqual(p0.x, 200.0, places=2)
+        self.assertAlmostEqual(p0.y, 300.0, places=2)
+        self.assertAlmostEqual(p1.x, 1000.0, places=2)
+        self.assertAlmostEqual(p1.y, 1500.0, places=2)
+        self.assertGreater(scaled.strokes[0].size_px, 10.0)
+
+        # 2. fit / contain (アスペクト比維持・余白レターボックス)
+        fitted = plan.scale_to(2000.0, 1000.0, fit_mode="fit")
+        self.assertEqual((fitted.canvas_width, fitted.canvas_height), (2000.0, 1000.0))
+        # 1000x1000 は 1000x1000 のまま scale=1.0、offset_x = (2000 - 1000)/2 = 500.0
+        fp0 = fitted.strokes[0].points[0]
+        self.assertAlmostEqual(fp0.x, 600.0, places=2)
+        self.assertAlmostEqual(fp0.y, 100.0, places=2)
+        self.assertAlmostEqual(fitted.strokes[0].size_px, 10.0, places=2)
+
+        # 3. fill / cover (アスペクト比維持・全域カバー)
+        filled = plan.scale_to(2000.0, 1000.0, fit_mode="fill")
+        # scale = max(2000/1000, 1000/1000) = 2.0
+        # offset_x = (2000 - 2000)/2 = 0.0, offset_y = (1000 - 2000)/2 = -500.0
+        self.assertEqual((filled.canvas_width, filled.canvas_height), (2000.0, 1000.0))
+        fl_p0 = filled.strokes[0].points[0]
+        self.assertAlmostEqual(fl_p0.x, 200.0, places=2)
+        self.assertAlmostEqual(fl_p0.y, 0.0, places=2)  # 100 * 2 - 500 = -300 -> clamped to 0.0
+        self.assertAlmostEqual(filled.strokes[0].size_px, 20.0, places=2)
+
+        # 4. center (スケール維持・中央配置)
+        centered = plan.scale_to(1200.0, 1200.0, fit_mode="center")
+        c_p0 = centered.strokes[0].points[0]
+        self.assertAlmostEqual(c_p0.x, 200.0, places=2)  # 100 + (1200 - 1000)/2 = 200.0
+        self.assertAlmostEqual(c_p0.y, 200.0, places=2)
+
+        # 5. with_canvas_size helper
+        resized = plan.with_canvas_size(800.0, 600.0)
+        self.assertEqual((resized.canvas_width, resized.canvas_height), (800.0, 600.0))
+
+        # 6. エラーハンドリング
+        with self.assertRaises(PlanValidationError):
+            plan.scale_to(0, 100)
+        with self.assertRaises(PlanValidationError):
+            plan.scale_to(100, 100, fit_mode="invalid_mode")
+
+    def test_combine_drawing_plans_auto_rescale(self) -> None:
+        """combine_drawing_plans で auto_rescale=True を指定した場合に異なる解像度の計画を統一して統合できることを検証。"""
+        stroke1 = Stroke(
+            id="s1",
+            points=[StrokePoint(10.0, 10.0, 0.8, 0), StrokePoint(90.0, 90.0, 0.8, 10)],
+            brush_preset="Basic-5 Size",
+            color="#111111",
+            size_px=5.0,
+            layer_name="Lineart",
+        )
+        stroke2 = Stroke(
+            id="s2",
+            points=[StrokePoint(20.0, 20.0, 0.8, 0), StrokePoint(180.0, 180.0, 0.8, 10)],
+            brush_preset="Basic-5 Size",
+            color="#222222",
+            size_px=10.0,
+            layer_name="Lineart",
+        )
+        plan1 = DrawingPlan("same prompt", 1, [stroke1], canvas_width=100.0, canvas_height=100.0)
+        plan2 = DrawingPlan("same prompt", 1, [stroke2], canvas_width=200.0, canvas_height=200.0)
+
+        # auto_rescale=False では寸法不一致例外
+        with self.assertRaises(PlanValidationError):
+            combine_drawing_plans([plan1, plan2], auto_rescale=False)
+
+        # auto_rescale=True では第1計画の寸法 (100x100) に自動リサイズされて正常統合
+        merged = combine_drawing_plans([plan1, plan2], auto_rescale=True)
+        self.assertEqual(len(merged.strokes), 2)
+        self.assertEqual((merged.canvas_width, merged.canvas_height), (100.0, 100.0))
+        # 2本目のストローク座標が 200x200 から 100x100 にスケーリングされている
+        self.assertAlmostEqual(merged.strokes[1].points[0].x, 10.0, places=2)
+        self.assertAlmostEqual(merged.strokes[1].points[1].x, 90.0, places=2)
+
+    def test_stroke_program_resolution_adaptation_and_compile(self) -> None:
+        """StrokeProgram の with_canvas_size および compile_stroke_program の target_width/height による解像度適応を検証。"""
+        prog = StrokeProgram(
+            prompt="anime girl",
+            seed=123,
+            operations=[
+                PathOperation(
+                    id="p1",
+                    points=(ProgramPoint(0.2, 0.2), ProgramPoint(0.8, 0.8)),
+                    brush=ProgramBrush(profile="gpen", color="#333333", size=0.01, size_mode="ratio"),
+                    layer="Lineart",
+                ),
+                FillOperation(
+                    id="f1",
+                    polygon=(
+                        ProgramPoint(0.1, 0.1),
+                        ProgramPoint(0.9, 0.1),
+                        ProgramPoint(0.9, 0.9),
+                        ProgramPoint(0.1, 0.9),
+                    ),
+                    brush=ProgramBrush(profile="watercolor", color="#eef5ff", size=0.08, size_mode="ratio"),
+                    style="wash",
+                    layer="Flats",
+                ),
+            ],
+            canvas_width=1000.0,
+            canvas_height=1000.0,
+        )
+
+        # 1. with_canvas_size
+        prog_4k = prog.with_canvas_size(3840.0, 2160.0)
+        self.assertEqual((prog_4k.canvas_width, prog_4k.canvas_height), (3840.0, 2160.0))
+
+        # 2. compile_stroke_program with target_width / target_height
+        compiled_4k = compile_stroke_program(prog, count=50, target_width=3840.0, target_height=2160.0)
+        self.assertEqual((compiled_4k.canvas_width, compiled_4k.canvas_height), (3840.0, 2160.0))
+        self.assertGreater(len(compiled_4k.strokes), 0)
+        # 全ての点が 3840x2160 の範囲内に収まっている
+        for s in compiled_4k.strokes:
+            for p in s.points:
+                self.assertGreaterEqual(p.x, 0.0)
+                self.assertLess(p.x, 3840.0)
+                self.assertGreaterEqual(p.y, 0.0)
+                self.assertLess(p.y, 2160.0)
+
+    def test_procedural_generation_across_various_resolutions_and_aspect_ratios(self) -> None:
+        """様々な解像度・アスペクト比（4K, 21:9 超ワイド, 9:16 縦長, 320x240 低解像度）でのプロシージャル生成健全性を検証。"""
+        test_resolutions = [
+            (3840.0, 2160.0),  # 4K UHD 16:9
+            (2560.0, 1080.0),  # 21:9 Ultra-Wide
+            (1080.0, 1920.0),  # 9:16 Mobile Vertical
+            (1000.0, 1000.0),  # 1:1 Square
+            (320.0, 240.0),  # Low-res Legacy
+        ]
+        prompts = [
+            ("cute anime girl with emerald eyes", "anime"),
+            ("majestic mountain lake landscape", "nature"),
+            ("cyberpunk neon city skyline", "cyberpunk"),
+            ("magic circle with runes", "anime"),
+        ]
+
+        for width, height in test_resolutions:
+            for prompt, palette in prompts:
+                plan = generate_procedural_plan(
+                    prompt,
+                    seed=42,
+                    count=40,
+                    width=width,
+                    height=height,
+                    palette_name=palette,
+                )
+                self.assertEqual((plan.canvas_width, plan.canvas_height), (width, height))
+                self.assertGreater(len(plan.strokes), 0)
+                self.assertLessEqual(len(plan.strokes), 40)
+
+                # 点がキャンバス境界内に完全に収まっていることを確認
+                for stroke in plan.strokes:
+                    self.assertGreater(stroke.size_px, 0.0)
+                    for pt in stroke.points:
+                        self.assertGreaterEqual(pt.x, 0.0)
+                        self.assertLess(pt.x, width)
+                        self.assertGreaterEqual(pt.y, 0.0)
+                        self.assertLess(pt.y, height)
+
 
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))

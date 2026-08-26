@@ -728,6 +728,14 @@ class StrokeProgram:
             "completion_score": self.completion_score,
         }
 
+    def with_canvas_size(self, width: float, height: float) -> StrokeProgram:
+        """キャンバス寸法を更新した新しい StrokeProgram を生成する。"""
+        new_w = _finite(width, "canvas_width")
+        new_h = _finite(height, "canvas_height")
+        if new_w < 2 or new_h < 2:
+            raise PlanValidationError("canvas_width と canvas_height は 2 以上である必要があります")
+        return replace(self, canvas_width=new_w, canvas_height=new_h)
+
 
 def _operation_uuid(program: StrokeProgram, operation_id: str, index: int) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/program/{program.seed}/{operation_id}/{index}"))
@@ -1325,10 +1333,20 @@ def _compile_fill_to_budget(program: StrokeProgram, operation: FillOperation, li
     return _compile_fill(program, adjusted, limit)
 
 
-def compile_stroke_program(program: StrokeProgram, count: int | None = None) -> DrawingPlan:
+def compile_stroke_program(
+    program: StrokeProgram,
+    count: int | None = None,
+    *,
+    target_width: float | None = None,
+    target_height: float | None = None,
+) -> DrawingPlan:
     """高水準命令を、既存レンダラーと保存形式が扱える DrawingPlan へ変換する。"""
     if not isinstance(program, StrokeProgram):
         raise TypeError("program は StrokeProgram である必要があります")
+    if target_width is not None or target_height is not None:
+        tw = target_width if target_width is not None else program.canvas_width
+        th = target_height if target_height is not None else program.canvas_height
+        program = program.with_canvas_size(tw, th)
     if count is not None and (
         isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_PLAN_STROKES
     ):
