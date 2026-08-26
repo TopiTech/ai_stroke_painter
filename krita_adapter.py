@@ -241,7 +241,16 @@ class KritaCanvasAdapter(CanvasPort):
                 f"{self._session_active_conflict}。アクティブレイヤーを上書きしないため、自動ロールバックを中止しました"
             )
         expected = self._session_active_expected
-        if node is None or expected is None or node is not expected.node:
+        if node is None or expected is None:
+            self._session_active_conflict = "アクティブレイヤーの復元対象を確認できませんでした"
+            raise ActiveLayerSessionConflict(
+                "アクティブレイヤーの復元対象を確認できないため、自動ロールバックを中止しました"
+            )
+        node_match = node is expected.node
+        if not node_match:
+            with contextlib.suppress(Exception):
+                node_match = bool(node == expected.node)
+        if not node_match:
             self._session_active_conflict = "アクティブレイヤーの復元対象を確認できませんでした"
             raise ActiveLayerSessionConflict(
                 "アクティブレイヤーの復元対象を確認できないため、自動ロールバックを中止しました"
@@ -829,8 +838,12 @@ def _fingerprint_layer(document: Any, node: Any) -> _LayerFingerprint:
 
 
 def _fingerprints_match(expected: _LayerFingerprint, actual: _LayerFingerprint) -> bool:
+    node_match = expected.node is actual.node
+    if not node_match:
+        with contextlib.suppress(Exception):
+            node_match = bool(expected.node == actual.node)
     return (
-        expected.node is actual.node
+        node_match
         and expected.width == actual.width
         and expected.height == actual.height
         and expected.digest == actual.digest

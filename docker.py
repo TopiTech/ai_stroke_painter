@@ -1410,6 +1410,9 @@ class AIStrokePainterDocker(DockWidget):
         if not file_path:
             return
         try:
+            source_path = Path(file_path)
+            if source_path.stat().st_size > 10 * 1024 * 1024:
+                raise ValueError("プリセットファイルのサイズが上限(10MB)を超えています")
             with open(file_path, encoding="utf-8") as f:
                 imported_data = json.load(f)
             if not isinstance(imported_data, dict):
