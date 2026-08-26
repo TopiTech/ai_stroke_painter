@@ -773,11 +773,35 @@ def generate_character_strokes(
             )
         )
 
-    # (C) 目・まつ毛・瞳・眉毛 (Eyes, Eyelashes, Irises & Eyebrows)
+    # (C) 目・まつ毛・瞳・眉毛 (Eyes, Eyelashes, Irises & Eyebrows - Exquisite Multi-layer Detailing)
     for side, side_name in [(-1.0, "left"), (1.0, "right")]:
         ecx = cx + side * eye_offset_x
 
-        # 上まつ毛 (太い力強いGペン主線 + 切れ味のある目尻フリック)
+        # 0. 白目の下塗り (Sclera Base - Flats Layer)
+        sclera_fill = catmull_rom_spline(
+            [
+                (ecx - side * eye_w * 0.70, eye_y + eye_h * 0.10),
+                (ecx, eye_y + eye_h * 0.40),
+                (ecx + side * eye_w * 0.70, eye_y + eye_h * 0.05),
+            ],
+            samples_per_segment=6,
+        )
+        strokes.append(
+            create_stroke(
+                sclera_fill,
+                profile_type="marker",
+                base_pressure=0.9,
+                color="#f8f9fa",
+                size_px=10.0,
+                layer_name="Flats",
+                rng=rng,
+                width=width,
+                height=height,
+                stroke_id=uid(f"sclera_base_{side_name}"),
+            )
+        )
+
+        # 1. 上まつ毛 (太い力強いGペン主線 + 美麗なアーチ)
         upper_lash = catmull_rom_spline(
             [
                 (ecx - side * eye_w * 0.75, eye_y + eye_h * 0.15),
@@ -802,11 +826,64 @@ def generate_character_strokes(
             )
         )
 
-        # 二重まぶた (Double Eyelid Crease)
+        # 2. まつ毛の先端フリック束 (Lash Strand Flicks - 目尻の跳ね上げ毛束)
+        flick_offsets = (
+            [
+                (0.85, -0.05, 1.08, -0.22, 2.8),
+                (0.70, -0.30, 0.92, -0.52, 2.4),
+                (0.50, -0.50, 0.68, -0.72, 2.0),
+            ]
+            if not masculine_subject
+            else [
+                (0.85, -0.05, 1.02, -0.15, 2.6),
+            ]
+        )
+        for f_i, (fx0, fy0, fx1, fy1, fsz) in enumerate(flick_offsets):
+            flick_pts = [
+                (ecx + side * eye_w * fx0, eye_y + eye_h * fy0),
+                (ecx + side * eye_w * fx1, eye_y + eye_h * fy1),
+            ]
+            strokes.append(
+                create_stroke(
+                    flick_pts,
+                    profile_type="marupen",
+                    base_pressure=0.75,
+                    color=colors["lineart"],
+                    size_px=fsz,
+                    layer_name="Lineart",
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid(f"lash_flick_{side_name}", f_i),
+                )
+            )
+
+        # 3. 目頭の繊細な切開ライン (Inner Canthus Accent)
+        inner_canthus = [
+            (ecx - side * eye_w * 0.75, eye_y + eye_h * 0.15),
+            (ecx - side * eye_w * 0.88, eye_y + eye_h * 0.28),
+        ]
+        strokes.append(
+            create_stroke(
+                inner_canthus,
+                profile_type="marupen",
+                base_pressure=0.60,
+                color=colors["lineart"],
+                size_px=2.2,
+                layer_name="Lineart",
+                rng=rng,
+                width=width,
+                height=height,
+                stroke_id=uid(f"inner_canthus_{side_name}"),
+            )
+        )
+
+        # 4. 二重まぶた (Double Eyelid Crease - 自然な抑揚を持つアーチ)
         double_lid = catmull_rom_spline(
             [
-                (ecx - side * eye_w * 0.45, eye_y - eye_h * 0.95),
-                (ecx + side * eye_w * 0.35, eye_y - eye_h * 0.85),
+                (ecx - side * eye_w * 0.50, eye_y - eye_h * 0.90),
+                (ecx - side * eye_w * 0.05, eye_y - eye_h * 1.05),
+                (ecx + side * eye_w * 0.40, eye_y - eye_h * 0.82),
             ],
             samples_per_segment=6,
         )
@@ -814,9 +891,9 @@ def generate_character_strokes(
             create_stroke(
                 double_lid,
                 profile_type="marupen",
-                base_pressure=0.60,
+                base_pressure=0.65,
                 color=colors["lineart"],
-                size_px=2.8,
+                size_px=2.6,
                 layer_name="Lineart",
                 rng=rng,
                 width=width,
@@ -825,21 +902,18 @@ def generate_character_strokes(
             )
         )
 
-        # 下まつ毛 (Lower Eyelashes)
-        lower_lash = catmull_rom_spline(
-            [
-                (ecx - side * eye_w * 0.30, eye_y + eye_h * 0.65),
-                (ecx + side * eye_w * 0.45, eye_y + eye_h * 0.60),
-            ],
-            samples_per_segment=6,
-        )
+        # 5. 下まつ毛 (Lower Eyelashes - 繊細な分離毛束)
+        lower_lash_points = [
+            (ecx - side * eye_w * 0.30, eye_y + eye_h * 0.65),
+            (ecx + side * eye_w * 0.45, eye_y + eye_h * 0.60),
+        ]
         strokes.append(
             create_stroke(
-                lower_lash,
+                catmull_rom_spline(lower_lash_points, samples_per_segment=6),
                 profile_type="marupen",
-                base_pressure=0.65,
+                base_pressure=0.60,
                 color=colors["lineart"],
-                size_px=3.2,
+                size_px=2.8,
                 layer_name="Lineart",
                 rng=rng,
                 width=width,
@@ -847,8 +921,28 @@ def generate_character_strokes(
                 stroke_id=uid(f"lower_lash_{side_name}"),
             )
         )
+        if not masculine_subject:
+            for l_i, (lx, ly, ldx, ldy) in enumerate([(0.20, 0.63, 0.25, 0.78), (0.40, 0.60, 0.48, 0.74)]):
+                lower_flick = [
+                    (ecx + side * eye_w * lx, eye_y + eye_h * ly),
+                    (ecx + side * eye_w * ldx, eye_y + eye_h * ldy),
+                ]
+                strokes.append(
+                    create_stroke(
+                        lower_flick,
+                        profile_type="marupen",
+                        base_pressure=0.55,
+                        color=colors["lineart"],
+                        size_px=1.8,
+                        layer_name="Lineart",
+                        rng=rng,
+                        width=width,
+                        height=height,
+                        stroke_id=uid(f"lower_flick_{side_name}", l_i),
+                    )
+                )
 
-        # 瞳の輪郭 (Iris Contour)
+        # 6. 瞳の輪郭 (Iris Contour)
         iris_pts = catmull_rom_spline(
             [
                 (ecx - eye_w * 0.38, eye_y - eye_h * 0.35),
@@ -874,33 +968,51 @@ def generate_character_strokes(
             )
         )
 
-        # 瞳の虹彩カラーストローク & グラデーション (Flats Layer)
-        for h_step in range(3):
-            hy = eye_y - eye_h * 0.10 + h_step * eye_h * 0.20
-            iris_fill = [(ecx - eye_w * 0.32, hy), (ecx + eye_w * 0.32, hy)]
+        # 7. 瞳の虹彩カラーグラデーション (Flats Layer - 多層グラデーション)
+        for h_step in range(2):
+            hy = eye_y - eye_h * 0.15 + h_step * eye_h * 0.15
+            iris_dark_fill = [(ecx - eye_w * 0.36, hy), (ecx + eye_w * 0.36, hy)]
             strokes.append(
                 create_stroke(
-                    iris_fill,
+                    iris_dark_fill,
                     profile_type="marker",
                     base_pressure=0.9,
-                    color=colors["eye_light"],
-                    size_px=6.0,
+                    color=colors["eye_dark"],
+                    size_px=6.5,
                     layer_name="Flats",
                     rng=rng,
                     width=width,
                     height=height,
-                    stroke_id=uid(f"iris_fill_{side_name}_{h_step}"),
+                    stroke_id=uid(f"iris_dark_fill_{side_name}_{h_step}"),
+                )
+            )
+        for h_step in range(3):
+            hy = eye_y + eye_h * 0.15 + h_step * eye_h * 0.12
+            iw = eye_w * (0.35 - h_step * 0.05)
+            iris_light_fill = [(ecx - iw, hy), (ecx + iw, hy)]
+            strokes.append(
+                create_stroke(
+                    iris_light_fill,
+                    profile_type="marker",
+                    base_pressure=0.85,
+                    color=colors["eye_light"],
+                    size_px=5.5,
+                    layer_name="Flats",
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid(f"iris_light_fill_{side_name}_{h_step}"),
                 )
             )
 
-        # 瞳孔 (Pupil - 深みのある中心コア)
+        # 8. 瞳孔 (Pupil Core - 深みのある中心核)
         strokes.append(
             create_stroke(
-                [(ecx, eye_y - eye_h * 0.05), (ecx, eye_y + eye_h * 0.18)],
+                [(ecx, eye_y - eye_h * 0.05), (ecx, eye_y + eye_h * 0.20)],
                 profile_type="gpen",
                 base_pressure=1.0,
                 color=colors["eye_dark"],
-                size_px=7.0,
+                size_px=7.5,
                 layer_name="Flats",
                 rng=rng,
                 width=width,
@@ -909,12 +1021,34 @@ def generate_character_strokes(
             )
         )
 
-        # 瞳のハイライト (Highlights Layer - メイン＆サブグリント＆虹彩三日月光)
+        # 9. 虹彩の放射状ディテール線 (Iris Radial Strands - 宝石のようなテクスチャ)
+        for r_i, (rx_angle, ry_sign) in enumerate([(-0.20, 0.35), (0.0, 0.40), (0.20, 0.35)]):
+            radial_strand = [
+                (ecx + eye_w * rx_angle * 0.5, eye_y + eye_h * 0.15),
+                (ecx + eye_w * rx_angle, eye_y + eye_h * ry_sign),
+            ]
+            strokes.append(
+                create_stroke(
+                    radial_strand,
+                    profile_type="marupen",
+                    base_pressure=0.50,
+                    color=colors.get("eye_crescent", colors["highlight"]),
+                    size_px=1.8,
+                    layer_name="Flats",
+                    opacity=0.75,
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid(f"iris_radial_{side_name}", r_i),
+                )
+            )
+
+        # 10. 瞳のハイライト (Highlights Layer - メイン、サブ、マイクログロー、三日月光)
         crescent_pts = catmull_rom_spline(
             [
-                (ecx - eye_w * 0.28, eye_y + eye_h * 0.12),
-                (ecx, eye_y + eye_h * 0.32),
-                (ecx + eye_w * 0.28, eye_y + eye_h * 0.12),
+                (ecx - eye_w * 0.28, eye_y + eye_h * 0.15),
+                (ecx, eye_y + eye_h * 0.38),
+                (ecx + eye_w * 0.28, eye_y + eye_h * 0.15),
             ],
             samples_per_segment=6,
         )
@@ -922,8 +1056,8 @@ def generate_character_strokes(
             generate_highlight_stroke(
                 crescent_pts,
                 color=colors.get("eye_crescent", colors["highlight"]),
-                size_px=2.8,
-                opacity=0.75,
+                size_px=3.0,
+                opacity=0.80,
                 profile_type="marupen",
                 stroke_id=uid(f"eye_crescent_{side_name}"),
                 width=width,
@@ -933,9 +1067,9 @@ def generate_character_strokes(
         )
         strokes.append(
             generate_highlight_stroke(
-                [(ecx - side * eye_w * 0.20, eye_y - eye_h * 0.22), (ecx - side * eye_w * 0.14, eye_y - eye_h * 0.10)],
+                [(ecx - side * eye_w * 0.22, eye_y - eye_h * 0.24), (ecx - side * eye_w * 0.12, eye_y - eye_h * 0.08)],
                 color=colors["highlight"],
-                size_px=5.5,
+                size_px=5.8,
                 stroke_id=uid(f"eye_hl_main_{side_name}"),
                 width=width,
                 height=height,
@@ -944,11 +1078,23 @@ def generate_character_strokes(
         )
         strokes.append(
             generate_highlight_stroke(
-                [(ecx + side * eye_w * 0.20, eye_y + eye_h * 0.22), (ecx + side * eye_w * 0.22, eye_y + eye_h * 0.26)],
+                [(ecx + side * eye_w * 0.20, eye_y + eye_h * 0.22), (ecx + side * eye_w * 0.24, eye_y + eye_h * 0.27)],
                 color=colors["highlight"],
-                size_px=3.2,
+                size_px=3.4,
                 profile_type="marupen",
                 stroke_id=uid(f"eye_hl_sub_{side_name}"),
+                width=width,
+                height=height,
+                rng=rng,
+            )
+        )
+        strokes.append(
+            generate_highlight_stroke(
+                [(ecx - side * eye_w * 0.05, eye_y + eye_h * 0.05), (ecx - side * eye_w * 0.02, eye_y + eye_h * 0.08)],
+                color=colors["highlight"],
+                size_px=2.0,
+                profile_type="marupen",
+                stroke_id=uid(f"eye_hl_sparkle_{side_name}"),
                 width=width,
                 height=height,
                 rng=rng,
@@ -1260,6 +1406,61 @@ def generate_character_strokes(
             )
         )
 
+        # 毛先の繊細な枝分かれ (Split Tip Flicks)
+        if i % 2 == 0:
+            split_dir = -1.0 if t_phase < 0 else 1.0
+            split_tip = [
+                (tip_x - split_dir * scale * 0.004, tip_y - scale * 0.018),
+                (tip_x + split_dir * scale * 0.012, tip_y + scale * 0.008),
+            ]
+            strokes.append(
+                create_stroke(
+                    split_tip,
+                    profile_type="marupen",
+                    base_pressure=0.60,
+                    color=colors["hair_main"],
+                    size_px=2.0,
+                    layer_name="Lineart",
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid("bang_split", i),
+                )
+            )
+
+    # 前髪表面をふわりと横切る微細な遊び毛 (Surface Flyaway Strands)
+    for fly_i, (fx_start, fy_start, fx_end, fy_end) in enumerate(
+        [
+            (-0.16, -0.22, 0.08, -0.08),
+            (0.14, -0.20, -0.06, -0.06),
+        ]
+    ):
+        surface_flyaway = catmull_rom_spline(
+            [
+                (cx + fx_start * scale, cy + fy_start * scale),
+                (
+                    cx + (fx_start + fx_end) * 0.5 * scale + (0.01 if fly_i == 0 else -0.01) * scale,
+                    cy + (fy_start + fy_end) * 0.5 * scale - 0.02 * scale,
+                ),
+                (cx + fx_end * scale, cy + fy_end * scale),
+            ],
+            samples_per_segment=8,
+        )
+        strokes.append(
+            create_stroke(
+                surface_flyaway,
+                profile_type="marupen",
+                base_pressure=0.45,
+                color=colors["hair_main"],
+                size_px=1.8,
+                layer_name="Lineart",
+                rng=rng,
+                width=width,
+                height=height,
+                stroke_id=uid("bang_surface_flyaway", fly_i),
+            )
+        )
+
     # (C) サイドの髪 (Side Locks)
     if not masculine_subject:
         for s_side, s_name in [(-1.0, "l"), (1.0, "r")]:
@@ -1489,18 +1690,47 @@ def generate_character_strokes(
         )
     )
 
-    # (B) 下唇のぷるんとした立体ハイライト (Lip Gloss Highlight)
+    # (B) 下唇のぷるんとした立体ハイライト (Lip Gloss Multi-Point Specular)
     strokes.append(
         generate_highlight_stroke(
-            [(cx - scale * 0.010, mouth_y + scale * 0.014), (cx + scale * 0.010, mouth_y + scale * 0.014)],
+            [(cx - scale * 0.012, mouth_y + scale * 0.013), (cx + scale * 0.012, mouth_y + scale * 0.013)],
             color=colors["highlight"],
-            size_px=2.8,
+            size_px=3.2,
+            opacity=0.90,
             stroke_id=uid("lip_highlight"),
             width=width,
             height=height,
             rng=rng,
         )
     )
+    if not masculine_subject:
+        # 下唇両端の微細な水分光沢アクセント
+        strokes.append(
+            generate_highlight_stroke(
+                [(cx - scale * 0.022, mouth_y + scale * 0.010), (cx - scale * 0.018, mouth_y + scale * 0.011)],
+                color=colors["highlight"],
+                size_px=2.0,
+                opacity=0.75,
+                profile_type="marupen",
+                stroke_id=uid("lip_highlight_sub_l"),
+                width=width,
+                height=height,
+                rng=rng,
+            )
+        )
+        strokes.append(
+            generate_highlight_stroke(
+                [(cx + scale * 0.018, mouth_y + scale * 0.011), (cx + scale * 0.022, mouth_y + scale * 0.010)],
+                color=colors["highlight"],
+                size_px=2.0,
+                opacity=0.75,
+                profile_type="marupen",
+                stroke_id=uid("lip_highlight_sub_r"),
+                width=width,
+                height=height,
+                rng=rng,
+            )
+        )
 
     # (C) 鎖骨の稜線ハイライト (Clavicle Specular Accents)
     strokes.append(
@@ -1528,16 +1758,20 @@ def generate_character_strokes(
         )
     )
 
-    # (D) 髪の天使の輪ハイライト (Hair Angel Halo Ring - 多段グラデーション)
-    for h_i in range(12):
-        hx = cx + (h_i - 5.5) * scale * 0.035
-        hy = cy - scale * 0.18 + math.sin(h_i * 0.5) * scale * 0.015
-        hl_stroke = [(hx, hy - scale * 0.015), (hx + scale * 0.005, hy + scale * 0.015)]
+    # (D) 髪の天使の輪ハイライト (Hair Angel Halo Ring - 毛束立体ジグザグハイライト)
+    halo_count = 14
+    for h_i in range(halo_count):
+        t_phase = (h_i - (halo_count - 1) / 2) / (halo_count / 2)
+        hx = cx + t_phase * scale * 0.22
+        # 毛束の段差を反映したジグザグオフセット
+        zigzag = (0.012 if h_i % 2 == 0 else -0.008) * scale
+        hy = cy - scale * 0.18 + math.sin(t_phase * math.pi * 0.8) * scale * 0.02 + zigzag
+        hl_stroke = [(hx, hy - scale * 0.018), (hx + scale * 0.006, hy + scale * 0.018)]
         strokes.append(
             generate_highlight_stroke(
                 hl_stroke,
                 color=colors["hair_highlight"],
-                size_px=4.8,
+                size_px=5.2 if h_i % 2 == 0 else 3.8,
                 stroke_id=uid("hair_ring_hl", h_i),
                 width=width,
                 height=height,

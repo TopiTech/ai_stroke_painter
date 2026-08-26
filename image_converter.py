@@ -20,8 +20,8 @@ MAX_ENCODED_IMAGE_BYTES = 25 * 1024 * 1024
 # Auto は、描画時間と DrawingPlan 上限を守る品質予算として扱う。
 # 手動指定の上限と揃えることで、暗部が多い画像でも予測可能な処理量に収める。
 AUTO_STROKE_BUDGET = min(500, MAX_PLAN_STROKES)
-MAX_ANALYSIS_DIMENSION = 512
-MAX_ANALYSIS_PIXELS = 120_000
+MAX_ANALYSIS_DIMENSION = 768
+MAX_ANALYSIS_PIXELS = 250_000
 
 
 def _strip_png_private_metadata(data: bytes) -> bytes:
@@ -445,8 +445,10 @@ class ImageStrokeConverter:
             raise ValueError("prompt は文字列である必要があります")
         if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
             raise ValueError("seed は 0 以上の整数である必要があります")
-        if count is not None and (isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 500):
-            raise ValueError("count は 1 から 500 の整数または None である必要があります")
+        if count is not None and (
+            isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_PLAN_STROKES
+        ):
+            raise ValueError(f"count は 1 から {MAX_PLAN_STROKES} の整数または None である必要があります")
         if any(
             isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 2
             for value in (target_width, target_height)
@@ -706,9 +708,11 @@ class ImageStrokeConverter:
                     background_mask[ny][nx] = True
                     background_queue.append((nx, ny))
 
-        # 1. エッジ検出（Sobel風フィルタによる輪郭抽出）-> Lineart
+        # 1. エッジ検出（Sobel + ヒステリシス輪郭追跡による高精細エッジ抽出）-> Lineart
         safe_edge_threshold = max(0.02, min(0.60, edge_threshold))
-        edge_mask = [[False for _x in range(grid_w)] for _y in range(grid_h)]
+        low_edge_threshold = safe_edge_threshold * 0.45
+        strong_edge_mask = [[False for _x in range(grid_w)] for _y in range(grid_h)]
+        candidate_mask = [[False for _x in range(grid_w)] for _y in range(grid_h)]
 
         for y in range(1, grid_h - 1):
             for x in range(1, grid_w - 1):
@@ -728,11 +732,27 @@ class ImageStrokeConverter:
                 touches_subject = not background_mask[y][x] or any(
                     not background_mask[y + ny][x + nx] for nx, ny in ((-1, 0), (1, 0), (0, -1), (0, 1))
                 )
-                if mag > safe_edge_threshold and touches_subject:
-                    edge_mask[y][x] = True
+                if touches_subject:
+                    if mag > safe_edge_threshold:
+                        strong_edge_mask[y][x] = True
+                    elif mag > low_edge_threshold:
+                        candidate_mask[y][x] = True
+
+        # 強いエッジから連結する中程度エッジをヒステリシス追跡して確定
+        edge_mask = [[strong_edge_mask[y][x] for x in range(grid_w)] for y in range(grid_h)]
+        edge_queue: deque[tuple[int, int]] = deque(
+            (x, y) for y in range(grid_h) for x in range(grid_w) if strong_edge_mask[y][x]
+        )
+        while edge_queue:
+            ex, ey = edge_queue.popleft()
+            for dx, dy in ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)):
+                nx, ny = ex + dx, ey + dy
+                if 0 <= nx < grid_w and 0 <= ny < grid_h and candidate_mask[ny][nx] and not edge_mask[ny][nx]:
+                    edge_mask[ny][nx] = True
+                    edge_queue.append((nx, ny))
 
         # エッジを連結し、輪郭に沿う連続ストロークを構築する（微小ノイズパスはフィルタ）。
-        max_paths = min(max(20, (count * 3) if count is not None else 150), 500)
+        max_paths = min(max(20, (count * 3) if count is not None else 180), MAX_PLAN_STROKES)
         raw_edge_paths = _trace_edge_paths(edge_mask, max_paths=max_paths)
         # 1ピクセルのみの微小孤立ノイズをカットし、意味のある輪郭線のみを保持
         edge_paths = [p for p in raw_edge_paths if len(p) >= 2 or len(raw_edge_paths) <= 10]
@@ -741,7 +761,7 @@ class ImageStrokeConverter:
 
         for i, pixel_path in enumerate(edge_paths):
             raw_controls = [(offset_x + px * fit_scale, offset_y + py * fit_scale) for px, py in pixel_path]
-            simplified = _rdp_simplify(raw_controls, epsilon=max(1.0, fit_scale * 0.75))
+            simplified = _rdp_simplify(raw_controls, epsilon=max(0.8, fit_scale * 0.55))
             if len(simplified) > 24:
                 sample_step = max(1, math.ceil(len(simplified) / 24))
                 simplified = simplified[::sample_step]
@@ -772,10 +792,10 @@ class ImageStrokeConverter:
                 dark_step = max(3, int(grid_w / 18))
                 lum_cutoff = 0.35
             elif shading_density == "high":
-                dark_step = max(1, int(grid_w / 35))
+                dark_step = max(1, int(grid_w / 38))
                 lum_cutoff = 0.55
             else:  # medium
-                dark_step = max(2, int(grid_w / 25))
+                dark_step = max(2, int(grid_w / 28))
                 lum_cutoff = 0.45
 
             for y in range(0, grid_h, dark_step):
@@ -866,7 +886,7 @@ class ImageStrokeConverter:
 
         # 3. カラーパレットサンプリングによる下塗りストローク -> Flats
         if enable_flats:
-            flat_step = max(3, int(grid_w / 15))
+            flat_step = max(2, int(grid_w / 20))
             for y in range(0, grid_h, flat_step):
                 for x in range(0, grid_w, flat_step):
                     if alpha_map[y][x] < 0.05 or background_mask[y][x]:

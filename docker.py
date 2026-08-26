@@ -924,7 +924,7 @@ class AIStrokePainterDocker(DockWidget):
 
         params_row1.addWidget(QLabel("本数"))
         self.count = QSpinBox()
-        self.count.setRange(1, 500)
+        self.count.setRange(1, 2000)
         self.count.setValue(35)
         params_row1.addWidget(self.count)
 
