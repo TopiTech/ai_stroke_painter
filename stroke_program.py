@@ -2108,104 +2108,216 @@ def _compile_macro(
         root_y = min(h * 0.98, cy + r)
         tree_h = max(30.0, r * 1.8)
         top_y = root_y - tree_h
+        trunk_color = operation.colors[0] if operation.colors else "#342017"
+        bark_shadow = "#1f120c"
 
-        # 主幹
-        trunk_pts = _catmull_rom_spline(
-            [
-                (root_x, root_y),
-                (root_x - scale * 0.02, root_y - tree_h * 0.35),
-                (root_x + scale * 0.015, root_y - tree_h * 0.65),
-                (root_x - scale * 0.01, top_y),
-            ],
-            8,
-        )
-        pts_trunk_p = [
-            (x, y, max(0.2, 1.0 - (i / max(1, len(trunk_pts) - 1)) * 0.75)) for i, (x, y) in enumerate(trunk_pts)
+        # 主幹 (根張り・うねり・テーパー)
+        trunk_ctrls = [
+            (root_x - scale * 0.015, root_y),
+            (root_x, root_y - tree_h * 0.15),
+            (root_x - scale * 0.018, root_y - tree_h * 0.45),
+            (root_x + scale * 0.014, root_y - tree_h * 0.72),
+            (root_x - scale * 0.008, top_y),
         ]
+        trunk_pts = _catmull_rom_spline(trunk_ctrls, 10)
+        pts_trunk_p = [
+            (x, y, max(0.18, 0.95 - (i / max(1, len(trunk_pts) - 1)) * 0.72)) for i, (x, y) in enumerate(trunk_pts)
+        ]
+        # 幹の陰影（立体感のある樹皮シャドウ）
+        strokes.append(
+            _create_macro_stroke(
+                stroke_id=uid("trunk_shadow"),
+                points=[(x + scale * 0.004, y, p * 0.8) for x, y, p in pts_trunk_p],
+                profile="brush",
+                color=bark_shadow,
+                size_px=max(6.0, scale * 0.024),
+                layer_name="Shading",
+                opacity=0.65,
+            )
+        )
         strokes.append(
             _create_macro_stroke(
                 stroke_id=uid("trunk_main"),
                 points=pts_trunk_p,
                 profile="gpen",
-                color=operation.colors[0] if operation.colors else "#342017",
-                size_px=max(5.0, scale * 0.018),
+                color=trunk_color,
+                size_px=max(5.5, scale * 0.020),
                 layer_name="Lineart",
                 opacity=0.95,
             )
         )
+        # 根張りの広がり
+        left_root = _catmull_rom_spline([(root_x, root_y - tree_h * 0.08), (root_x - scale * 0.04, root_y)], 6)
+        right_root = _catmull_rom_spline([(root_x, root_y - tree_h * 0.08), (root_x + scale * 0.035, root_y)], 6)
+        strokes.append(
+            _create_macro_stroke(
+                stroke_id=uid("root_l"),
+                points=[(x, y, 0.75 - 0.4 * (i / max(1, len(left_root) - 1))) for i, (x, y) in enumerate(left_root)],
+                profile="gpen",
+                color=trunk_color,
+                size_px=max(3.5, scale * 0.012),
+                layer_name="Lineart",
+                opacity=0.90,
+            )
+        )
+        strokes.append(
+            _create_macro_stroke(
+                stroke_id=uid("root_r"),
+                points=[(x, y, 0.75 - 0.4 * (i / max(1, len(right_root) - 1))) for i, (x, y) in enumerate(right_root)],
+                profile="gpen",
+                color=trunk_color,
+                size_px=max(3.5, scale * 0.012),
+                layer_name="Lineart",
+                opacity=0.90,
+            )
+        )
 
-        # 大枝
-        bough_configs = [
-            (-1.0, 0.45, 0.40, 0.30),
-            (1.0, 0.60, 0.45, 0.25),
-            (-1.0, 0.78, 0.35, 0.20),
-            (1.0, 0.88, 0.25, 0.15),
+        # 有機的な大枝・中枝の階層分岐 (Boughs & Twigs)
+        bough_specs = [
+            (-1.0, 0.48, 0.38, 0.18, 0.32),
+            (1.0, 0.58, 0.42, 0.14, 0.28),
+            (-1.0, 0.72, 0.32, 0.10, 0.22),
+            (1.0, 0.80, 0.28, 0.08, 0.18),
+            (-0.6, 0.90, 0.18, 0.06, 0.12),
+            (0.7, 0.94, 0.16, 0.05, 0.10),
         ]
-        for b_idx, (side, h_frac, spread, curve) in enumerate(bough_configs):
+        for b_idx, (side, h_frac, spread, lift, arc) in enumerate(bough_specs):
             if len(strokes) >= limit:
                 break
             b_start_y = root_y - tree_h * h_frac
-            b_start_x = root_x + side * scale * 0.01
-            b_mid_x = b_start_x + side * scale * spread * 0.55
-            b_mid_y = b_start_y - scale * curve * 0.5
+            b_start_x = root_x + side * scale * 0.012
+            b_ctrl1_x = b_start_x + side * scale * spread * 0.35
+            b_ctrl1_y = b_start_y - scale * lift * 0.2
+            b_ctrl2_x = b_start_x + side * scale * spread * 0.75
+            b_ctrl2_y = b_start_y - scale * (lift + arc) * 0.65
             b_end_x = b_start_x + side * scale * spread
-            b_end_y = b_start_y - scale * curve
+            b_end_y = b_start_y - scale * (lift + arc)
             b_pts = _catmull_rom_spline(
-                [
-                    (b_start_x, b_start_y),
-                    (b_mid_x, b_mid_y),
-                    (b_end_x, b_end_y),
-                ],
-                6,
+                [(b_start_x, b_start_y), (b_ctrl1_x, b_ctrl1_y), (b_ctrl2_x, b_ctrl2_y), (b_end_x, b_end_y)],
+                8,
             )
-            b_pts_p = [(x, y, max(0.15, 0.85 - (i / max(1, len(b_pts) - 1)) * 0.65)) for i, (x, y) in enumerate(b_pts)]
+            b_pts_p = [(x, y, max(0.12, 0.80 - (i / max(1, len(b_pts) - 1)) * 0.68)) for i, (x, y) in enumerate(b_pts)]
             strokes.append(
                 _create_macro_stroke(
                     stroke_id=uid("tree_bough", b_idx),
                     points=b_pts_p,
                     profile="gpen",
-                    color="#342017",
-                    size_px=max(3.0, scale * 0.009),
+                    color=trunk_color,
+                    size_px=max(2.8, scale * 0.010 * (1.0 - h_frac * 0.35)),
                     layer_name="Lineart",
-                    opacity=0.90,
+                    opacity=0.92,
                 )
             )
 
-        # 樹冠の花房
+            # 小枝分岐 (Twigs)
+            if b_idx < 4 and len(strokes) < limit:
+                t_start_i = len(b_pts) // 2
+                t_start = b_pts[t_start_i]
+                t_end_x = t_start[0] + side * scale * spread * 0.35 + rng.uniform(-scale * 0.01, scale * 0.01)
+                t_end_y = t_start[1] - scale * 0.04
+                t_pts = _catmull_rom_spline(
+                    [t_start, ((t_start[0] + t_end_x) * 0.5, t_start[1] - scale * 0.02), (t_end_x, t_end_y)], 6
+                )
+                strokes.append(
+                    _create_macro_stroke(
+                        stroke_id=uid(f"tree_twig_{b_idx}"),
+                        points=[
+                            (x, y, max(0.10, 0.60 - (i / max(1, len(t_pts) - 1)) * 0.50))
+                            for i, (x, y) in enumerate(t_pts)
+                        ],
+                        profile="gpen",
+                        color=trunk_color,
+                        size_px=max(1.8, scale * 0.005),
+                        layer_name="Lineart",
+                        opacity=0.88,
+                    )
+                )
+
+        # 樹冠の花房・葉の多層ボリューム (Canopy Layers)
         if operation.params.get("foliage", True):
+            is_sakura_theme = "sakura" in name or "pink" in str(operation.colors) or "blossom" in name
+            deep_shadow_col = "#9d4b68" if is_sakura_theme else "#234d31"
             blossom_colors = (
-                ["#ffb8cd", "#ff9ebb", "#ffd6e5"]
-                if "sakura" in name or "pink" in str(operation.colors)
-                else ["#4e7d58", "#72a37c", "#9ec4a5"]
+                ["#f7a8c4", "#ffb8cd", "#ffd6e5", "#fff0f5"]
+                if is_sakura_theme
+                else ["#3a6b47", "#528c60", "#76ab82", "#9ec4a5"]
             )
             cluster_centers = [
-                (root_x - scale * 0.15, root_y - tree_h * 0.70, scale * 0.12),
-                (root_x + scale * 0.18, root_y - tree_h * 0.75, scale * 0.14),
-                (root_x - scale * 0.05, top_y - scale * 0.04, scale * 0.16),
-                (root_x + scale * 0.08, root_y - tree_h * 0.55, scale * 0.11),
+                (root_x - scale * 0.16, root_y - tree_h * 0.68, scale * 0.14),
+                (root_x + scale * 0.18, root_y - tree_h * 0.74, scale * 0.15),
+                (root_x - scale * 0.06, top_y - scale * 0.05, scale * 0.17),
+                (root_x + scale * 0.09, root_y - tree_h * 0.58, scale * 0.13),
+                (root_x - scale * 0.24, root_y - tree_h * 0.52, scale * 0.11),
+                (root_x + scale * 0.25, root_y - tree_h * 0.60, scale * 0.12),
+                (root_x - scale * 0.02, root_y - tree_h * 0.85, scale * 0.15),
             ]
-            for c_i, (cc_x, cc_y, cc_r) in enumerate(cluster_centers):
+
+            # 1. 奥の影塊 (Deep Shadow Canopy Mass)
+            for c_i, (cc_x, cc_y, cc_r) in enumerate(cluster_centers[:4]):
                 if len(strokes) >= limit:
                     break
                 c_pts = [
                     (
-                        cc_x + math.cos(deg) * cc_r * (1.0 + rng.uniform(-0.1, 0.1)),
-                        cc_y + math.sin(deg) * cc_r * (1.0 + rng.uniform(-0.1, 0.1)),
+                        cc_x + math.cos(deg) * cc_r * (0.9 + rng.uniform(-0.06, 0.06)),
+                        cc_y + math.sin(deg) * cc_r * (0.9 + rng.uniform(-0.06, 0.06)),
                     )
                     for deg in (0.0, math.pi * 0.5, math.pi, math.pi * 1.5, math.pi * 2.0)
                 ]
-                c_spline = _catmull_rom_spline(c_pts, 6)
+                strokes.append(
+                    _create_macro_stroke(
+                        stroke_id=uid("tree_foliage_shadow", c_i),
+                        points=[(x, y, 0.70) for x, y in _catmull_rom_spline(c_pts, 6)],
+                        profile="watercolor",
+                        color=deep_shadow_col,
+                        size_px=max(20.0, cc_r * 0.75),
+                        layer_name="Flats",
+                        opacity=0.60,
+                    )
+                )
+
+            # 2. 中景〜前景の花房クラスタ (Midtone & Highlights Canopy)
+            for c_i, (cc_x, cc_y, cc_r) in enumerate(cluster_centers):
+                if len(strokes) >= limit:
+                    break
+                col = blossom_colors[c_i % len(blossom_colors)]
+                c_pts = [
+                    (
+                        cc_x + math.cos(deg) * cc_r * (1.0 + rng.uniform(-0.08, 0.08)),
+                        cc_y + math.sin(deg) * cc_r * (1.0 + rng.uniform(-0.08, 0.08)),
+                    )
+                    for deg in (0.0, math.pi * 0.5, math.pi, math.pi * 1.5, math.pi * 2.0)
+                ]
                 strokes.append(
                     _create_macro_stroke(
                         stroke_id=uid("tree_foliage", c_i),
-                        points=[(x, y, 0.8) for x, y in c_spline],
+                        points=[(x, y, 0.85) for x, y in _catmull_rom_spline(c_pts, 8)],
                         profile="watercolor",
-                        color=blossom_colors[c_i % len(blossom_colors)],
-                        size_px=max(15.0, cc_r * 0.6),
+                        color=col,
+                        size_px=max(18.0, cc_r * 0.65),
                         layer_name="Flats",
-                        opacity=0.65,
+                        opacity=0.72,
                     )
                 )
+
+            # 3. 外周に舞い散る花びら (Drifting Petals / Highlights)
+            if is_sakura_theme and len(strokes) < limit:
+                for p_i in range(8):
+                    if len(strokes) >= limit:
+                        break
+                    px = root_x + rng.uniform(-scale * 0.28, scale * 0.32)
+                    py = root_y - tree_h * rng.uniform(0.2, 0.95)
+                    drift_pts = [(px, py), (px + scale * rng.uniform(0.01, 0.03), py + scale * rng.uniform(0.01, 0.02))]
+                    strokes.append(
+                        _create_macro_stroke(
+                            stroke_id=uid("falling_petal", p_i),
+                            points=[(x, y, 0.8) for x, y in drift_pts],
+                            profile="gpen",
+                            color="#fff0f5" if p_i % 2 == 0 else "#ffc2d6",
+                            size_px=max(2.5, scale * 0.004),
+                            layer_name="Highlights",
+                            opacity=0.88,
+                        )
+                    )
 
         return strokes
 
@@ -2219,31 +2331,40 @@ def _compile_macro(
         for m_layer in range(layers):
             if len(strokes) >= limit:
                 break
-            layer_base_y = base_y + m_layer * scale * 0.08
-            steps = 8
+            layer_base_y = base_y + m_layer * scale * 0.07
+            steps = 14
             m_pts = [(0.0, layer_base_y)]
             for s_i in range(1, steps):
                 sx = (s_i / steps) * w
-                sy = layer_base_y - (rng.uniform(0.06, 0.20) * scale) / (m_layer + 1)
+                sy = layer_base_y - (rng.uniform(0.08, 0.22) * scale) / (m_layer + 1)
                 m_pts.append((sx, sy))
             m_pts.append((w, layer_base_y))
-            m_spline = _catmull_rom_spline(m_pts, 8)
+            m_spline = _catmull_rom_spline(m_pts, 10)
 
-            strokes.append(
-                _create_macro_stroke(
-                    stroke_id=uid("mountain_base", m_layer),
-                    points=[(x, y, 0.85) for x, y in m_spline],
-                    profile="watercolor",
-                    color=m_colors[m_layer % len(m_colors)],
-                    size_px=max(20.0, scale * 0.08),
-                    layer_name="Flats",
-                    opacity=0.75,
+            # 山体の面塗り (Flats) - 稜線直下・中腹・下部の3段で白抜けを防ぐ
+            col = m_colors[m_layer % len(m_colors)]
+            fill_bands = [0.0, 0.35, 0.70]
+            for fb_idx, fb_frac in enumerate(fill_bands):
+                if len(strokes) >= limit:
+                    break
+                band_pts = [(x, y + (layer_base_y - y) * fb_frac, 0.85) for x, y in m_spline]
+                strokes.append(
+                    _create_macro_stroke(
+                        stroke_id=uid(f"mountain_mass_{m_layer}", fb_idx),
+                        points=band_pts,
+                        profile="watercolor",
+                        color=col,
+                        size_px=max(28.0, scale * 0.09),
+                        layer_name="Flats",
+                        opacity=0.82 if fb_idx == 0 else 0.70,
+                    )
                 )
-            )
+
+            # 山稜線の輪郭 (Lineart)
             strokes.append(
                 _create_macro_stroke(
                     stroke_id=uid("mountain_ridge", m_layer),
-                    points=[(x, y, 0.7) for x, y in m_spline],
+                    points=[(x, y, 0.75) for x, y in m_spline],
                     profile="gpen",
                     color="#1a2733",
                     size_px=max(2.0, scale * 0.0035 - m_layer * 0.5),
@@ -2264,30 +2385,34 @@ def _compile_macro(
         operation.bounds[3] * h,
     )
     wash_colors = list(operation.colors) if operation.colors else ["#2b5c8f", "#5c93cf", "#b8d8f8", "#eef6ff"]
-    rows = max(2, min(limit, len(wash_colors)))
+    total_h = max(1.0, y1 - y0)
+    # キャンバス白抜けを防ぐため、密な段数と十分なオーバーラップを持たせる
+    rows = max(4, min(limit, max(len(wash_colors), int(total_h / max(20.0, scale * 0.08)))))
+    band_thickness = max(35.0, (total_h / max(1, rows - 1)) * 1.6)
     for r_i in range(rows):
         if len(strokes) >= limit:
             break
-        curr_y = y0 + (r_i / max(1, rows - 1)) * (y1 - y0)
-        c_col = wash_colors[r_i % len(wash_colors)]
+        t_row = r_i / max(1, rows - 1)
+        curr_y = y0 + t_row * total_h
+        c_col = wash_colors[min(len(wash_colors) - 1, int(t_row * len(wash_colors)))]
         w_pts = _catmull_rom_spline(
             [
                 (x0, curr_y),
-                (x0 + (x1 - x0) * 0.33, curr_y + scale * rng.uniform(-0.02, 0.02)),
-                (x0 + (x1 - x0) * 0.67, curr_y + scale * rng.uniform(-0.02, 0.02)),
+                (x0 + (x1 - x0) * 0.33, curr_y + scale * rng.uniform(-0.015, 0.015)),
+                (x0 + (x1 - x0) * 0.67, curr_y + scale * rng.uniform(-0.015, 0.015)),
                 (x1, curr_y),
             ],
-            6,
+            8,
         )
         strokes.append(
             _create_macro_stroke(
                 stroke_id=uid("wash_band", r_i),
-                points=[(x, y, 0.8) for x, y in w_pts],
+                points=[(x, y, 0.85) for x, y in w_pts],
                 profile="watercolor",
                 color=c_col,
-                size_px=max(25.0, (y1 - y0) / max(1, rows - 1) * 1.3),
+                size_px=band_thickness,
                 layer_name="Flats",
-                opacity=0.60,
+                opacity=0.75,
             )
         )
 

@@ -343,26 +343,29 @@ def generate_landscape_strokes(
 
     else:
         # =====================================================================
-        # 山岳・樹木・雲・丘陵のフル風景 (Mountains, Trees, Clouds)
+        # 山岳・樹木・雲・丘陵のフル風景 (Mountains, Trees, Clouds, Ground)
         # =====================================================================
-        # 0. 空のグラデーション (Flats Layer - Sky Gradient)
-        sky_colors = [
-            colors.get("sky_zenith", "#2b5c8f"),
-            "#457cb8",
-            "#7cb0e8",
-            colors.get("sky_horizon", "#eef6ff"),
-        ]
+        scale = min(width, height)
+        is_fantasy = any(k in prompt_l for k in ["fantasy", "magic", "dream", "幻想", "魔法"])
+
+        # 0. 空のグラデーション (Flats Layer - Sky Gradient) - 隙間なく地平線まで覆う
+        sky_colors = (
+            ["#223a5e", "#3a6094", "#5c8dc9", "#8bbbe8", "#eef6ff"]
+            if not is_fantasy
+            else ["#2c2459", "#4e3b7b", "#725b9c", "#a280b8", "#fce4ec"]
+        )
+        sky_limit_y = height * 0.58
         for s_idx, s_col in enumerate(sky_colors):
-            s_y = (s_idx / max(1, len(sky_colors) - 1)) * height * 0.48
+            s_y = (s_idx / max(1, len(sky_colors) - 1)) * sky_limit_y
             strokes.append(
                 create_stroke(
-                    [(0.0, s_y), (width * 0.5, s_y), (width, s_y)],
+                    [(-width * 0.05, s_y), (width * 0.5, s_y), (width * 1.05, s_y)],
                     profile_type="airbrush",
-                    base_pressure=0.8,
+                    base_pressure=0.85,
                     color=s_col,
-                    size_px=max(40.0, height * 0.16),
+                    size_px=max(50.0, height * 0.20),
                     layer_name="Flats",
-                    opacity=0.75,
+                    opacity=0.82,
                     rng=rng,
                     width=width,
                     height=height,
@@ -370,43 +373,48 @@ def generate_landscape_strokes(
                 )
             )
 
-        # 1. 遠景の山並み (Distant & Midground Mountains)
-        for m_layer in range(3):
+        # 1. 遠景〜中景の山並み (Mountains with solid mass and organic ridges)
+        mountain_colors = ["#5d6d7e", "#34495e", "#1f2d3d"] if not is_fantasy else ["#5c4a72", "#3e3256", "#251d38"]
+        for m_layer in range(2):
             m_pts: list[tuple[float, float]] = []
-            steps = 8
-            base_y = height * (0.42 + m_layer * 0.12)
-            m_pts.append((0.0, base_y))
+            steps = 14
+            base_y = height * (0.38 + m_layer * 0.12)
+            m_pts.append((-width * 0.05, base_y))
             for s_i in range(1, steps):
                 sx = (s_i / steps) * width
-                sy = base_y - (rng.uniform(0.08, 0.22) * height) / (m_layer + 1)
+                sy = base_y - (rng.uniform(0.08, 0.24) * height) / (m_layer + 1.2)
                 m_pts.append((sx, sy))
-            m_pts.append((width, base_y))
-
+            m_pts.append((width * 1.05, base_y))
             m_spline = catmull_rom_spline(m_pts, 8)
-            # 山肌のベース塗り (Flats)
-            strokes.append(
-                create_stroke(
-                    m_spline,
-                    profile_type="brush",
-                    base_pressure=0.9,
-                    color=["#4a5568", "#2d3748", "#1a202c"][m_layer],
-                    size_px=max(20.0, height * 0.08),
-                    layer_name="Flats",
-                    opacity=0.85,
-                    rng=rng,
-                    width=width,
-                    height=height,
-                    stroke_id=uid("mountain_base", m_layer),
+
+            m_col = mountain_colors[m_layer % len(mountain_colors)]
+            # 山体の面塗り (Flats) - 稜線直下・中腹の2段で白抜けを完全に防止
+            for fb_idx, fb_frac in enumerate((0.15, 0.55)):
+                band_pts = [(x, y + (base_y - y) * fb_frac) for x, y in m_spline]
+                strokes.append(
+                    create_stroke(
+                        band_pts,
+                        profile_type="watercolor",
+                        base_pressure=0.88,
+                        color=m_col,
+                        size_px=max(35.0, scale * 0.10),
+                        layer_name="Flats",
+                        opacity=0.78 if fb_idx == 0 else 0.65,
+                        rng=rng,
+                        width=width,
+                        height=height,
+                        stroke_id=uid(f"mountain_body_{m_layer}", fb_idx),
+                    )
                 )
-            )
+
             # 山稜線の輪郭 (Lineart)
             strokes.append(
                 create_stroke(
                     m_spline,
                     profile_type="gpen",
                     base_pressure=0.75,
-                    color=["#374151", "#1f2937", "#111827"][m_layer],
-                    size_px=4.5 - m_layer * 0.8,
+                    color=["#2c3e50", "#1a252f"][m_layer],
+                    size_px=max(2.5, 4.2 - m_layer * 1.0),
                     layer_name="Lineart",
                     rng=rng,
                     width=width,
@@ -415,49 +423,95 @@ def generate_landscape_strokes(
                 )
             )
 
-            # 山肌のハッチング陰影 (Shading Layer)
-            for h_i in range(6):
-                hx = (h_i / 6) * width + width * 0.08
-                hy = base_y - height * 0.05
-                h_stroke = [(hx, hy), (hx - width * 0.04, hy + height * 0.06)]
+            # 山肌の有機的陰影 (Shading Layer)
+            for h_i in range(4):
+                hx = (h_i / 4) * width + width * 0.12
+                hy = base_y - height * 0.08
+                h_stroke = catmull_rom_spline(
+                    [(hx, hy), (hx - width * 0.03, hy + height * 0.04), (hx - width * 0.05, hy + height * 0.08)],
+                    6,
+                )
                 strokes.append(
                     create_stroke(
                         h_stroke,
-                        profile_type="marupen",
-                        base_pressure=0.5,
-                        color="#718096",
-                        size_px=2.5,
+                        profile_type="watercolor",
+                        base_pressure=0.55,
+                        color="#2c3e50",
+                        size_px=max(4.0, scale * 0.012),
                         layer_name="Shading",
-                        opacity=0.6,
+                        opacity=0.50,
                         rng=rng,
                         width=width,
                         height=height,
-                        stroke_id=uid(f"mountain_hatch_{m_layer}", h_i),
+                        stroke_id=uid(f"mountain_shade_{m_layer}", h_i),
                     )
                 )
 
-        # 2. 前景の樹木 (Foreground Tree - 有機的トランク＆多層ボリューム)
-        tree_x = width * 0.78
-        tree_y = height * 0.88
-        tree_h = height * 0.45
+        # 2. 中景の丘陵・大地のベース (Ground, Hills & Meadow - 白抜け根絶)
+        ground_colors = ["#4a7c59", "#3b6e4c", "#2d5a3d"] if not is_fantasy else ["#4a6b5d", "#365345", "#253b30"]
+        for g_layer in range(2):
+            g_base_y = height * (0.54 + g_layer * 0.20)
+            g_ctrls = [
+                (-width * 0.05, g_base_y),
+                (width * 0.35, g_base_y - scale * 0.04),
+                (width * 0.70, g_base_y + scale * 0.02),
+                (width * 1.05, g_base_y - scale * 0.02),
+            ]
+            g_spline = catmull_rom_spline(g_ctrls, 8)
+            strokes.append(
+                create_stroke(
+                    g_spline,
+                    profile_type="watercolor",
+                    base_pressure=0.90,
+                    color=ground_colors[g_layer % len(ground_colors)],
+                    size_px=max(50.0, height * 0.25),
+                    layer_name="Flats",
+                    opacity=0.85,
+                    rng=rng,
+                    width=width,
+                    height=height,
+                    stroke_id=uid("ground_layer", g_layer),
+                )
+            )
 
-        # 幹 (Trunk)
-        trunk = catmull_rom_spline(
-            [
-                (tree_x, tree_y),
-                (tree_x - width * 0.02, tree_y - tree_h * 0.4),
-                (tree_x + width * 0.01, tree_y - tree_h * 0.7),
-                (tree_x - width * 0.01, tree_y - tree_h),
-            ],
-            8,
+        # 3. 前景の樹木 (Organic Tree Anatomy - 根張り・階層分岐・テーパー)
+        tree_x = width * 0.68
+        tree_y = height * 0.94
+        tree_h = height * 0.52
+        top_y = tree_y - tree_h
+        trunk_color = "#3d2817"
+
+        # 幹 (根張り・うねり・テーパー)
+        trunk_ctrls = [
+            (tree_x, tree_y),
+            (tree_x - width * 0.020, tree_y - tree_h * 0.25),
+            (tree_x + width * 0.015, tree_y - tree_h * 0.55),
+            (tree_x - width * 0.010, top_y),
+        ]
+        trunk = catmull_rom_spline(trunk_ctrls, 10)
+        # 幹の陰影
+        strokes.append(
+            create_stroke(
+                [(x + scale * 0.005, y) for x, y in trunk],
+                profile_type="brush",
+                base_pressure=0.85,
+                color="#201309",
+                size_px=max(12.0, scale * 0.028),
+                layer_name="Shading",
+                opacity=0.60,
+                rng=rng,
+                width=width,
+                height=height,
+                stroke_id=uid("tree_trunk_shadow"),
+            )
         )
         strokes.append(
             create_stroke(
                 trunk,
                 profile_type="brush",
-                base_pressure=1.0,
-                color="#3d2b1f",
-                size_px=11.0,
+                base_pressure=0.95,
+                color=trunk_color,
+                size_px=max(10.0, scale * 0.022),
                 layer_name="Lineart",
                 rng=rng,
                 width=width,
@@ -465,75 +519,187 @@ def generate_landscape_strokes(
                 stroke_id=uid("tree_trunk"),
             )
         )
+        # 根張り
+        root_l = catmull_rom_spline([(tree_x, tree_y - tree_h * 0.08), (tree_x - scale * 0.04, tree_y)], 6)
+        root_r = catmull_rom_spline([(tree_x, tree_y - tree_h * 0.08), (tree_x + scale * 0.035, tree_y)], 6)
+        strokes.append(
+            create_stroke(
+                root_l,
+                profile_type="brush",
+                base_pressure=0.8,
+                color=trunk_color,
+                size_px=max(4.5, scale * 0.012),
+                layer_name="Lineart",
+                rng=rng,
+                width=width,
+                height=height,
+                stroke_id=uid("root_l"),
+            )
+        )
+        strokes.append(
+            create_stroke(
+                root_r,
+                profile_type="brush",
+                base_pressure=0.8,
+                color=trunk_color,
+                size_px=max(4.5, scale * 0.012),
+                layer_name="Lineart",
+                rng=rng,
+                width=width,
+                height=height,
+                stroke_id=uid("root_r"),
+            )
+        )
 
-        # 枝と葉のクラスタ (Branches & Foliage)
-        for b_i in range(8):
-            b_ang = (b_i / 8) * math.pi * 1.8 - math.pi * 0.9
-            bx = tree_x + math.cos(b_ang) * width * 0.12
-            by = tree_y - tree_h * 0.7 + math.sin(b_ang) * height * 0.10
-            # 葉のモコモコしたストローク
-            foliage = bezier_cubic(
-                (bx - width * 0.04, by),
-                (bx - width * 0.02, by - height * 0.05),
-                (bx + width * 0.02, by - height * 0.05),
-                (bx + width * 0.04, by),
-                samples=8,
+        # 枝の階層的有機分岐 (Boughs with natural curvature)
+        bough_configs = [
+            (-1.0, 0.45, 0.35, 0.15, 0.25),
+            (1.0, 0.55, 0.38, 0.12, 0.22),
+            (-1.0, 0.70, 0.28, 0.08, 0.16),
+            (1.0, 0.78, 0.25, 0.06, 0.14),
+            (-0.7, 0.88, 0.16, 0.04, 0.09),
+        ]
+        for b_idx, (side, h_frac, spread, lift, arc) in enumerate(bough_configs):
+            b_start_y = tree_y - tree_h * h_frac
+            b_start_x = tree_x + side * scale * 0.010
+            b_ctrl1_x = b_start_x + side * scale * spread * 0.40
+            b_ctrl1_y = b_start_y - scale * lift * 0.3
+            b_end_x = b_start_x + side * scale * spread
+            b_end_y = b_start_y - scale * (lift + arc)
+            b_pts = catmull_rom_spline(
+                [(b_start_x, b_start_y), (b_ctrl1_x, b_ctrl1_y), (b_end_x, b_end_y)],
+                8,
             )
             strokes.append(
                 create_stroke(
-                    foliage,
-                    profile_type="gpen",
-                    base_pressure=0.85,
-                    color=("#d85f8f" if b_i % 2 == 0 else "#ef9fba")
-                    if is_sakura
-                    else ("#2d6a4f" if b_i % 2 == 0 else "#40916c"),
-                    size_px=5.5,
+                    b_pts,
+                    profile_type="brush",
+                    base_pressure=0.80,
+                    color=trunk_color,
+                    size_px=max(3.0, scale * 0.009 * (1.0 - h_frac * 0.3)),
                     layer_name="Lineart",
                     rng=rng,
                     width=width,
                     height=height,
-                    stroke_id=uid("foliage", b_i),
+                    stroke_id=uid("tree_bough", b_idx),
                 )
             )
 
+        # 4. 樹冠の花房・葉のボリューム (Blossom Canopy / Foliage Mass)
         if is_sakura:
-            blossom_colors = ["#f7c4d8", "#ee8fb5", "#fff0f5"]
-            for cluster_index in range(18):
-                angle = math.tau * cluster_index / 18.0
-                radius_x = width * (0.035 + 0.10 * ((cluster_index % 4) / 3.0))
-                radius_y = height * (0.025 + 0.08 * ((cluster_index % 5) / 4.0))
-                bx = tree_x + math.cos(angle) * radius_x + rng.uniform(-width * 0.018, width * 0.018)
-                by = tree_y - tree_h * 0.72 + math.sin(angle) * radius_y + rng.uniform(-height * 0.012, height * 0.012)
-                petal_radius = min(width, height) * 0.014
-                petal_points = [
+            blossom_colors = ["#f7a8c4", "#ffb8cd", "#ffd6e5", "#fff0f5"]
+            canopy_centers = [
+                (tree_x - scale * 0.14, tree_y - tree_h * 0.65, scale * 0.15),
+                (tree_x + scale * 0.16, tree_y - tree_h * 0.72, scale * 0.16),
+                (tree_x - scale * 0.05, top_y - scale * 0.04, scale * 0.18),
+                (tree_x + scale * 0.08, tree_y - tree_h * 0.55, scale * 0.14),
+                (tree_x - scale * 0.22, tree_y - tree_h * 0.50, scale * 0.12),
+                (tree_x + scale * 0.24, tree_y - tree_h * 0.58, scale * 0.13),
+            ]
+            # 奥の陰影塊 (Deep Shadow Mass)
+            for c_i, (cc_x, cc_y, cc_r) in enumerate(canopy_centers[:3]):
+                c_pts = [
                     (
-                        bx + math.cos(math.tau * point_index / 5.0) * petal_radius,
-                        by + math.sin(math.tau * point_index / 5.0) * petal_radius,
+                        cc_x + math.cos(deg) * cc_r * (0.9 + rng.uniform(-0.06, 0.06)),
+                        cc_y + math.sin(deg) * cc_r * (0.9 + rng.uniform(-0.06, 0.06)),
                     )
-                    for point_index in range(5)
+                    for deg in (0.0, math.pi * 0.5, math.pi, math.pi * 1.5, math.pi * 2.0)
                 ]
-                petal_points.append(petal_points[0])
                 strokes.append(
                     create_stroke(
-                        petal_points,
+                        catmull_rom_spline(c_pts, 6),
                         profile_type="watercolor",
-                        base_pressure=0.72,
-                        color=blossom_colors[cluster_index % len(blossom_colors)],
-                        size_px=max(2.0, petal_radius * 0.45),
-                        layer_name="Highlights",
-                        opacity=0.82,
+                        base_pressure=0.75,
+                        color="#9d4b68",
+                        size_px=max(25.0, cc_r * 0.75),
+                        layer_name="Flats",
+                        opacity=0.62,
                         rng=rng,
                         width=width,
                         height=height,
-                        stroke_id=uid("sakura_blossom", cluster_index),
+                        stroke_id=uid("sakura_shadow", c_i),
                     )
                 )
 
-        # 3. 雲 (Clouds - 立体フォーム＆光彩エッジ)
+            # 主花房クラスタ (Flats Blossom Clusters)
+            for c_i, (cc_x, cc_y, cc_r) in enumerate(canopy_centers):
+                col = blossom_colors[c_i % len(blossom_colors)]
+                c_pts = [
+                    (
+                        cc_x + math.cos(deg) * cc_r * (1.0 + rng.uniform(-0.08, 0.08)),
+                        cc_y + math.sin(deg) * cc_r * (1.0 + rng.uniform(-0.08, 0.08)),
+                    )
+                    for deg in (0.0, math.pi * 0.5, math.pi, math.pi * 1.5, math.pi * 2.0)
+                ]
+                strokes.append(
+                    create_stroke(
+                        catmull_rom_spline(c_pts, 8),
+                        profile_type="watercolor",
+                        base_pressure=0.85,
+                        color=col,
+                        size_px=max(20.0, cc_r * 0.65),
+                        layer_name="Flats",
+                        opacity=0.78,
+                        rng=rng,
+                        width=width,
+                        height=height,
+                        stroke_id=uid("sakura_mass", c_i),
+                    )
+                )
+
+            # 舞い散る花びら (Drifting Petals - Highlights)
+            for p_i in range(10):
+                px = tree_x + rng.uniform(-scale * 0.28, scale * 0.35)
+                py = tree_y - tree_h * rng.uniform(0.15, 0.95)
+                drift_pts = [(px, py), (px + scale * rng.uniform(0.015, 0.035), py + scale * rng.uniform(0.01, 0.025))]
+                strokes.append(
+                    create_stroke(
+                        drift_pts,
+                        profile_type="gpen",
+                        base_pressure=0.85,
+                        color="#fff0f5" if p_i % 2 == 0 else "#ffc2d6",
+                        size_px=max(2.5, scale * 0.0045),
+                        layer_name="Highlights",
+                        opacity=0.90,
+                        rng=rng,
+                        width=width,
+                        height=height,
+                        stroke_id=uid("sakura_blossom", p_i),
+                    )
+                )
+        else:
+            # 通常樹木のモコモコした葉の塊
+            for b_i in range(8):
+                b_ang = (b_i / 8) * math.pi * 1.8 - math.pi * 0.9
+                bx = tree_x + math.cos(b_ang) * width * 0.12
+                by = tree_y - tree_h * 0.7 + math.sin(b_ang) * height * 0.10
+                foliage = bezier_cubic(
+                    (bx - width * 0.04, by),
+                    (bx - width * 0.02, by - height * 0.05),
+                    (bx + width * 0.02, by - height * 0.05),
+                    (bx + width * 0.04, by),
+                    samples=8,
+                )
+                strokes.append(
+                    create_stroke(
+                        foliage,
+                        profile_type="gpen",
+                        base_pressure=0.85,
+                        color="#2d6a4f" if b_i % 2 == 0 else "#40916c",
+                        size_px=5.5,
+                        layer_name="Lineart",
+                        rng=rng,
+                        width=width,
+                        height=height,
+                        stroke_id=uid("foliage", b_i),
+                    )
+                )
+
+        # 5. 雲 (Clouds - 立体フォーム＆光彩エッジ)
         for c_i in range(3):
-            cx_cloud = width * (0.2 + c_i * 0.3)
+            cx_cloud = width * (0.18 + c_i * 0.32)
             cy_cloud = height * (0.12 + c_i * 0.05)
-            cw = width * 0.22
+            cw = width * 0.24
             cloud_pts = catmull_rom_spline(
                 [
                     (cx_cloud - cw * 0.5, cy_cloud),
@@ -552,7 +718,7 @@ def generate_landscape_strokes(
                     profile_type="brush",
                     base_pressure=0.7,
                     color="#e2e8f0",
-                    size_px=4.5,
+                    size_px=max(4.0, scale * 0.008),
                     layer_name="Lineart",
                     opacity=0.8,
                     rng=rng,
@@ -566,16 +732,60 @@ def generate_landscape_strokes(
                 create_stroke(
                     cloud_pts[1:4],
                     profile_type="airbrush",
-                    base_pressure=0.8,
+                    base_pressure=0.85,
                     color="#ffffff",
-                    size_px=6.0,
+                    size_px=max(6.0, scale * 0.012),
                     layer_name="Highlights",
-                    opacity=0.85,
+                    opacity=0.88,
                     rng=rng,
                     width=width,
                     height=height,
                     stroke_id=uid("cloud_hl", c_i),
                 )
             )
+
+        # 6. Fantasy 光彩エフェクト (Sunbeams & Magic Sparkles)
+        if is_fantasy:
+            # 天空から斜めに差し込む木漏れ日・光芒 (Sunbeams)
+            beam_x0 = width * 0.20
+            beam_y0 = 0.0
+            for b_i in range(3):
+                bx_end = width * (0.35 + b_i * 0.22)
+                by_end = height * 0.75
+                beam_pts = [(beam_x0 + b_i * width * 0.08, beam_y0), (bx_end, by_end)]
+                strokes.append(
+                    create_stroke(
+                        beam_pts,
+                        profile_type="airbrush",
+                        base_pressure=0.60,
+                        color="#fff9e6",
+                        size_px=max(30.0, scale * 0.06),
+                        layer_name="Highlights",
+                        opacity=0.38,
+                        rng=rng,
+                        width=width,
+                        height=height,
+                        stroke_id=uid("fantasy_sunbeam", b_i),
+                    )
+                )
+            # 神秘的な光の粒子 (Sparkles)
+            for s_i in range(6):
+                sp_x = tree_x + rng.uniform(-scale * 0.35, scale * 0.35)
+                sp_y = tree_y - tree_h * rng.uniform(0.3, 0.9)
+                strokes.append(
+                    create_stroke(
+                        [(sp_x, sp_y), (sp_x + scale * 0.003, sp_y + scale * 0.003)],
+                        profile_type="marupen",
+                        base_pressure=0.95,
+                        color="#ffffff",
+                        size_px=max(2.5, scale * 0.005),
+                        layer_name="Highlights",
+                        opacity=0.95,
+                        rng=rng,
+                        width=width,
+                        height=height,
+                        stroke_id=uid("fantasy_sparkle", s_i),
+                    )
+                )
 
     return sample_strokes_by_priority(recolor_strokes_to_palette(strokes, palette_name), count)

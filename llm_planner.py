@@ -2768,7 +2768,19 @@ def _mapping_to_drawing_plan(
         try:
             sanitized = _sanitize_repaired_dict(value)
             val_to_use = sanitized if sanitized is not None else dict(value)
-            return DrawingPlan.from_dict(val_to_use)
+            plan = DrawingPlan.from_dict(val_to_use)
+            if (
+                plan.canvas_width is not None
+                and plan.canvas_height is not None
+                and (
+                    not math.isclose(plan.canvas_width, width, rel_tol=0.01)
+                    or not math.isclose(plan.canvas_height, height, rel_tol=0.01)
+                )
+            ):
+                plan = plan.scale_to(width, height, fit_mode="scale")
+            elif plan.canvas_width is None or plan.canvas_height is None:
+                plan = replace(plan, canvas_width=width, canvas_height=height)
+            return plan
         except Exception:
             pass
 
@@ -2779,7 +2791,10 @@ def _mapping_to_drawing_plan(
             and "operations" in value
             and not any(k in value for k in ("strokes_summary", "summary_strokes"))
         ):
-            program = StrokeProgram.from_dict(value)
+            val_prog = dict(value)
+            if "canvas" not in val_prog and "canvas_width" not in val_prog:
+                val_prog["canvas"] = {"width": width, "height": height}
+            program = StrokeProgram.from_dict(val_prog)
             program = replace(
                 program,
                 prompt=prompt or program.prompt,

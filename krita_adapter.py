@@ -7,6 +7,7 @@ import contextlib
 from dataclasses import dataclass
 import hashlib
 import math
+import re
 from typing import TYPE_CHECKING, Any, cast
 
 from .brushes import brush_definition, infer_brush_profile
@@ -627,6 +628,8 @@ class KritaCanvasAdapter(CanvasPort):
                 for start, end in zip(stroke.points, stroke.points[1:], strict=False):
                     if cancelled():
                         return rendered
+                    if math.hypot(end.x - start.x, end.y - start.y) < 0.5:
+                        continue
                     painted_with_float = False
                     if use_float_points:
                         try:
@@ -887,7 +890,8 @@ def _can_use_continuous_path(node: Any, stroke: Stroke) -> bool:
     if not callable(getattr(node, "paintPath", None)):
         return False
     pressures = [point.pressure for point in stroke.points]
-    return max(pressures) - min(pressures) <= 0.03
+    # 筆圧差が極端でない限り、折れ線ダブ（点々）の発生を防ぐため paintPath を優先する
+    return (max(pressures) - min(pressures)) <= 0.45
 
 
 def _make_continuous_path(stroke: Stroke) -> Any:
@@ -1046,16 +1050,42 @@ def _apply_stroke_style(
 
         if preset is None and hasattr(presets, "values"):
             all_presets = list(presets.values())
-            # 1. 大文字小文字を無視した完全一致
+
+            def _clean_p_name(raw_name: str) -> str:
+                return re.sub(r"^[a-zA-Z]\)\s*", "", raw_name.strip()).lower()
+
             p_low = preset_name.lower()
+            p_clean = _clean_p_name(preset_name)
+
+            # 1. プレフィックス除去を含む完全一致
             for p in all_presets:
                 p_name = getattr(p, "name", None)
                 p_name_str: str = str(p_name()) if callable(p_name) else (str(p_name) if p_name is not None else "")
-                if p_name_str.lower() == p_low:
+                p_cand_clean = _clean_p_name(p_name_str)
+                if p_name_str.lower() == p_low or p_cand_clean == p_clean:
                     preset = p
                     break
 
-            # 2. 意味プロファイルに基づくカテゴリ柔軟マッチング
+            # 2. 意味プロファイルの candidates（候補リスト）による優先探索
+            if preset is None:
+                profile_key = infer_brush_profile(preset_name)
+                cand_list = list(brush_definition(profile_key).candidates)
+                for cand in cand_list:
+                    c_clean = _clean_p_name(cand)
+                    for p in all_presets:
+                        p_name = getattr(p, "name", None)
+                        p_name_str = str(p_name()) if callable(p_name) else (str(p_name) if p_name is not None else "")
+                        p_cand_clean = _clean_p_name(p_name_str)
+                        if p_cand_clean == c_clean or c_clean in p_cand_clean:
+                            # 通常ブラシの場合、非互換な mypaint ブラシを優先候補から除外
+                            if "(mypaint)" in p_name_str.lower() and "(mypaint)" not in cand.lower():
+                                continue
+                            preset = p
+                            break
+                    if preset is not None:
+                        break
+
+            # 3. 意味プロファイルに基づくカテゴリ柔軟マッチング (mypaint を除外)
             if preset is None:
                 profile_key = infer_brush_profile(preset_name)
                 cat_keywords = list(brush_definition(profile_key).keywords)
@@ -1064,18 +1094,20 @@ def _apply_stroke_style(
                     for p in all_presets:
                         p_name = getattr(p, "name", None)
                         p_name_str = str(p_name()) if callable(p_name) else (str(p_name) if p_name is not None else "")
+                        if "(mypaint)" in p_name_str.lower() and "(mypaint)" not in preset_name.lower():
+                            continue
                         if kw in p_name_str.lower():
                             preset = p
                             break
                     if preset is not None:
                         break
 
-            # 3. 汎用フォールバック
+            # 4. 汎用フォールバック (Basic系ピクセルブラシ)
             if preset is None:
                 for p in all_presets:
                     p_name = getattr(p, "name", None)
                     p_name_str = str(p_name()) if callable(p_name) else (str(p_name) if p_name is not None else "")
-                    if "basic" in p_name_str.lower():
+                    if "basic" in p_name_str.lower() and "(mypaint)" not in p_name_str.lower():
                         preset = p
                         break
 

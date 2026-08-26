@@ -74,7 +74,6 @@ def _prompt_category(prompt: str) -> str:
             "man",
             "portrait",
             "character",
-            "anime",
             "hero",
             "人物",
             "少女",

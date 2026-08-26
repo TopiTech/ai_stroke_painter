@@ -7,6 +7,7 @@ import contextlib
 from dataclasses import replace
 import datetime
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -244,6 +245,13 @@ class PreviewWidget(QWidget):
         self._opacity_multiplier = float(opacity_multiplier)
         self.update()
 
+    def set_canvas_size(self, width: float, height: float) -> None:
+        """Kritaアクティブキャンバスの実際の解像度をプレビューへ同期する。"""
+        if width > 0 and height > 0:
+            self._canvas_width = float(width)
+            self._canvas_height = float(height)
+            self.update()
+
     def paint_to_painter(self, painter: Any, width: float, height: float) -> None:
         """指定された QPainter インスタンスへストロークを描画する（テストおよびオフスクリーン出力共用）。"""
         if hasattr(painter, "setRenderHint"):
@@ -293,7 +301,14 @@ class PreviewWidget(QWidget):
         if hasattr(painter, "drawRect"):
             painter.drawRect(rx, ry, rw, rh)
 
-        # 3. ストロークの精密描画。multi layer はレイヤー別の透明バッファへ描き、
+        # 3. キャンバス用紙領域への厳格なクリッピング（用紙枠外へのはみ出し防止）
+        has_clipping = hasattr(painter, "setClipRect")
+        if has_clipping:
+            with contextlib.suppress(Exception):
+                painter.save()
+                painter.setClipRect(rx, ry, rw, rh)
+
+        # 4. ストロークの精密描画。multi layer はレイヤー別の透明バッファへ描き、
         # 消しゴムをそのレイヤーだけに適用してから Krita と同じ順序で合成する。
         cap_round = round_cap_style()
         join_round = round_join_style()
@@ -323,7 +338,7 @@ class PreviewWidget(QWidget):
             if not points:
                 return
             base_size = max(0.5, float(stroke.size_px) * self._size_multiplier)
-            pen_width = max(1.0, base_size * scale)
+            pen_width = max(0.35, base_size * scale)
             rgb_color, color_alpha = split_color_alpha(stroke.color)
             color = QColor(rgb_color)
             effective_opacity = max(
@@ -352,7 +367,7 @@ class PreviewWidget(QWidget):
                 point = points[0]
                 px = ox + point.x * scale
                 py = oy + point.y * scale
-                effective_width = max(1.0, pen_width * max(0.2, point.pressure))
+                effective_width = max(0.35, pen_width * max(0.2, point.pressure))
                 radius = effective_width * 0.5
                 target.setPen(pen)
                 if hasattr(target, "drawEllipse"):
@@ -368,7 +383,7 @@ class PreviewWidget(QWidget):
 
             for first, second in zip(points, points[1:], strict=False):
                 average_pressure = (first.pressure + second.pressure) * 0.5
-                effective_width = max(1.0, pen_width * average_pressure)
+                effective_width = max(0.35, pen_width * average_pressure)
                 if hasattr(pen, "setWidthF"):
                     pen.setWidthF(effective_width)
                 elif hasattr(pen, "setWidth"):
@@ -401,6 +416,9 @@ class PreviewWidget(QWidget):
                     if hasattr(layer_painter, "setRenderHint"):
                         with contextlib.suppress(Exception):
                             layer_painter.setRenderHint(antialiasing_render_hint())
+                    if hasattr(layer_painter, "setClipRect"):
+                        with contextlib.suppress(Exception):
+                            layer_painter.setClipRect(rx, ry, rw, rh)
                     for stroke in layer_strokes:
                         draw_stroke(layer_painter, stroke)
                 finally:
@@ -414,6 +432,10 @@ class PreviewWidget(QWidget):
                 if hasattr(painter, "setCompositionMode") and not stroke.is_eraser:
                     painter.setCompositionMode(layer_blend_mode(stroke.layer_name))
                 draw_stroke(painter, stroke, isolated_layer=False)
+
+        if has_clipping:
+            with contextlib.suppress(Exception):
+                painter.restore()
 
         if hasattr(painter, "setCompositionMode"):
             with contextlib.suppress(Exception):
@@ -2497,8 +2519,11 @@ class AIStrokePainterDocker(DockWidget):
             st.setText("描画計画を生成中… 停止できます。")
 
         prev_w_initial = _get_attr(self, "preview")
-        if prev_w_initial is not None and hasattr(prev_w_initial, "clear_plan"):
-            prev_w_initial.clear_plan()
+        if prev_w_initial is not None:
+            if hasattr(prev_w_initial, "set_canvas_size"):
+                prev_w_initial.set_canvas_size(doc_width, doc_height)
+            if hasattr(prev_w_initial, "clear_plan"):
+                prev_w_initial.clear_plan()
 
         try:
             canvas_port = _get_attr(self, "canvas_port")
@@ -2635,8 +2660,30 @@ class AIStrokePainterDocker(DockWidget):
             or "multi_layer"
         )
 
+        active_doc = _get_attr(self, "_active_doc")
+        document = active_doc or (Krita.instance().activeDocument() if Krita.instance() is not None else None)
+
+        has_doc_dims = document is not None and hasattr(document, "width") and hasattr(document, "height")
+        doc_w = float(document.width()) if has_doc_dims else (plan.canvas_width or 1000.0)
+        doc_h = float(document.height()) if has_doc_dims else (plan.canvas_height or 1000.0)
+
+        # キャンバス解像度と計画寸法の整合（乖離防止）
+        if (
+            plan.canvas_width is not None
+            and plan.canvas_height is not None
+            and (
+                not math.isclose(plan.canvas_width, doc_w, rel_tol=0.01)
+                or not math.isclose(plan.canvas_height, doc_h, rel_tol=0.01)
+            )
+        ):
+            plan = plan.scale_to(doc_w, doc_h, fit_mode="scale")
+        elif plan.canvas_width is None or plan.canvas_height is None:
+            plan = replace(plan, canvas_width=doc_w, canvas_height=doc_h)
+
         if not resuming_pending and prev_w is not None and hasattr(prev_w, "set_plan"):
             try:
+                if hasattr(prev_w, "set_canvas_size"):
+                    prev_w.set_canvas_size(doc_w, doc_h)
                 prev_w.set_plan(
                     plan,
                     size_multiplier=size_mult,
@@ -2675,9 +2722,6 @@ class AIStrokePainterDocker(DockWidget):
             apply_button = _get_attr(self, "apply_btn")
             if apply_button is not None and hasattr(apply_button, "setEnabled"):
                 apply_button.setEnabled(False)
-
-        active_doc = _get_attr(self, "_active_doc")
-        document = active_doc or (Krita.instance().activeDocument() if Krita.instance() is not None else None)
 
         render_error: str | None = None
         try:

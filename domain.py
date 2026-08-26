@@ -398,6 +398,27 @@ class DrawingPlan:
                     metadata_val.get("completion_score", 0.0),
                 )
             )
+            canvas_obj = value.get("canvas")
+            canvas_dict = canvas_obj if isinstance(canvas_obj, Mapping) else {}
+            raw_cw = value.get("canvas_width", canvas_dict.get("width"))
+            raw_ch = value.get("canvas_height", canvas_dict.get("height"))
+            cw: float | None = None
+            ch: float | None = None
+            if raw_cw is not None and not isinstance(raw_cw, bool):
+                try:
+                    val_w = float(raw_cw)
+                    if math.isfinite(val_w) and val_w > 0:
+                        cw = val_w
+                except (ValueError, TypeError):
+                    pass
+            if raw_ch is not None and not isinstance(raw_ch, bool):
+                try:
+                    val_h = float(raw_ch)
+                    if math.isfinite(val_h) and val_h > 0:
+                        ch = val_h
+                except (ValueError, TypeError):
+                    pass
+
             return cls(
                 prompt=value.get("prompt", ""),
                 seed=value.get("seed", 0),
@@ -407,8 +428,8 @@ class DrawingPlan:
                 layers=value.get("layers", ()),
                 request_canvas_image=value.get("request_canvas_image", False),
                 metadata=metadata_val,
-                canvas_width=value.get("canvas_width"),
-                canvas_height=value.get("canvas_height"),
+                canvas_width=cw,
+                canvas_height=ch,
                 goal_reached=goal_reached_val,
                 completion_score=completion_score_val,
             )

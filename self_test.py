@@ -7420,6 +7420,120 @@ class PaletteAutoModeTests(unittest.TestCase):
         self.assertEqual(docker.model.text(), "llama3.2-vision")
 
 
+class PreviewDiscrepancyFixTests(unittest.TestCase):
+    """プレビュー表示とKrita実キャンバス描画の乖離是正の検証。"""
+
+    def test_drawing_plan_from_dict_parses_nested_canvas_mapping(self) -> None:
+        raw = {
+            "prompt": "fantasy anime landscape",
+            "seed": 22,
+            "strokes": [],
+            "canvas": {"width": 2480, "height": 3508},
+        }
+        plan = DrawingPlan.from_dict(raw)
+        self.assertEqual(plan.canvas_width, 2480.0)
+        self.assertEqual(plan.canvas_height, 3508.0)
+
+    def test_preview_widget_set_canvas_size_and_clipping(self) -> None:
+        from .docker import PreviewWidget
+        from .qt_compat import QImage, QPainter
+
+        prev = PreviewWidget()
+        prev.set_canvas_size(2480, 3508)
+        self.assertEqual(prev._canvas_width, 2480.0)
+        self.assertEqual(prev._canvas_height, 3508.0)
+
+        outside_stroke = Stroke(
+            id="outside",
+            points=[
+                StrokePoint(x=-500, y=-500, pressure=0.8, time_ms=0),
+                StrokePoint(x=3500, y=4000, pressure=0.8, time_ms=10),
+            ],
+            brush_preset="Basic-5 Size",
+            color="#ff0000",
+            size_px=50.0,
+        )
+        plan = DrawingPlan(
+            prompt="test",
+            seed=1,
+            strokes=(outside_stroke,),
+            canvas_width=2480,
+            canvas_height=3508,
+        )
+        prev.set_plan(plan)
+
+        if QImage is not None and QPainter is not None and callable(QImage) and callable(QPainter):
+            img = QImage(200, 160, QImage.Format_ARGB32)
+            img.fill(0)
+            painter = QPainter(img)
+            try:
+                prev.paint_to_painter(painter, 200, 160)
+            finally:
+                painter.end()
+
+    def test_procedural_prompt_category_anime_landscape(self) -> None:
+        from .procedural import _prompt_category
+
+        cat = _prompt_category("fantasy anime landscape with mountains and cherry blossom")
+        self.assertEqual(cat, "landscape")
+
+    def test_apply_stroke_style_prefix_and_mypaint_exclusion(self) -> None:
+        from types import SimpleNamespace
+        from .krita_adapter import _apply_stroke_style
+
+        selected_preset = None
+
+        def fake_set_preset(p: Any) -> None:
+            nonlocal selected_preset
+            selected_preset = p
+
+        view = SimpleNamespace(setCurrentBrushPreset=fake_set_preset)
+        fake_mypaint = SimpleNamespace(name=lambda: "c) Pencil 2b (mypaint)")
+        fake_pencil2 = SimpleNamespace(name=lambda: "c) Pencil-2")
+        fake_basic = SimpleNamespace(name=lambda: "b) Basic-5 Size")
+
+        presets_dict = {
+            "mypaint": fake_mypaint,
+            "pencil2": fake_pencil2,
+            "basic": fake_basic,
+        }
+        app = SimpleNamespace(resources=lambda _k: presets_dict)
+        fake_krita = SimpleNamespace(Krita=SimpleNamespace(instance=lambda: app))
+
+        stroke_pencil = Stroke(
+            id="p",
+            points=[StrokePoint(0, 0, 1, 0), StrokePoint(10, 10, 1, 10)],
+            brush_preset="pencil",
+        )
+        with patch.dict("sys.modules", {"krita": fake_krita}):
+            _apply_stroke_style(stroke_pencil, view=view)
+            self.assertIs(selected_preset, fake_pencil2)
+
+            stroke_basic = Stroke(
+                id="b",
+                points=[StrokePoint(0, 0, 1, 0), StrokePoint(10, 10, 1, 10)],
+                brush_preset="Basic-5 Size",
+            )
+            _apply_stroke_style(stroke_basic, view=view)
+            self.assertIs(selected_preset, fake_basic)
+
+    def test_continuous_path_pressure_tolerance(self) -> None:
+        from .krita_adapter import _can_use_continuous_path
+        from types import SimpleNamespace
+
+        node = SimpleNamespace(paintPath=lambda _p: None)
+        stroke_smooth = Stroke(
+            id="s1",
+            points=[
+                StrokePoint(0, 0, 0.6, 0),
+                StrokePoint(10, 10, 0.9, 10),
+                StrokePoint(20, 20, 0.7, 20),
+            ],
+            brush_preset="Basic-5 Size",
+        )
+        self.assertTrue(_can_use_continuous_path(node, stroke_smooth))
+
+
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))
     result = unittest.TextTestRunner(verbosity=2).run(suite)
