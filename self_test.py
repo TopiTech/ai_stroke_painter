@@ -8394,6 +8394,189 @@ class CodeReviewEnhancementTests(unittest.TestCase):
         docker._reset_run_state(commit_session=True)
         self.assertFalse(preview.cleared)
 
+    def test_image_generator_settings_validation(self) -> None:
+        from .image_generator import ImageGeneratorSettings
+
+        # Valid defaults
+        s = ImageGeneratorSettings()
+        self.assertEqual(s.provider, "openai")
+        self.assertEqual(s.model, "dall-e-3")
+
+        # Invalid provider
+        with self.assertRaises(ValueError):
+            ImageGeneratorSettings(provider="unsupported_provider")
+
+        # Invalid endpoint_url
+        with self.assertRaises(ValueError):
+            ImageGeneratorSettings(endpoint_url="")
+        with self.assertRaises(ValueError):
+            ImageGeneratorSettings(endpoint_url="x" * 2049)
+
+        # Invalid quality / style
+        with self.assertRaises(ValueError):
+            ImageGeneratorSettings(quality="ultra_hd")
+        with self.assertRaises(ValueError):
+            ImageGeneratorSettings(style="cartoonish")
+
+        # Invalid timeout
+        with self.assertRaises(ValueError):
+            ImageGeneratorSettings(timeout_seconds=-10.0)
+        with self.assertRaises(ValueError):
+            ImageGeneratorSettings(timeout_seconds=float("nan"))
+        with self.assertRaises(ValueError):
+            ImageGeneratorSettings(timeout_seconds=True)
+        with self.assertRaises(ValueError):
+            ImageGeneratorSettings(timeout_seconds=5000.0)
+
+    def test_call_openai_images_respects_explicit_size_and_auto_aspect(self) -> None:
+        from .image_generator import ImageGeneratorClient, ImageGeneratorSettings
+
+        # When size is "auto", adapts to aspect
+        client_auto = ImageGeneratorClient(ImageGeneratorSettings(size="auto", model="dall-e-3"))
+
+        captured_payloads: list[dict[str, Any]] = []
+
+        def fake_open(req: Any, **kwargs: Any) -> Any:
+            data = json.loads(req.data.decode("utf-8"))
+            captured_payloads.append(data)
+            raise RuntimeError("stop_call")
+
+        with patch("ai_stroke_painter.image_generator.build_opener") as mock_opener:
+            mock_inst = mock_opener.return_value
+            mock_inst.open.side_effect = fake_open
+
+            # Landscape aspect >= 1.35 -> 1792x1024
+            with self.assertRaises(RuntimeError):
+                client_auto.generate_image("a vast mountain landscape", target_aspect=1.77)
+            self.assertEqual(captured_payloads[-1]["size"], "1792x1024")
+
+            # Portrait aspect <= 0.75 -> 1024x1792
+            with self.assertRaises(RuntimeError):
+                client_auto.generate_image("a tall anime portrait", target_aspect=0.56)
+            self.assertEqual(captured_payloads[-1]["size"], "1024x1792")
+
+            # Square aspect -> 1024x1024
+            with self.assertRaises(RuntimeError):
+                client_auto.generate_image("a cute cat", target_aspect=1.0)
+            self.assertEqual(captured_payloads[-1]["size"], "1024x1024")
+
+            # Explicit size -> preserved regardless of aspect
+            client_explicit = ImageGeneratorClient(ImageGeneratorSettings(size="512x512", model="dall-e-3"))
+            with self.assertRaises(RuntimeError):
+                client_explicit.generate_image("a cyberpunk city", target_aspect=1.77)
+            self.assertEqual(captured_payloads[-1]["size"], "512x512")
+
+    def test_image_generation_planner_multi_iteration_cache_and_seed_offset(self) -> None:
+        from .image_generator import ImageGeneratorSettings
+        from .planner import ImageGenerationPlanner
+
+        calls_count = 0
+        fake_png = b"\x89PNG\r\n\x1a\n" + (b"\x00" * 8) + (20).to_bytes(4, "big") + (10).to_bytes(4, "big")
+
+        class FakeColor:
+            def __init__(self, val: int) -> None:
+                self.val = val
+
+            def red(self) -> int:
+                return self.val
+
+            def green(self) -> int:
+                return self.val
+
+            def blue(self) -> int:
+                return self.val
+
+            def alpha(self) -> int:
+                return 255
+
+        class FakeImage:
+            def loadFromData(self, _data: bytes) -> bool:  # noqa: N802
+                return True
+
+            def width(self) -> int:
+                return 20
+
+            def height(self) -> int:
+                return 10
+
+            def scaled(self, _width: int, _height: int) -> Any:
+                return self
+
+            def convertToFormat(self, _format: Any) -> Any:  # noqa: N802
+                return self
+
+            def pixelColor(self, x: int, _y: int) -> FakeColor:  # noqa: N802
+                return FakeColor(20 if x < 10 else 240)
+
+        class DummyImageClient:
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                pass
+
+            def generate_image(self, prompt: str, **kwargs: Any) -> bytes:
+                nonlocal calls_count
+                calls_count += 1
+                return fake_png
+
+        planner = ImageGenerationPlanner(ImageGeneratorSettings())
+        planner.image_converter.qimage_cls = FakeImage
+        planner.image_client = cast(Any, DummyImageClient())
+
+        # Iteration 1 -> generates image (calls_count becomes 1)
+        plan1 = planner.plan("a lovely flower garden", seed=42, iteration=1, max_iterations=3, count=20)
+        self.assertEqual(calls_count, 1)
+        self.assertEqual(plan1.iteration, 1)
+
+        # Iteration 2 -> reuses cached image, does NOT call API again
+        plan2 = planner.plan("a lovely flower garden", seed=42, iteration=2, max_iterations=3, count=20)
+        self.assertEqual(calls_count, 1)
+        self.assertEqual(plan2.iteration, 2)
+
+        # Iteration 3 -> reuses cached image, does NOT call API again
+        plan3 = planner.plan("a lovely flower garden", seed=42, iteration=3, max_iterations=3, count=20)
+        self.assertEqual(calls_count, 1)
+        self.assertEqual(plan3.iteration, 3)
+
+        # Seed offset ensures different stroke IDs across iterations
+        ids1 = [s.id for s in plan1.strokes]
+        ids2 = [s.id for s in plan2.strokes]
+        self.assertNotEqual(ids1, ids2)
+
+        # New prompt on iteration 1 -> cache refreshed and API called again
+        planner.plan("a blue futuristic car", seed=42, iteration=1, max_iterations=1, count=20)
+        self.assertEqual(calls_count, 2)
+
+    def test_storage_resolve_output_dir_rejects_parent_traversal(self) -> None:
+        from .storage import _resolve_output_dir
+
+        with self.assertRaises(ValueError):
+            _resolve_output_dir("../outside")
+        with self.assertRaises(ValueError):
+            _resolve_output_dir("subdir/../../outside")
+        with self.assertRaises(ValueError):
+            _resolve_output_dir("..")
+
+    def test_docker_save_log_and_select_image_defensive_dialogs(self) -> None:
+        from .docker import AIStrokePainterDocker
+
+        docker = AIStrokePainterDocker.__new__(AIStrokePainterDocker)
+        docker._image_bytes = None
+
+        class DummyEdit:
+            def toPlainText(self) -> str:
+                return "Sample log text"
+
+        # Test _save_debug_log handles cancel/empty filename safely
+        with (
+            patch("ai_stroke_painter.docker._safe_get_save_filename", return_value=("", "")),
+            patch("ai_stroke_painter.docker._get_attr", return_value=DummyEdit()),
+        ):
+            docker._save_debug_log()  # Must not raise
+
+        # Test _select_reference_image handles cancel/empty filename safely
+        with patch("ai_stroke_painter.docker._safe_get_open_filename", return_value=("", "")):
+            docker._select_reference_image()  # Must not raise
+            self.assertIsNone(docker._image_bytes)
+
 
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))

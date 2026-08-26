@@ -29,12 +29,11 @@ def app_data_dir() -> Path:
 def _resolve_output_dir(directory: str | Path | None) -> Path:
     if directory is None:
         return app_data_dir()
+    if ".." in Path(directory).parts:
+        raise ValueError(f"保存先に親ディレクトリ参照を含めることはできません: {directory}")
     requested = Path(directory)
     if requested.is_absolute():
-        resolved = requested.resolve()
-        if ".." in Path(directory).parts:
-            raise ValueError(f"保存先に親ディレクトリ参照を含めることはできません: {directory}")
-        return resolved
+        return requested.resolve()
     output = (app_data_dir() / requested).resolve()
     allowed = app_data_dir().resolve()
     try:

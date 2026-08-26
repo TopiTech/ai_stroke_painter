@@ -2137,7 +2137,7 @@ class AIStrokePainterDocker(DockWidget):
         if not text:
             QMessageBox.information(self, "ログ保存", "保存するログがありません。")
             return
-        file_path, _ = QFileDialog.getSaveFileName(
+        file_path, _ = _safe_get_save_filename(
             self, "デバッグログを保存", "ai_stroke_painter_debug.log", "テキストログ (*.log *.txt)"
         )
         if file_path:
@@ -2219,7 +2219,7 @@ class AIStrokePainterDocker(DockWidget):
         self._log_debug(f"[プリセット適用] {combo.currentText()}")
 
     def _select_reference_image(self) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(
+        file_path, _ = _safe_get_open_filename(
             self, "参照画像を開く", "", "画像ファイル (*.png *.jpg *.jpeg *.webp *.bmp)"
         )
         if file_path and Path(file_path).is_file():
@@ -2436,7 +2436,7 @@ class AIStrokePainterDocker(DockWidget):
                     endpoint_url=ep_val,
                     api_key=k_val or os.environ.get("OPENAI_API_KEY", ""),
                     model=m_val,
-                    size=sz_val if sz_val != "auto" else "1024x1024",
+                    size=sz_val,
                     negative_prompt=neg_val,
                 ),
                 log_callback=self._log_debug,

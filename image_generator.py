@@ -13,6 +13,7 @@ import contextlib
 from dataclasses import dataclass
 import ipaddress
 import json
+import math
 import re
 import time
 from typing import Any, cast
@@ -71,11 +72,47 @@ class ImageGeneratorSettings:
     endpoint_url: str = DEFAULT_OPENAI_IMAGES_URL
     api_key: str = ""
     model: str = "dall-e-3"
-    size: str = "1024x1024"  # "1024x1024", "1024x1792", "1792x1024", "512x512"
+    size: str = "1024x1024"  # "auto", "1024x1024", "1024x1792", "1792x1024", "512x512"
     quality: str = "standard"  # "standard", "hd"
     style: str = "vivid"  # "vivid", "natural"
     timeout_seconds: float = 120.0
     negative_prompt: str = ""
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.provider, str) or not self.provider.strip():
+            raise ValueError("provider は文字列である必要があります")
+        if self.provider.strip().lower() not in {"openai", "sd_webui", "custom_http"}:
+            raise ValueError(f"未対応の画像生成プロバイダです: {self.provider}")
+        if not isinstance(self.endpoint_url, str) or not self.endpoint_url.strip():
+            raise ValueError("endpoint_url は文字列である必要があります")
+        if len(self.endpoint_url) > 2048:
+            raise ValueError("endpoint_url が長すぎます")
+        if not isinstance(self.api_key, str):
+            raise ValueError("api_key は文字列である必要があります")
+        if len(self.api_key) > 4096:
+            raise ValueError("api_key が長すぎます")
+        if not isinstance(self.model, str) or not self.model.strip():
+            raise ValueError("model は文字列である必要があります")
+        if len(self.model) > 256:
+            raise ValueError("model 名が長すぎます")
+        if not isinstance(self.size, str) or not self.size.strip():
+            raise ValueError("size は文字列である必要があります")
+        if not isinstance(self.quality, str) or self.quality.strip().lower() not in {"standard", "hd"}:
+            raise ValueError("quality は standard または hd である必要があります")
+        if not isinstance(self.style, str) or self.style.strip().lower() not in {"vivid", "natural"}:
+            raise ValueError("style は vivid または natural である必要があります")
+        if (
+            isinstance(self.timeout_seconds, bool)
+            or not isinstance(self.timeout_seconds, (int, float))
+            or not math.isfinite(self.timeout_seconds)
+            or self.timeout_seconds <= 0
+            or self.timeout_seconds > 3600
+        ):
+            raise ValueError("timeout_seconds は 3,600 秒以下の正の有限数値である必要があります")
+        if not isinstance(self.negative_prompt, str):
+            raise ValueError("negative_prompt は文字列である必要があります")
+        if len(self.negative_prompt) > 20000:
+            raise ValueError("negative_prompt は 20,000 文字以下である必要があります")
 
 
 MAX_IMAGE_RESPONSE_BYTES = 50 * 1024 * 1024  # 50 MB
@@ -262,15 +299,19 @@ class ImageGeneratorClient:
         cancel_check: Callable[[], bool] | None = None,
     ) -> bytes:
         # アスペクト比に応じた適切な解像度を選択 (DALL-E 3: 1024x1024, 1024x1792, 1792x1024)
-        chosen_size = self.settings.size
+        raw_size = self.settings.size.strip().lower()
         model_name = self.settings.model.strip() or "dall-e-3"
-        if "dall-e-3" in model_name.lower():
+        if raw_size in ("auto", "") and "dall-e-3" in model_name.lower():
             if target_aspect >= 1.35:
                 chosen_size = "1792x1024"
             elif target_aspect <= 0.75:
                 chosen_size = "1024x1792"
             else:
                 chosen_size = "1024x1024"
+        elif raw_size in ("auto", ""):
+            chosen_size = "1024x1024"
+        else:
+            chosen_size = self.settings.size.strip()
 
         payload: dict[str, Any] = {
             "model": model_name,

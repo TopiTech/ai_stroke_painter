@@ -186,6 +186,8 @@ class ImageGenerationPlanner(PlannerPort):
         self.log_callback = log_callback
         self.image_client = ImageGeneratorClient(self.settings, log_callback=self._log)
         self.image_converter = ImageStrokeConverter()
+        self._cached_image_data: bytes | None = None
+        self._last_prompt: str = ""
 
     def _log(self, message: str) -> None:
         if self.log_callback:
@@ -229,22 +231,31 @@ class ImageGenerationPlanner(PlannerPort):
 
             raise _CancelErr("画像生成がキャンセルされました")
 
-        if image_data is None or len(image_data) == 0:
+        generation_seed = (valid_seed + (iteration - 1) * 1000) & 0x7FFFFFFF
+
+        if image_data is not None and len(image_data) > 0:
+            active_image_bytes = image_data
+        elif iteration > 1 and self._cached_image_data is not None and self._last_prompt == valid_prompt:
+            active_image_bytes = self._cached_image_data
+            self._log(f"ステップ {iteration}/{max_iterations}: 生成済み基準画像からストロークを分解・洗練中...")
+        else:
             sanitized_prompt = valid_prompt.replace("\n", " ").replace("\r", " ")[:60]
             self._log(
                 f"Text-to-Image 画像生成を開始します (Prompt: '{sanitized_prompt}...', Aspect: {target_aspect:.2f})"
             )
-            image_data = self.image_client.generate_image(
+            active_image_bytes = self.image_client.generate_image(
                 valid_prompt,
                 cancel_check=cancel_fn,
                 target_aspect=target_aspect,
             )
+            self._cached_image_data = active_image_bytes
+            self._last_prompt = valid_prompt
             self._log("画像生成が完了しました。手描きストロークへ自動分解中...")
 
         image_plan = self.image_converter.convert_image_to_plan(
-            image_bytes=image_data,
+            image_bytes=active_image_bytes,
             prompt=valid_prompt,
-            seed=valid_seed,
+            seed=generation_seed,
             count=valid_count,
             target_width=valid_width,
             target_height=valid_height,
