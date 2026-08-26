@@ -244,32 +244,40 @@ for binding in _binding_order:
     except (ImportError, AttributeError):
         continue
 
+
+class _FakeSignal:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        self._slots: list[Any] = []
+        self._attribute_name = ""
+
+    def __set_name__(self, _owner: Any, name: str) -> None:
+        self._attribute_name = f"__signal_{name}"
+
+    def __get__(self, instance: Any, _owner: Any = None) -> Any:
+        if instance is None or not self._attribute_name:
+            return self
+        signal = instance.__dict__.get(self._attribute_name)
+        if signal is None:
+            signal = _FakeSignal()
+            instance.__dict__[self._attribute_name] = signal
+        return signal
+
+    def connect(self, slot: Any) -> None:
+        self._slots.append(slot)
+
+    def disconnect(self, slot: Any = None) -> None:
+        if slot is None:
+            self._slots.clear()
+        else:
+            self._slots = [s for s in self._slots if s != slot]
+
+    def emit(self, *args: Any) -> None:
+        for slot in list(self._slots):
+            slot(*args)
+
+
 # Qt が存在しない環境（CI、ヘッドレス、テスト環境等）用の完全なフォールバックスタブ
 if not HAS_QT:
-
-    class _FakeSignal:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            self._slots: list[Any] = []
-            self._attribute_name = ""
-
-        def __set_name__(self, _owner: Any, name: str) -> None:
-            self._attribute_name = f"__signal_{name}"
-
-        def __get__(self, instance: Any, _owner: Any = None) -> Any:
-            if instance is None or not self._attribute_name:
-                return self
-            signal = instance.__dict__.get(self._attribute_name)
-            if signal is None:
-                signal = _FakeSignal()
-                instance.__dict__[self._attribute_name] = signal
-            return signal
-
-        def connect(self, slot: Any) -> None:
-            self._slots.append(slot)
-
-        def emit(self, *args: Any) -> None:
-            for slot in list(self._slots):
-                slot(*args)
 
     def _pyqtSignal(*_args: Any) -> Any:
         return _FakeSignal()

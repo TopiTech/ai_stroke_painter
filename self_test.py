@@ -6983,6 +6983,80 @@ class ExtendedCustomizationTests(unittest.TestCase):
                         self.assertGreaterEqual(pt.y, 0.0)
                         self.assertLess(pt.y, height)
 
+    def test_combine_drawing_plans_auto_rescale_with_leading_none_dimensions(self) -> None:
+        """第1計画の寸法がNoneでも後続計画の既知寸法へ自動スケールして統合できることを検証。"""
+        stroke1 = Stroke(
+            id="s1",
+            points=[StrokePoint(10.0, 10.0, 0.8, 0), StrokePoint(90.0, 90.0, 0.8, 10)],
+            brush_preset="Basic-5 Size",
+            color="#111111",
+            size_px=5.0,
+            layer_name="Lineart",
+        )
+        stroke2 = Stroke(
+            id="s2",
+            points=[StrokePoint(20.0, 20.0, 0.8, 0), StrokePoint(180.0, 180.0, 0.8, 10)],
+            brush_preset="Basic-5 Size",
+            color="#222222",
+            size_px=10.0,
+            layer_name="Lineart",
+        )
+        plan_none = DrawingPlan("same prompt", 1, [stroke1], canvas_width=None, canvas_height=None)
+        plan_200 = DrawingPlan("same prompt", 1, [stroke2], canvas_width=200.0, canvas_height=200.0)
+
+        merged = combine_drawing_plans([plan_none, plan_200], auto_rescale=True)
+        self.assertEqual(len(merged.strokes), 2)
+        self.assertEqual((merged.canvas_width, merged.canvas_height), (200.0, 200.0))
+
+    def test_svg_export_sanitizes_layer_element_ids(self) -> None:
+        """レイヤー名に空白や記号が含まれていてもXML標準準拠のID属性へサニタイズされることを検証。"""
+        import xml.etree.ElementTree as ET
+
+        points = [StrokePoint(10, 10, 1, 0), StrokePoint(50, 50, 1, 10)]
+        plan = DrawingPlan(
+            "test prompt",
+            1,
+            [
+                Stroke("s1", points, layer_name="AI Strokes (editable)"),
+                Stroke("s2", points, layer_name="Draft / Sketch"),
+            ],
+            layers=["AI Strokes (editable)", "Draft / Sketch"],
+        )
+        svg_content = plan.to_svg(100, 100)
+        self.assertIn('id="layer_AI_Strokes__editable_"', svg_content)
+        self.assertIn('id="layer_Draft___Sketch"', svg_content)
+        # XMLとして正しくパース可能であることを確認
+        root = ET.fromstring(svg_content)
+        self.assertEqual(root.tag.split("}")[-1], "svg")
+
+    def test_fake_signal_disconnect(self) -> None:
+        """ヘッドレス環境用 _FakeSignal の disconnect メソッドの個別解除および一括解除を検証。"""
+        from .qt_compat import _FakeSignal
+
+        signal = _FakeSignal()
+        received: list[int] = []
+
+        def slot_a(val: int) -> None:
+            received.append(val)
+
+        def slot_b(val: int) -> None:
+            received.append(val * 10)
+
+        signal.connect(slot_a)
+        signal.connect(slot_b)
+        signal.emit(5)
+        self.assertEqual(received, [5, 50])
+
+        received.clear()
+        signal.disconnect(slot_a)
+        signal.emit(3)
+        self.assertEqual(received, [30])
+
+        received.clear()
+        signal.disconnect()
+        signal.emit(7)
+        self.assertEqual(received, [])
+
 
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))

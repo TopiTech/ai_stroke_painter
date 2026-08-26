@@ -487,8 +487,8 @@ class DrawingPlan:
             elif layer_mode == "multi_layer" and any(token in lowered_layer for token in ("highlight", "fx", "glow")):
                 # SVGにKritaの線形加算と同一の標準指定はないため、近似screenと元モード名を併記する。
                 blend_attributes = ' style="mix-blend-mode:screen" data-krita-blend-mode="addition"'
-            safe_layer_name = html.escape(_xml_safe_text(layer_name), quote=True)
-            svg_body.append(f'  <g id="layer_{safe_layer_name}"{blend_attributes}>')
+            svg_id_layer_name = re.sub(r"[^\w.-]", "_", _xml_safe_text(layer_name))
+            svg_body.append(f'  <g id="layer_{svg_id_layer_name}"{blend_attributes}>')
             svg_body.extend(f"    {line}" for line in layer_content)
             svg_body.append("  </g>")
 
@@ -624,11 +624,11 @@ def combine_drawing_plans(plans: Sequence[DrawingPlan], *, auto_rescale: bool = 
             raise PlanValidationError("異なる prompt または seed の計画は同一セッションとして統合できません")
 
     # キャンバス寸法のチェックと必要に応じた自動スケール
-    target_w = first.canvas_width
-    target_h = first.canvas_height
+    target_w = next((plan.canvas_width for plan in normalized if plan.canvas_width is not None), None)
+    target_h = next((plan.canvas_height for plan in normalized if plan.canvas_height is not None), None)
     if auto_rescale and target_w is not None and target_h is not None:
-        rescaled_plans: list[DrawingPlan] = [first]
-        for plan in normalized[1:]:
+        rescaled_plans: list[DrawingPlan] = []
+        for plan in normalized:
             pw = plan.canvas_width
             ph = plan.canvas_height
             if (
