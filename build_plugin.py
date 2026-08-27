@@ -27,15 +27,20 @@ PACKAGE_FILES = (
     "quality.py",
     "quality_check.py",
     "qt_compat.py",
+    "scene_spec.py",
     "storage.py",
     "stroke_program.py",
     "procedural/__init__.py",
     "procedural/base.py",
     "procedural/character.py",
+    "procedural/color_plan.py",
+    "procedural/composition.py",
     "procedural/creature.py",
     "procedural/geometry.py",
     "procedural/landscape.py",
     "procedural/manga_fx.py",
+    "procedural/render_graph.py",
+    "procedural/semantic_budget.py",
 )
 
 

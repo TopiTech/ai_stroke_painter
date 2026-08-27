@@ -17,6 +17,8 @@ from .domain import MAX_PLAN_STROKES, MAX_STROKE_POINTS, DrawingPlan, PlanValida
 PROGRAM_SCHEMA_VERSION = 2
 MAX_PROGRAM_OPERATIONS = MAX_PLAN_STROKES
 MAX_OPERATION_POINTS = 1_000
+# 太い走査線で面を保てるため、低予算では輪郭・表情へより多くの本数を残す。
+FILL_STROKE_BUDGET_RATIO = 0.32
 _COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")
 
 
@@ -1399,6 +1401,117 @@ def _scanline_segments(polygon: Sequence[tuple[float, float]], y: float) -> list
     ]
 
 
+def _inset_scanline_segment(start_x: float, end_x: float, brush_size_px: float) -> tuple[float, float]:
+    """丸いブラシ端がポリゴン外へ張り出さないよう、走査線の両端を半径分だけ内側へ寄せる。"""
+
+    direction = 1.0 if end_x >= start_x else -1.0
+    length = abs(end_x - start_x)
+    inset = min(brush_size_px * 0.5, max(0.0, (length - 0.5) * 0.5))
+    return start_x + direction * inset, end_x - direction * inset
+
+
+def _ellipse_like_bounds(
+    polygon: Sequence[tuple[float, float]],
+) -> tuple[float, float, float, float] | None:
+    """多数点ポリゴンが楕円近似なら境界を返す。一般ポリゴンは走査線へ委ねる。"""
+
+    if len(polygon) < 8:
+        return None
+    min_x = min(point[0] for point in polygon)
+    max_x = max(point[0] for point in polygon)
+    min_y = min(point[1] for point in polygon)
+    max_y = max(point[1] for point in polygon)
+    radius_x = (max_x - min_x) * 0.5
+    radius_y = (max_y - min_y) * 0.5
+    if radius_x < 0.5 or radius_y < 0.5:
+        return None
+    center_x = (min_x + max_x) * 0.5
+    center_y = (min_y + max_y) * 0.5
+    radial_errors = [abs(((x - center_x) / radius_x) ** 2 + ((y - center_y) / radius_y) ** 2 - 1.0) for x, y in polygon]
+    return (min_x, min_y, max_x, max_y) if sum(radial_errors) / len(radial_errors) <= 0.12 else None
+
+
+def _compile_ellipse_mass(
+    program: StrokeProgram,
+    operation: FillOperation | GradientFillOperation,
+    polygon: Sequence[tuple[float, float]],
+    limit: int,
+) -> list[Stroke]:
+    """楕円を帯の集合でなく、筆圧付き主軸と内側の明暗ストロークで表現する。"""
+
+    bounds = _ellipse_like_bounds(polygon)
+    if bounds is None or limit <= 0:
+        return []
+    min_x, min_y, max_x, max_y = bounds
+    width = max_x - min_x
+    height = max_y - min_y
+    vertical = height >= width
+    minor = width if vertical else height
+    center_x = (min_x + max_x) * 0.5
+    center_y = (min_y + max_y) * 0.5
+    phases = (0.05, 0.22, 0.50, 0.78, 0.95)
+    pressures = (0.12, 0.76, 1.0, 0.76, 0.12)
+
+    def axis_points(offset: float = 0.0) -> list[tuple[float, float, float]]:
+        if vertical:
+            return [
+                (center_x + offset, min_y + height * phase, pressure)
+                for phase, pressure in zip(phases, pressures, strict=True)
+            ]
+        return [
+            (min_x + width * phase, center_y + offset, pressure)
+            for phase, pressure in zip(phases, pressures, strict=True)
+        ]
+
+    def inset_axis_points(offset: float) -> list[tuple[float, float, float]]:
+        if vertical:
+            return [(center_x + offset, min_y + height * 0.16, 0.9), (center_x + offset, max_y - height * 0.16, 0.9)]
+        return [(min_x + width * 0.16, center_y + offset, 0.9), (max_x - width * 0.16, center_y + offset, 0.9)]
+
+    if isinstance(operation, GradientFillOperation):
+        base_color = operation.colors[1] if len(operation.colors) >= 3 else operation.colors[0]
+    else:
+        base_color = operation.brush.color
+    base_brush = replace(operation.brush, color=base_color, size=max(0.5, minor), size_mode="px")
+    strokes = [_make_stroke(program, replace(operation, brush=base_brush), 0, axis_points())]
+    if not isinstance(operation, GradientFillOperation) or limit < 2 or len(operation.colors) < 2:
+        return strokes
+
+    shadow_brush = replace(
+        operation.brush,
+        color=operation.colors[-1],
+        size=max(0.5, minor * 0.26),
+        size_mode="px",
+        opacity=min(operation.brush.opacity, 0.55),
+    )
+    shadow_offset = minor * 0.33
+    strokes.append(
+        _make_stroke(
+            program,
+            replace(operation, brush=shadow_brush),
+            1,
+            inset_axis_points(shadow_offset),
+        )
+    )
+    if limit >= 3:
+        highlight_brush = replace(
+            operation.brush,
+            color=operation.colors[0],
+            size=max(0.5, minor * 0.16),
+            size_mode="px",
+            opacity=min(operation.brush.opacity, 0.45),
+        )
+        strokes.append(
+            _make_stroke(
+                program,
+                replace(operation, brush=highlight_brush),
+                2,
+                inset_axis_points(-minor * 0.36),
+            )
+        )
+    return strokes
+
+
 def _compile_fill_contour(
     program: StrokeProgram,
     operation: FillOperation,
@@ -1519,7 +1632,8 @@ def _compile_fill_directional(
     spacing = max(0.5, operation.brush.size_px(program.canvas_width, program.canvas_height) * spacing_scale)
     strokes: list[Stroke] = []
     row = 0
-    y = min_y + spacing * 0.5
+    brush_size_px = operation.brush.size_px(program.canvas_width, program.canvas_height)
+    y = min_y + (brush_size_px * 0.5 if operation.style == "scanline" else spacing * 0.5)
     while y < max_y and len(strokes) < limit:
         segments = _scanline_segments(rotated, y)
         if row % 2:
@@ -1596,6 +1710,10 @@ def _compile_fill_directional(
 
 def _compile_fill(program: StrokeProgram, operation: FillOperation, limit: int) -> list[Stroke]:
     polygon = [(point.x * program.canvas_width, point.y * program.canvas_height) for point in operation.polygon]
+    if operation.id.startswith("foundation-"):
+        ellipse_mass = _compile_ellipse_mass(program, operation, polygon, limit)
+        if ellipse_mass:
+            return ellipse_mass
     if operation.style == "contour":
         res = _compile_fill_contour(program, operation, polygon, limit)
         if res:
@@ -1615,7 +1733,8 @@ def _compile_fill(program: StrokeProgram, operation: FillOperation, limit: int) 
     spacing = max(0.5, operation.brush.size_px(program.canvas_width, program.canvas_height) * spacing_scale)
     strokes: list[Stroke] = []
     row = 0
-    y = min_y + spacing * 0.5
+    brush_size_px = operation.brush.size_px(program.canvas_width, program.canvas_height)
+    y = min_y + (brush_size_px * 0.5 if operation.style == "scanline" else spacing * 0.5)
     while y < max_y and len(strokes) < limit:
         segments = _scanline_segments(polygon, y)
         if row % 2:
@@ -1624,6 +1743,16 @@ def _compile_fill(program: StrokeProgram, operation: FillOperation, limit: int) 
             if len(strokes) >= limit:
                 break
             first_x, second_x = (end_x, start_x) if row % 2 else (start_x, end_x)
+            if operation.style == "scanline":
+                reaches_canvas_sides = min(first_x, second_x) <= 0.5 and max(first_x, second_x) >= (
+                    program.canvas_width - 0.5
+                )
+                if not reaches_canvas_sides:
+                    first_x, second_x = _inset_scanline_segment(
+                        first_x,
+                        second_x,
+                        operation.brush.size_px(program.canvas_width, program.canvas_height),
+                    )
             seg_len = abs(second_x - first_x)
             if operation.style in {"wash", "feathered"} and seg_len > 4.0:
                 mid_x = (first_x + second_x) * 0.5
@@ -1897,17 +2026,20 @@ def _compile_fill_to_budget(program: StrokeProgram, operation: FillOperation, li
     span = max(max(point[1] for point in polygon) - min(point[1] for point in polygon), 1.0)
     if operation.style in {"directional", "radial", "contour"} or abs(operation.angle_deg) > 1e-3:
         span = max(span, max(point[0] for point in polygon) - min(point[0] for point in polygon))
-    spacing_scale = 0.50 if operation.style in {"wash", "feathered"} else operation.spacing
+    low_budget_scan = operation.style in {"wash", "feathered", "scanline"}
+    spacing_scale = 0.55 if low_budget_scan else operation.spacing
     current_px = operation.brush.size_px(program.canvas_width, program.canvas_height)
-    required_px = span / max(1.0, limit * spacing_scale) * 1.08
+    required_px = span / max(1.0, 1.0 + (limit - 1) * spacing_scale) * 1.02
     adjusted = operation
     if required_px > current_px:
+        if low_budget_scan:
+            adjusted = replace(adjusted, style="scanline", spacing=spacing_scale)
         adjusted_size = (
             required_px
             if operation.brush.size_mode == "px"
             else required_px / min(program.canvas_width, program.canvas_height)
         )
-        adjusted = replace(operation, brush=replace(operation.brush, size=adjusted_size))
+        adjusted = replace(adjusted, brush=replace(operation.brush, size=adjusted_size))
     return _compile_fill(program, adjusted, limit)
 
 
@@ -2708,6 +2840,9 @@ def _compile_gradient_fill(
     poly = [(p.x * w, p.y * h) for p in operation.polygon]
     if len(poly) < 3:
         return []
+    ellipse_mass = _compile_ellipse_mass(program, operation, poly, limit)
+    if ellipse_mass:
+        return ellipse_mass
     center = (sum(p[0] for p in poly) / len(poly), sum(p[1] for p in poly) / len(poly))
     angle = math.radians(operation.angle_deg)
     rotated = [_rotate(p, center, -angle) for p in poly]
@@ -2718,7 +2853,8 @@ def _compile_gradient_fill(
     spacing = max(0.5, operation.brush.size_px(w, h) * spacing_scale)
     strokes: list[Stroke] = []
     row = 0
-    y = min_y + spacing * 0.5
+    brush_size_px = operation.brush.size_px(w, h)
+    y = min_y + brush_size_px * 0.5
     while y < max_y and len(strokes) < limit:
         segments = _scanline_segments(rotated, y)
         if row % 2:
@@ -2730,6 +2866,15 @@ def _compile_gradient_fill(
             if len(strokes) >= limit:
                 break
             first_x, second_x = (end_x, start_x) if row % 2 else (start_x, end_x)
+            reaches_canvas_sides = (
+                abs(operation.angle_deg) <= 1e-3 and min(first_x, second_x) <= 0.5 and max(first_x, second_x) >= w - 0.5
+            )
+            if not reaches_canvas_sides:
+                first_x, second_x = _inset_scanline_segment(
+                    first_x,
+                    second_x,
+                    operation.brush.size_px(w, h),
+                )
             first_rot = _rotate((first_x, y), center, angle)
             second_rot = _rotate((second_x, y), center, angle)
             pts = [(first_rot[0], first_rot[1], 1.0), (second_rot[0], second_rot[1], 1.0)]
@@ -2750,6 +2895,11 @@ def _compile_gradient_fill(
         for start_x, end_x in segments:
             if len(strokes) >= limit:
                 break
+            reaches_canvas_sides = (
+                abs(operation.angle_deg) <= 1e-3 and min(start_x, end_x) <= 0.5 and max(start_x, end_x) >= w - 0.5
+            )
+            if not reaches_canvas_sides:
+                start_x, end_x = _inset_scanline_segment(start_x, end_x, operation.brush.size_px(w, h))
             first_rot = _rotate((start_x, mid_y), center, angle)
             second_rot = _rotate((end_x, mid_y), center, angle)
             pts = [(first_rot[0], first_rot[1], 1.0), (second_rot[0], second_rot[1], 1.0)]
@@ -2759,6 +2909,38 @@ def _compile_gradient_fill(
             strokes.append(_make_stroke(program, replace(operation, brush=colored_brush), len(strokes), pts))
 
     return strokes
+
+
+def _compile_gradient_fill_to_budget(
+    program: StrokeProgram,
+    operation: GradientFillOperation,
+    limit: int,
+) -> list[Stroke]:
+    """少数のグラデーション帯でも面積を失わないようブラシ幅を再計算する。"""
+
+    if limit <= 0:
+        return []
+    polygon = [(point.x * program.canvas_width, point.y * program.canvas_height) for point in operation.polygon]
+    center = (
+        sum(point[0] for point in polygon) / len(polygon),
+        sum(point[1] for point in polygon) / len(polygon),
+    )
+    angle = math.radians(operation.angle_deg)
+    rotated = [_rotate(point, center, -angle) for point in polygon]
+    span = max(max(point[1] for point in rotated) - min(point[1] for point in rotated), 1.0)
+    spacing_scale = 0.55
+    current_px = operation.brush.size_px(program.canvas_width, program.canvas_height)
+    required_px = span / max(1.0, 1.0 + (limit - 1) * spacing_scale) * 1.02
+    adjusted = operation
+    if required_px > current_px:
+        adjusted = replace(adjusted, style="directional", spacing=spacing_scale)
+        adjusted_size = (
+            required_px
+            if operation.brush.size_mode == "px"
+            else required_px / min(program.canvas_width, program.canvas_height)
+        )
+        adjusted = replace(adjusted, brush=replace(operation.brush, size=adjusted_size))
+    return _compile_gradient_fill(program, adjusted, limit)
 
 
 def compile_stroke_program(
@@ -2788,13 +2970,18 @@ def compile_stroke_program(
         fill_budgets = [operation_budget] * len(fill_operations)
     else:
         has_non_fill = len(fill_operations) < len(program.operations)
-        reserved = count if not has_non_fill else min(count, max(len(fill_operations), round(count * 0.48)))
+        reserved = (
+            count
+            if not has_non_fill
+            else min(count, max(len(fill_operations), round(count * FILL_STROKE_BUDGET_RATIO)))
+        )
         fill_budgets = _allocate_fill_budgets(fill_operations, reserved)
         if len(fill_budgets) < len(fill_operations):
             fill_budgets = [max(1, reserved // len(fill_operations))] * len(fill_operations)
 
     fill_index = 0
     fill_strokes: list[Stroke] = []
+    gradient_strokes: list[Stroke] = []
     other_strokes: list[Stroke] = []
     for operation in program.operations:
         if isinstance(operation, FillOperation):
@@ -2804,9 +2991,10 @@ def compile_stroke_program(
             fill_strokes.extend(compiled)
         elif isinstance(operation, GradientFillOperation):
             budget = fill_budgets[fill_index] if fill_index < len(fill_budgets) else operation_budget
-            compiled = _compile_gradient_fill(program, operation, budget)
+            compiled = _compile_gradient_fill_to_budget(program, operation, budget)
             fill_index += 1
             fill_strokes.extend(compiled)
+            gradient_strokes.extend(compiled)
         elif isinstance(operation, RibbonOperation):
             other_strokes.extend(_compile_ribbon(program, operation, operation_budget))
         elif isinstance(operation, PathOperation):
@@ -2827,11 +3015,15 @@ def compile_stroke_program(
         strokes = _sample_strokes_by_priority(strokes, MAX_PLAN_STROKES)
     if not strokes:
         raise PlanValidationError("StrokeProgram から有効なストロークを生成できませんでした")
+    selected_stroke_ids = {stroke.id for stroke in strokes}
     metadata = {
         **dict(program.metadata),
         "source_schema_version": PROGRAM_SCHEMA_VERSION,
         "operation_count": len(program.operations),
-        "budget_strategy": "operation_aware_v1",
+        "budget_strategy": "operation_aware_v2",
+        "compiled_gradient_colors": sorted(
+            {stroke.color.lower() for stroke in gradient_strokes if stroke.id in selected_stroke_ids}
+        ),
     }
     return DrawingPlan(
         prompt=program.prompt,

@@ -17,6 +17,62 @@ from .base import (
 )
 
 
+def landscape_feature_stroke_ids(prompt: str, seed: int) -> tuple[str, ...]:
+    """風景種別ごとのシルエットと前中後景を保つ特徴を優先順で返す。"""
+
+    prompt_l = prompt.casefold()
+
+    def uid(name: str, index: int = 0) -> str:
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/land/{seed}/{name}/{index}"))
+
+    if any(keyword in prompt_l for keyword in ("wave", "波", "海", "ocean", "sea", "北斎", "hokusai")):
+        return (
+            uid("wave_arc", 0),
+            uid("wave_arc", 2),
+            uid("wave_arc", 4),
+            uid("wave_arc", 6),
+            uid("wave_claw", 0),
+            uid("wave_claw", 6),
+            uid("fuji"),
+            uid("ripple", 0),
+        )
+    if any(
+        keyword in prompt_l for keyword in ("wildflower", "wild flower", "garden", "meadow", "野花", "花畑", "庭園")
+    ):
+        return (
+            uid("wildflower_stem", 0),
+            uid("wildflower_stem", 7),
+            uid("wildflower_stem", 14),
+            uid("wildflower_petals_0", 0),
+            uid("wildflower_petals_7", 0),
+            uid("wildflower_center", 0),
+            uid("meadow_ground"),
+            uid("meadow_sky"),
+        )
+    if any(keyword in prompt_l for keyword in ("rose", "バラ", "薔薇")):
+        return (
+            uid("stem"),
+            uid("leaf_l"),
+            uid("leaf_r"),
+            uid("rose_petal", 0),
+            uid("rose_petal", 20),
+            uid("rose_petal", 40),
+            uid("rose_petal", 60),
+            uid("rose_petal", 80),
+        )
+    is_sakura = any(keyword in prompt_l for keyword in ("sakura", "桜", "cherry blossom"))
+    return (
+        uid("mountain_ridge", 0),
+        uid("mountain_ridge", 1),
+        uid("tree_trunk"),
+        uid("tree_bough", 0),
+        uid("tree_bough", 1),
+        uid("cloud", 0),
+        uid("sakura_mass" if is_sakura else "foliage", 0),
+        uid("ground_layer", 0),
+    )
+
+
 def generate_landscape_strokes(
     prompt: str,
     seed: int,

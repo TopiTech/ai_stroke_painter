@@ -21,6 +21,7 @@ def main() -> int:
     project_dir = Path(__file__).resolve().parent
     parent_dir = project_dir.parent
 
+    test_modules = ["ai_stroke_painter.self_test", "ai_stroke_painter.implementation_test"]
     steps: list[tuple[str, list[str], Path]] = [
         ("Ruff Check", [sys.executable, "-m", "ruff", "check", "."], project_dir),
         ("Ruff Format Check", [sys.executable, "-m", "ruff", "format", "--check", "."], project_dir),
@@ -28,12 +29,12 @@ def main() -> int:
         ("Pyrefly Type Check", [sys.executable, "-m", "pyrefly", "check"], project_dir),
         (
             "Regression Self-Tests",
-            [sys.executable, "-m", "unittest", "ai_stroke_painter.self_test", "-v"],
+            [sys.executable, "-m", "unittest", *test_modules, "-v"],
             parent_dir,
         ),
         (
             "Headless Compatibility Tests",
-            [sys.executable, "-S", "-m", "unittest", "ai_stroke_painter.self_test"],
+            [sys.executable, "-S", "-m", "unittest", *test_modules],
             parent_dir,
         ),
         (

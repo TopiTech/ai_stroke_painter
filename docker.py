@@ -79,6 +79,58 @@ from .storage import save_plan, save_svg
 MAX_REFERENCE_IMAGE_BYTES = MAX_ENCODED_IMAGE_BYTES
 RENDER_WAIT_TIMEOUT_SECONDS = 15 * 60
 
+_ELEMENT_LABELS = {
+    "character": "人物",
+    "cat": "猫",
+    "dog": "犬",
+    "bird": "鳥",
+    "dragon": "ドラゴン",
+    "wolf": "狼",
+    "city": "都市",
+    "cyber_city": "サイバー都市",
+    "cathedral": "大聖堂",
+    "mountain": "山",
+    "sea": "海",
+    "wave": "波",
+    "tree": "樹木",
+    "clouds": "雲",
+    "sakura": "桜",
+    "garden": "庭園",
+    "wildflowers": "野花",
+    "rose": "バラ",
+    "mandala": "曼荼羅",
+    "focus_lines": "集中線",
+    "speed_lines": "スピード線",
+    "hatching": "ハッチング",
+    "glow": "発光",
+    "magic_aura": "魔法オーラ",
+    "magic_circle": "魔法陣",
+}
+
+
+def _format_plan_quality_summary(plan: DrawingPlan) -> str:
+    """適用判断に必要な品質・意味不足を一行へまとめる。"""
+
+    report = evaluate_plan_quality(plan)
+    score = round(report.score * 100)
+    fidelity = round(report.semantic_fidelity_score * 100)
+    missing = tuple(report.missing_required_elements)
+    if missing:
+        labels = "、".join(_ELEMENT_LABELS.get(element, element) for element in missing)
+        return f"⚠ 品質診断 {score}%｜意味充足 {fidelity}%｜不足: {labels}｜本数を増やして再生成してください"
+    if report.issues:
+        return f"△ 品質診断 {score}%｜意味充足 {fidelity}%｜{report.issues[0]}"
+
+    details: list[str] = []
+    scene_spec = plan.metadata.get("scene_spec", {})
+    subjects = scene_spec.get("subjects", ()) if isinstance(scene_spec, dict) else ()
+    if isinstance(subjects, (list, tuple)) and subjects:
+        details.append(f"主役コントラスト {report.subject_background_contrast:.2f}")
+    if report.effect_subject_intrusion_ratio > 0.0:
+        details.append(f"効果侵入 {round(report.effect_subject_intrusion_ratio * 100)}%")
+    suffix = "｜" + "｜".join(details) if details else ""
+    return f"✓ 品質診断 {score}%｜意味充足 {fidelity}%{suffix}"
+
 
 def _is_plan_goal_reached(plan: DrawingPlan) -> bool:
     """モデル自己申告だけでなく、独立した品質検査にも合格した場合だけ完成とする。"""
@@ -1074,6 +1126,9 @@ class AIStrokePainterDocker(DockWidget):
 
         self.preview = PreviewWidget(self)
         preview_box_layout.addWidget(self.preview)
+        self.quality_summary_label = QLabel("品質診断: プレビュー生成後に表示します")
+        self.quality_summary_label.setWordWrap(True)
+        preview_box_layout.addWidget(self.quality_summary_label)
         tab_main_layout.addWidget(preview_box)
         tab_main_layout.addStretch(1)
 
@@ -2863,6 +2918,9 @@ class AIStrokePainterDocker(DockWidget):
                 prev_w_initial.set_canvas_size(doc_width, doc_height)
             if hasattr(prev_w_initial, "clear_plan"):
                 prev_w_initial.clear_plan()
+        quality_label = _get_attr(self, "quality_summary_label")
+        if quality_label is not None and hasattr(quality_label, "setText"):
+            quality_label.setText("品質診断: 計画を解析中…")
 
         try:
             planner = self._planner()
@@ -3047,6 +3105,14 @@ class AIStrokePainterDocker(DockWidget):
                         self._log_debug(f"[プレビュー更新失敗] {exc}")
             except Exception as exc:
                 self._log_debug(f"[プレビュー更新失敗] {exc}")
+
+        quality_label = _get_attr(self, "quality_summary_label")
+        if quality_label is not None and hasattr(quality_label, "setText"):
+            try:
+                quality_label.setText(_format_plan_quality_summary(plan))
+            except Exception as exc:
+                quality_label.setText("品質診断を計算できませんでした")
+                self._log_debug(f"[品質診断失敗] {exc}")
 
         confirm_w = _get_attr(self, "confirm_before_apply")
         confirmation_required = bool(

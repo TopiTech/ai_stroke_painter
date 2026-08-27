@@ -64,7 +64,22 @@ def main() -> int:
                 infer_brush_profile(stroke.brush_preset, is_eraser=stroke.is_eraser) == brush_profile
                 for stroke in plan.strokes
             )
-            palette_contract = all(stroke.color.lower() in palette_colors for stroke in plan.strokes)
+            color_plan = plan.metadata.get("color_plan", {})
+            planned_colors = (
+                {value.lower() for value in color_plan.values() if isinstance(value, str) and value.startswith("#")}
+                if isinstance(color_plan, dict)
+                else set()
+            )
+            compiled_gradient_colors = {
+                value.lower()
+                for value in plan.metadata.get("compiled_gradient_colors", ())
+                if isinstance(value, str) and value.startswith("#")
+            }
+            palette_contract = all(
+                stroke.color.lower() in palette_colors | planned_colors | compiled_gradient_colors
+                for stroke in plan.strokes
+            )
+            semantic_contract = report.semantic_fidelity_score >= 1.0 and not report.missing_required_elements
             budget = manual_count if requested_count is not None else 500
             passed = (
                 deterministic
@@ -79,6 +94,7 @@ def main() -> int:
                 and plan.metadata.get("prompt_category") == expected_category
                 and brush_contract
                 and palette_contract
+                and semantic_contract
             )
             failed = failed or not passed
             rows.append(
@@ -91,10 +107,20 @@ def main() -> int:
                     "strokes": len(plan.strokes),
                     "coverage": round(report.coverage, 3),
                     "quality_score": round(report.score, 3),
+                    "visual_score": report.visual_score,
+                    "value_range": report.value_range,
+                    "dominant_color_ratio": report.dominant_color_ratio,
+                    "banding": max(report.horizontal_banding_score, report.vertical_banding_score),
+                    "edge_density": report.edge_density,
+                    "subject_background_contrast": report.subject_background_contrast,
+                    "effect_subject_intrusion": report.effect_subject_intrusion_ratio,
+                    "semantic_fidelity": report.semantic_fidelity_score,
+                    "missing_elements": list(report.missing_required_elements),
                     "layers": report.layer_count,
                     "category": plan.metadata.get("prompt_category"),
                     "brush_contract": brush_contract,
                     "palette_contract": palette_contract,
+                    "semantic_contract": semantic_contract,
                     "fallback_paint_calls": report.estimated_paint_calls,
                     "issues": report.issues,
                 }

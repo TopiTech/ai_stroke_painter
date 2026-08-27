@@ -10,6 +10,40 @@ from ..domain import Stroke
 from .base import catmull_rom_spline, create_stroke, sample_strokes_by_priority
 
 
+def geometry_feature_stroke_ids(prompt: str, seed: int) -> tuple[str, ...]:
+    """低予算でも都市の広がり／曼荼羅の対称性が読める特徴を返す。"""
+
+    prompt_l = prompt.casefold()
+
+    def uid(name: str, index: int = 0) -> str:
+        return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/geom/{seed}/{name}/{index}"))
+
+    is_city = any(
+        keyword in prompt_l
+        for keyword in ("city", "都市", "building", "ビル", "cathedral", "cyber", "cyberpunk", "スカイライン")
+    )
+    if is_city:
+        return (
+            uid("bldg_outline", 3),
+            uid("bldg_outline", 7),
+            uid("bldg_outline", 11),
+            uid("bldg_win_3", 0),
+            uid("bldg_win_11", 0),
+            uid("bldg_outline", 0),
+            uid("bldg_outline", 14),
+        )
+    return (
+        uid("mandala_frame", 46),
+        uid("mandala_frame", 48),
+        uid("mandala_petal_0", 0),
+        uid("mandala_petal_0", 2),
+        uid("mandala_petal_0", 4),
+        uid("mandala_petal_0", 6),
+        uid("mandala_petal_2", 1),
+        uid("mandala_petal_2", 5),
+    )
+
+
 def generate_geometry_strokes(
     prompt: str,
     seed: int,

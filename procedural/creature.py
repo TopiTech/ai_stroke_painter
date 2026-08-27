@@ -10,6 +10,34 @@ from ..domain import Stroke
 from .base import catmull_rom_spline, create_stroke, sample_strokes_by_priority
 
 
+def creature_feature_stroke_ids(prompt: str, seed: int) -> tuple[str, ...]:
+    """種ごとのシルエット・目・口を、認識に重要な順で返す。"""
+
+    prompt_l = prompt.casefold()
+    if any(key in prompt_l for key in ("dragon", "ドラゴン", "竜", "龍")):
+        namespace = "dragon"
+        names = ("spine", "belly", "snout", "wing_l", "wing_r", "eye", "horn_top", "horn_back")
+    elif any(key in prompt_l for key in ("bird", "鳥", "小鳥", "eagle", "鷲")):
+        namespace = "bird"
+        names = ("body", "wing_l", "wing_r", "beak_top", "beak_bottom", "eye", "tail_2", "perch")
+    elif any(key in prompt_l for key in ("dog", "犬", "puppy", "子犬")):
+        namespace = "dog"
+        names = ("head", "ear_l", "ear_r", "eye_l", "eye_r", "muzzle_l", "muzzle_r", "nose")
+    else:
+        names = (
+            "cat_head",
+            "cat_ear_l",
+            "cat_ear_r",
+            "cat_eye_l",
+            "cat_eye_r",
+            "cat_nose",
+            "cat_mouth_l",
+            "cat_mouth_r",
+        )
+        return tuple(str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/creature/{seed}/{name}/0")) for name in names)
+    return tuple(str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/{namespace}/{seed}/{name}")) for name in names)
+
+
 def generate_creature_strokes(
     prompt: str,
     seed: int,

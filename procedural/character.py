@@ -23,6 +23,24 @@ from .base import (
 )
 
 
+def character_feature_stroke_ids(seed: int) -> tuple[str, ...]:
+    """低予算でも顔として読める、左右対称の必須輪郭を優先順で返す。"""
+
+    names = (
+        "jaw_l",
+        "jaw_r",
+        "upper_lash_left",
+        "upper_lash_right",
+        "iris_outline_left",
+        "iris_outline_right",
+        "nose",
+        "mouth",
+        "brow_left",
+        "brow_right",
+    )
+    return tuple(str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/char/{seed}/{name}/0")) for name in names)
+
+
 def _adjust_color_luminance(hex_str: str, factor: float) -> str:
     """指定された16進カラーの輝度を調整する（factor < 1.0 で暗く、factor > 1.0 で明るく）。"""
     h = hex_str.lstrip("#")

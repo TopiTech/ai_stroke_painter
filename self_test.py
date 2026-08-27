@@ -26,6 +26,7 @@ from .docker import (
     ApiConnectionWorker,
     PlanWorker,
     _confirm,
+    _format_plan_quality_summary,
     _is_plan_goal_reached,
     _safe_endpoint_label,
 )
@@ -734,7 +735,7 @@ class PlannerAndStorageTests(unittest.TestCase):
 
         manual_budget = generate_procedural_plan("anime girl portrait", 42, 40, 800, 600)
         self.assertEqual(len(manual_budget.strokes), 40)
-        self.assertEqual(manual_budget.metadata["budget_strategy"], "operation_aware_v1")
+        self.assertEqual(manual_budget.metadata["budget_strategy"], "operation_aware_v2")
         self.assertGreaterEqual(evaluate_plan_quality(manual_budget).coverage, 0.90)
 
         from .procedural.base import color_palette
@@ -3799,6 +3800,16 @@ class CanvasAdapterTests(unittest.TestCase):
 
 
 class WorkerAndDockerTests(unittest.TestCase):
+    def test_preview_quality_summary_reports_success_and_missing_semantics(self) -> None:
+        prompt = "anime girl with a cat in a cyberpunk city and focus lines"
+        standard = generate_procedural_plan(prompt, 42, 40, 800, 600)
+        constrained = generate_procedural_plan(prompt, 42, 12, 800, 600)
+
+        self.assertIn("✓ 品質診断", _format_plan_quality_summary(standard))
+        constrained_summary = _format_plan_quality_summary(constrained)
+        self.assertIn("不足:", constrained_summary)
+        self.assertIn("本数を増やして", constrained_summary)
+
     _app: Any = None
 
     @classmethod
