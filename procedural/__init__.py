@@ -473,6 +473,7 @@ def _prompt_palette(prompt: str, palette_name: str) -> dict[str, str]:
         "pink": "#e86f9d",
         "blonde": "#e7bd55",
         "golden": "#e7bd55",
+        "brown": "#6b4226",
         "black": "#292632",
         "white": "#e8edf5",
         "赤": "#d94b58",
@@ -480,13 +481,15 @@ def _prompt_palette(prompt: str, palette_name: str) -> dict[str, str]:
         "緑": "#4f9b68",
         "紫": "#8554b3",
         "ピンク": "#e86f9d",
+        "茶": "#6b4226",
+        "茶髪": "#6b4226",
         "金髪": "#e7bd55",
         "黒髪": "#292632",
         "白髪": "#e8edf5",
     }
     for cue, color in color_cues.items():
         hair_phrases = [f"{cue} hair", f"{cue}-haired", f"{cue}髪", f"{cue}い髪", f"{cue}の髪"]
-        if cue in {"金髪", "黒髪", "白髪"}:
+        if cue in {"金髪", "黒髪", "白髪", "茶髪"}:
             hair_phrases.append(cue)
         if any(phrase in normalized for phrase in hair_phrases):
             colors["hair_main"] = color
@@ -648,13 +651,49 @@ def generate_procedural_program(
     # 歴史的に固定色を持つ風景・動物・幾何・FXも、UIで選んだパレットへ確実に収める。
     strokes = recolor_strokes_to_palette(strokes, resolved_palette)
 
-    color_replacements = {
+    hair_replacements = {
         base_colors[key]: effective_colors[key]
-        for key in ("hair_main", "hair_shadow", "eye_light", "eye_dark")
+        for key in ("hair_main", "hair_shadow")
         if base_colors[key] != effective_colors[key]
     }
-    if color_replacements:
-        strokes = [replace(stroke, color=color_replacements.get(stroke.color, stroke.color)) for stroke in strokes]
+    eye_replacements = {
+        base_colors[key]: effective_colors[key]
+        for key in ("eye_light", "eye_dark")
+        if base_colors[key] != effective_colors[key]
+    }
+    if hair_replacements or eye_replacements:
+
+        def _safe_color_replace(stroke: Stroke) -> Stroke:
+            # Lineart レイヤーの主線はパレット共有色による意図せぬ置換から保護する
+            if stroke.layer_name == "Lineart":
+                return stroke
+            sid = stroke.id.lower()
+            # 背景ストローク（空、山、波、雲、木等）も保護する
+            if any(
+                bg in sid for bg in ("sky", "mountain", "wave", "ground", "sea", "cloud", "tree", "mandala", "city")
+            ):
+                return stroke
+            if (
+                hair_replacements
+                and stroke.color in hair_replacements
+                and (
+                    any(k in sid for k in ("hair", "bang", "ahoge", "flyaway", "ponytail", "twintail"))
+                    or stroke.layer_name in {"Flats", "Shading"}
+                )
+            ):
+                return replace(stroke, color=hair_replacements[stroke.color])
+            if (
+                eye_replacements
+                and stroke.color in eye_replacements
+                and (
+                    any(k in sid for k in ("eye", "iris", "pupil"))
+                    or stroke.layer_name in {"Flats", "Shading", "Highlights"}
+                )
+            ):
+                return replace(stroke, color=eye_replacements[stroke.color])
+            return stroke
+
+        strokes = [_safe_color_replace(stroke) for stroke in strokes]
 
     # 指定されたブラシプロファイルの一括適用
     if brush_profile and brush_profile != "auto":

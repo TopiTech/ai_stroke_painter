@@ -91,7 +91,6 @@ def _is_reasoning_model(model_name: str) -> bool:
             "deepseek-r1",
             "deepseek-reasoner",
             "deepseek-v3",
-            "r1",
             "qwq",
             "qwen-2.5-coder",
             "thinking",

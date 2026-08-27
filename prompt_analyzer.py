@@ -173,16 +173,41 @@ _ACCESSORY_PATTERNS = [
 ]
 
 _COLOR_MAPPINGS = [
-    ("blonde", "#e7bd55", [r"\b(?:blonde?|yellow|golden?)\b", r"金髪|金色|ゴールド|黄色"]),
+    ("blonde", "#e7bd55", [r"\b(?:blonde?|yellow|golden?)\b", r"金髪|金色|ゴールド|黄色|金"]),
     ("black", "#292632", [r"\b(?:black|dark|raven)\b", r"黒髪|黒|漆黒"]),
-    ("silver", "#e8edf5", [r"\b(?:silver|white|platinum|grey|gray)\b", r"銀髪|白髪|シルバー|白"]),
+    ("silver", "#e8edf5", [r"\b(?:silver|white|platinum|grey|gray)\b", r"銀髪|白髪|シルバー|白|銀"]),
     ("pink", "#e86f9d", [r"\b(?:pink|rose)\b", r"ピンク髪|ピンク|桃色"]),
     ("blue", "#4776d0", [r"\b(?:blue|azure|cyan|navy)\b", r"青髪|青|水色|蒼"]),
     ("red", "#d94b58", [r"\b(?:red|crimson|scarlet)\b", r"赤髪|赤|紅|緋色"]),
-    ("brown", "#6b4226", [r"\b(?:brown|chestnut|auburn)\b", r"茶髪|茶色|栗色"]),
+    ("brown", "#6b4226", [r"\b(?:brown|chestnut|auburn)\b", r"茶髪|茶色|栗色|茶"]),
     ("purple", "#8554b3", [r"\b(?:purple|violet|lavender)\b", r"紫髪|紫|パープル"]),
     ("green", "#4f9b68", [r"\b(?:green|emerald)\b", r"緑髪|緑|エメラルド"]),
 ]
+
+_JAPANESE_FEATURE_COLOR_PHRASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "hair": {
+        "blonde": ("金髪", "金色の髪", "金の髪", "金髪の少女", "金髪の少年"),
+        "black": ("黒髪", "黒い髪", "黒の髪"),
+        "silver": ("銀髪", "白髪", "銀色の髪", "白い髪", "銀の髪"),
+        "pink": ("ピンク髪", "ピンクの髪", "桃色の髪"),
+        "blue": ("青髪", "青い髪", "青の髪", "水色の髪"),
+        "red": ("赤髪", "赤い髪", "赤の髪"),
+        "brown": ("茶髪", "茶色い髪", "茶の髪", "栗色の髪"),
+        "purple": ("紫髪", "紫の髪"),
+        "green": ("緑髪", "緑の髪"),
+    },
+    "eye": {
+        "blonde": ("金の瞳", "金色の目", "黄色い瞳", "黄色い目"),
+        "black": ("黒い瞳", "黒い目", "漆黒の瞳"),
+        "silver": ("銀の瞳", "銀色の目", "白い瞳", "灰色の目"),
+        "pink": ("ピンクの瞳", "ピンクの目", "桃色の瞳"),
+        "blue": ("青い瞳", "青い目", "青の瞳", "水色の瞳", "水色の目", "蒼い瞳"),
+        "red": ("赤い瞳", "赤い目", "赤の瞳", "紅い瞳"),
+        "brown": ("茶色い瞳", "茶色い目", "茶の瞳", "栗色の瞳"),
+        "purple": ("紫の瞳", "紫の目", "紫色の瞳"),
+        "green": ("緑の瞳", "緑の目", "エメラルドの瞳"),
+    },
+}
 
 _TIME_PATTERNS = [
     ("sunset", [r"\b(?:sunset|dusk|evening|golden\s*hour|twilight)\b", r"夕暮れ|夕焼け|夕方|黄昏|日没|茜空"]),
@@ -222,30 +247,41 @@ def _match_any(patterns: list[str], text: str) -> bool:
 
 def _extract_color_for_feature(feature_keywords: list[str], prompt: str) -> str | None:
     """指定された部位（hair, eye など）に関連付けられた色を抽出する。"""
-    for color_name, hex_val, col_patterns in _COLOR_MAPPINGS:
+    is_hair_search = any(k in feature_keywords for k in ("hair", "髪", "前髪", "ツインテ", "ポニテ"))
+    is_eye_search = any(k in feature_keywords for k in ("eye", "eyes", "瞳", "目"))
+
+    # 1. 日本語明示フレーズの優先照合
+    if is_hair_search:
+        for color_name, phrases in _JAPANESE_FEATURE_COLOR_PHRASES["hair"].items():
+            if any(phrase in prompt for phrase in phrases):
+                for c_name, hex_val, _ in _COLOR_MAPPINGS:
+                    if c_name == color_name:
+                        return hex_val
+    elif is_eye_search:
+        for color_name, phrases in _JAPANESE_FEATURE_COLOR_PHRASES["eye"].items():
+            if any(phrase in prompt for phrase in phrases):
+                for c_name, hex_val, _ in _COLOR_MAPPINGS:
+                    if c_name == color_name:
+                        return hex_val
+
+    # 2. 英語直結および近傍探索
+    for _color_name, hex_val, col_patterns in _COLOR_MAPPINGS:
         for feat in feature_keywords:
             for c_pat in col_patterns:
                 # 英語直結 (e.g. "blonde hair")
                 if re.search(rf"(?:{c_pat})\s+(?:{feat})", prompt, re.IGNORECASE):
-                    return hex_val
-                # 日本語直結 (e.g. "金髪", "青い瞳")
-                if feat in ("hair", "髪", "前髪", "ツインテ", "ポニテ") and any(
-                    k in prompt for k in (f"{color_name}髪", f"{color_name}の髪")
-                ):
-                    return hex_val
-                if feat in ("eye", "eyes", "瞳", "目") and any(
-                    k in prompt for k in (f"{color_name}の瞳", f"{color_name}目", f"{color_name}の目")
-                ):
                     return hex_val
                 # 近傍探索 (前後12文字以内) - c_pat と feat の両方をグループ化
                 m = re.search(
                     rf"(?:(?:{c_pat}).{{0,12}}(?:{feat})|(?:{feat}).{{0,12}}(?:{c_pat}))", prompt, re.IGNORECASE
                 )
                 if m:
-                    # ただし hair を探している時に eye の共起がある場合、あるいはその逆を二重抽出しないようガード
-                    if feat in ("eye", "eyes", "瞳", "目") and any(
-                        h in m.group(0) for h in ("髪", "hair", "ツインテ", "ポニテ")
-                    ):
+                    matched_text = m.group(0).lower()
+                    # 髪探索時に瞳キーワードが共起している場合はスキップ
+                    if is_hair_search and any(e in matched_text for e in ("目", "瞳", "eye")):
+                        continue
+                    # 瞳探索時に髪キーワードが共起している場合はスキップ
+                    if is_eye_search and any(h in matched_text for h in ("髪", "hair", "ツインテ", "ポニテ")):
                         continue
                     return hex_val
     return None

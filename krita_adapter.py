@@ -630,6 +630,7 @@ class KritaCanvasAdapter(CanvasPort):
                                 _process_events()
                         continue
 
+                stroke_painted = False
                 for start, end in zip(stroke.points, stroke.points[1:], strict=False):
                     if cancelled():
                         return rendered
@@ -653,6 +654,35 @@ class KritaCanvasAdapter(CanvasPort):
                             _qpoint(start.x, start.y), _qpoint(end.x, end.y), start.pressure, end.pressure
                         )
 
+                    mutated = True
+                    stroke_painted = True
+                    segment_count += 1
+                    if segment_count >= evt_interval:
+                        segment_count = 0
+                        if process_events_during_render:
+                            _process_events()
+
+                # 全区間が0.5px未満でスキップされた微小ストローク（ドット・ハイライト等）の描画補償
+                if not stroke_painted and stroke.points:
+                    pt0 = stroke.points[0]
+                    pt_end_x = pt0.x + 0.5
+                    pt_end_y = pt0.y
+                    painted_with_float = False
+                    if use_float_points:
+                        try:
+                            current_node.paintLine(
+                                _qpoint_float(pt0.x, pt0.y),
+                                _qpoint_float(pt_end_x, pt_end_y),
+                                pt0.pressure,
+                                pt0.pressure,
+                            )
+                            painted_with_float = True
+                        except TypeError:
+                            use_float_points = False
+                    if not painted_with_float:
+                        current_node.paintLine(
+                            _qpoint(pt0.x, pt0.y), _qpoint(pt_end_x, pt_end_y), pt0.pressure, pt0.pressure
+                        )
                     mutated = True
                     segment_count += 1
                     if segment_count >= evt_interval:

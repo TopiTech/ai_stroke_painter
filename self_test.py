@@ -9013,6 +9013,109 @@ class SeniorReviewRegressionTests(unittest.TestCase):
         for fs in flat_strokes:
             self.assertGreaterEqual(len(fs.points), 3)
 
+    def test_r1_lineart_protected_from_palette_color_replacement(self) -> None:
+        """R1: パレット共有色がある場合でも、Lineart の主線色が髪色の影色に置換されないこと。"""
+        plan = generate_procedural_plan(
+            "blonde hair anime girl",
+            seed=42,
+            count=50,
+            width=800,
+            height=600,
+            palette_name="dark_fantasy",
+        )
+        line_strokes = [s for s in plan.strokes if s.layer_name == "Lineart"]
+        self.assertGreater(len(line_strokes), 0)
+        # dark_fantasy の lineart 色 (#130f40) が維持され、金髪の影色 (#8f7535) に侵食されない
+        for stroke in line_strokes:
+            self.assertNotEqual(stroke.color.lower(), "#8f7535")
+
+    def test_r2_macro_watercolor_wash_not_unintentionally_generated(self) -> None:
+        """R2: 雲マクロ等のコンパイル時に、無条件に全画面水彩ウォッシュが背後に混入しないこと。"""
+        from .stroke_program import MacroOperation, StrokeProgram, compile_stroke_program
+
+        prog = StrokeProgram(
+            prompt="cumulus clouds",
+            seed=42,
+            canvas_width=800,
+            canvas_height=600,
+            operations=[MacroOperation(id="m1", name="cumulus")],
+        )
+        plan = compile_stroke_program(prog)
+        # 雲のみが生成され、不要な水彩ウォッシュ帯が背後に生成されない
+        self.assertGreater(len(plan.strokes), 0)
+        for stroke in plan.strokes:
+            self.assertNotIn("wash_band", stroke.id)
+
+    def test_r3_duplicate_city_macros_do_not_collide_stroke_ids(self) -> None:
+        """R3: 同一計画内に複数の city/magic マクロがある場合でも stroke ID が衝突せずコンパイルできること。"""
+        from .stroke_program import MacroOperation, StrokeProgram, compile_stroke_program
+
+        prog = StrokeProgram(
+            prompt="two cities",
+            seed=42,
+            canvas_width=800,
+            canvas_height=600,
+            operations=[
+                MacroOperation(id="m_city1", name="city"),
+                MacroOperation(id="m_city2", name="city"),
+            ],
+        )
+        plan = compile_stroke_program(prog)
+        stroke_ids = [s.id for s in plan.strokes]
+        self.assertEqual(len(stroke_ids), len(set(stroke_ids)))
+
+    def test_r4_large_polygon_wash_downsamples_to_max_stroke_points(self) -> None:
+        """R4: 頂点数の多いポリゴン塗りでも MAX_STROKE_POINTS を超過せずコンパイルできること。"""
+        from .domain import MAX_STROKE_POINTS
+        from .stroke_program import FillOperation, ProgramPoint, StrokeProgram, compile_stroke_program
+
+        poly = [ProgramPoint(float(i % 100), float(i % 50)) for i in range(300)]
+        prog = StrokeProgram(
+            prompt="large fill",
+            seed=42,
+            canvas_width=800,
+            canvas_height=600,
+            operations=[FillOperation(id="f_large", polygon=poly, style="wash")],
+        )
+        plan = compile_stroke_program(prog)
+        for stroke in plan.strokes:
+            self.assertLessEqual(len(stroke.points), MAX_STROKE_POINTS)
+
+    def test_r5_japanese_hair_colors_and_no_eye_leakage(self) -> None:
+        """R5: 日本語の金髪・茶髪・銀髪が正しく抽出され、目の色が髪色に漏洩しないこと。"""
+        from .prompt_analyzer import analyze_prompt
+
+        self.assertEqual(analyze_prompt("金髪の少女").character.hair_color, "#e7bd55")
+        self.assertEqual(analyze_prompt("茶髪の少女").character.hair_color, "#6b4226")
+        self.assertEqual(analyze_prompt("銀髪の少女").character.hair_color, "#e8edf5")
+
+        dual = analyze_prompt("青い瞳、茶髪の少女")
+        self.assertEqual(dual.character.hair_color, "#6b4226")
+        self.assertEqual(dual.character.eye_color, "#4776d0")
+
+    def test_r6_is_reasoning_model_does_not_overmatch_r1(self) -> None:
+        """R6: user1-chat や server1-model などの非推論モデルが誤判定されないこと。"""
+        self.assertFalse(_is_reasoning_model("user1-chat"))
+        self.assertFalse(_is_reasoning_model("server1-model"))
+        self.assertFalse(_is_reasoning_model("llama-3.1-lora_r16"))
+        self.assertTrue(_is_reasoning_model("deepseek-r1"))
+        self.assertTrue(_is_reasoning_model("o1-mini"))
+
+    def test_r7_dot_stroke_renders_with_fallback_in_adapter(self) -> None:
+        """R7: 距離 0.0px の同一点ストローク（ドット・ハイライト）が Krita アダプターで描画されること。"""
+        doc = _FakeDocument()
+        adapter = KritaCanvasAdapter()
+        dot_stroke = Stroke(
+            id="dot_highlight",
+            points=(StrokePoint(50.0, 50.0, 0.9, 0), StrokePoint(50.0, 50.0, 0.9, 10)),
+        )
+        plan = DrawingPlan(prompt="highlight dot", seed=1, strokes=(dot_stroke,))
+        rendered = adapter.render(doc, plan)
+        self.assertEqual(rendered, 1)
+        root = doc.rootNode()
+        paint_node = root.childNodes()[0].childNodes()[0]
+        self.assertGreater(len(paint_node.lines), 0)
+
 
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))

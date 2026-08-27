@@ -12,7 +12,7 @@ from typing import Any, Literal, TypeAlias
 import uuid
 
 from .brushes import brush_preset_for_profile, canonical_brush_profile, infer_brush_profile
-from .domain import MAX_PLAN_STROKES, DrawingPlan, PlanValidationError, Stroke, StrokePoint
+from .domain import MAX_PLAN_STROKES, MAX_STROKE_POINTS, DrawingPlan, PlanValidationError, Stroke, StrokePoint
 
 PROGRAM_SCHEMA_VERSION = 2
 MAX_PROGRAM_OPERATIONS = MAX_PLAN_STROKES
@@ -1101,8 +1101,14 @@ def _make_stroke(
     index: int,
     points: Sequence[tuple[float, float, float]],
 ) -> Stroke:
+    pts = list(points)
+    if len(pts) > MAX_STROKE_POINTS:
+        step = (len(pts) - 1) / (MAX_STROKE_POINTS - 1)
+        sampled = [pts[int(round(i * step))] for i in range(MAX_STROKE_POINTS - 1)]
+        sampled.append(pts[-1])
+        pts = sampled
     bounded: list[StrokePoint] = []
-    for point_index, (x, y, pressure) in enumerate(points):
+    for point_index, (x, y, pressure) in enumerate(pts):
         bounded.append(
             StrokePoint(
                 x=max(0.0, min(program.canvas_width - 0.5, x)),
@@ -2408,43 +2414,45 @@ def _compile_macro(
     # -------------------------------------------------------------------------
     # 4. 水彩ウォッシュ (Watercolor Wash / Sky / Ground)
     # -------------------------------------------------------------------------
-    x0, y0, x1, y1 = (
-        operation.bounds[0] * w,
-        operation.bounds[1] * h,
-        operation.bounds[2] * w,
-        operation.bounds[3] * h,
-    )
-    wash_colors = list(operation.colors) if operation.colors else ["#2b5c8f", "#5c93cf", "#b8d8f8", "#eef6ff"]
-    total_h = max(1.0, y1 - y0)
-    # キャンバス白抜けを防ぐため、密な段数と十分なオーバーラップを持たせる
-    rows = max(4, min(limit, max(len(wash_colors), int(total_h / max(20.0, scale * 0.08)))))
-    band_thickness = max(35.0, (total_h / max(1, rows - 1)) * 1.6)
-    for r_i in range(rows):
-        if len(strokes) >= limit:
-            break
-        t_row = r_i / max(1, rows - 1)
-        curr_y = y0 + t_row * total_h
-        c_col = wash_colors[min(len(wash_colors) - 1, int(t_row * len(wash_colors)))]
-        w_pts = _catmull_rom_spline(
-            [
-                (x0, curr_y),
-                (x0 + (x1 - x0) * 0.33, curr_y + scale * rng.uniform(-0.015, 0.015)),
-                (x0 + (x1 - x0) * 0.67, curr_y + scale * rng.uniform(-0.015, 0.015)),
-                (x1, curr_y),
-            ],
-            8,
+    if any(k in name for k in ("wash", "watercolor_wash", "sky", "ground", "horizon")):
+        x0, y0, x1, y1 = (
+            operation.bounds[0] * w,
+            operation.bounds[1] * h,
+            operation.bounds[2] * w,
+            operation.bounds[3] * h,
         )
-        strokes.append(
-            _create_macro_stroke(
-                stroke_id=uid("wash_band", r_i),
-                points=[(x, y, 0.85) for x, y in w_pts],
-                profile="watercolor",
-                color=c_col,
-                size_px=band_thickness,
-                layer_name="Flats",
-                opacity=0.75,
+        wash_colors = list(operation.colors) if operation.colors else ["#2b5c8f", "#5c93cf", "#b8d8f8", "#eef6ff"]
+        total_h = max(1.0, y1 - y0)
+        # キャンバス白抜けを防ぐため、密な段数と十分なオーバーラップを持たせる
+        rows = max(4, min(limit, max(len(wash_colors), int(total_h / max(20.0, scale * 0.08)))))
+        band_thickness = max(35.0, (total_h / max(1, rows - 1)) * 1.6)
+        for r_i in range(rows):
+            if len(strokes) >= limit:
+                break
+            t_row = r_i / max(1, rows - 1)
+            curr_y = y0 + t_row * total_h
+            c_col = wash_colors[min(len(wash_colors) - 1, int(t_row * len(wash_colors)))]
+            w_pts = _catmull_rom_spline(
+                [
+                    (x0, curr_y),
+                    (x0 + (x1 - x0) * 0.33, curr_y + scale * rng.uniform(-0.015, 0.015)),
+                    (x0 + (x1 - x0) * 0.67, curr_y + scale * rng.uniform(-0.015, 0.015)),
+                    (x1, curr_y),
+                ],
+                8,
             )
-        )
+            strokes.append(
+                _create_macro_stroke(
+                    stroke_id=uid("wash_band", r_i),
+                    points=[(x, y, 0.85) for x, y in w_pts],
+                    profile="watercolor",
+                    color=c_col,
+                    size_px=band_thickness,
+                    layer_name="Flats",
+                    opacity=0.75,
+                )
+            )
+        return strokes
 
     # -------------------------------------------------------------------------
     # 5. 雲・積乱雲・もくもく雲 (Cloud Cluster / Cumulus Clouds)
@@ -2644,24 +2652,26 @@ def _compile_macro(
     if any(k in name for k in ("magic_circle", "rune", "magic")):
         from .procedural.manga_fx import generate_manga_fx_strokes
 
-        return generate_manga_fx_strokes(
+        raw_strokes = generate_manga_fx_strokes(
             prompt="magic circle",
             seed=program.seed,
             count=min(limit, 80),
             width=w,
             height=h,
         )
+        return [replace(s, id=_operation_uuid(program, operation.id, idx)) for idx, s in enumerate(raw_strokes)]
 
     if any(k in name for k in ("city", "cyber", "skyline", "building")):
         from .procedural.geometry import generate_geometry_strokes
 
-        return generate_geometry_strokes(
+        raw_strokes = generate_geometry_strokes(
             prompt="cyberpunk city",
             seed=program.seed,
             count=min(limit, 100),
             width=w,
             height=h,
         )
+        return [replace(s, id=_operation_uuid(program, operation.id, idx)) for idx, s in enumerate(raw_strokes)]
 
     if not strokes and limit > 0:
         ring_segments = 16
