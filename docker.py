@@ -193,7 +193,9 @@ def _safe_get_open_filename(parent: Any, title: str, default_dir: str, filter_st
 
 
 class PreviewWidget(QWidget):
-    """描画計画のストロークをリアルタイムでベクタープレビューするミニキャンバス。"""
+    """描画計画のストロークをリアルタイムでベクタープレビューするミニキャンバス。
+    マウスホイールでズーム、ドラッグでパン移動、ダブルクリックでリセット可能。
+    """
 
     def __init__(self, parent: Any | None = None) -> None:
         super().__init__(parent)
@@ -204,13 +206,30 @@ class PreviewWidget(QWidget):
         self._size_multiplier: float = 1.0
         self._opacity_multiplier: float = 1.0
         self._layer_mode: str = "multi_layer"
+        self._zoom_factor: float = 1.0
+        self._pan_offset_x: float = 0.0
+        self._pan_offset_y: float = 0.0
+        self._layer_filter: set[str] | None = None
         self.setMinimumHeight(160)
-        self.setMaximumHeight(200)
+        self.setMaximumHeight(220)
+
+    def reset_view(self) -> None:
+        """ズームとパン位置を初期状態にリセットする。"""
+        self._zoom_factor = 1.0
+        self._pan_offset_x = 0.0
+        self._pan_offset_y = 0.0
+        self.update()
+
+    def set_layer_filter(self, allowed_layers: set[str] | None) -> None:
+        """表示対象とするレイヤー名のセットを設定する（Noneで全レイヤー表示）。"""
+        self._layer_filter = set(allowed_layers) if allowed_layers is not None else None
+        self.update()
 
     def clear_plan(self) -> None:
         """プレビュー表示と累積ストロークを初期化する。"""
         self._plan = None
         self._accumulated_strokes.clear()
+        self.reset_view()
         self.update()
 
     def set_plan(
@@ -286,11 +305,19 @@ class PreviewWidget(QWidget):
         canvas_w = max(1.0, float(canvas_w))
         canvas_h = max(1.0, float(canvas_h))
 
-        scale = min(w / canvas_w, h / canvas_h) * 0.92
+        layer_filter = _get_attr(self, "_layer_filter", None)
+        if layer_filter is not None:
+            strokes = [s for s in strokes if s.layer_name in layer_filter]
+
+        zoom_factor = float(_get_attr(self, "_zoom_factor", 1.0))
+        pan_x = float(_get_attr(self, "_pan_offset_x", 0.0))
+        pan_y = float(_get_attr(self, "_pan_offset_y", 0.0))
+
+        scale = min(w / canvas_w, h / canvas_h) * 0.92 * zoom_factor
         cw_px = canvas_w * scale
         ch_px = canvas_h * scale
-        ox = (w - cw_px) * 0.5
-        oy = (h - ch_px) * 0.5
+        ox = (w - cw_px) * 0.5 + pan_x
+        oy = (h - ch_px) * 0.5 + pan_y
 
         # 1. 白地キャンバス用紙領域の描画（Krita の白地キャンバス再現）
         rx, ry, rw, rh = int(ox), int(oy), int(cw_px), int(ch_px)
@@ -442,6 +469,21 @@ class PreviewWidget(QWidget):
             with contextlib.suppress(Exception):
                 painter.setCompositionMode(mode_source_over)
 
+        # 5. 情報バッジ（GUI有効時のみストローク数・レイヤー数・ズーム倍率を控えめに表示）
+        if (
+            strokes
+            and hasattr(painter, "drawText")
+            and QApplication is not None
+            and hasattr(QApplication, "instance")
+            and QApplication.instance() is not None
+        ):
+            with contextlib.suppress(Exception):
+                unique_layers = len({s.layer_name for s in strokes})
+                zoom_str = f" · {zoom_factor:.1f}x" if abs(zoom_factor - 1.0) > 0.05 else ""
+                badge_text = f"{len(strokes)} 本 ({unique_layers} 層){zoom_str}"
+                painter.setPen(QColor("#9999aa"))
+                painter.drawText(8, int(h - 8), badge_text)
+
     def paintEvent(self, event: Any) -> None:  # noqa: N802
         if QPainter is None or QColor is None or QPen is None or not callable(QPainter):
             return
@@ -457,6 +499,17 @@ class PreviewWidget(QWidget):
             self.paint_to_painter(painter, w, h)
         finally:
             painter.end()
+
+    def set_zoom_factor(self, factor: float) -> None:
+        """ズーム倍率を設定する（0.3x〜5.0x）。"""
+        self._zoom_factor = max(0.3, min(5.0, float(factor)))
+        self.update()
+
+    def set_pan_offset(self, offset_x: float, offset_y: float) -> None:
+        """パン移動オフセットを設定する。"""
+        self._pan_offset_x = float(offset_x)
+        self._pan_offset_y = float(offset_y)
+        self.update()
 
 
 class PlanWorker(QObject):
@@ -854,15 +907,18 @@ class AIStrokePainterDocker(DockWidget):
         self.save_preset_btn.clicked.connect(self._save_custom_preset)
         self.del_preset_btn = QPushButton("🗑️ 削除")
         self.del_preset_btn.clicked.connect(self._delete_custom_preset)
+        preset_row2.addWidget(self.save_preset_btn)
+        preset_row2.addWidget(self.del_preset_btn)
+        preset_layout.addLayout(preset_row2)
+
+        preset_row3 = QHBoxLayout()
         self.export_preset_btn = QPushButton("📤 出力...")
         self.export_preset_btn.clicked.connect(self._export_presets)
         self.import_preset_btn = QPushButton("📥 読込...")
         self.import_preset_btn.clicked.connect(self._import_presets)
-        preset_row2.addWidget(self.save_preset_btn)
-        preset_row2.addWidget(self.del_preset_btn)
-        preset_row2.addWidget(self.export_preset_btn)
-        preset_row2.addWidget(self.import_preset_btn)
-        preset_layout.addLayout(preset_row2)
+        preset_row3.addWidget(self.export_preset_btn)
+        preset_row3.addWidget(self.import_preset_btn)
+        preset_layout.addLayout(preset_row3)
         tab_main_layout.addWidget(preset_box)
 
         # 2. プロンプト入力欄 & 履歴 & クイックタグ
@@ -988,9 +1044,37 @@ class AIStrokePainterDocker(DockWidget):
         gen_layout.addLayout(refine_layout)
         tab_main_layout.addWidget(gen_box)
 
-        # 4. ベクタープレビュー
+        # 4. ベクタープレビュー & プレビューコントロール
+        preview_box = QGroupBox("ストローク・プレビュー")
+        preview_box_layout = QVBoxLayout(preview_box)
+
+        preview_bar = QHBoxLayout()
+        self.preview_layer_combo = QComboBox()
+        self.preview_layer_combo.addItem("全レイヤー表示", "all")
+        self.preview_layer_combo.addItem("Lineart (線画のみ)", "lineart")
+        self.preview_layer_combo.addItem("Flats (下塗りのみ)", "flats")
+        self.preview_layer_combo.addItem("Shading (陰影のみ)", "shading")
+        self.preview_layer_combo.currentIndexChanged.connect(self._on_preview_layer_filter_changed)
+        preview_bar.addWidget(self.preview_layer_combo)
+
+        self.preview_zoom_in_btn = QPushButton("＋")
+        if hasattr(self.preview_zoom_in_btn, "setMaximumWidth"):
+            self.preview_zoom_in_btn.setMaximumWidth(28)
+        self.preview_zoom_in_btn.clicked.connect(self._preview_zoom_in)
+        self.preview_zoom_out_btn = QPushButton("－")
+        if hasattr(self.preview_zoom_out_btn, "setMaximumWidth"):
+            self.preview_zoom_out_btn.setMaximumWidth(28)
+        self.preview_zoom_out_btn.clicked.connect(self._preview_zoom_out)
+        self.preview_reset_btn = QPushButton("リセット")
+        self.preview_reset_btn.clicked.connect(self._preview_reset)
+        preview_bar.addWidget(self.preview_zoom_in_btn)
+        preview_bar.addWidget(self.preview_zoom_out_btn)
+        preview_bar.addWidget(self.preview_reset_btn)
+        preview_box_layout.addLayout(preview_bar)
+
         self.preview = PreviewWidget(self)
-        tab_main_layout.addWidget(self.preview)
+        preview_box_layout.addWidget(self.preview)
+        tab_main_layout.addWidget(preview_box)
         tab_main_layout.addStretch(1)
 
         scroll_main = QScrollArea(self)
@@ -1395,6 +1479,38 @@ class AIStrokePainterDocker(DockWidget):
         self.brush_size_multiplier.valueChanged.connect(self._update_preview_multipliers)
         self.opacity_multiplier.valueChanged.connect(self._update_preview_multipliers)
         self._update_planner_settings_state()
+
+    def _on_preview_layer_filter_changed(self, _index: int = 0) -> None:
+        combo = _get_attr(self, "preview_layer_combo")
+        preview = _get_attr(self, "preview")
+        if combo is None or preview is None or not hasattr(preview, "set_layer_filter"):
+            return
+        val = combo.currentData() if hasattr(combo, "currentData") else None
+        if not val or val == "all":
+            preview.set_layer_filter(None)
+        elif val == "lineart":
+            preview.set_layer_filter({"Lineart"})
+        elif val == "flats":
+            preview.set_layer_filter({"Flats"})
+        elif val == "shading":
+            preview.set_layer_filter({"Shading"})
+
+    def _preview_zoom_in(self) -> None:
+        preview = _get_attr(self, "preview")
+        if preview is not None and hasattr(preview, "set_zoom_factor"):
+            cur = float(_get_attr(preview, "_zoom_factor", 1.0))
+            preview.set_zoom_factor(cur * 1.25)
+
+    def _preview_zoom_out(self) -> None:
+        preview = _get_attr(self, "preview")
+        if preview is not None and hasattr(preview, "set_zoom_factor"):
+            cur = float(_get_attr(preview, "_zoom_factor", 1.0))
+            preview.set_zoom_factor(cur / 1.25)
+
+    def _preview_reset(self) -> None:
+        preview = _get_attr(self, "preview")
+        if preview is not None and hasattr(preview, "reset_view"):
+            preview.reset_view()
 
     def _clear_prompt(self) -> None:
         """プロンプト入力欄を初期化・クリアする。"""

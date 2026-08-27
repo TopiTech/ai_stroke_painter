@@ -344,6 +344,12 @@ if not HAS_QT:
         def setMaximumHeight(self, h: int) -> None:
             self._height = h
 
+        def setMinimumWidth(self, w: int) -> None:
+            self._width = w
+
+        def setMaximumWidth(self, w: int) -> None:
+            self._width = w
+
         def setEnabled(self, enabled: bool) -> None:
             self._enabled = bool(enabled)
 

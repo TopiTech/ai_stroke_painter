@@ -973,7 +973,7 @@ class ImageStrokeConverter:
                                 )
                             )
 
-        # 3. カラーパレットサンプリングによる下塗りストローク -> Flats
+        # 3. カラーパレットサンプリングによる下塗りストローク -> Flats (有機的手描きタッチ)
         if enable_flats:
             flat_step = max(2, int(grid_w / 20))
             for y in range(0, grid_h, flat_step):
@@ -982,14 +982,23 @@ class ImageStrokeConverter:
                         continue
                     fx = offset_x + x * fit_scale
                     fy = offset_y + y * fit_scale
-                    f_stroke = [(fx - fit_scale * flat_step * 0.3, fy), (fx + fit_scale * flat_step * 1.1, fy)]
+                    half_span = fit_scale * flat_step * 0.70
+                    # 手描きの自然なストローク角度（わずかな傾きとランダム性）
+                    angle_deg = rng.uniform(-14.0, 14.0)
+                    angle_rad = math.radians(angle_deg)
+                    cos_a, sin_a = math.cos(angle_rad), math.sin(angle_rad)
+                    # 3点による自然なカーブスプライン
+                    p0 = (fx - half_span * cos_a, fy - half_span * sin_a)
+                    p_mid = (fx + rng.uniform(-0.1, 0.1) * half_span, fy + rng.uniform(-0.15, 0.15) * half_span)
+                    p1 = (fx + half_span * cos_a * 1.15, fy + half_span * sin_a * 1.15)
+                    f_curve = catmull_rom_spline([p0, p_mid, p1], 3)
                     strokes.append(
                         create_stroke(
-                            f_stroke,
+                            f_curve,
                             profile_type="brush",
-                            base_pressure=0.80,
+                            base_pressure=0.82,
                             color=color_map[y][x],
-                            size_px=fit_scale * flat_step * 1.30,
+                            size_px=fit_scale * flat_step * 1.35,
                             layer_name="Flats",
                             opacity=0.88,
                             rng=rng,
@@ -1000,7 +1009,7 @@ class ImageStrokeConverter:
                         )
                     )
 
-        # 4. 高輝度ハイライトストロークの自動抽出 -> Highlights
+        # 4. 高輝度ハイライトストロークの自動抽出 -> Highlights (有機的タッチ)
         hl_step = max(4, int(grid_w / 20))
         for y in range(0, grid_h, hl_step):
             for x in range(0, grid_w, hl_step):
@@ -1008,10 +1017,14 @@ class ImageStrokeConverter:
                 if lum > 0.90 and alpha_map[y][x] > 0.5 and not background_mask[y][x]:
                     hlx = offset_x + x * fit_scale
                     hly = offset_y + y * fit_scale
-                    hl_stroke = [(hlx, hly), (hlx + fit_scale * 2.0, hly + fit_scale * 1.0)]
+                    hl_angle = rng.uniform(-30.0, 30.0)
+                    hl_rad = math.radians(hl_angle)
+                    hl_len = fit_scale * rng.uniform(2.0, 4.0)
+                    hl_p0 = (hlx, hly)
+                    hl_p1 = (hlx + math.cos(hl_rad) * hl_len, hly + math.sin(hl_rad) * hl_len)
                     strokes.append(
                         create_stroke(
-                            hl_stroke,
+                            [hl_p0, hl_p1],
                             profile_type="gpen",
                             base_pressure=0.90,
                             color="#ffffff",

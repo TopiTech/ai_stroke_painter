@@ -7679,6 +7679,16 @@ class PaletteAutoModeTests(unittest.TestCase):
 class PreviewDiscrepancyFixTests(unittest.TestCase):
     """プレビュー表示とKrita実キャンバス描画の乖離是正の検証。"""
 
+    _app: Any = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if hasattr(QApplication, "instance"):
+            cls._app = QApplication.instance()
+            if cls._app is None and callable(QApplication):
+                with contextlib.suppress(Exception):
+                    cls._app = QApplication(["test", "-platform", "offscreen"])
+
     def test_drawing_plan_from_dict_parses_nested_canvas_mapping(self) -> None:
         raw = {
             "prompt": "fantasy anime landscape",
@@ -8844,6 +8854,164 @@ class SeniorReviewRegressionTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             _capture_layer_snapshot(FakeDoc(), FakeNode())
         self.assertIn("上限を超えています", str(ctx.exception))
+
+    def test_r6_preview_widget_zoom_pan_and_layer_filter(self) -> None:
+        """R6: PreviewWidget のズーム・パン・レイヤーフィルター機能および境界値制御の検証。"""
+        from .docker import PreviewWidget
+        from .domain import DrawingPlan, Stroke, StrokePoint
+
+        prev = PreviewWidget()
+        self.assertEqual(prev._zoom_factor, 1.0)
+        self.assertEqual(prev._pan_offset_x, 0.0)
+        self.assertEqual(prev._pan_offset_y, 0.0)
+        self.assertIsNone(prev._layer_filter)
+
+        # ズーム倍率変更と境界値クランプ (0.3〜5.0)
+        prev.set_zoom_factor(2.5)
+        self.assertEqual(prev._zoom_factor, 2.5)
+        prev.set_zoom_factor(10.0)
+        self.assertEqual(prev._zoom_factor, 5.0)
+        prev.set_zoom_factor(0.1)
+        self.assertEqual(prev._zoom_factor, 0.3)
+
+        # パン移動
+        prev.set_pan_offset(25.0, -15.0)
+        self.assertEqual(prev._pan_offset_x, 25.0)
+        self.assertEqual(prev._pan_offset_y, -15.0)
+
+        # レイヤーフィルター
+        prev.set_layer_filter({"Lineart", "Highlights"})
+        self.assertEqual(prev._layer_filter, {"Lineart", "Highlights"})
+        prev.set_layer_filter(None)
+        self.assertIsNone(prev._layer_filter)
+
+        # リセット
+        prev.set_zoom_factor(3.0)
+        prev.set_pan_offset(50.0, 50.0)
+        prev.reset_view()
+        self.assertEqual(prev._zoom_factor, 1.0)
+        self.assertEqual(prev._pan_offset_x, 0.0)
+        self.assertEqual(prev._pan_offset_y, 0.0)
+
+        # 描画フィルタリングの動作検証
+        strokes = [
+            Stroke(id="s_line", points=[StrokePoint(0, 0, 1.0, 0), StrokePoint(10, 10, 1.0, 1)], layer_name="Lineart"),
+            Stroke(id="s_flat", points=[StrokePoint(20, 20, 1.0, 0), StrokePoint(30, 30, 1.0, 1)], layer_name="Flats"),
+        ]
+        plan = DrawingPlan(prompt="t", seed=1, strokes=strokes, canvas_width=100, canvas_height=100)
+        prev.set_plan(plan)
+        prev.set_layer_filter({"Lineart"})
+
+        class MockPainter:
+            def __init__(self) -> None:
+                self.drawn: list[Any] = []
+
+            def fillRect(self, *a: Any) -> None:
+                pass
+
+            def drawRect(self, *a: Any) -> None:
+                pass
+
+            def setPen(self, *a: Any) -> None:
+                pass
+
+            def drawLine(self, *a: Any) -> None:
+                self.drawn.append(a)
+
+            def drawEllipse(self, *a: Any) -> None:
+                self.drawn.append(a)
+
+        mp = MockPainter()
+        prev.paint_to_painter(mp, 200, 160)
+        self.assertGreater(len(mp.drawn), 0)
+
+    def test_r7_docker_preview_controls_integration(self) -> None:
+        """R7: Docker 上のプレビューツールバー（ズーム、リセット、レイヤーフィルター）連携の検証。"""
+        from .docker import AIStrokePainterDocker
+
+        docker = AIStrokePainterDocker()
+        self.assertIsNotNone(docker.preview)
+        self.assertIsNotNone(docker.preview_layer_combo)
+
+        # ズームイン・ズームアウト
+        orig_zoom = float(docker.preview._zoom_factor)
+        docker._preview_zoom_in()
+        self.assertGreater(docker.preview._zoom_factor, orig_zoom)
+        docker._preview_zoom_out()
+        docker._preview_reset()
+        self.assertEqual(docker.preview._zoom_factor, 1.0)
+
+        # レイヤーフィルター切り替え
+        docker.preview_layer_combo.setCurrentIndex(1)  # lineart
+        docker._on_preview_layer_filter_changed(1)
+        self.assertEqual(docker.preview._layer_filter, {"Lineart"})
+
+        docker.preview_layer_combo.setCurrentIndex(0)  # all
+        docker._on_preview_layer_filter_changed(0)
+        self.assertIsNone(docker.preview._layer_filter)
+
+    def test_r8_image_converter_organic_strokes(self) -> None:
+        """R8: ImageStrokeConverter による有機的筆致生成（Flats / Highlights）の検証。"""
+        import random
+
+        from .image_converter import ImageStrokeConverter
+
+        converter = ImageStrokeConverter()
+
+        class FakeColor:
+            def __init__(self, r: int, g: int, b: int) -> None:
+                self._r = r
+                self._g = g
+                self._b = b
+
+            def red(self) -> int:
+                return self._r
+
+            def green(self) -> int:
+                return self._g
+
+            def blue(self) -> int:
+                return self._b
+
+            def alpha(self) -> int:
+                return 255
+
+        class FakeMultiColorImage:
+            def width(self) -> int:
+                return 32
+
+            def height(self) -> int:
+                return 32
+
+            def scaled(self, w: int, h: int) -> Any:
+                return self
+
+            def convertToFormat(self, fmt: Any) -> Any:  # noqa: N802
+                return self
+
+            def pixelColor(self, x: int, y: int) -> Any:  # noqa: N802
+                if x < 16:
+                    return FakeColor(50, 100, 200)
+                return FakeColor(220, 150, 40)
+
+        rng = random.Random(42)
+        fake_img = FakeMultiColorImage()
+        strokes = converter._process_qimage(
+            qimg=fake_img,
+            seed=42,
+            count=60,
+            target_width=64.0,
+            target_height=64.0,
+            rng=rng,
+            enable_flats=True,
+            palette_name="nature",
+            prompt="test",
+        )
+        flat_strokes = [s for s in strokes if s.layer_name == "Flats"]
+        self.assertGreater(len(flat_strokes), 0)
+        # スプライン補間により制御点が3点以上生成されていることを検証
+        for fs in flat_strokes:
+            self.assertGreaterEqual(len(fs.points), 3)
 
 
 def run() -> bool:
