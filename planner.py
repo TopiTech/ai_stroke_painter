@@ -6,7 +6,7 @@ from collections.abc import Callable
 import math
 from typing import Any, cast
 
-from .domain import DrawingPlan
+from .domain import MAX_PLAN_STROKES, DrawingPlan
 from .image_converter import ImageStrokeConverter
 from .ports import PlannerPort
 from .procedural import generate_procedural_plan
@@ -44,12 +44,12 @@ def validate_plan_request(
         raise ValueError("seed は 0 以上の整数である必要があります")
     valid_count: int | None = None
     if not auto_count and count is not None and count != 0 and count != "auto":
-        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 500:
-            raise ValueError("count は 1 から 500 の整数または None である必要があります")
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_PLAN_STROKES:
+            raise ValueError(f"count は 1 から {MAX_PLAN_STROKES} の整数または None である必要があります")
         valid_count = count
     elif auto_count and count is not None and count not in (0, "auto"):
-        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= 500:
-            raise ValueError("count は 1 から 500 の整数または None である必要があります")
+        if isinstance(count, bool) or not isinstance(count, int) or not 1 <= count <= MAX_PLAN_STROKES:
+            raise ValueError(f"count は 1 から {MAX_PLAN_STROKES} の整数または None である必要があります")
     return prompt, seed, valid_count, _valid_dimension(width, "width"), _valid_dimension(height, "height")
 
 

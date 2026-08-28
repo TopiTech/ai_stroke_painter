@@ -31,6 +31,7 @@ from .docker import (
     _safe_endpoint_label,
 )
 from .domain import (
+    MAX_PLAN_STROKES,
     DrawingPlan,
     PlanValidationError,
     Stroke,
@@ -5772,6 +5773,34 @@ class ExtendedCustomizationTests(unittest.TestCase):
         # count=None
         plan_none = planner.plan("cyberpunk city landscape", seed=200, count=None, width=1000, height=1000)
         self.assertGreater(len(plan_none.strokes), 0)
+
+        # count > 500 (UI/Domain の MAX_PLAN_STROKES = 2,000 に整合するテスト [R1])
+        plan_high = planner.plan("cyberpunk city landscape", seed=200, count=600, width=1000, height=1000)
+        self.assertGreater(len(plan_high.strokes), 0)
+        self.assertLessEqual(len(plan_high.strokes), MAX_PLAN_STROKES)
+
+    def test_validate_plan_request_stroke_count_range(self) -> None:
+        """validate_plan_request が MAX_PLAN_STROKES (2,000) までの本数を正しく許容・検証するテスト [R1]。"""
+        from .planner import validate_plan_request
+
+        # 正常系: 境界値および UI 許容範囲
+        for c in (1, 500, 600, 1000, MAX_PLAN_STROKES):
+            p, s, valid_c, w, h = validate_plan_request("test prompt", 42, c, 1000, 1000)
+            self.assertEqual(valid_c, c)
+
+        # auto (None / 0 / "auto") は None として扱われる
+        for auto_val in (None, 0, "auto"):
+            p, s, valid_c, w, h = validate_plan_request("test prompt", 42, auto_val, 1000, 1000)
+            self.assertIsNone(valid_c)
+
+        # auto_count=True 時は検証を通過した上で valid_count は None (自動予算) となる
+        p, s, valid_c, w, h = validate_plan_request("test prompt", 42, 1500, 1000, 1000, auto_count=True)
+        self.assertIsNone(valid_c)
+
+        # 異常系: 負数, 2001, bool (True), 小数, 無効文字列
+        for invalid_c in (-1, MAX_PLAN_STROKES + 1, True, 3.5, "invalid"):
+            with self.assertRaises(ValueError):
+                validate_plan_request("test prompt", 42, invalid_c, 1000, 1000)
 
     def test_llm_planner_sanitize_auto_count_and_eraser(self) -> None:
         """LLMPlanner の count=None 品質予算と is_eraser 保持テスト。"""
