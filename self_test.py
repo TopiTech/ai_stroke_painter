@@ -9235,6 +9235,245 @@ class CodeReview2026HardeningTests(unittest.TestCase):
         self.assertIn("[REDACTED]", sanitized)
 
 
+class CodeReviewFinalQualityTests(unittest.TestCase):
+    """コードレビューに基づくUI操作性・アクセシビリティ・SVG1点描画・プリセット堅牢化の回帰テスト。"""
+
+    _app: Any = None
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if hasattr(QApplication, "instance"):
+            cls._app = QApplication.instance()
+            if cls._app is None and callable(QApplication):
+                with contextlib.suppress(Exception):
+                    cls._app = QApplication(["test", "-platform", "offscreen"])
+
+    def test_preview_widget_interactive_mouse_and_wheel_events(self) -> None:
+        """PreviewWidget のマウスホイールズーム、ドラッグパン、ダブルクリックリセットを検証。"""
+        from .docker import PreviewWidget
+
+        prev = PreviewWidget()
+        self.assertEqual(prev._zoom_factor, 1.0)
+        self.assertEqual(prev._pan_offset_x, 0.0)
+        self.assertEqual(prev._pan_offset_y, 0.0)
+
+        # 1. ホイールによるズームイン
+        class MockWheelEvent:
+            def __init__(self, delta_y: int) -> None:
+                self._delta_y = delta_y
+
+            def angleDelta(self) -> Any:
+                class Point:
+                    def __init__(self, y: int) -> None:
+                        self._y = y
+
+                    def y(self) -> int:
+                        return self._y
+
+                return Point(self._delta_y)
+
+            def accept(self) -> None:
+                pass
+
+        prev.wheelEvent(MockWheelEvent(120))
+        self.assertGreater(prev._zoom_factor, 1.0)
+        zoom_in_val = prev._zoom_factor
+
+        # 2. ホイールによるズームアウト
+        prev.wheelEvent(MockWheelEvent(-120))
+        self.assertLess(prev._zoom_factor, zoom_in_val)
+
+        # 3. マウスドラッグによるパン移動
+        class MockPos:
+            def __init__(self, x: float, y: float) -> None:
+                self._x = x
+                self._y = y
+
+            def x(self) -> float:
+                return self._x
+
+            def y(self) -> float:
+                return self._y
+
+        class MockMouseEvent:
+            def __init__(self, x: float, y: float, btn: int = 1) -> None:
+                self._pos = MockPos(x, y)
+                self._btn = btn
+
+            def button(self) -> int:
+                return self._btn
+
+            def pos(self) -> Any:
+                return self._pos
+
+            def accept(self) -> None:
+                pass
+
+        prev.mousePressEvent(MockMouseEvent(100.0, 100.0))
+        self.assertTrue(prev._dragging)
+        prev.mouseMoveEvent(MockMouseEvent(140.0, 120.0))
+        self.assertEqual(prev._pan_offset_x, 40.0)
+        self.assertEqual(prev._pan_offset_y, 20.0)
+        prev.mouseReleaseEvent(MockMouseEvent(140.0, 120.0))
+        self.assertFalse(prev._dragging)
+
+        # 4. ダブルクリックによるリセット
+        class MockDoubleClickEvent:
+            def accept(self) -> None:
+                pass
+
+        prev.mouseDoubleClickEvent(MockDoubleClickEvent())
+        self.assertEqual(prev._zoom_factor, 1.0)
+        self.assertEqual(prev._pan_offset_x, 0.0)
+        self.assertEqual(prev._pan_offset_y, 0.0)
+
+    def test_single_point_stroke_svg_circle_output(self) -> None:
+        """1点ストローク（パーティクル・ハイライト点）が SVG で <circle class="stroke-dot"> として出力されること。"""
+        from .domain import DrawingPlan, Stroke, StrokePoint
+
+        dot_stroke = Stroke(
+            id="dot-highlight",
+            points=[StrokePoint(150.0, 250.0, 0.8, 0), StrokePoint(150.0, 250.0, 0.8, 1)],
+            color="#ffff00",
+            size_px=8.0,
+            layer_name="Highlights",
+            opacity=0.9,
+        )
+        eraser_dot = Stroke(
+            id="dot-eraser",
+            points=[StrokePoint(100.0, 100.0, 0.5, 0), StrokePoint(100.0, 100.0, 0.5, 1)],
+            color="#000000",
+            size_px=6.0,
+            layer_name="Highlights",
+            is_eraser=True,
+        )
+        plan = DrawingPlan(
+            prompt="starlight particles",
+            seed=42,
+            strokes=[dot_stroke, eraser_dot],
+            canvas_width=800,
+            canvas_height=600,
+        )
+        svg_content = plan.to_svg()
+        self.assertIn('<circle cx="150.00" cy="250.00"', svg_content)
+        self.assertIn('class="stroke-dot"', svg_content)
+        self.assertIn('fill="#ffff00"', svg_content)
+        self.assertIn(".stroke-dot { stroke: none; }", svg_content)
+        # 消しゴムマスク側
+        self.assertIn('class="stroke-dot eraser"', svg_content)
+        self.assertIn('fill="#000000"', svg_content)
+
+    def test_single_point_stroke_rasterization_quality(self) -> None:
+        """1点ストロークのみの DrawingPlan でも品質評価関数が例外なくラスタライズ・評価できること。"""
+        from .domain import DrawingPlan, Stroke, StrokePoint
+        from .quality import evaluate_plan_quality
+
+        dot_stroke = Stroke(
+            id="p-1",
+            points=[StrokePoint(200.0, 200.0, 0.9, 0), StrokePoint(200.0, 200.0, 0.9, 1)],
+            color="#ff0088",
+            size_px=15.0,
+            layer_name="Lineart",
+        )
+        plan = DrawingPlan(prompt="single dot", seed=1, strokes=[dot_stroke], canvas_width=400, canvas_height=400)
+        report = evaluate_plan_quality(plan)
+        self.assertGreater(report.coverage, 0.0)
+        self.assertEqual(report.out_of_bounds_points, 0)
+
+    def test_confirm_before_apply_toggle_updates_ui_state(self) -> None:
+        """適用前確認の切替時にボタン文言と適用ボタンの enabled 状態が正しく連動すること。"""
+        from .docker import AIStrokePainterDocker
+        from .domain import DrawingPlan, Stroke, StrokePoint
+
+        docker = AIStrokePainterDocker()
+        # 初期状態: confirm_before_apply = True
+        self.assertTrue(docker.confirm_before_apply.isChecked())
+        self.assertEqual(docker.run_btn.text(), "プレビュー生成")
+        self.assertFalse(docker.apply_btn.isEnabled())
+
+        # 切替: False -> キャンバスに描画
+        docker.confirm_before_apply.setChecked(False)
+        self.assertEqual(docker.run_btn.text(), "キャンバスに描画")
+        self.assertFalse(docker.apply_btn.isEnabled())
+
+        # 再切替: True -> プレビュー生成
+        docker.confirm_before_apply.setChecked(True)
+        self.assertEqual(docker.run_btn.text(), "プレビュー生成")
+
+        # pending plan がある状態での連動
+        sample_plan = DrawingPlan(
+            prompt="test",
+            seed=1,
+            strokes=[Stroke(id="s1", points=[StrokePoint(0, 0, 1, 1), StrokePoint(10, 10, 1, 1)])],
+        )
+        docker._pending_plan = sample_plan
+        docker._update_action_buttons_state()
+        self.assertTrue(docker.apply_btn.isEnabled())
+
+        docker.confirm_before_apply.setChecked(False)
+        self.assertFalse(docker.apply_btn.isEnabled())
+
+    def test_keyboard_shortcuts_and_accessibility(self) -> None:
+        """主要操作ボタンにショートカットとアクセシビリティ名が設定されていること。"""
+        from .docker import AIStrokePainterDocker
+
+        docker = AIStrokePainterDocker()
+        self.assertEqual(docker.run_btn.shortcut(), "Ctrl+Return")
+        self.assertEqual(docker.apply_btn.shortcut(), "Ctrl+Shift+Return")
+        self.assertEqual(docker.stop_btn.shortcut(), "Escape")
+
+        self.assertEqual(docker.tabs.accessibleName(), "機能設定タブ")
+        self.assertEqual(docker.preset_combo.accessibleName(), "プリセット選択")
+        self.assertEqual(docker.prompt.accessibleName(), "描画指示プロンプト入力欄")
+        self.assertEqual(docker.seed.accessibleName(), "乱数シード")
+        self.assertEqual(docker.count.accessibleName(), "ストローク本数")
+        self.assertEqual(docker.preview.accessibleName(), "ストロークベクタープレビュー")
+
+    def test_generation_controls_locks_test_conn_btn(self) -> None:
+        """描画実行中に API 接続テストボタンが正しくロック・アンロックされること。"""
+        from .docker import AIStrokePainterDocker
+
+        docker = AIStrokePainterDocker()
+        docker.planner_mode.setCurrentIndex(1)
+        docker._update_planner_settings_state()
+        docker._set_generation_controls_enabled(False)
+        self.assertFalse(docker.test_conn_btn.isEnabled())
+        docker._set_generation_controls_enabled(True)
+        self.assertTrue(docker.test_conn_btn.isEnabled())
+
+    def test_preset_management_security_and_sanitization(self) -> None:
+        """プリセットインポート・削除の文字長・制御文字・接頭辞の堅牢化を検証。"""
+        from pathlib import Path
+        import tempfile
+
+        from .docker import AIStrokePainterDocker
+
+        docker = AIStrokePainterDocker()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # 不正なキー（制御文字、長すぎる名前）を含む JSON
+            bad_data = {
+                "safe_preset": {"prompt": "valid prompt"},
+                "bad\x00name": {"prompt": "invalid"},
+                "a" * 150: {"prompt": "too long"},
+            }
+            json_path = Path(tmpdir) / "test_presets.json"
+            json_path.write_text(json.dumps(bad_data), encoding="utf-8")
+
+            with (
+                patch("ai_stroke_painter.docker._safe_get_open_filename", return_value=(str(json_path), "")),
+                patch("ai_stroke_painter.docker.QMessageBox.information"),
+                patch("ai_stroke_painter.docker.QMessageBox.critical"),
+            ):
+                docker._import_presets()
+
+            # safe_preset だけが保存されることを確認
+            settings = QSettings("AIStrokePainter", "CustomPresets")
+            saved = json.loads(str(settings.value("presets_json")))
+            self.assertIn("safe_preset", saved)
+            self.assertNotIn("bad\x00name", saved)
+            self.assertNotIn("a" * 150, saved)
+
+
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))
     result = unittest.TextTestRunner(verbosity=2).run(suite)

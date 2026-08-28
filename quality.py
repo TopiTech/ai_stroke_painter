@@ -141,6 +141,7 @@ def _rasterize_layer(
         _rgb, color_alpha = split_color_alpha(stroke.color)
         opacity = max(0.0, min(1.0, stroke.opacity * color_alpha))
         radius = max(0.35, stroke.size_px * brush_scale * 0.5)
+        stroke_painted = False
         for first, second in zip(stroke.points, stroke.points[1:], strict=False):
             first_x = first.x * scale_x
             first_y = first.y * scale_y
@@ -164,6 +165,22 @@ def _rasterize_layer(
                     opacity=opacity,
                     is_eraser=stroke.is_eraser,
                 )
+            stroke_painted = True
+        if not stroke_painted and stroke.points:
+            pt = stroke.points[0]
+            _paint_disc(
+                red,
+                green,
+                blue,
+                alpha,
+                grid_size=grid_size,
+                center_x=pt.x * scale_x,
+                center_y=pt.y * scale_y,
+                radius=max(0.35, radius * max(0.2, pt.pressure)),
+                color=color,
+                opacity=opacity,
+                is_eraser=stroke.is_eraser,
+            )
     return red, green, blue, alpha
 
 

@@ -54,6 +54,8 @@ def split_color_alpha(color: str) -> tuple[str, float]:
 def _stroke_svg_lines(stroke: Stroke, *, mask: bool = False) -> list[str]:
     lines: list[str] = []
     for first, second in zip(stroke.points, stroke.points[1:], strict=False):
+        if math.hypot(second.x - first.x, second.y - first.y) < 0.001:
+            continue
         average_pressure = (first.pressure + second.pressure) * 0.5
         stroke_width = max(0.5, stroke.size_px * average_pressure)
         if mask:
@@ -69,6 +71,23 @@ def _stroke_svg_lines(stroke: Stroke, *, mask: bool = False) -> list[str]:
         lines.append(
             f'<line x1="{first.x:.2f}" y1="{first.y:.2f}" x2="{second.x:.2f}" y2="{second.y:.2f}" '
             f'stroke="{color}" stroke-width="{stroke_width:.2f}" class="{css_class}"{opacity} />'
+        )
+    if not lines and stroke.points:
+        pt0 = stroke.points[0]
+        stroke_width = max(0.5, stroke.size_px * max(0.2, pt0.pressure))
+        radius = stroke_width * 0.5
+        if mask:
+            color = "#000000"
+            _rgb_color, color_alpha = split_color_alpha(stroke.color)
+            combined_opacity = stroke.opacity * color_alpha
+            css_class = "stroke-dot eraser"
+        else:
+            color, color_alpha = split_color_alpha(stroke.color)
+            combined_opacity = stroke.opacity * color_alpha
+            css_class = "stroke-dot"
+        opacity = f' fill-opacity="{combined_opacity:.2f}"' if combined_opacity < 1.0 else ""
+        lines.append(
+            f'<circle cx="{pt0.x:.2f}" cy="{pt0.y:.2f}" r="{radius:.2f}" fill="{color}" class="{css_class}"{opacity} />'
         )
     return lines
 
@@ -462,7 +481,9 @@ class DrawingPlan:
             f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w:.1f} {h:.1f}" width="{w:.1f}" height="{h:.1f}">',
             f"  <!-- AI Stroke Painter: {safe_prompt} (Seed: {self.seed}) -->",
         ]
-        svg_definitions = ["    <style>.stroke { stroke-linecap: round; stroke-linejoin: round; fill: none; }</style>"]
+        svg_definitions = [
+            "    <style>.stroke { stroke-linecap: round; stroke-linejoin: round; fill: none; } .stroke-dot { stroke: none; }</style>"
+        ]
         svg_body: list[str] = []
 
         render_options = self.metadata.get("render_options", {})

@@ -59,6 +59,7 @@ from .qt_compat import (
     QScrollArea,
     QSettings,
     QSpinBox,
+    Qt,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -261,9 +262,18 @@ class PreviewWidget(QWidget):
         self._zoom_factor: float = 1.0
         self._pan_offset_x: float = 0.0
         self._pan_offset_y: float = 0.0
+        self._dragging: bool = False
+        self._last_mouse_pos: tuple[float, float] = (0.0, 0.0)
         self._layer_filter: set[str] | None = None
         self.setMinimumHeight(160)
         self.setMaximumHeight(220)
+        if Qt is not None and hasattr(Qt, "OpenHandCursor") and hasattr(self, "setCursor"):
+            with contextlib.suppress(Exception):
+                self.setCursor(Qt.OpenHandCursor)
+        if hasattr(self, "setToolTip"):
+            self.setToolTip(
+                "ストロークプレビュー: マウスホイールでズーム、ドラッグでパン移動、ダブルクリックでリセット"
+            )
 
     def reset_view(self) -> None:
         """ズームとパン位置を初期状態にリセットする。"""
@@ -532,7 +542,8 @@ class PreviewWidget(QWidget):
             with contextlib.suppress(Exception):
                 unique_layers = len({s.layer_name for s in strokes})
                 zoom_str = f" · {zoom_factor:.1f}x" if abs(zoom_factor - 1.0) > 0.05 else ""
-                badge_text = f"{len(strokes)} 本 ({unique_layers} 層){zoom_str}"
+                pan_str = " · 移動中" if abs(pan_x) > 1.0 or abs(pan_y) > 1.0 else ""
+                badge_text = f"{len(strokes)} 本 ({unique_layers} 層){zoom_str}{pan_str}"
                 painter.setPen(QColor("#9999aa"))
                 painter.drawText(8, int(h - 8), badge_text)
 
@@ -562,6 +573,60 @@ class PreviewWidget(QWidget):
         self._pan_offset_x = float(offset_x)
         self._pan_offset_y = float(offset_y)
         self.update()
+
+    def mousePressEvent(self, event: Any) -> None:  # noqa: N802
+        btn = getattr(event, "button", lambda: None)()
+        is_left = btn == 1 or (Qt is not None and btn == getattr(Qt, "LeftButton", 1))
+        if is_left:
+            self._dragging = True
+            pos = getattr(event, "pos", lambda: None)()
+            if pos is not None and hasattr(pos, "x") and hasattr(pos, "y"):
+                self._last_mouse_pos = (float(pos.x()), float(pos.y()))
+            if Qt is not None and hasattr(Qt, "ClosedHandCursor") and hasattr(self, "setCursor"):
+                with contextlib.suppress(Exception):
+                    self.setCursor(Qt.ClosedHandCursor)
+        if hasattr(event, "accept"):
+            event.accept()
+
+    def mouseMoveEvent(self, event: Any) -> None:  # noqa: N802
+        if getattr(self, "_dragging", False):
+            pos = getattr(event, "pos", lambda: None)()
+            if pos is not None and hasattr(pos, "x") and hasattr(pos, "y"):
+                cur_x, cur_y = float(pos.x()), float(pos.y())
+                dx = cur_x - self._last_mouse_pos[0]
+                dy = cur_y - self._last_mouse_pos[1]
+                self._last_mouse_pos = (cur_x, cur_y)
+                self.set_pan_offset(self._pan_offset_x + dx, self._pan_offset_y + dy)
+        if hasattr(event, "accept"):
+            event.accept()
+
+    def mouseReleaseEvent(self, event: Any) -> None:  # noqa: N802
+        self._dragging = False
+        if Qt is not None and hasattr(Qt, "OpenHandCursor") and hasattr(self, "setCursor"):
+            with contextlib.suppress(Exception):
+                self.setCursor(Qt.OpenHandCursor)
+        if hasattr(event, "accept"):
+            event.accept()
+
+    def mouseDoubleClickEvent(self, event: Any) -> None:  # noqa: N802
+        self.reset_view()
+        if hasattr(event, "accept"):
+            event.accept()
+
+    def wheelEvent(self, event: Any) -> None:  # noqa: N802
+        delta = 0
+        if hasattr(event, "angleDelta"):
+            ad = event.angleDelta()
+            if hasattr(ad, "y"):
+                delta = ad.y()
+        if delta == 0 and hasattr(event, "delta"):
+            delta = event.delta()
+        if delta > 0:
+            self.set_zoom_factor(self._zoom_factor * 1.15)
+        elif delta < 0:
+            self.set_zoom_factor(self._zoom_factor / 1.15)
+        if hasattr(event, "accept"):
+            event.accept()
 
 
 class PlanWorker(QObject):
@@ -1499,10 +1564,16 @@ class AIStrokePainterDocker(DockWidget):
         # 下部固定アクションバー (Execution Controls)
         # ==========================================
         self.run_btn = QPushButton("プレビュー生成")
+        self.run_btn.setShortcut("Ctrl+Return")
+        self.run_btn.setToolTip("描画計画を生成またはキャンバスへ直接描画します (Ctrl+Enter)")
         self.apply_btn = QPushButton("キャンバスへ適用")
         self.apply_btn.setEnabled(False)
+        self.apply_btn.setShortcut("Ctrl+Shift+Return")
+        self.apply_btn.setToolTip("プレビュー確認済みの計画をキャンバスへ適用します (Ctrl+Shift+Enter)")
         self.stop_btn = QPushButton("停止")
         self.stop_btn.setEnabled(False)
+        self.stop_btn.setShortcut("Escape")
+        self.stop_btn.setToolTip("実行中の処理を停止します (Esc)")
         btn_layout = QHBoxLayout()
         btn_layout.addWidget(self.run_btn)
         btn_layout.addWidget(self.apply_btn)
@@ -1530,10 +1601,13 @@ class AIStrokePainterDocker(DockWidget):
         self.run_btn.clicked.connect(self.run)
         self.apply_btn.clicked.connect(self._apply_pending_plan)
         self.stop_btn.clicked.connect(self.cancel)
+        self.confirm_before_apply.toggled.connect(self._update_action_buttons_state)
         self.planner_mode.currentIndexChanged.connect(self._update_planner_settings_state)
         self.brush_size_multiplier.valueChanged.connect(self._update_preview_multipliers)
         self.opacity_multiplier.valueChanged.connect(self._update_preview_multipliers)
         self._update_planner_settings_state()
+        self._update_action_buttons_state()
+        self._setup_accessibility()
 
     def _on_preview_layer_filter_changed(self, _index: int = 0) -> None:
         combo = _get_attr(self, "preview_layer_combo")
@@ -1789,7 +1863,9 @@ class AIStrokePainterDocker(DockWidget):
             return
 
         name = preset_name.strip()
-        if len(name) > 100 or any(ord(char) < 32 for char in name):
+        if name.startswith("⭐ [カスタム] "):
+            name = name[len("⭐ [カスタム] ") :].strip()
+        if not name or len(name) > 100 or any(ord(char) < 32 for char in name):
             QMessageBox.warning(self, "プリセット保存", "プリセット名は制御文字を含まない100文字以下にしてください。")
             return
         prompt_w = _get_attr(self, "prompt")
@@ -1851,7 +1927,9 @@ class AIStrokePainterDocker(DockWidget):
             QMessageBox.information(self, "プリセット削除", "ビルトインプリセットは削除できません。")
             return
 
-        name = current_text.replace("⭐ [カスタム] ", "").strip()
+        name = current_text
+        if name.startswith("⭐ [カスタム] "):
+            name = name[len("⭐ [カスタム] ") :].strip()
         if not _confirm(self, "プリセット削除確認", f"カスタムプリセット '{name}' を削除しますか？"):
             return
         if callable(QSettings):
@@ -1877,6 +1955,7 @@ class AIStrokePainterDocker(DockWidget):
 
         self._populate_presets()
         self._log_debug(f"[プリセット削除] カスタムプリセット '{name}' を削除しました")
+        QMessageBox.information(self, "プリセット削除", f"カスタムプリセット '{name}' を削除しました。")
 
     def _export_presets(self) -> None:
         """保存済みカスタムプリセットを JSON ファイルとしてエクスポートする。"""
@@ -1898,9 +1977,13 @@ class AIStrokePainterDocker(DockWidget):
             QMessageBox.critical(self, "プリセット出力", f"プリセットの読み出しに失敗しました: {exc}")
             return
 
-        file_path, _ = _safe_get_save_filename(self, "カスタムプリセットを保存", "", "JSON Files (*.json)")
+        file_path, _ = _safe_get_save_filename(
+            self, "カスタムプリセットを保存", "custom_presets.json", "JSON Files (*.json)"
+        )
         if not file_path:
             return
+        if not file_path.lower().endswith(".json"):
+            file_path += ".json"
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(loaded, f, ensure_ascii=False, indent=2)
@@ -1929,10 +2012,22 @@ class AIStrokePainterDocker(DockWidget):
             # プリセット構造の検証
             valid_presets: dict[str, Any] = {}
             for k, v in imported_data.items():
-                if isinstance(k, str) and isinstance(v, dict) and "prompt" in v:
-                    valid_presets[k.strip()] = v
+                if not isinstance(k, str) or not isinstance(v, dict):
+                    continue
+                k_clean = k.strip()
+                if k_clean.startswith("⭐ [カスタム] "):
+                    k_clean = k_clean[len("⭐ [カスタム] ") :].strip()
+                if not k_clean or len(k_clean) > 100 or any(ord(c) < 32 for c in k_clean):
+                    continue
+                if "prompt" not in v or not isinstance(v.get("prompt"), str):
+                    continue
+                valid_presets[k_clean] = v
+                if len(valid_presets) >= 100:
+                    break
             if not valid_presets:
-                raise ValueError("有効なプリセットデータが見つかりませんでした")
+                raise ValueError(
+                    "有効なプリセットデータが見つかりませんでした（各プリセットは100文字以内の名前とpromptを含む必要があります）"
+                )
 
             settings: Any = QSettings("AIStrokePainter", "CustomPresets")
             raw_json = settings.value("presets_json")
@@ -2083,6 +2178,7 @@ class AIStrokePainterDocker(DockWidget):
         if w is not None and hasattr(w, "setChecked"):
             w.setChecked(False)
         self._save_settings()
+        self._update_action_buttons_state()
         self._log_debug("[設定リセット] 全設定を初期値に戻しました")
 
     def _load_settings(self) -> None:
@@ -2596,6 +2692,169 @@ class AIStrokePainterDocker(DockWidget):
             iters.setEnabled(is_openai)
         self._update_seed_controls_state()
 
+    def _setup_accessibility(self) -> None:
+        """スクリーンリーダーおよびアクセシビリティ支援技術向けに各UI要素の名称と説明を設定する。"""
+        # タブメニュー
+        tabs_w = _get_attr(self, "tabs")
+        if tabs_w is not None and hasattr(tabs_w, "setAccessibleName"):
+            tabs_w.setAccessibleName("機能設定タブ")
+        # プリセット群
+        p_combo = _get_attr(self, "preset_combo")
+        if p_combo is not None and hasattr(p_combo, "setAccessibleName"):
+            p_combo.setAccessibleName("プリセット選択")
+            if hasattr(p_combo, "setAccessibleDescription"):
+                p_combo.setAccessibleDescription("作成済みのビルトインまたはカスタムプリセットを選択します")
+        save_p = _get_attr(self, "save_preset_btn")
+        if save_p is not None and hasattr(save_p, "setAccessibleName"):
+            save_p.setAccessibleName("カスタムプリセット保存")
+        del_p = _get_attr(self, "del_preset_btn")
+        if del_p is not None and hasattr(del_p, "setAccessibleName"):
+            del_p.setAccessibleName("カスタムプリセット削除")
+        exp_p = _get_attr(self, "export_preset_btn")
+        if exp_p is not None and hasattr(exp_p, "setAccessibleName"):
+            exp_p.setAccessibleName("プリセットエクスポート")
+        imp_p = _get_attr(self, "import_preset_btn")
+        if imp_p is not None and hasattr(imp_p, "setAccessibleName"):
+            imp_p.setAccessibleName("プリセットインポート")
+        # プロンプト群
+        ph_combo = _get_attr(self, "prompt_history_combo")
+        if ph_combo is not None and hasattr(ph_combo, "setAccessibleName"):
+            ph_combo.setAccessibleName("プロンプト履歴")
+        cp_btn = _get_attr(self, "clear_prompt_btn")
+        if cp_btn is not None and hasattr(cp_btn, "setAccessibleName"):
+            cp_btn.setAccessibleName("プロンプトクリア")
+        prompt_w = _get_attr(self, "prompt")
+        if prompt_w is not None and hasattr(prompt_w, "setAccessibleName"):
+            prompt_w.setAccessibleName("描画指示プロンプト入力欄")
+        # パラメータ群
+        seed_w = _get_attr(self, "seed")
+        if seed_w is not None and hasattr(seed_w, "setAccessibleName"):
+            seed_w.setAccessibleName("乱数シード")
+        aseed_w = _get_attr(self, "auto_seed")
+        if aseed_w is not None and hasattr(aseed_w, "setAccessibleName"):
+            aseed_w.setAccessibleName("乱数シード自動生成")
+        count_w = _get_attr(self, "count")
+        if count_w is not None and hasattr(count_w, "setAccessibleName"):
+            count_w.setAccessibleName("ストローク本数")
+        acount_w = _get_attr(self, "auto_count")
+        if acount_w is not None and hasattr(acount_w, "setAccessibleName"):
+            acount_w.setAccessibleName("ストローク本数品質予算自動化")
+        pal_w = _get_attr(self, "palette_combo")
+        if pal_w is not None and hasattr(pal_w, "setAccessibleName"):
+            pal_w.setAccessibleName("カラーパレット")
+        prof_w = _get_attr(self, "brush_profile")
+        if prof_w is not None and hasattr(prof_w, "setAccessibleName"):
+            prof_w.setAccessibleName("ブラシタッチプロファイル")
+        ref_w = _get_attr(self, "auto_refine")
+        if ref_w is not None and hasattr(ref_w, "setAccessibleName"):
+            ref_w.setAccessibleName("段階的ステップ描画")
+        goal_w = _get_attr(self, "goal_mode")
+        if goal_w is not None and hasattr(goal_w, "setAccessibleName"):
+            goal_w.setAccessibleName("目標達成まで継続")
+        iter_w = _get_attr(self, "iterations")
+        if iter_w is not None and hasattr(iter_w, "setAccessibleName"):
+            iter_w.setAccessibleName("反復回数")
+        # プレビュー群
+        pl_combo = _get_attr(self, "preview_layer_combo")
+        if pl_combo is not None and hasattr(pl_combo, "setAccessibleName"):
+            pl_combo.setAccessibleName("プレビュー表示レイヤー切り替え")
+        pzi_btn = _get_attr(self, "preview_zoom_in_btn")
+        if pzi_btn is not None and hasattr(pzi_btn, "setAccessibleName"):
+            pzi_btn.setAccessibleName("プレビュー拡大")
+        pzo_btn = _get_attr(self, "preview_zoom_out_btn")
+        if pzo_btn is not None and hasattr(pzo_btn, "setAccessibleName"):
+            pzo_btn.setAccessibleName("プレビュー縮小")
+        prz_btn = _get_attr(self, "preview_reset_btn")
+        if prz_btn is not None and hasattr(prz_btn, "setAccessibleName"):
+            prz_btn.setAccessibleName("プレビュー表示リセット")
+        prev_w = _get_attr(self, "preview")
+        if prev_w is not None and hasattr(prev_w, "setAccessibleName"):
+            prev_w.setAccessibleName("ストロークベクタープレビュー")
+            if hasattr(prev_w, "setAccessibleDescription"):
+                prev_w.setAccessibleDescription(
+                    "生成されたストロークのベクタープレビュー。マウスホイールでズーム、ドラッグで移動、ダブルクリックでリセット"
+                )
+        # 画像変換タブ
+        load_b = _get_attr(self, "load_image_btn")
+        if load_b is not None and hasattr(load_b, "setAccessibleName"):
+            load_b.setAccessibleName("参照画像読み込み")
+        clear_img_b = _get_attr(self, "clear_image_btn")
+        if clear_img_b is not None and hasattr(clear_img_b, "setAccessibleName"):
+            clear_img_b.setAccessibleName("参照画像クリア")
+        for attr, name in (
+            ("edge_threshold", "エッジ検出感度"),
+            ("shading_density", "陰影ハッチング密度"),
+            ("enable_flats", "下塗り描画"),
+            ("image_color_mode", "画像カラーモード"),
+        ):
+            w = _get_attr(self, attr)
+            if w is not None and hasattr(w, "setAccessibleName"):
+                w.setAccessibleName(name)
+        # AI設定タブ
+        for attr, name in (
+            ("planner_mode", "描画エンジン切り替え"),
+            ("test_conn_btn", "API接続テスト"),
+            ("base_url", "APIエンドポイントURL"),
+            ("model", "AIモデル識別子"),
+            ("api_key", "APIキー"),
+            ("profile_openai_btn", "OpenAI公式プロファイル適用"),
+            ("profile_ollama_btn", "Ollamaローカルプロファイル適用"),
+            ("profile_lmstudio_btn", "LM Studioローカルプロファイル適用"),
+            ("profile_deepseek_btn", "DeepSeekプロファイル適用"),
+        ):
+            w = _get_attr(self, attr)
+            if w is not None and hasattr(w, "setAccessibleName"):
+                w.setAccessibleName(name)
+        # レイヤー・詳細設定タブ
+        for attr, name in (
+            ("brush_size_multiplier", "ブラシ太さ倍率"),
+            ("opacity_multiplier", "不透明度倍率"),
+            ("layer_mode", "レイヤー出力モード"),
+            ("layer_prefix", "レイヤー名プレフィックス"),
+            ("event_interval", "画面描画更新間隔"),
+            ("save_json", "計画JSON保存"),
+            ("save_svg_chk", "ベクターSVG保存"),
+            ("confirm_before_apply", "適用前プレビュー確認"),
+            ("debug_mode_chk", "デバッグログ表示切り替え"),
+            ("reset_defaults_btn", "全設定初期化"),
+            ("copy_log_btn", "デバッグログコピー"),
+            ("clear_log_btn", "デバッグログクリア"),
+            ("save_log_btn", "デバッグログファイル保存"),
+        ):
+            w = _get_attr(self, attr)
+            if w is not None and hasattr(w, "setAccessibleName"):
+                w.setAccessibleName(name)
+        # 下部実行コントロール
+        run_b = _get_attr(self, "run_btn")
+        if run_b is not None and hasattr(run_b, "setAccessibleName"):
+            run_b.setAccessibleName("プレビュー生成または描画実行")
+        apply_b = _get_attr(self, "apply_btn")
+        if apply_b is not None and hasattr(apply_b, "setAccessibleName"):
+            apply_b.setAccessibleName("キャンバスへ適用")
+        stop_b = _get_attr(self, "stop_btn")
+        if stop_b is not None and hasattr(stop_b, "setAccessibleName"):
+            stop_b.setAccessibleName("描画処理停止")
+        prog_w = _get_attr(self, "progress")
+        if prog_w is not None and hasattr(prog_w, "setAccessibleName"):
+            prog_w.setAccessibleName("描画進捗率")
+        stat_w = _get_attr(self, "status")
+        if stat_w is not None and hasattr(stat_w, "setAccessibleName"):
+            stat_w.setAccessibleName("ステータス表示")
+
+    def _update_action_buttons_state(self, *_args: Any) -> None:
+        """適用前確認チェックボックスの状態に合わせてボタン文言と適用ボタン状態を同期する。"""
+        confirm_w = _get_attr(self, "confirm_before_apply")
+        is_confirm = bool(confirm_w.isChecked()) if confirm_w is not None and hasattr(confirm_w, "isChecked") else True
+        run_b = _get_attr(self, "run_btn")
+        if run_b is not None and hasattr(run_b, "setText"):
+            run_b.setText("プレビュー生成" if is_confirm else "キャンバスに描画")
+        apply_b = _get_attr(self, "apply_btn")
+        if apply_b is not None and hasattr(apply_b, "setEnabled"):
+            if not is_confirm:
+                apply_b.setEnabled(False)
+            else:
+                apply_b.setEnabled(self._pending_plan is not None)
+
     def _is_t2i_mode(self) -> bool:
         mode_w = _get_attr(self, "planner_mode")
         if mode_w is None:
@@ -2712,7 +2971,10 @@ class AIStrokePainterDocker(DockWidget):
         )
 
     def is_cancelled(self) -> bool:
-        return self._cancel
+        try:
+            return bool(getattr(self, "_cancel", False))
+        except Exception:
+            return False
 
     def _set_generation_controls_enabled(self, enabled: bool) -> None:
         """実行中に変更しても現在の worker へ反映されない設定をロックする。"""
@@ -2757,6 +3019,7 @@ class AIStrokePainterDocker(DockWidget):
             "save_svg_chk",
             "confirm_before_apply",
             "reset_defaults_btn",
+            "test_conn_btn",
         )
         for name in names:
             widget = _get_attr(self, name)
@@ -3377,6 +3640,12 @@ class AIStrokePainterDocker(DockWidget):
             if prev_w is not None and hasattr(prev_w, "clear_plan"):
                 with contextlib.suppress(Exception):
                     prev_w.clear_plan()
+            if self.is_cancelled():
+                st_w = _get_attr(self, "status")
+                if st_w is not None and hasattr(st_w, "setText"):
+                    curr_st = str(st_w.text()) if hasattr(st_w, "text") else str(getattr(st_w, "_text", ""))
+                    if "停止要求" in curr_st:
+                        st_w.setText("処理を停止しました。キャンバスは変更されていません。")
         prog = _get_attr(self, "progress")
         if prog is not None and hasattr(prog, "setRange"):
             prog.setRange(0, 1)
@@ -3398,3 +3667,4 @@ class AIStrokePainterDocker(DockWidget):
         self._pending_plan = None
         self._applying_pending = False
         self._worker = None
+        self._update_action_buttons_state()

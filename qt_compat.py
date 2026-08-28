@@ -368,6 +368,18 @@ if not HAS_QT:
         def height(self) -> int:
             return self._height
 
+        def setAccessibleName(self, name: str) -> None:  # noqa: N802
+            self._accessible_name = str(name)
+
+        def accessibleName(self) -> str:  # noqa: N802
+            return getattr(self, "_accessible_name", "")
+
+        def setAccessibleDescription(self, description: str) -> None:  # noqa: N802
+            self._accessible_description = str(description)
+
+        def accessibleDescription(self) -> str:  # noqa: N802
+            return getattr(self, "_accessible_description", "")
+
     class QLabel(QWidget):  # type: ignore[no-redef]
         def __init__(self, text: str = "", *args: Any, **kwargs: Any) -> None:
             super().__init__()
@@ -382,10 +394,29 @@ if not HAS_QT:
         def setWordWrap(self, *args: Any) -> None:
             pass
 
+        def setBuddy(self, buddy: Any) -> None:  # noqa: N802
+            self._buddy = buddy
+
+        def buddy(self) -> Any:  # noqa: N802
+            return getattr(self, "_buddy", None)
+
     class QPushButton(QWidget):  # type: ignore[no-redef]
         def __init__(self, text: str = "", *args: Any, **kwargs: Any) -> None:
             super().__init__()
+            self._text = str(text)
             self.clicked = _FakeSignal()
+
+        def setText(self, text: str) -> None:  # noqa: N802
+            self._text = str(text)
+
+        def text(self) -> str:  # noqa: N802
+            return self._text
+
+        def setShortcut(self, shortcut: Any) -> None:  # noqa: N802
+            self._shortcut = shortcut
+
+        def shortcut(self) -> Any:  # noqa: N802
+            return getattr(self, "_shortcut", None)
 
     class QLineEdit(QWidget):  # type: ignore[no-redef]
         Password = 1
@@ -732,6 +763,11 @@ if not HAS_QT:
     class Qt:  # type: ignore[no-redef]
         RoundCap = 0x20
         RoundJoin = 0x40
+        LeftButton = 1
+        RightButton = 2
+        MiddleButton = 4
+        OpenHandCursor = 17
+        ClosedHandCursor = 18
 
         class PenCapStyle:
             RoundCap = 0x20

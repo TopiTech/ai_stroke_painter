@@ -17,6 +17,7 @@ dev = [
 [tool.pyrefly.errors]
 no-any-return = "error"
 redundant-cast = "warn"
+unnecessary-type-conversion = "ignore"
 
 [tool.ruff]
 target-version = "py310"
