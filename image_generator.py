@@ -152,11 +152,20 @@ def sanitize_api_key_log(text: str) -> str:
     """API Key、Bearer トークン、および認証情報を伏字化する。"""
     masked = re.sub(r"Bearer\s+[A-Za-z0-9_\-\.]{8,}", "Bearer [REDACTED]", text, flags=re.IGNORECASE)
     masked = re.sub(r"sk-[A-Za-z0-9_\-\.]{10,}", "sk-[REDACTED]", masked)
+    masked = re.sub(r"sk-proj-[A-Za-z0-9_\-\.]{8,}", "sk-proj-[REDACTED]", masked, flags=re.IGNORECASE)
+    masked = re.sub(r"anthropic-[A-Za-z0-9_\-]{8,}", "anthropic-[REDACTED]", masked, flags=re.IGNORECASE)
+    masked = re.sub(r"gsk_[A-Za-z0-9_\-]{8,}", "gsk_[REDACTED]", masked, flags=re.IGNORECASE)
     masked = re.sub(
         r'(["\']?(?:api[_-]?key|authorization|token)["\']?\s*[:=]\s*["\'])([^"\']{6,})(["\'])',
         r"\1[REDACTED]\3",
         masked,
         flags=re.IGNORECASE,
+    )
+    # クォートなし Authorization:Bearer ... 形式
+    masked = re.sub(
+        r"(?i)(authorization\s*[:=]\s*)([A-Za-z0-9_\-\.=]{6,})",
+        r"\1[REDACTED]",
+        masked,
     )
     masked = re.sub(
         r"https?://([^:]+):([^@]+)@",

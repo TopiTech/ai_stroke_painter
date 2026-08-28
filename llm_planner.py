@@ -1022,7 +1022,9 @@ class OpenAICompatiblePlanner(PlannerPort):
                 metadata={
                     **dict(fallback_plan.metadata),
                     "planner_fallback": "procedural",
-                    "fallback_reason": str(last_error or "LLM response could not be parsed")[:500],
+                    "fallback_reason": _safe_error_message(last_error)
+                    if last_error is not None
+                    else "LLM response could not be parsed",
                     "goal_reached": is_final,
                     "completion_score": comp_score,
                 },

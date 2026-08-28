@@ -157,7 +157,11 @@ class JsonLineNativeStrokeBridge(NativeStrokeBridgePort):
 
 
 def discover_native_bridge() -> JsonLineNativeStrokeBridge | None:
-    """環境変数が完全に設定された場合だけ bridge を有効化する。"""
+    """環境変数が完全に設定された場合だけ bridge を有効化する。
+
+    `AI_STROKE_BRIDGE_PORT` は 1〜65535 の整数である必要があり、
+    `AI_STROKE_BRIDGE_TOKEN` は 16〜4096 文字の制御文字を含まない文字列でなければならない。
+    """
     raw_port = os.environ.get("AI_STROKE_BRIDGE_PORT", "").strip()
     token = os.environ.get("AI_STROKE_BRIDGE_TOKEN", "").strip()
     if not raw_port or not token:

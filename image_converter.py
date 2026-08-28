@@ -566,7 +566,11 @@ class ImageStrokeConverter:
         qimg = self.qimage_cls()
         if not qimg.loadFromData(image_bytes):
             raise ValueError("参照画像をデコードできませんでした")
-        if qimg.width() * qimg.height() > MAX_DECODED_IMAGE_PIXELS:
+        decoded_width = int(qimg.width())
+        decoded_height = int(qimg.height())
+        if decoded_width <= 0 or decoded_height <= 0:
+            raise ValueError("参照画像のデコード結果が空です")
+        if decoded_width * decoded_height > MAX_DECODED_IMAGE_PIXELS:
             raise ValueError("参照画像の画素数が上限を超えています")
         strokes = self._process_qimage(
             qimg=qimg,

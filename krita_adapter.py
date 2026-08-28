@@ -149,7 +149,14 @@ class KritaCanvasAdapter(CanvasPort):
         self.layer_mode = layer_mode
         self.layer_prefix = layer_prefix
         self.event_interval = max(1, int(event_interval))
-        self.native_bridge = native_bridge if native_bridge is not None else discover_native_bridge()
+        if native_bridge is not None:
+            self.native_bridge: NativeStrokeBridgePort | None = native_bridge
+        else:
+            # 環境変数の設定ミスでプラグイン全体を開始不能にしないよう、bridge だけ無効化する
+            try:
+                self.native_bridge = discover_native_bridge()
+            except ValueError:
+                self.native_bridge = None
         self._session_document: Any | None = None
         self._session_mode: str | None = None
         self._session_container: Any | None = None
