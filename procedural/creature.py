@@ -419,7 +419,7 @@ def _generate_bird_strokes(seed: int, count: int | None, width: float, height: f
     for tail in range(5):
         x_off = (tail - 2) * scale * 0.035
         add("tail_" + str(tail), [(cx + x_off, cy + scale * 0.21), (cx + x_off * 1.8, cy + scale * 0.39)], 3.0)
-    add("perch", [(cx - scale * 0.30, cy + scale * 0.31), (cx + scale * 0.32, cy + scale * 0.31)], 5.0, "Draft")
+    add("perch", [(cx - scale * 0.30, cy + scale * 0.31), (cx + scale * 0.32, cy + scale * 0.31)], 5.0, "Lineart")
     return sample_strokes_by_priority(strokes, count)
 
 

@@ -608,7 +608,7 @@ class QualityV3ContractTests(unittest.TestCase):
         plan = generate_procedural_plan("anime girl portrait", 7, 40, 800, 600)
         trace = plan.metadata["generation_trace"]
 
-        self.assertEqual(trace["plugin_version"], "0.5.0")
+        self.assertEqual(trace["plugin_version"], "1.2.0")
         self.assertEqual(len(trace["source_fingerprint"]), 16)
         self.assertEqual(trace["count_mode"], "manual")
 

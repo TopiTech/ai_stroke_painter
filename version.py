@@ -6,8 +6,9 @@ from functools import lru_cache
 import hashlib
 from pathlib import Path
 
-PLUGIN_VERSION = "0.5.0"
+PLUGIN_VERSION = "1.2.0"
 GENERATION_TRACE_VERSION = 1
+_EXCLUDED_SOURCE_FILES = {"check.py", "build_plugin.py", "self_test.py", "implementation_test.py"}
 
 
 @lru_cache(maxsize=1)
@@ -17,12 +18,14 @@ def source_fingerprint() -> str:
     digest = hashlib.sha256()
     paths = sorted(package_root.glob("*.py")) + sorted((package_root / "procedural").glob("*.py"))
     for path in paths:
-        if not path.is_file() or "__pycache__" in path.parts:
+        if not path.is_file() or "__pycache__" in path.parts or path.name in _EXCLUDED_SOURCE_FILES:
             continue
         relative = path.relative_to(package_root).as_posix().encode("utf-8")
         digest.update(len(relative).to_bytes(2, "big"))
         digest.update(relative)
-        digest.update(path.read_bytes())
+        # OS による改行コード差異 (CRLF vs LF) を平坦化して決定性を担保する。
+        normalized_content = path.read_bytes().replace(b"\r\n", b"\n")
+        digest.update(normalized_content)
     return digest.hexdigest()[:16]
 
 

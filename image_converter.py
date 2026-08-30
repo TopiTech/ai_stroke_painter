@@ -80,7 +80,12 @@ def _strip_jpeg_private_metadata(data: bytes) -> bytes:
             if segment_length < 2 or scan_start > len(data):
                 raise ValueError("JPEG scan length が不正です")
             output.extend(data[marker_start:scan_start])
-            output.extend(data[scan_start:])
+            # EOI (End Of Image) 以降に付加された末尾の不正データや私的メタデータを確実に除去する。
+            eoi_index = data.rfind(b"\xff\xd9", scan_start)
+            if eoi_index != -1:
+                output.extend(data[scan_start : eoi_index + 2])
+            else:
+                output.extend(data[scan_start:])
             saw_scan = True
             break
         if marker in {0xD8} or 0xD0 <= marker <= 0xD7:

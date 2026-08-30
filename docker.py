@@ -1043,24 +1043,39 @@ class ApiConnectionWorker(QObject):
         super().__init__(parent)
         self.planner = planner
         self._thread: threading.Thread | None = None
+        self._state_lock = threading.Lock()
         self._is_running = False
         self._cancelled = False
-        self.planner.log_callback = self.debug_log.emit
+        self.planner.log_callback = self._on_debug_log
+
+    def _on_debug_log(self, message: str) -> None:
+        with self._state_lock:
+            if self._cancelled:
+                return
+        self.debug_log.emit(message)
 
     def start(self) -> None:
-        if self._is_running:
-            return
-        # 接続テスト worker を再利用する場合も前回のキャンセル状態を持ち越さない。
-        self._cancelled = False
-        self._is_running = True
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
+        with self._state_lock:
+            if self._is_running:
+                return
+            # 接続テスト worker を再利用する場合も前回のキャンセル状態を持ち越さない。
+            self._cancelled = False
+            self._is_running = True
+            self._thread = threading.Thread(target=self._run, daemon=True)
+            self._thread.start()
 
     def isRunning(self) -> bool:  # noqa: N802
-        return self._is_running or (self._thread is not None and self._thread.is_alive())
+        with self._state_lock:
+            running = self._is_running
+        return running or (self._thread is not None and self._thread.is_alive())
 
     def cancel(self) -> None:
-        self._cancelled = True
+        with self._state_lock:
+            self._cancelled = True
+
+    def is_cancelled(self) -> bool:
+        with self._state_lock:
+            return self._cancelled
 
     def wait(self, timeout_ms: int = 1_500) -> bool:
         thread = self._thread
@@ -1072,13 +1087,14 @@ class ApiConnectionWorker(QObject):
     def _run(self) -> None:
         try:
             result = self.planner.test_connection()
-            if not self._cancelled:
+            if not self.is_cancelled():
                 self.succeeded.emit(result)
         except Exception as exc:
-            if not self._cancelled:
+            if not self.is_cancelled():
                 self.failed.emit(str(exc) or exc.__class__.__name__)
         finally:
-            self._is_running = False
+            with self._state_lock:
+                self._is_running = False
             self.finished.emit()
 
 

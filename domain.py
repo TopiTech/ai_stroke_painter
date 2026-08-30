@@ -791,7 +791,7 @@ def materialize_render_options(
             points=stroke.points,
             brush_preset=stroke.brush_preset,
             color=stroke.color,
-            size_px=stroke.size_px * size_value,
+            size_px=max(0.5, stroke.size_px * size_value),
             layer_name=stroke.layer_name,
             opacity=min(1.0, stroke.opacity * opacity_value),
             is_eraser=stroke.is_eraser,

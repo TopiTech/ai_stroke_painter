@@ -9736,6 +9736,124 @@ class CodeReviewFinalQualityTests(unittest.TestCase):
         self.assertEqual(docker.fallback_to_procedural.accessibleName(), "AIエラー時のプロシージャル自動切り替え")
         self.assertEqual(docker.quality_summary_label.accessibleName(), "品質評価サマリー")
 
+    def test_bird_perch_stroke_layer_and_persistence(self) -> None:
+        """鳥のイラストで止まり木(perch)がLineartレイヤーになり描画時に保持されること。"""
+        import uuid
+
+        from .domain import materialize_render_options
+        from .procedural import generate_procedural_plan
+        from .procedural.creature import _generate_bird_strokes
+
+        perch_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "ai-stroke/bird/42/perch"))
+        bird_strokes = _generate_bird_strokes(42, 50, 800, 600)
+        perch_strokes = [s for s in bird_strokes if s.id == perch_id]
+        self.assertEqual(len(perch_strokes), 1)
+        self.assertEqual(perch_strokes[0].layer_name, "Lineart")
+
+        plan = generate_procedural_plan("cute blue bird on a perch", 42, 45, 800, 600)
+        self.assertEqual(plan.metadata.get("draft_policy"), "preview_only")
+        materialized = materialize_render_options(
+            plan,
+            size_multiplier=1.0,
+            opacity_multiplier=1.0,
+            layer_mode="multi_layer",
+        )
+        mat_perch = [s for s in materialized.strokes if s.id == perch_id]
+        self.assertEqual(len(mat_perch), 1)
+        self.assertEqual(mat_perch[0].layer_name, "Lineart")
+
+    def test_geometry_word_boundary_city_prompt(self) -> None:
+        """simplicity などの英単語が誤って city に部分一致しないこと。"""
+        import uuid
+
+        from .procedural.geometry import _is_city_prompt, geometry_feature_stroke_ids
+
+        self.assertFalse(_is_city_prompt("sacred geometry with simplicity and harmony"))
+        self.assertFalse(_is_city_prompt("high capacity electric mandala"))
+        self.assertTrue(_is_city_prompt("cyberpunk city skyline with neon lights"))
+        self.assertTrue(_is_city_prompt("未来都市のビル群"))
+
+        mandala_features = geometry_feature_stroke_ids("sacred geometry with simplicity", 42)
+        uid_mandala = str(uuid.uuid5(uuid.NAMESPACE_URL, "ai-stroke/geom/42/mandala_frame/46"))
+        uid_bldg = str(uuid.uuid5(uuid.NAMESPACE_URL, "ai-stroke/geom/42/bldg_outline/3"))
+        self.assertIn(uid_mandala, mandala_features)
+        self.assertNotIn(uid_bldg, mandala_features)
+
+        city_features = geometry_feature_stroke_ids("cyberpunk city at night", 42)
+        self.assertIn(uid_bldg, city_features)
+
+    def test_api_connection_worker_thread_safety_and_cancellation(self) -> None:
+        """ApiConnectionWorker が _state_lock で保護されキャンセル時に安全に中断すること。"""
+        from unittest.mock import MagicMock
+
+        from .docker import ApiConnectionWorker
+        from .llm_planner import OpenAICompatiblePlanner, OpenAICompatibleSettings
+
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings(base_url="https://api.openai.com/v1", api_key="test-key", model="test-model")
+        )
+        worker = ApiConnectionWorker(planner)
+        self.assertTrue(hasattr(worker, "_state_lock"))
+        self.assertFalse(worker.is_cancelled())
+        self.assertFalse(worker.isRunning())
+
+        worker.cancel()
+        self.assertTrue(worker.is_cancelled())
+
+        # キャンセル後は debug_log が遮断されること
+        mock_slot = MagicMock()
+        worker.debug_log.connect(mock_slot)
+        worker._on_debug_log("This log should be suppressed after cancellation")
+        mock_slot.assert_not_called()
+
+    def test_strip_jpeg_eoi_truncation(self) -> None:
+        """_strip_jpeg_private_metadata が EOI マーカー以降の不正な末尾付加データを除去すること。"""
+        from .image_converter import _strip_jpeg_private_metadata
+
+        # 有効な最小 JPEG (SOI + SOF0 + SOS + EOI) + 末尾にプライベートデータ
+        valid_minimal_jpeg = (
+            b"\xff\xd8"  # SOI
+            b"\xff\xc0\x00\x0b\x08\x00\x01\x00\x01\x01\x01\x11\x00"  # SOF0 (1x1)
+            b"\xff\xda\x00\x08\x01\x01\x00\x00\x3f\x00"  # SOS
+            b"\x00\x7f"  # Scan data
+            b"\xff\xd9"  # EOI
+        )
+        trailing_garbage = b"SECRET_TRACKING_PAYLOAD_12345"
+        jpeg_with_trailing = valid_minimal_jpeg + trailing_garbage
+
+        sanitized = _strip_jpeg_private_metadata(jpeg_with_trailing)
+        self.assertNotIn(b"SECRET_TRACKING_PAYLOAD", sanitized)
+        self.assertTrue(sanitized.endswith(b"\xff\xd9"))
+
+    def test_materialize_render_options_minimum_brush_size(self) -> None:
+        """materialize_render_options が極小倍率時にも最小 0.5px を担保すること。"""
+        from .domain import DrawingPlan, Stroke, StrokePoint, materialize_render_options
+
+        plan = DrawingPlan(
+            prompt="test",
+            seed=1,
+            strokes=(
+                Stroke(
+                    id="tiny",
+                    points=(StrokePoint(10, 10, 0.5, 0), StrokePoint(20, 20, 0.5, 10)),
+                    size_px=2.0,
+                    color="#000000",
+                ),
+            ),
+        )
+        # size_multiplier = 0.01 (2.0 * 0.01 = 0.02px -> 0.5px にクランプされる)
+        materialized = materialize_render_options(plan, size_multiplier=0.01, opacity_multiplier=1.0)
+        self.assertEqual(materialized.strokes[0].size_px, 0.5)
+
+    def test_version_and_fingerprint_consistency(self) -> None:
+        """PLUGIN_VERSION が 1.2.0 であり、フィンガープリントが決定論的であること。"""
+        from .version import PLUGIN_VERSION, source_fingerprint
+
+        self.assertEqual(PLUGIN_VERSION, "1.2.0")
+        fp = source_fingerprint()
+        self.assertEqual(len(fp), 16)
+        self.assertTrue(all(c in "0123456789abcdef" for c in fp))
+
 
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))

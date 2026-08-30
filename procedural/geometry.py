@@ -4,25 +4,35 @@ from __future__ import annotations
 
 import math
 import random
+import re
 import uuid
 
 from ..domain import Stroke
 from .base import catmull_rom_spline, create_stroke, sample_strokes_by_priority
 
+_CITY_ASCII_TERMS = ("city", "building", "cathedral", "cyber", "cyberpunk", "skyline")
+_CITY_JA_TERMS = ("都市", "ビル", "スカイライン", "大聖堂")
+_CITY_ASCII_REGEX = re.compile(
+    rf"(?<![a-z0-9])(?:{'|'.join(_CITY_ASCII_TERMS)})(?![a-z0-9])",
+    re.IGNORECASE,
+)
+
+
+def _is_city_prompt(prompt: str) -> bool:
+    """単語境界を考慮して都市・サイバーパンク題材かを判定する。"""
+    prompt_l = prompt.casefold()
+    if _CITY_ASCII_REGEX.search(prompt_l):
+        return True
+    return any(term in prompt_l for term in _CITY_JA_TERMS)
+
 
 def geometry_feature_stroke_ids(prompt: str, seed: int) -> tuple[str, ...]:
     """低予算でも都市の広がり／曼荼羅の対称性が読める特徴を返す。"""
 
-    prompt_l = prompt.casefold()
-
     def uid(name: str, index: int = 0) -> str:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/geom/{seed}/{name}/{index}"))
 
-    is_city = any(
-        keyword in prompt_l
-        for keyword in ("city", "都市", "building", "ビル", "cathedral", "cyber", "cyberpunk", "スカイライン")
-    )
-    if is_city:
+    if _is_city_prompt(prompt):
         return (
             uid("bldg_outline", 3),
             uid("bldg_outline", 7),
@@ -53,15 +63,12 @@ def generate_geometry_strokes(
 ) -> list[Stroke]:
     """幾何学マンダラや都市スカイラインストロークを生成する。"""
     rng = random.Random(seed)
-    prompt_l = prompt.lower()
     strokes: list[Stroke] = []
 
     def uid(name: str, idx: int = 0) -> str:
         return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/geom/{seed}/{name}/{idx}"))
 
-    is_city = any(
-        k in prompt_l for k in ["city", "都市", "building", "ビル", "cathedral", "cyber", "cyberpunk", "スカイライン"]
-    )
+    is_city = _is_city_prompt(prompt)
 
     cx = width * 0.5
     cy = height * 0.5
