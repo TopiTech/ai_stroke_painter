@@ -2797,6 +2797,21 @@ class AIStrokePainterDocker(DockWidget):
             ("base_url", "APIエンドポイントURL"),
             ("model", "AIモデル識別子"),
             ("api_key", "APIキー"),
+            ("t2i_provider", "Text-to-Image画像生成プロバイダー"),
+            ("t2i_endpoint", "Text-to-ImageエンドポイントURL"),
+            ("t2i_model", "Text-to-Imageモデル名"),
+            ("t2i_api_key", "Text-to-Image APIキー"),
+            ("t2i_size", "Text-to-Image画像解像度"),
+            ("t2i_negative_prompt", "Text-to-Imageネガティブプロンプト"),
+            ("timeout_sec", "APIリクエストタイムアウト秒数"),
+            ("max_tokens", "最大出力トークン数"),
+            ("reasoning_effort", "思考推論強度"),
+            ("temperature", "多様性温度係数"),
+            ("top_p", "確率閾値"),
+            ("vision_res", "視覚評価キャプチャ解像度"),
+            ("custom_instructions", "AI追加指示システムプロンプト"),
+            ("autonomy_mode", "AI自律モード"),
+            ("fallback_to_procedural", "AIエラー時のプロシージャル自動切り替え"),
             ("profile_openai_btn", "OpenAI公式プロファイル適用"),
             ("profile_ollama_btn", "Ollamaローカルプロファイル適用"),
             ("profile_lmstudio_btn", "LM Studioローカルプロファイル適用"),
@@ -2840,6 +2855,9 @@ class AIStrokePainterDocker(DockWidget):
         stat_w = _get_attr(self, "status")
         if stat_w is not None and hasattr(stat_w, "setAccessibleName"):
             stat_w.setAccessibleName("ステータス表示")
+        q_sum = _get_attr(self, "quality_summary_label")
+        if q_sum is not None and hasattr(q_sum, "setAccessibleName"):
+            q_sum.setAccessibleName("品質評価サマリー")
 
     def _update_action_buttons_state(self, *_args: Any) -> None:
         """適用前確認チェックボックスの状態に合わせてボタン文言と適用ボタン状態を同期する。"""
@@ -3280,8 +3298,9 @@ class AIStrokePainterDocker(DockWidget):
             try:
                 w_val: Any = document.width() if callable(document.width) else document.width
                 h_val: Any = document.height() if callable(document.height) else document.height
-                doc_w = float(w_val)
-                doc_h = float(h_val)
+                if float(w_val) > 0 and float(h_val) > 0:
+                    doc_w = float(w_val)
+                    doc_h = float(h_val)
             except Exception:
                 pass
 

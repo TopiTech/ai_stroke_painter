@@ -178,7 +178,12 @@ def create_stroke(
         bounded_y = max(0.0, min(height - 1.0, py))
         pts.append(StrokePoint(bounded_x, bounded_y, press, i * 10))
 
-    sid = stroke_id or str(uuid.uuid4())
+    if stroke_id:
+        sid = stroke_id
+    elif rng is not None:
+        sid = str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/procedural/{rng.getrandbits(64)}"))
+    else:
+        sid = str(uuid.uuid4())
     return Stroke(
         id=sid,
         points=pts,

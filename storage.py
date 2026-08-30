@@ -97,7 +97,7 @@ def load_plan(path: str | Path) -> DrawingPlan:
         raise ValueError(f"計画 JSON は {MAX_PLAN_FILE_BYTES // (1024 * 1024)}MB 以下である必要があります")
     try:
         contents = json.loads(source.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ValueError(f"計画 JSON の形式が不正です: {source}") from exc
     if isinstance(contents, dict) and (
         contents.get("schema_version") == PROGRAM_SCHEMA_VERSION or "operations" in contents
@@ -137,7 +137,7 @@ def load_program(path: str | Path) -> StrokeProgram:
         raise ValueError(f"計画 JSON は {MAX_PLAN_FILE_BYTES // (1024 * 1024)}MB 以下である必要があります")
     try:
         contents = json.loads(source.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise ValueError(f"計画 JSON の形式が不正です: {source}") from exc
     if isinstance(contents, dict) and (
         contents.get("schema_version") == PROGRAM_SCHEMA_VERSION or "operations" in contents

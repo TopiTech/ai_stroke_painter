@@ -44,13 +44,24 @@ def character_feature_stroke_ids(seed: int) -> tuple[str, ...]:
 def _adjust_color_luminance(hex_str: str, factor: float) -> str:
     """指定された16進カラーの輝度を調整する（factor < 1.0 で暗く、factor > 1.0 で明るく）。"""
     h = hex_str.lstrip("#")
-    if len(h) == 6:
-        try:
+    try:
+        alpha_suffix = ""
+        if len(h) in (3, 4):
+            r, g, b = int(h[0] * 2, 16), int(h[1] * 2, 16), int(h[2] * 2, 16)
+            if len(h) == 4:
+                alpha_suffix = h[3] * 2
+        elif len(h) in (6, 8):
             r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-            return f"#{max(0, min(255, round(r * factor))):02x}{max(0, min(255, round(g * factor))):02x}{max(0, min(255, round(b * factor))):02x}"
-        except ValueError:
-            pass
-    return hex_str
+            if len(h) == 8:
+                alpha_suffix = h[6:8]
+        else:
+            return hex_str
+        new_r = max(0, min(255, round(r * factor)))
+        new_g = max(0, min(255, round(g * factor)))
+        new_b = max(0, min(255, round(b * factor)))
+        return f"#{new_r:02x}{new_g:02x}{new_b:02x}{alpha_suffix}"
+    except ValueError:
+        return hex_str
 
 
 def generate_character_strokes(

@@ -247,7 +247,7 @@ def _validate_endpoint_url(url_str: str, _api_key: str = "") -> str:
         raise ImageGenerationError("エンドポイント URL にホスト名が含まれていません")
 
     is_loopback = False
-    if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0", "::") or hostname.endswith(".localhost"):
+    if hostname in ("localhost", "127.0.0.1", "::1") or hostname.endswith(".localhost"):
         is_loopback = True
     else:
         try:
@@ -276,8 +276,10 @@ def _validate_image_download_url(url_str: str, source_endpoint: str) -> str:
     hostname = (parsed.hostname or "").lower().rstrip(".")
     if parsed.scheme.lower() != "https":
         raise ImageGenerationError("API が返した画像 URL は HTTPS または同一オリジンである必要があります")
-    if hostname in {"localhost", "localhost.localdomain"}:
-        raise ImageGenerationError("API が返した画像 URL のローカルホスト接続を拒否しました")
+    if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(
+        (".localhost", ".local", ".internal", ".arpa", ".home.arpa")
+    ):
+        raise ImageGenerationError("API が返した画像 URL のローカル／内部ホスト接続を拒否しました")
     try:
         address = ipaddress.ip_address(hostname)
     except ValueError:

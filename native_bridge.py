@@ -144,7 +144,7 @@ class JsonLineNativeStrokeBridge(NativeStrokeBridgePort):
         if not isinstance(response, Mapping):
             raise NativeBridgeProtocolError("Native Bridge 応答はオブジェクトである必要があります")
         if response.get("ok") is not True:
-            error = response.get("error", "unknown native bridge error")
+            error = response.get("error") or "unknown native bridge error"
             error_text = error if isinstance(error, str) else str(error)
             raise NativeBridgeProtocolError(f"Native Bridge が描画を拒否しました: {error_text[:300]}")
         protocol_version = response.get("protocol_version")

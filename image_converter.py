@@ -470,33 +470,47 @@ def _trace_edge_paths(edge_mask: list[list[bool]], max_paths: int) -> list[list[
 
 
 def _rdp_simplify(points: list[tuple[float, float]], epsilon: float) -> list[tuple[float, float]]:
-    """Ramer-Douglas-Peucker (RDP) アルゴリズムによる点列の幾何学的単純化。"""
-    if len(points) < 3:
+    """Ramer-Douglas-Peucker (RDP) アルゴリズムによる点列の幾何学的単純化（スタック反復実装）。"""
+    n = len(points)
+    if n < 3:
         return list(points)
 
-    dmax = 0.0
-    index = 0
-    p1 = points[0]
-    p2 = points[-1]
-    dx = p2[0] - p1[0]
-    dy = p2[1] - p1[1]
-    line_len = math.hypot(dx, dy)
+    keep = [False] * n
+    keep[0] = True
+    keep[-1] = True
 
-    for i in range(1, len(points) - 1):
-        p = points[i]
-        if line_len > 1e-6:
-            d = abs(dy * p[0] - dx * p[1] + p2[0] * p1[1] - p2[1] * p1[0]) / line_len
-        else:
-            d = math.hypot(p[0] - p1[0], p[1] - p1[1])
-        if d > dmax:
-            index = i
-            dmax = d
+    stack: list[tuple[int, int]] = [(0, n - 1)]
 
-    if dmax > epsilon:
-        rec_results1 = _rdp_simplify(points[: index + 1], epsilon)
-        rec_results2 = _rdp_simplify(points[index:], epsilon)
-        return rec_results1[:-1] + rec_results2
-    return [points[0], points[-1]]
+    while stack:
+        start, end = stack.pop()
+        if end <= start + 1:
+            continue
+
+        p1 = points[start]
+        p2 = points[end]
+        dx = p2[0] - p1[0]
+        dy = p2[1] - p1[1]
+        line_len = math.hypot(dx, dy)
+
+        dmax = 0.0
+        max_idx = start
+
+        for i in range(start + 1, end):
+            p = points[i]
+            if line_len > 1e-6:
+                d = abs(dy * p[0] - dx * p[1] + p2[0] * p1[1] - p2[1] * p1[0]) / line_len
+            else:
+                d = math.hypot(p[0] - p1[0], p[1] - p1[1])
+            if d > dmax:
+                dmax = d
+                max_idx = i
+
+        if dmax > epsilon:
+            keep[max_idx] = True
+            stack.append((start, max_idx))
+            stack.append((max_idx, end))
+
+    return [points[i] for i in range(n) if keep[i]]
 
 
 class ImageStrokeConverter:
@@ -761,6 +775,8 @@ class ImageStrokeConverter:
         border_samples = [
             rgb_map[y][x] for y in range(grid_h) for x in range(grid_w) if x in {0, grid_w - 1} or y in {0, grid_h - 1}
         ]
+        if not border_samples:
+            return strokes
         border_rgb = tuple(
             round(sum(rgb[channel] for rgb in border_samples) / len(border_samples)) for channel in range(3)
         )

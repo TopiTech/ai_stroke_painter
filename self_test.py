@@ -9473,6 +9473,120 @@ class CodeReviewFinalQualityTests(unittest.TestCase):
             self.assertNotIn("bad\x00name", saved)
             self.assertNotIn("a" * 150, saved)
 
+    def test_rdp_simplify_deep_stack_iterative_safety(self) -> None:
+        """2,500点の長い輪郭線でもスタック反復により RecursionError を起こさず正確に単純化されること。"""
+        from .image_converter import _rdp_simplify
+
+        # 2,500 点の直線点列（途中にわずかなノイズがあるが epsilon 内）
+        points = [(float(i), float(i) * 0.5) for i in range(2500)]
+        simplified = _rdp_simplify(points, epsilon=1.0)
+        self.assertEqual(len(simplified), 2)
+        self.assertEqual(simplified[0], (0.0, 0.0))
+        self.assertEqual(simplified[-1], (2499.0, 1249.5))
+
+        # 中間に顕著な屈曲点がある三角形状点列（各辺1,200点ずつ）の場合、頂点のみが保持され3点になること
+        points_with_peak = [(float(i), i * (100.0 / 1200.0)) for i in range(1200)] + [
+            (1200.0 + i, 100.0 - i * (100.0 / 1200.0)) for i in range(1201)
+        ]
+        simplified_peak = _rdp_simplify(points_with_peak, epsilon=1.0)
+        self.assertEqual(len(simplified_peak), 3)
+        self.assertEqual(simplified_peak, [(0.0, 0.0), (1200.0, 100.0), (2400.0, 0.0)])
+
+    def test_image_download_url_ssrf_hardened(self) -> None:
+        """画像ダウンロードURLの SSRF 防御（.localhost, .local, .internal, 私設IP）を検証。"""
+        from .image_generator import (
+            ImageGenerationError,
+            _validate_endpoint_url,
+            _validate_image_download_url,
+        )
+
+        source = "https://api.openai.com/v1"
+        # 拒否されるべき URL
+        for bad_url in (
+            "https://localhost/image.png",
+            "https://sub.localhost/image.png",
+            "https://server.local/image.png",
+            "https://corp.internal/image.png",
+            "https://127.0.0.1/image.png",
+            "https://10.0.0.1/image.png",
+            "https://192.168.1.1/image.png",
+            "https://169.254.169.254/latest/meta-data",
+            "http://external.example.com/image.png",  # HTTP 拒否
+        ):
+            with self.assertRaises(ImageGenerationError, msg=f"Should reject: {bad_url}"):
+                _validate_image_download_url(bad_url, source)
+
+        # 許可されるべき URL
+        self.assertEqual(
+            _validate_image_download_url("https://oaidalleapiprodscus.blob.core.windows.net/test.png", source),
+            "https://oaidalleapiprodscus.blob.core.windows.net/test.png",
+        )
+        # 同一オリジンは許可
+        self.assertEqual(
+            _validate_image_download_url("https://api.openai.com/v1/images/123.png", source),
+            "https://api.openai.com/v1/images/123.png",
+        )
+
+        # _validate_endpoint_url で 0.0.0.0 はループバックとして扱われないこと (HTTP 拒否)
+        with self.assertRaises(ImageGenerationError):
+            _validate_endpoint_url("http://0.0.0.0:8000")
+
+    def test_adjust_color_luminance_formats(self) -> None:
+        """_adjust_color_luminance が 3, 4, 6, 8 桁カラーをサポートしアルファを保持すること。"""
+        from .procedural.character import _adjust_color_luminance
+
+        # 6 桁
+        self.assertEqual(_adjust_color_luminance("#102030", 2.0), "#204060")
+        # 3 桁 (#123 -> #112233)
+        self.assertEqual(_adjust_color_luminance("#123", 2.0), "#224466")
+        # 8 桁 (アルファチャンネル ff 保持)
+        self.assertEqual(_adjust_color_luminance("#10203080", 2.0), "#20406080")
+        # 4 桁 (#1238 -> #11223388)
+        self.assertEqual(_adjust_color_luminance("#1238", 2.0), "#22446688")
+        # 不正な入力は元の文字列を返す
+        self.assertEqual(_adjust_color_luminance("invalid", 1.5), "invalid")
+
+    def test_load_plan_and_program_unicode_decode_error(self) -> None:
+        """非 UTF-8 の破損ファイル読み込み時に ValueError が送出されること。"""
+        from pathlib import Path
+        import tempfile
+
+        from .storage import load_plan, load_program
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            bad_file = Path(tmpdir) / "corrupt.json"
+            bad_file.write_bytes(b"\xff\xfe\x00\x00\x80\x90\xff\xaa")
+
+            with self.assertRaises(ValueError) as ctx:
+                load_plan(bad_file)
+            self.assertIn("計画 JSON の形式が不正です", str(ctx.exception))
+
+            with self.assertRaises(ValueError) as ctx_prog:
+                load_program(bad_file)
+            self.assertIn("計画 JSON の形式が不正です", str(ctx_prog.exception))
+
+    def test_t2i_and_advanced_widgets_accessible_names(self) -> None:
+        """T2I および高度な AI パラメータウィジェットにアクセシビリティ名が設定されていること。"""
+        from .docker import AIStrokePainterDocker
+
+        docker = AIStrokePainterDocker()
+        self.assertEqual(docker.t2i_provider.accessibleName(), "Text-to-Image画像生成プロバイダー")
+        self.assertEqual(docker.t2i_endpoint.accessibleName(), "Text-to-ImageエンドポイントURL")
+        self.assertEqual(docker.t2i_model.accessibleName(), "Text-to-Imageモデル名")
+        self.assertEqual(docker.t2i_api_key.accessibleName(), "Text-to-Image APIキー")
+        self.assertEqual(docker.t2i_size.accessibleName(), "Text-to-Image画像解像度")
+        self.assertEqual(docker.t2i_negative_prompt.accessibleName(), "Text-to-Imageネガティブプロンプト")
+        self.assertEqual(docker.timeout_sec.accessibleName(), "APIリクエストタイムアウト秒数")
+        self.assertEqual(docker.max_tokens.accessibleName(), "最大出力トークン数")
+        self.assertEqual(docker.reasoning_effort.accessibleName(), "思考推論強度")
+        self.assertEqual(docker.temperature.accessibleName(), "多様性温度係数")
+        self.assertEqual(docker.top_p.accessibleName(), "確率閾値")
+        self.assertEqual(docker.vision_res.accessibleName(), "視覚評価キャプチャ解像度")
+        self.assertEqual(docker.custom_instructions.accessibleName(), "AI追加指示システムプロンプト")
+        self.assertEqual(docker.autonomy_mode.accessibleName(), "AI自律モード")
+        self.assertEqual(docker.fallback_to_procedural.accessibleName(), "AIエラー時のプロシージャル自動切り替え")
+        self.assertEqual(docker.quality_summary_label.accessibleName(), "品質評価サマリー")
+
 
 def run() -> bool:
     suite = unittest.defaultTestLoader.loadTestsFromModule(__import__(__name__, fromlist=["*"]))
