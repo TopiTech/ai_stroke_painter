@@ -4044,6 +4044,52 @@ class WorkerAndDockerTests(unittest.TestCase):
         self.assertEqual(len(received_errors), 0)
         self.assertIsInstance(received_plans[0], DrawingPlan)
 
+    def test_plan_worker_restart_clears_previous_cancel_state(self) -> None:
+        """再利用した worker が前回の停止要求を次回生成へ持ち越さないこと。"""
+        import time
+
+        from .krita_adapter import _process_events
+
+        class FastPlanner:
+            log_callback: Any = None
+
+            def plan(self, **_kwargs: Any) -> DrawingPlan:
+                return DrawingPlan(
+                    "cat",
+                    1,
+                    [Stroke("s1", [StrokePoint(0, 0, 1, 0), StrokePoint(1, 1, 1, 1)])],
+                    canvas_width=200,
+                    canvas_height=200,
+                )
+
+        worker = PlanWorker(
+            planner=cast(Any, FastPlanner()),
+            prompt="cat",
+            seed=1,
+            count=2,
+            width=200,
+            height=200,
+            max_iterations=1,
+        )
+        received_plans: list[DrawingPlan] = []
+
+        def accept_plan(plan: DrawingPlan) -> None:
+            received_plans.append(plan)
+            worker.notify_render_done()
+
+        worker.plan_ready.connect(accept_plan)
+
+        worker.cancel()
+        worker.start()
+        for _ in range(100):
+            _process_events()
+            if not worker.isRunning():
+                break
+            time.sleep(0.01)
+        self.assertTrue(worker.wait(5_000))
+        self.assertEqual(len(received_plans), 1)
+        self.assertTrue(worker.completed_successfully)
+
     def test_plan_worker_suppresses_emission_when_cancelled(self) -> None:
         planner = RuleBasedPlanner()
         worker = PlanWorker(
@@ -9231,6 +9277,37 @@ class CodeReview2026HardeningTests(unittest.TestCase):
         self.assertNotIn("eyJfake", sanitized)
         self.assertIn("[REDACTED]", sanitized)
 
+    def test_llm_api_error_payload_and_logs_redact_credentials(self) -> None:
+        """API が返したエラー本文を UI、ログ、再試行経路へ生のまま流さないこと。"""
+        secret = "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz12345"
+        response = {"error": {"message": f"upstream echoed {secret}", "type": "invalid_api_key"}}
+
+        for extractor in (_extract_content_from_response, _plan_from_response):
+            with self.assertRaises(LLMPlannerError) as ctx:
+                extractor(response)
+            self.assertNotIn(secret, str(ctx.exception))
+            self.assertIn("[REDACTED]", str(ctx.exception))
+
+        messages: list[str] = []
+        planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings("https://example.test/v1", "model"),
+            log_callback=messages.append,
+        )
+        planner._log(f"provider error: {secret}")
+        self.assertTrue(messages)
+        self.assertNotIn(secret, messages[0])
+        self.assertIn("[REDACTED]", messages[0])
+
+    def test_api_keys_reject_all_ascii_control_characters(self) -> None:
+        """HTTP Authorization ヘッダーへ渡す API キーの全 ASCII 制御文字を拒否すること。"""
+        from .image_generator import ImageGeneratorSettings
+
+        for control in ("\x00", "\t", "\x1f", "\x7f"):
+            with self.assertRaises(ValueError):
+                OpenAICompatibleSettings("https://example.test/v1", "model", api_key=f"key{control}value")
+            with self.assertRaises(ValueError):
+                ImageGeneratorSettings(api_key=f"key{control}value")
+
 
 class CodeReviewFinalQualityTests(unittest.TestCase):
     """コードレビューに基づくUI操作性・アクセシビリティ・SVG1点描画・プリセット堅牢化の回帰テスト。"""
@@ -9470,6 +9547,51 @@ class CodeReviewFinalQualityTests(unittest.TestCase):
             self.assertNotIn("bad\x00name", saved)
             self.assertNotIn("a" * 150, saved)
 
+    def test_corrupt_persisted_preset_values_are_normalized_before_ui_use(self) -> None:
+        """壊れた QSettings の数値・型がプリセット適用時の例外や範囲外値にならないこと。"""
+        from .docker import _load_custom_preset_map
+        from .qt_compat import QComboBox
+
+        raw = json.dumps(
+            {
+                "safe": {
+                    "prompt": "valid prompt",
+                    "count": 10**1000,
+                    "brush_size": "nan",
+                    "opacity": {"unexpected": "object"},
+                    "auto_count": "false",
+                },
+                "not-a-preset": ["invalid"],
+            }
+        )
+
+        class FakeSettings:
+            def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+                pass
+
+            def value(self, _key: str) -> str:
+                return raw
+
+        docker = AIStrokePainterDocker.__new__(AIStrokePainterDocker)
+        docker.preset_combo = QComboBox()
+        with patch("ai_stroke_painter.docker.QSettings", FakeSettings):
+            docker._populate_presets()
+
+        custom_data = [
+            docker.preset_combo.itemData(index)
+            for index in range(docker.preset_combo.count())
+            if docker.preset_combo.itemText(index).startswith("⭐ [カスタム]")
+        ]
+        self.assertEqual(len(custom_data), 1)
+        self.assertEqual(custom_data[0]["count"], 35)
+        self.assertEqual(custom_data[0]["brush_size"], 1.0)
+        self.assertEqual(custom_data[0]["opacity"], 100)
+        self.assertFalse(custom_data[0]["auto_count"])
+
+        # 正規化ヘルパー単体でも不正なエントリを無視できることを確認する。
+        normalized = _load_custom_preset_map(json.dumps({"bad": {"prompt": "x" * 20_001}}))
+        self.assertEqual(normalized, {})
+
     def test_rdp_simplify_deep_stack_iterative_safety(self) -> None:
         """2,500点の長い輪郭線でもスタック反復により RecursionError を起こさず正確に単純化されること。"""
         from .image_converter import _rdp_simplify
@@ -9527,6 +9649,36 @@ class CodeReviewFinalQualityTests(unittest.TestCase):
         # _validate_endpoint_url で 0.0.0.0 はループバックとして扱われないこと (HTTP 拒否)
         with self.assertRaises(ImageGenerationError):
             _validate_endpoint_url("http://0.0.0.0:8000")
+
+        # 名前解決後に私設アドレスへ向くホストも、表記上の HTTPS だけで許可しない。
+        with (
+            patch(
+                "ai_stroke_painter.image_generator.socket.getaddrinfo",
+                return_value=[(2, 1, 6, "", ("127.0.0.1", 443))],
+            ),
+            self.assertRaises(ImageGenerationError),
+        ):
+            _validate_image_download_url("https://public-looking.example/image.png", source)
+
+    def test_llm_rescue_preserves_explicit_zero_opacity(self) -> None:
+        """救済処理で明示された opacity=0 を未指定(1.0)へ誤変換しないこと。"""
+        rescued = _sanitize_and_rescue_program_dict(
+            {
+                "schema_version": 2,
+                "canvas": {"width": 100, "height": 100},
+                "operations": [
+                    {
+                        "kind": "path",
+                        "id": "invisible",
+                        "points": [[0.1, 0.1], [0.9, 0.9]],
+                        "brush": {"profile": "gpen", "opacity": 0.0},
+                    }
+                ],
+            },
+            canvas_w=100,
+            canvas_h=100,
+        )
+        self.assertEqual(rescued["operations"][0]["brush"]["opacity"], 0.0)
 
     def test_adjust_color_luminance_formats(self) -> None:
         """_adjust_color_luminance が 3, 4, 6, 8 桁カラーをサポートしアルファを保持すること。"""

@@ -15,6 +15,7 @@ import ipaddress
 import json
 import math
 import re
+import socket
 import time
 from typing import Any, cast
 from urllib.error import HTTPError, URLError
@@ -121,6 +122,8 @@ class ImageGeneratorSettings:
             raise ValueError("api_key は文字列である必要があります")
         if len(self.api_key) > 4096:
             raise ValueError("api_key が長すぎます")
+        if any(ord(char) < 32 or ord(char) == 127 for char in self.api_key):
+            raise ValueError("api_key に制御文字を含めることはできません")
         if not isinstance(self.model, str) or not self.model.strip():
             raise ValueError("model は文字列である必要があります")
         if len(self.model) > 256:
@@ -264,16 +267,51 @@ def _validate_endpoint_url(url_str: str, _api_key: str = "") -> str:
     return url
 
 
+def _is_loopback_hostname(hostname: str) -> bool:
+    host = hostname.strip().lower().rstrip(".")
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _reject_private_dns_result(hostname: str) -> None:
+    """Reject a public-looking host when DNS resolves it to a non-public address.
+
+    Lexical URL checks cannot protect against an API returning a hostname whose
+    DNS record points at loopback, link-local, or RFC1918 space. Resolution
+    failures are left to the HTTP client so normal offline/custom-host usage
+    retains its existing error handling.
+    """
+    try:
+        infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return
+    for info in infos:
+        sockaddr = info[4]
+        raw_address = str(sockaddr[0]).split("%", 1)[0]
+        try:
+            address = ipaddress.ip_address(raw_address)
+        except ValueError:
+            continue
+        if not address.is_global:
+            raise ImageGenerationError(
+                "API が返した画像 URL のホスト名がプライベート／予約済みアドレスへ解決されるため接続を拒否しました"
+            )
+
+
 def _validate_image_download_url(url_str: str, source_endpoint: str) -> str:
     """Validate an image URL returned by an API without opening private hosts."""
     url = _validate_endpoint_url(url_str)
     source_origin = _url_origin(source_endpoint)
     target_origin = _url_origin(url)
-    if source_origin is not None and source_origin == target_origin:
-        return url
-
     parsed = urlsplit(url)
     hostname = (parsed.hostname or "").lower().rstrip(".")
+    if source_origin is not None and source_origin == target_origin and _is_loopback_hostname(hostname):
+        return url
+
     if parsed.scheme.lower() != "https":
         raise ImageGenerationError("API が返した画像 URL は HTTPS または同一オリジンである必要があります")
     if hostname in {"localhost", "localhost.localdomain"} or hostname.endswith(
@@ -286,6 +324,7 @@ def _validate_image_download_url(url_str: str, source_endpoint: str) -> str:
         address = None
     if address is not None and not address.is_global:
         raise ImageGenerationError("API が返した画像 URL のプライベート／予約済みアドレス接続を拒否しました")
+    _reject_private_dns_result(hostname)
     return url
 
 

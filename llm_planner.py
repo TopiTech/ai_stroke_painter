@@ -450,8 +450,8 @@ class OpenAICompatibleSettings:
             raise ValueError("API Key は文字列である必要があります")
         if len(self.api_key) > 4_096:
             raise ValueError("API Key が長すぎます")
-        if "\r" in self.api_key or "\n" in self.api_key:
-            raise ValueError("API Key に改行を含めないでください")
+        if any(ord(char) < 32 or ord(char) == 127 for char in self.api_key):
+            raise ValueError("API Key に制御文字を含めないでください")
         parsed = urlsplit(self.base_url.strip())
         try:
             parsed_port = parsed.port
@@ -566,7 +566,9 @@ class OpenAICompatiblePlanner(PlannerPort):
     def _log(self, message: str) -> None:
         if self.log_callback is not None:
             ts = datetime.datetime.now().strftime("%H:%M:%S")
-            self.log_callback(f"[{ts}] {message}")
+            # API エラー本文や互換サーバーの診断文字列には、認証情報が
+            # エコーされる実装もある。ログは全経路で同じマスキングを通す。
+            self.log_callback(f"[{ts}] {_redact_sensitive_text(str(message))}")
 
     def test_connection(self) -> str:
         """API 接続疎通確認を行う。思考モデルのパラメータ特性にも適応。"""
@@ -605,7 +607,10 @@ class OpenAICompatiblePlanner(PlannerPort):
             self._log(msg)
             return msg
         except Exception as exc:
-            msg = f"接続失敗: HTTP 200 でしたがモデル応答を解釈できませんでした ({elapsed:.2f}s): {exc}"
+            msg = (
+                "接続失敗: HTTP 200 でしたがモデル応答を解釈できませんでした "
+                f"({elapsed:.2f}s): {_safe_error_message(exc)}"
+            )
             self._log(msg)
             raise LLMPlannerError(msg) from exc
 
@@ -829,7 +834,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                 current_payload = dict(payload)
             elif attempt == 2:
                 err_summary = (
-                    str(last_error)[:200].replace("\n", " ") if last_error else "Invalid format or incomplete JSON"
+                    _safe_error_message(last_error)[:200] if last_error else "Invalid format or incomplete JSON"
                 )
                 is_len_err = any(kw in err_summary.lower() for kw in ("token", "length", "途切れ", "上限"))
                 self._log(
@@ -867,7 +872,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                 r_messages.append({"role": "user", "content": user_content})
                 current_payload["messages"] = r_messages
             else:
-                err_summary = str(last_error)[:200].replace("\n", " ") if last_error else "Malformed output"
+                err_summary = _safe_error_message(last_error)[:200] if last_error else "Malformed output"
                 self._log(
                     f"[自動リトライ {attempt - 1}/{max_attempts - 1}] 思考抑制・最小構造 Zero-Thought モードで再試行します..."
                 )
@@ -970,7 +975,7 @@ class OpenAICompatiblePlanner(PlannerPort):
 
             except LLMPlannerError as exc:
                 last_error = exc
-                err_str = str(exc)
+                err_str = _safe_error_message(exc)
                 # 致命的な認証エラー（401/403/404 等）はリトライせず即座に例外を上げる
                 if any(
                     code in err_str
@@ -978,16 +983,16 @@ class OpenAICompatiblePlanner(PlannerPort):
                 ):
                     raise
                 if attempt < max_attempts:
-                    self._log(f"警告: 試行 {attempt}/{max_attempts} でエラーが発生しました: {exc}")
+                    self._log(f"警告: 試行 {attempt}/{max_attempts} でエラーが発生しました: {err_str}")
                     for _ in range(5):
                         raise_if_cancelled()
                         time.sleep(0.1)
                 else:
-                    self._log(f"エラー: 全 {max_attempts} 回の試行が失敗しました: {exc}")
+                    self._log(f"エラー: 全 {max_attempts} 回の試行が失敗しました: {err_str}")
 
         if not self.settings.fallback_to_procedural:
             if last_error is not None:
-                raise last_error
+                raise LLMPlannerError(_safe_error_message(last_error)) from last_error
             raise LLMPlannerError("LLM 描画計画の生成に失敗しました")
 
         # 利用者が明示的に許可した場合だけ、プロシージャル生成へフォールバックする。
@@ -1035,8 +1040,8 @@ class OpenAICompatiblePlanner(PlannerPort):
             )
         except Exception as fb_exc:
             if last_error is not None:
-                raise last_error from fb_exc
-            raise LLMPlannerError(f"LLM 描画計画の生成に失敗しました: {last_error or fb_exc}") from fb_exc
+                raise LLMPlannerError(_safe_error_message(last_error)) from fb_exc
+            raise LLMPlannerError(f"LLM 描画計画の生成に失敗しました: {_safe_error_message(fb_exc)}") from fb_exc
 
     def _post_with_parameter_fallback(
         self,
@@ -1053,7 +1058,7 @@ class OpenAICompatiblePlanner(PlannerPort):
             try:
                 return self._post(current_payload, cancelled=cancelled)
             except LLMPlannerError as exc:
-                err_text = str(exc).lower()
+                err_text = _safe_error_message(exc).lower()
                 modified = False
                 response_format_adapted = False
 
@@ -1074,7 +1079,7 @@ class OpenAICompatiblePlanner(PlannerPort):
                 if is_transient and p_attempt < max_param_retries - 1:
                     backoff_sec = min(4.0, 0.4 * (2**p_attempt))
                     self._log(
-                        f"[一時通信エラー再試行] 一時的エラー ({exc}) を検知しました。{backoff_sec:.1f}s 後に再試行します..."
+                        f"[一時通信エラー再試行] 一時的エラー ({_safe_error_message(exc)}) を検知しました。{backoff_sec:.1f}s 後に再試行します..."
                     )
                     deadline = time.monotonic() + backoff_sec
                     while time.monotonic() < deadline:
@@ -2266,14 +2271,14 @@ def _extract_content_from_response(
         if isinstance(err, Mapping):
             err_msg = err.get("message") or err.get("code") or str(err)
             err_type = err.get("type", "")
-            type_info = f" [{err_type}]" if err_type else ""
-            raise LLMPlannerError(f"LLM API エラー{type_info}: {err_msg}")
-        raise LLMPlannerError(f"LLM API エラー: {err}")
+            type_info = f" [{_safe_error_message(Exception(str(err_type)))}]" if err_type else ""
+            raise LLMPlannerError(f"LLM API エラー{type_info}: {_safe_error_message(Exception(str(err_msg)))}")
+        raise LLMPlannerError(f"LLM API エラー: {_safe_error_message(Exception(str(err)))}")
 
     if "detail" in response and not any(
         k in response for k in ("choices", "candidates", "content", "message", "strokes")
     ):
-        raise LLMPlannerError(f"LLM API エラー: {response['detail']}")
+        raise LLMPlannerError(f"LLM API エラー: {_safe_error_message(Exception(str(response['detail'])))}")
 
     # 2. トップレベルが直接 DrawingPlan 辞書である場合
     if "strokes" in response and isinstance(response["strokes"], list):
@@ -2585,7 +2590,10 @@ def _sanitize_and_rescue_program_dict(
                 sz_mode = "ratio"
 
         try:
-            op_opacity = float(b_dict.get("opacity") or item_d.get("opacity") or 1.0)
+            raw_opacity = b_dict.get("opacity")
+            if raw_opacity is None:
+                raw_opacity = item_d.get("opacity")
+            op_opacity = float(raw_opacity) if raw_opacity is not None else 1.0
         except (ValueError, TypeError):
             op_opacity = 1.0
         op_opacity = max(0.0, min(1.0, op_opacity))
@@ -3041,8 +3049,8 @@ def _plan_from_response(
         err = response["error"]
         if isinstance(err, Mapping):
             err_msg = err.get("message") or err.get("code") or str(err)
-            raise LLMPlannerError(f"LLM API エラー: {err_msg}")
-        raise LLMPlannerError(f"LLM API エラー: {err}")
+            raise LLMPlannerError(f"LLM API エラー: {_safe_error_message(Exception(str(err_msg)))}")
+        raise LLMPlannerError(f"LLM API エラー: {_safe_error_message(Exception(str(err)))}")
 
     # 2. 直接 StrokeProgram / DrawingPlan 辞書の場合
     if _looks_like_drawing_json(response):
@@ -3112,7 +3120,9 @@ def _plan_from_response(
         value = _extract_json_object(first_text, log_func=log_func)
         return _mapping_to_drawing_plan(value, prompt=prompt, seed=seed, width=width, height=height)
     except Exception as exc:
-        raise LLMPlannerError(f"LLM が有効な DrawingPlan JSON を返しませんでした: {exc}") from (last_error or exc)
+        raise LLMPlannerError(f"LLM が有効な DrawingPlan JSON を返しませんでした: {_safe_error_message(exc)}") from (
+            last_error or exc
+        )
 
 
 def _looks_like_drawing_json(value: Any) -> TypeGuard[Mapping[str, Any]]:

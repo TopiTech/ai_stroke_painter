@@ -618,7 +618,7 @@ class KritaCanvasAdapter(CanvasPort):
                 _apply_color_to_krita(stroke.color, view=target_view)
 
                 if _can_use_continuous_path(current_node, stroke):
-                    painted_sections = 0
+                    painted_sections: int = 0
                     try:
                         for section in _pressure_path_sections(stroke):
                             resolved_preset = _apply_stroke_style(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 import contextlib
 from dataclasses import replace
 import datetime
@@ -80,6 +80,10 @@ from .version import PLUGIN_VERSION, source_fingerprint
 
 MAX_REFERENCE_IMAGE_BYTES = MAX_ENCODED_IMAGE_BYTES
 RENDER_WAIT_TIMEOUT_SECONDS = 15 * 60
+MAX_CUSTOM_PRESETS = 100
+MAX_CUSTOM_PRESET_NAME_LENGTH = 100
+MAX_CUSTOM_PRESET_PROMPT_LENGTH = 20_000
+MAX_CUSTOM_PRESET_JSON_BYTES = 10 * 1024 * 1024
 
 _ELEMENT_LABELS = {
     "character": "人物",
@@ -218,7 +222,7 @@ def _safe_endpoint_label(url: str) -> str:
         host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
         port = f":{parsed.port}" if parsed.port is not None else ""
         return f"{parsed.scheme.lower()}://{host}{port}"
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return "[invalid URL]"
 
 
@@ -244,6 +248,120 @@ def _safe_get_open_filename(parent: Any, title: str, default_dir: str, filter_st
         if isinstance(res, str):
             return res, ""
     return "", ""
+
+
+def _normalize_custom_preset_name(value: Any) -> str | None:
+    """Persisted/imported preset names are treated as untrusted text."""
+    if not isinstance(value, str):
+        return None
+    name = value.strip()
+    prefix = "⭐ [カスタム] "
+    if name.startswith(prefix):
+        name = name[len(prefix) :].strip()
+    if (
+        not name
+        or len(name) > MAX_CUSTOM_PRESET_NAME_LENGTH
+        or any(ord(char) < 32 or ord(char) == 127 for char in name)
+    ):
+        return None
+    return name
+
+
+def _coerce_preset_integer(value: Any, default: int, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        number = float(value)
+    except (OverflowError, TypeError, ValueError):
+        return default
+    if not math.isfinite(number):
+        return default
+    return max(minimum, min(maximum, int(number)))
+
+
+def _coerce_preset_float(value: Any, default: float, minimum: float, maximum: float) -> float:
+    if isinstance(value, bool):
+        return default
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number):
+        return default
+    return max(minimum, min(maximum, number))
+
+
+def _coerce_preset_choice(value: Any, default: str) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value) > 128:
+        return default
+    if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        return default
+    return value.strip()
+
+
+def _coerce_preset_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1"}:
+            return True
+        if normalized in {"false", "0"}:
+            return False
+    return default
+
+
+def _normalize_custom_preset_data(value: Any) -> dict[str, Any] | None:
+    """Return only bounded, UI-compatible fields from one custom preset."""
+    if not isinstance(value, Mapping):
+        return None
+    prompt = value.get("prompt")
+    if not isinstance(prompt, str) or len(prompt) > MAX_CUSTOM_PRESET_PROMPT_LENGTH:
+        return None
+    return {
+        "prompt": prompt,
+        "palette": _coerce_preset_choice(value.get("palette", "auto"), "auto"),
+        "count": _coerce_preset_integer(value.get("count", 35), 35, 1, MAX_PLAN_STROKES),
+        "brush_profile": _coerce_preset_choice(value.get("brush_profile", "auto"), "auto"),
+        "brush_size": _coerce_preset_float(value.get("brush_size", 1.0), 1.0, 0.1, 5.0),
+        "opacity": _coerce_preset_integer(value.get("opacity", 100), 100, 10, 100),
+        "auto_count": _coerce_preset_bool(value.get("auto_count", False)),
+        "custom": True,
+    }
+
+
+def _normalize_custom_preset_entry(name: Any, value: Any) -> tuple[str, dict[str, Any]] | None:
+    normalized_name = _normalize_custom_preset_name(name)
+    normalized_data = _normalize_custom_preset_data(value)
+    if normalized_name is None or normalized_data is None:
+        return None
+    return normalized_name, normalized_data
+
+
+def _load_custom_preset_map(raw_value: Any) -> dict[str, dict[str, Any]]:
+    """Decode and bound QSettings data without allowing malformed values into widgets."""
+    if not raw_value:
+        return {}
+    try:
+        raw_text = str(raw_value)
+        if len(raw_text.encode("utf-8")) > MAX_CUSTOM_PRESET_JSON_BYTES:
+            return {}
+        parsed: Any = json.loads(raw_text)
+    except (UnicodeError, TypeError, ValueError):
+        return {}
+    if not isinstance(parsed, Mapping):
+        return {}
+
+    normalized: dict[str, dict[str, Any]] = {}
+    for name, data in parsed.items():
+        entry = _normalize_custom_preset_entry(name, data)
+        if entry is None:
+            continue
+        normalized_name, normalized_data = entry
+        if normalized_name not in normalized and len(normalized) >= MAX_CUSTOM_PRESETS:
+            break
+        normalized[normalized_name] = normalized_data
+    return normalized
 
 
 class PreviewWidget(QWidget):
@@ -702,7 +820,8 @@ class PlanWorker(QObject):
 
     def provide_canvas_capture(self, capture_bytes: bytes | None) -> None:
         """メインスレッドから取得された安全なキャンバスキャプチャを受け取り、次イテレーションを再開する。"""
-        self._next_canvas_image = capture_bytes
+        with self._state_lock:
+            self._next_canvas_image = capture_bytes
         self._render_done_event.set()
 
     def notify_render_done(self) -> None:
@@ -711,7 +830,8 @@ class PlanWorker(QObject):
 
     def notify_render_failed(self, message: str) -> None:
         """メインスレッドの描画失敗をワーカーへ伝え、反復を失敗終了させる。"""
-        self._render_error = message.strip() or "描画処理に失敗しました"
+        with self._state_lock:
+            self._render_error = message.strip() or "描画処理に失敗しました"
         self._render_done_event.set()
 
     def cancel(self) -> None:
@@ -735,29 +855,39 @@ class PlanWorker(QObject):
             return True
 
     def isRunning(self) -> bool:  # noqa: N802
-        return self._is_running or (self._thread is not None and self._thread.is_alive())
+        with self._state_lock:
+            return self._is_running or (self._thread is not None and self._thread.is_alive())
 
     def wait(self, timeout_ms: int = 1_500) -> bool:
-        thread = self._thread
+        with self._state_lock:
+            thread = self._thread
         if thread is None:
             return True
         thread.join(max(0, timeout_ms) / 1000.0)
         return not thread.is_alive()
 
     def start(self) -> None:
-        if self.isRunning():
-            return
         with self._state_lock:
+            if self._is_running or (self._thread is not None and self._thread.is_alive()):
+                return
+            # QObject/worker は UI から再利用される可能性がある。前回の
+            # cancel 状態や通知を次回実行へ持ち越さない。
+            self._is_cancelled = False
             self.completed_successfully = False
-        self._is_running = True
-        self._thread = threading.Thread(target=self._run_wrapper, daemon=True)
-        self._thread.start()
+            self._next_canvas_image = None
+            self._render_error = None
+            self._render_done_event.clear()
+            self._is_running = True
+            self._thread = threading.Thread(target=self._run_wrapper, daemon=True)
+            thread = self._thread
+        thread.start()
 
     def _run_wrapper(self) -> None:
         try:
             self.run()
         finally:
-            self._is_running = False
+            with self._state_lock:
+                self._is_running = False
             self.finished.emit()
 
     def run(self) -> None:
@@ -780,7 +910,8 @@ class PlanWorker(QObject):
                 self.iteration_progress.emit(iter_idx, self.max_iterations, msg)
                 self.debug_log.emit(f"[ステップ {iter_idx}/{self.max_iterations}] 計画生成処理を開始")
 
-                canvas_img: bytes | None = self._next_canvas_image if iter_idx > 1 else None
+                with self._state_lock:
+                    canvas_img: bytes | None = self._next_canvas_image if iter_idx > 1 else None
 
                 current_plan = self.planner.plan(
                     prompt=self.prompt,
@@ -853,9 +984,10 @@ class PlanWorker(QObject):
                     f"[ステップ {iter_idx}] 計画生成完了。メインスレッドへ描画を要求します (ストローク数: {len(current_plan.strokes)}, 完成度: {current_plan.completion_score * 100:.0f}%, Goal達成: {current_plan.goal_reached})"
                 )
 
-                self._render_done_event.clear()
-                self._next_canvas_image = None
-                self._render_error = None
+                with self._state_lock:
+                    self._render_done_event.clear()
+                    self._next_canvas_image = None
+                    self._render_error = None
                 self.plan_ready.emit(current_plan)
 
                 # メインスレッドでの描画 & キャプチャ完了を待機
@@ -867,8 +999,10 @@ class PlanWorker(QObject):
                     if time.monotonic() - render_wait_started > RENDER_WAIT_TIMEOUT_SECONDS:
                         raise TimeoutError("Krita の描画完了通知がタイムアウトしました")
 
-                if self._render_error is not None:
-                    raise RuntimeError(self._render_error)
+                with self._state_lock:
+                    render_error = self._render_error
+                if render_error is not None:
+                    raise RuntimeError(render_error)
 
                 # Goal モード時の目標達成判定による早期自律完了
                 if session_goal_met and iter_idx >= 1:
@@ -884,7 +1018,9 @@ class PlanWorker(QObject):
                     )
                     break
 
-            if not self.completed_successfully and self._mark_completed_successfully():
+            with self._state_lock:
+                already_completed = self.completed_successfully
+            if not already_completed and self._mark_completed_successfully():
                 self.iteration_progress.emit(self.max_iterations, self.max_iterations, "全ステップの描画が完了しました")
                 self.debug_log.emit("[ワーカー完了] 全ての処理が正常に完了しました")
 
@@ -914,6 +1050,8 @@ class ApiConnectionWorker(QObject):
     def start(self) -> None:
         if self._is_running:
             return
+        # 接続テスト worker を再利用する場合も前回のキャンセル状態を持ち越さない。
+        self._cancelled = False
         self._is_running = True
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -1848,10 +1986,8 @@ class AIStrokePainterDocker(DockWidget):
             with contextlib.suppress(Exception):
                 settings: Any = QSettings("AIStrokePainter", "CustomPresets")
                 raw_json = settings.value("presets_json")
-                if raw_json:
-                    custom_map: dict[str, Any] = json.loads(str(raw_json))
-                    for name, data in custom_map.items():
-                        combo.addItem(f"⭐ [カスタム] {name}", data)
+                for name, data in _load_custom_preset_map(raw_json).items():
+                    combo.addItem(f"⭐ [カスタム] {name}", data)
 
         if selected_title:
             for i in range(combo.count()):
@@ -1865,10 +2001,8 @@ class AIStrokePainterDocker(DockWidget):
         if not ok or not preset_name or not preset_name.strip():
             return
 
-        name = preset_name.strip()
-        if name.startswith("⭐ [カスタム] "):
-            name = name[len("⭐ [カスタム] ") :].strip()
-        if not name or len(name) > 100 or any(ord(char) < 32 for char in name):
+        name = _normalize_custom_preset_name(preset_name)
+        if name is None:
             QMessageBox.warning(self, "プリセット保存", "プリセット名は制御文字を含まない100文字以下にしてください。")
             return
         prompt_w = _get_attr(self, "prompt")
@@ -1891,15 +2025,21 @@ class AIStrokePainterDocker(DockWidget):
             else False,
             "custom": True,
         }
+        normalized_entry = _normalize_custom_preset_entry(name, data)
+        if normalized_entry is None:
+            QMessageBox.warning(
+                self,
+                "プリセット保存",
+                f"プリセットのプロンプトは {MAX_CUSTOM_PRESET_PROMPT_LENGTH:,} 文字以下で入力してください。",
+            )
+            return
+        name, data = normalized_entry
 
         if callable(QSettings):
             try:
                 settings: Any = QSettings("AIStrokePainter", "CustomPresets")
                 raw_json = settings.value("presets_json")
-                loaded = json.loads(str(raw_json)) if raw_json else {}
-                if not isinstance(loaded, dict):
-                    raise ValueError("保存済みプリセットの形式が不正です")
-                custom_map: dict[str, Any] = loaded
+                custom_map = _load_custom_preset_map(raw_json)
                 if name in custom_map and not _confirm(
                     self, "プリセット上書き確認", f"カスタムプリセット '{name}' を上書きしますか？"
                 ):
@@ -1930,24 +2070,20 @@ class AIStrokePainterDocker(DockWidget):
             QMessageBox.information(self, "プリセット削除", "ビルトインプリセットは削除できません。")
             return
 
-        name = current_text
-        if name.startswith("⭐ [カスタム] "):
-            name = name[len("⭐ [カスタム] ") :].strip()
+        name = _normalize_custom_preset_name(current_text)
+        if name is None:
+            return
         if not _confirm(self, "プリセット削除確認", f"カスタムプリセット '{name}' を削除しますか？"):
             return
         if callable(QSettings):
             try:
                 settings: Any = QSettings("AIStrokePainter", "CustomPresets")
                 raw_json = settings.value("presets_json")
-                if raw_json:
-                    loaded = json.loads(str(raw_json))
-                    if not isinstance(loaded, dict):
-                        raise ValueError("保存済みプリセットの形式が不正です")
-                    custom_map: dict[str, Any] = loaded
-                    custom_map.pop(name, None)
-                    settings.setValue("presets_json", json.dumps(custom_map, ensure_ascii=False))
-                    if hasattr(settings, "sync"):
-                        settings.sync()
+                custom_map = _load_custom_preset_map(raw_json)
+                custom_map.pop(name, None)
+                settings.setValue("presets_json", json.dumps(custom_map, ensure_ascii=False))
+                if hasattr(settings, "sync"):
+                    settings.sync()
             except Exception as exc:
                 self._log_debug(f"[プリセット削除失敗] {exc}")
                 QMessageBox.critical(self, "プリセット削除", f"カスタムプリセットを削除できませんでした: {exc}")
@@ -1968,11 +2104,8 @@ class AIStrokePainterDocker(DockWidget):
         try:
             settings: Any = QSettings("AIStrokePainter", "CustomPresets")
             raw_json = settings.value("presets_json")
-            if not raw_json:
-                QMessageBox.information(self, "プリセット出力", "エクスポート可能なカスタムプリセットがありません。")
-                return
-            loaded = json.loads(str(raw_json))
-            if not isinstance(loaded, dict) or not loaded:
+            loaded = _load_custom_preset_map(raw_json)
+            if not loaded:
                 QMessageBox.information(self, "プリセット出力", "エクスポート可能なカスタムプリセットがありません。")
                 return
         except Exception as exc:
@@ -2012,21 +2145,16 @@ class AIStrokePainterDocker(DockWidget):
                 imported_data = json.load(f)
             if not isinstance(imported_data, dict):
                 raise ValueError("JSONのルートがオブジェクト(辞書)ではありません")
-            # プリセット構造の検証
-            valid_presets: dict[str, Any] = {}
+            # プリセット構造の検証と UI 入力範囲への正規化
+            valid_presets: dict[str, dict[str, Any]] = {}
             for k, v in imported_data.items():
-                if not isinstance(k, str) or not isinstance(v, dict):
+                entry = _normalize_custom_preset_entry(k, v)
+                if entry is None:
                     continue
-                k_clean = k.strip()
-                if k_clean.startswith("⭐ [カスタム] "):
-                    k_clean = k_clean[len("⭐ [カスタム] ") :].strip()
-                if not k_clean or len(k_clean) > 100 or any(ord(c) < 32 for c in k_clean):
-                    continue
-                if "prompt" not in v or not isinstance(v.get("prompt"), str):
-                    continue
-                valid_presets[k_clean] = v
-                if len(valid_presets) >= 100:
+                name, data = entry
+                if name not in valid_presets and len(valid_presets) >= MAX_CUSTOM_PRESETS:
                     break
+                valid_presets[name] = data
             if not valid_presets:
                 raise ValueError(
                     "有効なプリセットデータが見つかりませんでした（各プリセットは100文字以内の名前とpromptを含む必要があります）"
@@ -2034,10 +2162,10 @@ class AIStrokePainterDocker(DockWidget):
 
             settings: Any = QSettings("AIStrokePainter", "CustomPresets")
             raw_json = settings.value("presets_json")
-            existing = json.loads(str(raw_json)) if raw_json else {}
-            if not isinstance(existing, dict):
-                existing = {}
-            existing.update(valid_presets)
+            existing = _load_custom_preset_map(raw_json)
+            for name, data in valid_presets.items():
+                if name in existing or len(existing) < MAX_CUSTOM_PRESETS:
+                    existing[name] = data
             settings.setValue("presets_json", json.dumps(existing, ensure_ascii=False))
             if hasattr(settings, "sync"):
                 settings.sync()
@@ -2468,7 +2596,13 @@ class AIStrokePainterDocker(DockWidget):
         auto_count_w = _get_attr(self, "auto_count")
 
         if isinstance(data, dict):
-            # カスタムプリセット
+            # カスタムプリセット。コンボボックスを外部コードや破損設定から
+            # 差し替えられても、数値変換例外で操作不能にしない。
+            normalized_data = _normalize_custom_preset_data(data)
+            if normalized_data is None:
+                self._log_debug("[プリセット適用失敗] カスタムプリセットの形式が不正です")
+                return
+            data = normalized_data
             if prompt_w is not None and hasattr(prompt_w, "setPlainText"):
                 prompt_w.setPlainText(data.get("prompt", ""))
             if count_w is not None and hasattr(count_w, "setValue"):
