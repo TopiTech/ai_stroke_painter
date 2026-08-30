@@ -71,6 +71,8 @@ def generate_character_strokes(
     width: float,
     height: float,
     palette_name: str = "anime",
+    *,
+    include_foundation_strokes: bool = True,
 ) -> list[Stroke]:
     """指示文、Seed、本数、寸法から本格的な人物イラストストローク群を生成する。"""
     rng = random.Random(seed)
@@ -188,8 +190,8 @@ def generate_character_strokes(
     # 2. 下塗りレイヤー (Flats Layer - インナーヘア・肌・瞳ベース)
     # =========================================================================
     # 奥の後ろ髪（インナーヘア）のダークベース塗り
-    for i in range(6):
-        p_off = (i - 2.5) * scale * 0.08
+    for i in range(4):
+        p_off = (i - 1.5) * scale * 0.10
         inner_hair_sweep = catmull_rom_spline(
             [
                 (cx + p_off * 0.7, cy - scale * 0.25),
@@ -215,8 +217,8 @@ def generate_character_strokes(
         )
 
     # 顔・首のベース肌塗り
-    for r_step in range(4):
-        skin_r = (scale * 0.05) * (r_step + 1)
+    for r_step in range(2):
+        skin_r = (scale * 0.075) * (r_step + 1)
         skin_patch = catmull_rom_spline(
             [
                 (cx - skin_r * 2.0, cy - scale * 0.10 + skin_r * 0.8),
@@ -231,9 +233,9 @@ def generate_character_strokes(
                 profile_type="marker",
                 base_pressure=0.8,
                 color=colors["skin_base"],
-                size_px=18.0,
+                size_px=14.0,
                 layer_name="Flats",
-                opacity=0.75,
+                opacity=0.38,
                 rng=rng,
                 width=width,
                 height=height,
@@ -708,14 +710,16 @@ def generate_character_strokes(
     jaw_pts_l = [
         (cx - scale * 0.22, cy - scale * 0.08),
         (cx - scale * 0.20, cy + scale * 0.06),
-        (cx - scale * 0.12, cy + scale * 0.18),
-        (cx, cy + scale * (0.24 if not masculine_subject else 0.25)),
+        (cx - scale * 0.14, cy + scale * 0.15),
+        (cx - scale * 0.06, cy + scale * 0.205),
+        (cx, cy + scale * (0.218 if not masculine_subject else 0.235)),
     ]
     jaw_pts_r = [
         (cx + scale * 0.22, cy - scale * 0.08),
         (cx + scale * 0.20, cy + scale * 0.06),
-        (cx + scale * 0.12, cy + scale * 0.18),
-        (cx, cy + scale * (0.24 if not masculine_subject else 0.25)),
+        (cx + scale * 0.14, cy + scale * 0.15),
+        (cx + scale * 0.06, cy + scale * 0.205),
+        (cx, cy + scale * (0.218 if not masculine_subject else 0.235)),
     ]
     left_jaw = catmull_rom_spline(jaw_pts_l, samples_per_segment=8)
     right_jaw = catmull_rom_spline(jaw_pts_r, samples_per_segment=8)
@@ -1579,7 +1583,7 @@ def generate_character_strokes(
                 )
             )
 
-    back_hair_count = 3 if is_short_or_bob else (4 if is_twintails else (7 if not masculine_subject else 4))
+    back_hair_count = 3 if is_short_or_bob else (4 if is_twintails else (5 if not masculine_subject else 4))
     back_hair_reach = 0.08 if is_short_or_bob else (0.28 if is_twintails else (0.42 if not masculine_subject else 0.15))
     for i in range(back_hair_count):
         p_offset = (i - (back_hair_count - 1) / 2) * scale * 0.075
@@ -1607,7 +1611,7 @@ def generate_character_strokes(
         )
 
     # (B) 前髪の束 (Bangs - 立体的な房感・稜線・毛先抜き)
-    bang_count = 9
+    bang_count = 7
     for i in range(bang_count):
         t_phase = (i - (bang_count - 1) / 2) / (bang_count / 2)
         top_x = cx + t_phase * scale * 0.20 + rng.uniform(-jitter, jitter)
@@ -1615,7 +1619,9 @@ def generate_character_strokes(
         mid_x = cx + t_phase * scale * 0.24 + math.sin(t_phase * 1.5) * scale * 0.02
         mid_y = cy - scale * 0.12
         tip_x = cx + t_phase * scale * 0.22 + rng.uniform(-scale * 0.01, scale * 0.01)
-        tip_y = cy - scale * 0.02 + abs(t_phase) * scale * 0.04
+        # 中央の前髪は上まぶたより上で止め、外側だけをこめかみへ流す。
+        # 目の安全領域を横切る機械的なW字を作らない。
+        tip_y = eye_y - eye_h * (1.50 - abs(t_phase) * 0.10)
 
         bang_strand = catmull_rom_spline([(top_x, top_y), (mid_x, mid_y), (tip_x, tip_y)], samples_per_segment=8)
         strokes.append(
@@ -2057,4 +2063,10 @@ def generate_character_strokes(
         )
 
     # ユーザー指定の本数に合わせてレイヤー優先度付きサンプリング
+    if not include_foundation_strokes:
+        duplicate_mass_ids = {
+            *(uid("inner_hair_flat", index) for index in range(4)),
+            *(uid("skin_base_patch", index) for index in range(2)),
+        }
+        strokes = [stroke for stroke in strokes if stroke.id not in duplicate_mass_ids]
     return sample_strokes_by_priority(strokes, count)

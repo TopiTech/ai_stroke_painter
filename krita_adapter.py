@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sized
+from collections.abc import Callable, Sequence, Sized
 import contextlib
 from dataclasses import dataclass
 import hashlib
@@ -11,7 +11,7 @@ import re
 from typing import TYPE_CHECKING, Any
 
 from .brushes import brush_definition, infer_brush_profile
-from .domain import LAYER_RENDER_ORDER, Stroke, split_color_alpha
+from .domain import LAYER_RENDER_ORDER, Stroke, StrokePoint, split_color_alpha
 from .native_bridge import NativeBridgeUnavailable, discover_native_bridge
 from .ports import CanvasPort, NativeStrokeBridgePort
 from .qt_compat import (
@@ -169,6 +169,7 @@ class KritaCanvasAdapter(CanvasPort):
         self._session_macro_open: bool = False
         self._session_has_changes: bool = False
         self._brush_preset_cache: dict[tuple[str, bool], Any] = {}
+        self.last_render_trace: dict[str, Any] = {}
 
     def begin_render_session(self, document: Any) -> None:
         """複数の Auto-Refine 描画を一つのコミット／ロールバック単位として開始する。"""
@@ -448,7 +449,19 @@ class KritaCanvasAdapter(CanvasPort):
             raise ValueError("不透明度倍率は 0.0 から 1.0 の有限数値である必要があります")
         if mode not in {"multi_layer", "active_layer", "single_layer"}:
             raise ValueError(f"未対応のレイヤーモードです: {mode}")
-        if not plan.strokes:
+        draft_preview_only = plan.metadata.get("draft_policy") == "preview_only"
+        render_strokes = tuple(
+            stroke
+            for stroke in plan.strokes
+            if not (draft_preview_only and stroke.layer_name.casefold().startswith("draft"))
+        )
+        self.last_render_trace = {
+            "draft_policy": "preview_only" if draft_preview_only else "render",
+            "draft_skipped": len(plan.strokes) - len(render_strokes),
+            "routes": {"native_bridge": 0, "continuous_path": 0, "segmented_line": 0},
+            "resolved_presets": {},
+        }
+        if not render_strokes:
             return 0
 
         session_active = self._session_document is document
@@ -525,7 +538,7 @@ class KritaCanvasAdapter(CanvasPort):
                     output_group = self.create_output_group(document, prefix)
                 generated_container = output_group
                 layer_cache = self._session_layer_cache if session_active else {}
-                first_layer = plan.strokes[0].layer_name
+                first_layer = render_strokes[0].layer_name
                 current_node = layer_cache.get(first_layer)
                 if current_node is None:
                     current_node = self.ensure_layer(document, first_layer, parent=output_group)
@@ -551,7 +564,7 @@ class KritaCanvasAdapter(CanvasPort):
                     old_batchmode = bool(document.batchmode())
                     document.setBatchmode(True)
 
-            for stroke in plan.strokes:
+            for stroke in render_strokes:
                 if cancelled():
                     break
 
@@ -590,6 +603,7 @@ class KritaCanvasAdapter(CanvasPort):
                             raise RuntimeError("Native Bridge がストローク全点を受理しませんでした")
                         mutated = True
                         rendered += 1
+                        self.last_render_trace["routes"]["native_bridge"] += 1
                         segment_count += max(1, len(stroke.points) - 1)
                         if segment_count >= evt_interval:
                             segment_count = 0
@@ -601,25 +615,27 @@ class KritaCanvasAdapter(CanvasPort):
                     raise RuntimeError("このKritaには Node.paintLine がありません。Krita 6.0以降を使用してください。")
                 if stroke.is_eraser and target_view is None:
                     raise RuntimeError("消しゴムストロークにはKritaのアクティブビューが必要です")
-                _apply_stroke_style(
-                    stroke,
-                    size_multiplier=(
-                        size_mult * _constant_path_pressure(stroke)
-                        if _can_use_continuous_path(current_node, stroke)
-                        else size_mult
-                    ),
-                    opacity_multiplier=op_mult,
-                    view=target_view,
-                    preset_cache=self._brush_preset_cache,
-                )
                 _apply_color_to_krita(stroke.color, view=target_view)
 
                 if _can_use_continuous_path(current_node, stroke):
-                    path = _make_continuous_path(stroke)
+                    painted_sections = 0
                     try:
-                        current_node.paintPath(path)
-                    except (TypeError, AttributeError, NotImplementedError):
+                        for section in _pressure_path_sections(stroke):
+                            resolved_preset = _apply_stroke_style(
+                                stroke,
+                                size_multiplier=size_mult * _points_pressure(section),
+                                opacity_multiplier=op_mult,
+                                view=target_view,
+                                preset_cache=self._brush_preset_cache,
+                            )
+                            if resolved_preset:
+                                self.last_render_trace["resolved_presets"][stroke.brush_preset] = resolved_preset
+                            current_node.paintPath(_make_continuous_path(section))
+                            painted_sections += 1
+                    except (TypeError, AttributeError, NotImplementedError) as exc:
                         # 一部ビルドで paintPath のPython bindingが欠ける場合だけ区間描画へ戻す。
+                        if painted_sections:
+                            raise RuntimeError("連続ストロークの一部だけが描画されたため安全に中止しました") from exc
                         _apply_stroke_style(
                             stroke,
                             size_multiplier=size_mult,
@@ -630,12 +646,23 @@ class KritaCanvasAdapter(CanvasPort):
                     else:
                         mutated = True
                         rendered += 1
+                        self.last_render_trace["routes"]["continuous_path"] += 1
                         segment_count += max(1, len(stroke.points) - 1)
                         if segment_count >= evt_interval:
                             segment_count = 0
                             if process_events_during_render:
                                 _process_events()
                         continue
+
+                resolved_preset = _apply_stroke_style(
+                    stroke,
+                    size_multiplier=size_mult,
+                    opacity_multiplier=op_mult,
+                    view=target_view,
+                    preset_cache=self._brush_preset_cache,
+                )
+                if resolved_preset:
+                    self.last_render_trace["resolved_presets"][stroke.brush_preset] = resolved_preset
 
                 stroke_painted = False
                 for start, end in zip(stroke.points, stroke.points[1:], strict=False):
@@ -698,6 +725,7 @@ class KritaCanvasAdapter(CanvasPort):
                             _process_events()
 
                 rendered += 1
+                self.last_render_trace["routes"]["segmented_line"] += 1
             completed = not cancelled()
         finally:
             rollback_error: Exception | None = None
@@ -931,24 +959,55 @@ def _qpoint_float(x: float, y: float) -> Any:
 
 
 def _constant_path_pressure(stroke: Stroke) -> float:
-    return sum(point.pressure for point in stroke.points) / len(stroke.points)
+    return _points_pressure(stroke.points)
+
+
+def _points_pressure(points: Sequence[StrokePoint]) -> float:
+    return max(0.05, sum(point.pressure for point in points) / max(1, len(points)))
+
+
+def _pressure_path_sections(
+    stroke: Stroke,
+    *,
+    pressure_delta: float = 0.18,
+    max_sections: int = 6,
+) -> tuple[tuple[StrokePoint, ...], ...]:
+    """筆圧を少数の連続パスへ量子化し、点ごとの丸い継ぎ目を防ぐ。"""
+    points = tuple(stroke.points)
+    if len(points) < 3:
+        return (points,)
+    sections: list[tuple[StrokePoint, ...]] = []
+    current: list[StrokePoint] = [points[0]]
+    pressure_sum = points[0].pressure
+    for point in points[1:]:
+        mean_pressure = pressure_sum / len(current)
+        can_split = len(current) >= 2 and len(sections) < max_sections - 1
+        if can_split and abs(point.pressure - mean_pressure) > pressure_delta:
+            current.append(point)
+            sections.append(tuple(current))
+            current = [point]
+            pressure_sum = point.pressure
+        else:
+            current.append(point)
+            pressure_sum += point.pressure
+    if len(current) == 1 and sections:
+        sections[-1] = (*sections[-1], current[0])
+    else:
+        sections.append(tuple(current))
+    return tuple(section for section in sections if len(section) >= 2)
 
 
 def _can_use_continuous_path(node: Any, stroke: Stroke) -> bool:
     if stroke.is_eraser or len(stroke.points) < 3 or not callable(QPainterPath):
         return False
-    if not callable(getattr(node, "paintPath", None)):
-        return False
-    pressures = [point.pressure for point in stroke.points]
-    # 筆圧差が極端でない限り、折れ線ダブ（点々）の発生を防ぐため paintPath を優先する
-    return (max(pressures) - min(pressures)) <= 0.45
+    return callable(getattr(node, "paintPath", None))
 
 
-def _make_continuous_path(stroke: Stroke) -> Any:
+def _make_continuous_path(points: Sequence[StrokePoint]) -> Any:
     path = QPainterPath()
-    first = stroke.points[0]
+    first = points[0]
     path.moveTo(float(first.x), float(first.y))
-    for point in stroke.points[1:]:
+    for point in points[1:]:
         path.lineTo(float(point.x), float(point.y))
     return path
 
@@ -1056,7 +1115,7 @@ def _apply_stroke_style(
     opacity_multiplier: float = 1.0,
     view: Any | None = None,
     preset_cache: dict[tuple[str, bool], Any] | None = None,
-) -> None:
+) -> str | None:
     """Apply the DrawingPlan brush contract to Krita's active view."""
     try:
         from krita import Krita
@@ -1064,7 +1123,7 @@ def _apply_stroke_style(
         app = Krita.instance()
         target_view = view or _active_view()
         if target_view is None:
-            return
+            return None
 
         is_eraser = bool(getattr(stroke, "is_eraser", False))
         preset_name = str(stroke.brush_preset).strip()
@@ -1100,6 +1159,13 @@ def _apply_stroke_style(
 
         if preset is None and hasattr(presets, "get"):
             preset = presets.get(preset_name)
+            if preset is not None:
+                resolved_name_getter = getattr(preset, "name", None)
+                resolved_name = (
+                    str(resolved_name_getter()) if callable(resolved_name_getter) else str(resolved_name_getter or "")
+                )
+                if "(mypaint)" in resolved_name.casefold() and "(mypaint)" not in preset_name.casefold():
+                    preset = None
 
         if preset is None and hasattr(presets, "values"):
             all_presets = list(presets.values())
@@ -1116,6 +1182,8 @@ def _apply_stroke_style(
                 p_name_str: str = str(p_name()) if callable(p_name) else (str(p_name) if p_name is not None else "")
                 p_cand_clean = _clean_p_name(p_name_str)
                 if p_name_str.lower() == p_low or p_cand_clean == p_clean:
+                    if "(mypaint)" in p_name_str.casefold() and "(mypaint)" not in preset_name.casefold():
+                        continue
                     preset = p
                     break
 
@@ -1180,6 +1248,9 @@ def _apply_stroke_style(
             target_view.setBrushSize(effective_size)
         if hasattr(target_view, "setPaintingOpacity"):
             target_view.setPaintingOpacity(effective_opacity)
+        preset_name_getter = getattr(preset, "name", None)
+        return str(preset_name_getter()) if callable(preset_name_getter) else str(preset_name)
     except Exception:
         if view is not None or bool(getattr(stroke, "is_eraser", False)):
             raise
+    return None

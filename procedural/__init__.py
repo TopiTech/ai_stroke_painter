@@ -7,7 +7,12 @@ from dataclasses import replace
 import math
 import re
 
-from ..brushes import brush_preset_for_profile, canonical_brush_profile
+from ..brushes import (
+    brush_policy_for_profile,
+    brush_preset_for_profile,
+    canonical_brush_profile,
+    infer_brush_profile,
+)
 from ..domain import DrawingPlan, Stroke, StrokePoint
 from ..scene_spec import SceneSpec, analyze_scene
 from ..stroke_program import (
@@ -21,6 +26,7 @@ from ..stroke_program import (
     compile_stroke_program,
     drawing_plan_to_stroke_program,
 )
+from ..version import generation_trace
 from .base import color_palette, pressure_profile, recolor_strokes_to_palette
 from .character import character_feature_stroke_ids, generate_character_strokes
 from .color_plan import ColorPlan, build_color_plan
@@ -43,6 +49,22 @@ __all__ = [
 ]
 
 AUTO_PROCEDURAL_STROKE_BUDGET = 500
+AUTO_COMPILED_BUDGETS = {
+    "character": 132,
+    "landscape": 96,
+    "creature": 88,
+    "geometry": 136,
+    "fx": 96,
+    "unknown": 120,
+}
+AUTO_SEMANTIC_BUDGETS = {
+    "character": 104,
+    "landscape": 76,
+    "creature": 64,
+    "geometry": 108,
+    "fx": 80,
+    "unknown": 96,
+}
 
 _CREATURE_ELEMENTS = {"cat", "dog", "bird", "dragon", "wolf"}
 _LANDSCAPE_ELEMENTS = {
@@ -70,10 +92,10 @@ def generate_procedural_plan(
     brush_profile: str = "auto",
 ) -> DrawingPlan:
     """共通 StrokeProgram コンパイラを介して描画可能な計画を生成する。"""
-    return compile_stroke_program(
-        generate_procedural_program(prompt, seed, count, width, height, palette_name, brush_profile),
-        count=count if count is not None else AUTO_PROCEDURAL_STROKE_BUDGET,
-    )
+    program = generate_procedural_program(prompt, seed, count, width, height, palette_name, brush_profile)
+    category = str(program.metadata.get("prompt_category", "unknown"))
+    effective_count = count if count is not None else AUTO_COMPILED_BUDGETS.get(category, AUTO_PROCEDURAL_STROKE_BUDGET)
+    return compile_stroke_program(program, count=effective_count)
 
 
 def _prompt_category(prompt: str) -> str:
@@ -606,7 +628,15 @@ def _build_procedural_render_graph(
 
     if natural_requirements and primary != "landscape":
         environment_seed = seed + 3_571
-        environment = generate_landscape_strokes(prompt, environment_seed, None, width, height, palette_name)
+        environment = generate_landscape_strokes(
+            prompt,
+            environment_seed,
+            None,
+            width,
+            height,
+            palette_name,
+            include_foundation_strokes=False,
+        )
         background = tuple(stroke for stroke in environment if stroke.layer_name in {"Lineart", "Shading"})
         if background:
             background_ids = {stroke.id for stroke in background}
@@ -653,7 +683,15 @@ def _build_procedural_render_graph(
 
     if primary == "character":
         character = transform_strokes_to_box(
-            generate_character_strokes(prompt, seed, None, width, height, palette_name),
+            generate_character_strokes(
+                prompt,
+                seed,
+                None,
+                width,
+                height,
+                palette_name,
+                include_foundation_strokes=False,
+            ),
             canvas_width=width,
             canvas_height=height,
             box=composition.primary,
@@ -680,7 +718,17 @@ def _build_procedural_render_graph(
     elif primary == "creature":
         title = "Creature Artwork"
     elif primary == "landscape":
-        landscape = tuple(generate_landscape_strokes(prompt, seed, None, width, height, palette_name))
+        landscape = tuple(
+            generate_landscape_strokes(
+                prompt,
+                seed,
+                None,
+                width,
+                height,
+                palette_name,
+                include_foundation_strokes=False,
+            )
+        )
         landscape_ids = {stroke.id for stroke in landscape}
         nodes.append(
             RenderNode(
@@ -721,7 +769,15 @@ def _build_procedural_render_graph(
         title = "Manga FX Artwork"
     else:
         fallback = transform_strokes_to_box(
-            generate_character_strokes(prompt, seed, None, width, height, palette_name),
+            generate_character_strokes(
+                prompt,
+                seed,
+                None,
+                width,
+                height,
+                palette_name,
+                include_foundation_strokes=False,
+            ),
             canvas_width=width,
             canvas_height=height,
             box=composition.primary,
@@ -843,6 +899,8 @@ def _foundation_operations(
     composition: CompositionPlan,
     scene_spec: SceneSpec,
     stroke_budget: int | None,
+    canvas_width: float,
+    canvas_height: float,
 ) -> tuple[ProgramOperation, ...]:
     """背景・環境・主役の順に大きな明暗面を置き、少数筆でも立体を成立させる。"""
 
@@ -949,11 +1007,36 @@ def _foundation_operations(
         )
 
     if category == "character":
+        # character.py と同じ基準（中心0.5/0.47、最小辺の85%）から面形状を
+        # 導出し、独立した巨大楕円が主線からはみ出すのを防ぐ。
+        unit_scale_x = min(canvas_width, canvas_height) * 0.85 / canvas_width
+        unit_scale_y = min(canvas_width, canvas_height) * 0.85 / canvas_height
+        face_shape = (
+            ProgramPoint(0.5, 0.47 - unit_scale_y * 0.25),
+            ProgramPoint(0.5 - unit_scale_x * 0.18, 0.47 - unit_scale_y * 0.19),
+            ProgramPoint(0.5 - unit_scale_x * 0.22, 0.47 - unit_scale_y * 0.08),
+            ProgramPoint(0.5 - unit_scale_x * 0.20, 0.47 + unit_scale_y * 0.06),
+            ProgramPoint(0.5 - unit_scale_x * 0.14, 0.47 + unit_scale_y * 0.15),
+            ProgramPoint(0.5 - unit_scale_x * 0.06, 0.47 + unit_scale_y * 0.205),
+            ProgramPoint(0.5, 0.47 + unit_scale_y * 0.218),
+            ProgramPoint(0.5 + unit_scale_x * 0.06, 0.47 + unit_scale_y * 0.205),
+            ProgramPoint(0.5 + unit_scale_x * 0.14, 0.47 + unit_scale_y * 0.15),
+            ProgramPoint(0.5 + unit_scale_x * 0.20, 0.47 + unit_scale_y * 0.06),
+            ProgramPoint(0.5 + unit_scale_x * 0.22, 0.47 - unit_scale_y * 0.08),
+            ProgramPoint(0.5 + unit_scale_x * 0.18, 0.47 - unit_scale_y * 0.19),
+        )
         foundations.extend(
             (
                 value_fill(
                     "back-hair",
-                    primary(_ellipse_points(0.5, 0.45, 0.29, 0.40)),
+                    primary(
+                        _ellipse_points(
+                            0.5,
+                            0.47 + unit_scale_y * 0.06,
+                            unit_scale_x * 0.29,
+                            unit_scale_y * 0.36,
+                        )
+                    ),
                     (
                         role_color("hair_main", color_plan.subject_mid),
                         role_color("hair_shadow", color_plan.subject_shadow),
@@ -981,7 +1064,7 @@ def _foundation_operations(
                 ),
                 value_fill(
                     "face",
-                    primary(_ellipse_points(0.5, 0.46, 0.205, 0.285)),
+                    primary(face_shape),
                     (
                         role_color("skin_base", color_plan.subject_base),
                         role_color("skin_shadow", color_plan.subject_shadow),
@@ -1154,9 +1237,19 @@ def generate_procedural_program(
         composition,
         scene_spec,
         count,
+        width,
+        height,
     )
     if count is None:
-        scene_budget = None
+        # Autoは全装飾を無条件に採用せず、題材の認識に必要な構造と少量の
+        # 仕上げへ予算を集中する。必須要素が多い混合題材だけ段階的に増やす。
+        minimum_required = sum(node.minimum_count for node in render_graph.nodes)
+        desired = AUTO_SEMANTIC_BUDGETS.get(category, AUTO_SEMANTIC_BUDGETS["unknown"])
+        desired += max(0, len(scene_spec.required_elements) - 1) * 8
+        scene_budget = min(
+            sum(len(node.strokes) for node in render_graph.nodes),
+            max(minimum_required, desired),
+        )
     else:
         # compiler と同じ比率で面の完全性を先に予約し、残りを意味ノードへ配る。
         fill_count = len(foundations)
@@ -1213,12 +1306,19 @@ def generate_procedural_program(
 
         strokes = [_safe_color_replace(stroke) for stroke in strokes]
 
-    # 指定されたブラシプロファイルの一括適用
-    if brush_profile and brush_profile != "auto":
-        normalized_profile = canonical_brush_profile(brush_profile)
-        target_preset = brush_preset_for_profile(normalized_profile)
+    # UIの画材指定を役割別に展開する。線用ペンによる面塗りや、ぼかし用
+    # ブラシによる主線の一括上書きを避ける。
+    brush_policy = brush_policy_for_profile(brush_profile)
+    if brush_profile:
         profile_strokes: list[Stroke] = []
         for s in strokes:
+            default_profile = infer_brush_profile(s.brush_preset, is_eraser=s.is_eraser)
+            normalized_profile = brush_policy.profile_for(
+                s.layer_name,
+                default_profile=default_profile,
+                operation_kind="path",
+            )
+            target_preset = brush_preset_for_profile(normalized_profile)
             new_pts: list[StrokePoint] = []
             n = len(s.points) - 1
             for idx, pt in enumerate(s.points):
@@ -1243,7 +1343,15 @@ def generate_procedural_program(
     # 基準解像度 600px（基準最小辺）に対し、超高解像度（4K/8K）から低解像度まで自然にスケーリング
     resolution_scale = max(0.35, min(12.0, min(width, height) / 600.0))
     if abs(resolution_scale - 1.0) > 1e-9:
-        strokes = [replace(stroke, size_px=stroke.size_px * resolution_scale) for stroke in strokes]
+        stroke_domains = {stroke.id: node.domain for node in render_graph.nodes for stroke in node.strokes}
+        # landscape.py はブラシ径もキャンバス最小辺から算出済み。ここで再度
+        # 解像度倍率を掛けるとA4で幹や地面が4倍以上に膨張する。
+        strokes = [
+            stroke
+            if stroke_domains.get(stroke.id) == "landscape"
+            else replace(stroke, size_px=stroke.size_px * resolution_scale)
+            for stroke in strokes
+        ]
 
     # レイヤー順序の抽出
     layer_order = ["Draft", "Flats", "Shading", "Lineart", "Highlights", "FX"]
@@ -1268,20 +1376,24 @@ def generate_procedural_program(
         ).operations
     else:
         path_operations = ()
-    if brush_profile and brush_profile != "auto":
-        normalized_profile = canonical_brush_profile(brush_profile)
-        target_preset = brush_preset_for_profile(normalized_profile)
-        foundations = tuple(
-            replace(
+    if brush_profile:
+
+        def _apply_foundation_brush_policy(operation: ProgramOperation) -> ProgramOperation:
+            resolved_profile = brush_policy.profile_for(
+                operation.layer,
+                default_profile=operation.brush.profile,
+                operation_kind=operation.kind,
+            )
+            return replace(
                 operation,
                 brush=replace(
                     operation.brush,
-                    profile=normalized_profile,
-                    preset_hint=target_preset,
+                    profile=resolved_profile,
+                    preset_hint=brush_preset_for_profile(resolved_profile),
                 ),
             )
-            for operation in foundations
-        )
+
+        foundations = tuple(_apply_foundation_brush_policy(operation) for operation in foundations)
     return StrokeProgram(
         prompt=prompt,
         seed=seed,
@@ -1297,6 +1409,11 @@ def generate_procedural_program(
             "resolved_palette": resolved_palette,
             "effective_palette": resolved_palette,
             "requested_count": count,
+            "generation_seed": seed,
+            "brush_profile": canonical_brush_profile(brush_profile),
+            "brush_policy": brush_policy.as_dict(),
+            "draft_policy": "preview_only",
+            "generation_trace": generation_trace(generator="procedural_v2", requested_count=count),
             "overlay": category == "fx",
             "scene_spec": scene_spec.as_dict(),
             "required_elements": list(scene_spec.required_elements),

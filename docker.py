@@ -76,6 +76,7 @@ from .qt_compat import (
 )
 from .quality import evaluate_plan_quality
 from .storage import save_plan, save_svg
+from .version import PLUGIN_VERSION, source_fingerprint
 
 MAX_REFERENCE_IMAGE_BYTES = MAX_ENCODED_IMAGE_BYTES
 RENDER_WAIT_TIMEOUT_SECONDS = 15 * 60
@@ -979,7 +980,7 @@ class AIStrokePainterDocker(DockWidget):
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("AI Stroke Painter Pro")
+        self.setWindowTitle(f"AI Stroke Painter Pro v{PLUGIN_VERSION}")
         self.planner = RuleBasedPlanner()
         self.canvas_port = KritaCanvasAdapter()
         self._cancel: bool = False
@@ -1191,7 +1192,9 @@ class AIStrokePainterDocker(DockWidget):
 
         self.preview = PreviewWidget(self)
         preview_box_layout.addWidget(self.preview)
-        self.quality_summary_label = QLabel("品質診断: プレビュー生成後に表示します")
+        self.quality_summary_label = QLabel(
+            f"品質診断: プレビュー生成後に表示します（v{PLUGIN_VERSION}/{source_fingerprint()}）"
+        )
         self.quality_summary_label.setWordWrap(True)
         preview_box_layout.addWidget(self.quality_summary_label)
         tab_main_layout.addWidget(preview_box)
@@ -3175,7 +3178,7 @@ class AIStrokePainterDocker(DockWidget):
         }
 
         now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self._log_debug(f"\n========== 描画タスク開始 [{now_str}] ==========")
+        self._log_debug(f"\n========== 描画タスク開始 [{now_str}] v{PLUGIN_VERSION}/{source_fingerprint()} ==========")
         mode_w = _get_attr(self, "planner_mode")
         mode_str = mode_w.currentText() if mode_w is not None and hasattr(mode_w, "currentText") else ""
         count_mode_str = (
@@ -3487,6 +3490,9 @@ class AIStrokePainterDocker(DockWidget):
                 event_interval=e_interval,
                 view=_get_attr(self, "_active_view"),
             )
+            render_trace = getattr(cp, "last_render_trace", None)
+            if isinstance(render_trace, dict):
+                self._log_debug("[描画トレース] " + json.dumps(render_trace, ensure_ascii=False, sort_keys=True))
             render_worker = _get_attr(self, "_worker")
             is_goal_completion = bool(getattr(render_worker, "goal_mode", False)) and (
                 plan.metadata.get("session_goal_reached", False) is True or _is_plan_goal_reached(plan)

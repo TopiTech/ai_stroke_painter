@@ -13,6 +13,155 @@ class BrushProfileDefinition:
     keywords: tuple[str, ...]
 
 
+BRUSH_POLICY_VERSION = 1
+
+
+@dataclass(frozen=True)
+class BrushPolicy:
+    """ユーザー指定の画材を、描画上の役割に適したブラシへ展開する。"""
+
+    requested_profile: str
+
+    def profile_for(
+        self,
+        layer_name: str,
+        *,
+        default_profile: str = "auto",
+        operation_kind: str | None = None,
+    ) -> str:
+        role = brush_role_for_layer(layer_name, operation_kind=operation_kind)
+        requested = canonical_brush_profile(self.requested_profile)
+        fallback = canonical_brush_profile(default_profile)
+        if fallback == "auto":
+            fallback = _ROLE_DEFAULT_PROFILES.get(role, "gpen")
+        if requested == "auto":
+            if role == "draft":
+                return "pencil"
+            if role == "flats" and fallback in {"gpen", "marupen", "pencil", "screentone", "splatter"}:
+                return "marker"
+            if role == "shading" and fallback in {"gpen", "marupen", "marker", "screentone", "splatter"}:
+                return "airbrush"
+            if role == "lineart" and fallback in {"airbrush", "marker", "watercolor", "glaze", "splatter"}:
+                return "gpen"
+            if role == "highlights" and fallback not in {"gpen", "marupen", "brush"}:
+                return "gpen"
+            return fallback
+
+        # 線用のペンで大面積を塗ったり、エアブラシで主線を引いたりしない。
+        if role == "draft":
+            return "pencil"
+        if role == "flats":
+            if requested == "brush":
+                return "watercolor"
+            if requested in {"gpen", "marupen", "pencil", "screentone", "splatter"}:
+                return (
+                    fallback
+                    if fallback in {"marker", "airbrush", "watercolor", "brush", "glaze", "oil_paint", "pastel"}
+                    else "marker"
+                )
+            if requested in {"brush", "watercolor", "glaze", "oil_paint", "pastel", "marker", "airbrush"}:
+                return requested
+            return "marker"
+        if role == "shading":
+            if requested == "brush":
+                return "watercolor"
+            if requested in {"brush", "watercolor", "glaze", "oil_paint", "pastel", "pencil", "airbrush"}:
+                return requested
+            return "airbrush"
+        if role == "lineart":
+            if requested in {"gpen", "marupen", "brush", "pencil", "pastel"}:
+                return requested
+            return "gpen"
+        if role == "highlights":
+            if requested in {"gpen", "marupen"}:
+                return requested
+            return "gpen"
+        if role == "fx":
+            return requested
+        return fallback
+
+    def as_dict(self) -> dict[str, object]:
+        role_layers = (
+            ("draft", "Draft"),
+            ("flats", "Flats"),
+            ("shading", "Shading"),
+            ("lineart", "Lineart"),
+            ("highlights", "Highlights"),
+            ("fx", "FX"),
+        )
+        return {
+            "version": BRUSH_POLICY_VERSION,
+            "mode": "role_aware",
+            "requested_profile": canonical_brush_profile(self.requested_profile),
+            "roles": {role: self.profile_for(layer) for role, layer in role_layers},
+            "compatible_roles": {
+                role: sorted(
+                    {
+                        self.profile_for(layer, default_profile=default)
+                        for default in (
+                            "marker",
+                            "airbrush",
+                            "watercolor",
+                            "gpen",
+                            "marupen",
+                            "pencil",
+                            "brush",
+                            "oil_paint",
+                            "pastel",
+                            "screentone",
+                            "glaze",
+                            "splatter",
+                        )
+                    }
+                )
+                for role, layer in role_layers
+            },
+        }
+
+
+_ROLE_DEFAULT_PROFILES: dict[str, str] = {
+    "draft": "pencil",
+    "flats": "marker",
+    "shading": "airbrush",
+    "lineart": "gpen",
+    "highlights": "gpen",
+    "fx": "gpen",
+}
+
+
+def brush_role_for_layer(layer_name: str, *, operation_kind: str | None = None) -> str:
+    normalized = str(layer_name).strip().casefold()
+    if "draft" in normalized or "sketch" in normalized:
+        return "draft"
+    if "flat" in normalized or "base" in normalized or operation_kind in {"fill", "gradient_fill"}:
+        return "flats"
+    if "shad" in normalized or "shadow" in normalized or "hatch" in normalized:
+        return "shading"
+    if "highlight" in normalized or "light" in normalized:
+        return "highlights"
+    if normalized == "fx" or "effect" in normalized or operation_kind == "particles":
+        return "fx"
+    return "lineart"
+
+
+def brush_policy_for_profile(profile: str | None) -> BrushPolicy:
+    return BrushPolicy(canonical_brush_profile(profile))
+
+
+def role_brush_profile(
+    profile: str | None,
+    layer_name: str,
+    *,
+    default_profile: str = "auto",
+    operation_kind: str | None = None,
+) -> str:
+    return brush_policy_for_profile(profile).profile_for(
+        layer_name,
+        default_profile=default_profile,
+        operation_kind=operation_kind,
+    )
+
+
 BRUSH_PROFILES: dict[str, BrushProfileDefinition] = {
     "auto": BrushProfileDefinition("auto", "Basic-5 Size", ("Basic-5 Size", "Basic-1"), ("basic",)),
     "gpen": BrushProfileDefinition(
@@ -29,8 +178,8 @@ BRUSH_PROFILES: dict[str, BrushProfileDefinition] = {
     ),
     "brush": BrushProfileDefinition(
         "brush",
-        "Wet-1 Water",
-        ("Wet-1 Water", "Dry Bristles"),
+        "Dry Bristles",
+        ("Dry Bristles", "Wet-1 Water"),
         ("bristle", "paint", "calligraphy"),
     ),
     "marker": BrushProfileDefinition(

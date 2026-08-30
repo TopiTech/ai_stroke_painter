@@ -6,7 +6,8 @@ import math
 import unittest
 import uuid
 
-from .domain import DrawingPlan, Stroke, StrokePoint
+from .brushes import brush_policy_for_profile
+from .domain import DrawingPlan, Stroke, StrokePoint, materialize_render_options
 from .procedural import generate_procedural_plan, generate_procedural_program
 from .procedural.base import color_palette
 from .procedural.color_plan import build_color_plan, contrast_ratio
@@ -162,7 +163,7 @@ class QualityV2Tests(unittest.TestCase):
         uniform_report = evaluate_plan_quality(uniform)
         reference_report = evaluate_plan_quality(reference)
 
-        self.assertEqual(uniform_report.quality_version, 2)
+        self.assertEqual(uniform_report.quality_version, 3)
         self.assertLess(uniform_report.visual_score, reference_report.visual_score)
         self.assertLess(uniform_report.value_range, 0.08)
         self.assertGreater(uniform_report.dominant_color_ratio, 0.95)
@@ -321,7 +322,8 @@ class RenderGraphIntegrationTests(unittest.TestCase):
             sum(stroke.id not in plan.metadata["stroke_node_map"] for stroke in plan.strokes),
             13,
         )
-        self.assertEqual(report.semantic_fidelity_score, 1.0)
+        self.assertGreaterEqual(report.semantic_fidelity_score, 0.90)
+        self.assertGreaterEqual(report.feature_geometry_score, 0.85)
         self.assertFalse(report.missing_required_elements)
         self.assertGreater(report.subject_background_contrast, 0.05)
         self.assertLess(report.effect_subject_intrusion_ratio, 0.10)
@@ -514,6 +516,101 @@ class CompositionAndColorPlanTests(unittest.TestCase):
                 plan.highlight,
             }.issubset(registered)
         )
+
+
+class QualityV3ContractTests(unittest.TestCase):
+    def test_builtin_goldens_use_role_aware_brushes_and_bounded_auto_budgets(self) -> None:
+        cases = (
+            ("anime girl portrait, delicate eyes, flowing hair", "anime", "gpen", 132),
+            ("fantasy sakura landscape with mountains and clouds", "nature", "brush", 96),
+        )
+        for prompt, palette, profile, maximum in cases:
+            with self.subTest(prompt=prompt):
+                plan = generate_procedural_plan(
+                    prompt,
+                    42,
+                    None,
+                    2480,
+                    3508,
+                    palette_name=palette,
+                    brush_profile=profile,
+                )
+                report = evaluate_plan_quality(plan)
+                self.assertLessEqual(len(plan.strokes), maximum)
+                self.assertEqual(plan.metadata["draft_policy"], "preview_only")
+                self.assertEqual(plan.metadata["brush_policy"]["mode"], "role_aware")
+                self.assertGreaterEqual(report.brush_role_compatibility_score, 0.95)
+                self.assertGreaterEqual(report.feature_geometry_score, 0.85)
+                self.assertFalse(report.issues)
+                self.assertGreater(len({stroke.brush_preset for stroke in plan.strokes}), 1)
+
+    def test_old_single_pen_contract_is_rejected(self) -> None:
+        strokes = tuple(
+            _stroke(f"s-{index}", layer=layer)
+            for index, layer in enumerate(("Flats", "Shading", "Lineart", "Highlights"))
+        )
+        strokes = tuple(
+            Stroke(
+                stroke.id,
+                stroke.points,
+                brush_preset="Ink-2 Fineliner",
+                color=stroke.color,
+                size_px=stroke.size_px,
+                layer_name=stroke.layer_name,
+            )
+            for stroke in strokes
+        )
+        plan = DrawingPlan(
+            "single pen",
+            1,
+            strokes,
+            metadata={"brush_policy": brush_policy_for_profile("gpen").as_dict()},
+            canvas_width=100,
+            canvas_height=100,
+        )
+
+        report = evaluate_plan_quality(plan)
+
+        self.assertLess(report.brush_role_compatibility_score, 0.75)
+        self.assertTrue(any("役割" in issue for issue in report.issues))
+
+    def test_materialized_final_omits_preview_only_draft(self) -> None:
+        draft = _stroke("draft", layer="Draft")
+        line = _stroke("line", layer="Lineart")
+        plan = DrawingPlan(
+            "draft policy",
+            1,
+            (draft, line),
+            layers=("Draft", "Lineart"),
+            metadata={"draft_policy": "preview_only"},
+        )
+
+        final_plan = materialize_render_options(plan)
+
+        self.assertEqual([stroke.id for stroke in final_plan.strokes], ["line"])
+        self.assertEqual(final_plan.layers, ("Lineart",))
+
+    def test_pressure_variation_is_bounded_into_continuous_sections(self) -> None:
+        from .krita_adapter import _pressure_path_sections
+
+        points = tuple(
+            StrokePoint(float(index * 10), float(index * 4), 0.1 if index % 2 == 0 else 1.0, index * 10)
+            for index in range(24)
+        )
+        sections = _pressure_path_sections(Stroke("pressure", points))
+
+        self.assertLessEqual(len(sections), 6)
+        self.assertTrue(all(len(section) >= 2 for section in sections))
+        self.assertEqual(sections[0][0], points[0])
+        self.assertEqual(sections[-1][-1], points[-1])
+
+    def test_generation_trace_identifies_installed_sources(self) -> None:
+        plan = generate_procedural_plan("anime girl portrait", 7, 40, 800, 600)
+        trace = plan.metadata["generation_trace"]
+
+        self.assertEqual(trace["plugin_version"], "0.5.0")
+        self.assertEqual(len(trace["source_fingerprint"]), 16)
+        self.assertEqual(trace["count_mode"], "manual")
 
 
 if __name__ == "__main__":

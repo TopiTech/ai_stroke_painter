@@ -68,8 +68,7 @@ def landscape_feature_stroke_ids(prompt: str, seed: int) -> tuple[str, ...]:
         uid("tree_bough", 0),
         uid("tree_bough", 1),
         uid("cloud", 0),
-        uid("sakura_mass" if is_sakura else "foliage", 0),
-        uid("ground_layer", 0),
+        uid("sakura_blossom" if is_sakura else "foliage", 0),
     )
 
 
@@ -80,6 +79,8 @@ def generate_landscape_strokes(
     width: float,
     height: float,
     palette_name: str = "nature",
+    *,
+    include_foundation_strokes: bool = True,
 ) -> list[Stroke]:
     """自然風景（山・樹木・波・雲・花）の本格ストロークを生成する。"""
     rng = random.Random(seed)
@@ -844,4 +845,11 @@ def generate_landscape_strokes(
                     )
                 )
 
+    if not include_foundation_strokes:
+        duplicate_mass_ids = {
+            *(uid("sky_grad", index) for index in range(8)),
+            *(uid(f"mountain_body_{layer}", band) for layer in range(3) for band in range(3)),
+            *(uid("ground_layer", index) for index in range(4)),
+        }
+        strokes = [stroke for stroke in strokes if stroke.id not in duplicate_mass_ids]
     return sample_strokes_by_priority(recolor_strokes_to_palette(strokes, palette_name), count)

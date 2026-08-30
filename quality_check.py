@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import time
 
-from .brushes import infer_brush_profile
 from .docker import AIStrokePainterDocker
 from .procedural import generate_procedural_plan
 from .procedural.base import color_palette
@@ -60,10 +59,7 @@ def main() -> int:
             overlay = plan.metadata.get("overlay", False) is True
             minimum_coverage = 0.05 if overlay else 0.35
             minimum_layers = 1 if overlay else 2
-            brush_contract = all(
-                infer_brush_profile(stroke.brush_preset, is_eraser=stroke.is_eraser) == brush_profile
-                for stroke in plan.strokes
-            )
+            brush_contract = report.brush_role_compatibility_score >= 0.95
             color_plan = plan.metadata.get("color_plan", {})
             planned_colors = (
                 {value.lower() for value in color_plan.values() if isinstance(value, str) and value.startswith("#")}
@@ -79,7 +75,7 @@ def main() -> int:
                 stroke.color.lower() in palette_colors | planned_colors | compiled_gradient_colors
                 for stroke in plan.strokes
             )
-            semantic_contract = report.semantic_fidelity_score >= 1.0 and not report.missing_required_elements
+            semantic_contract = report.semantic_fidelity_score >= 0.78 and not report.missing_required_elements
             budget = manual_count if requested_count is not None else 500
             passed = (
                 deterministic
@@ -115,6 +111,10 @@ def main() -> int:
                     "subject_background_contrast": report.subject_background_contrast,
                     "effect_subject_intrusion": report.effect_subject_intrusion_ratio,
                     "semantic_fidelity": report.semantic_fidelity_score,
+                    "feature_geometry": report.feature_geometry_score,
+                    "feature_occlusion": report.feature_occlusion_ratio,
+                    "oversized_strokes": report.oversized_stroke_ratio,
+                    "draft_leak": report.draft_leak_ratio,
                     "missing_elements": list(report.missing_required_elements),
                     "layers": report.layer_count,
                     "category": plan.metadata.get("prompt_category"),

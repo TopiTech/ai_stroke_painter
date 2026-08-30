@@ -30,6 +30,7 @@ PACKAGE_FILES = (
     "scene_spec.py",
     "storage.py",
     "stroke_program.py",
+    "version.py",
     "procedural/__init__.py",
     "procedural/base.py",
     "procedural/character.py",

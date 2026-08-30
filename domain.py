@@ -779,6 +779,12 @@ def materialize_render_options(
     if layer_mode not in {"multi_layer", "single_layer", "active_layer"}:
         raise PlanValidationError("layer_mode が未対応です")
 
+    preview_only_draft = plan.metadata.get("draft_policy") == "preview_only"
+    source_strokes = tuple(
+        stroke
+        for stroke in plan.strokes
+        if not (preview_only_draft and stroke.layer_name.casefold().startswith("draft"))
+    )
     strokes = tuple(
         Stroke(
             id=stroke.id,
@@ -790,7 +796,7 @@ def materialize_render_options(
             opacity=min(1.0, stroke.opacity * opacity_value),
             is_eraser=stroke.is_eraser,
         )
-        for stroke in plan.strokes
+        for stroke in source_strokes
     )
     metadata = dict(plan.metadata)
     metadata["render_options"] = {
@@ -805,7 +811,9 @@ def materialize_render_options(
         strokes=strokes,
         title=plan.title,
         iteration=plan.iteration,
-        layers=plan.layers,
+        layers=tuple(
+            layer for layer in plan.layers if not (preview_only_draft and str(layer).casefold().startswith("draft"))
+        ),
         request_canvas_image=plan.request_canvas_image,
         metadata=metadata,
         canvas_width=plan.canvas_width,

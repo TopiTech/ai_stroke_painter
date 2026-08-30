@@ -5234,18 +5234,10 @@ class ExtendedCustomizationTests(unittest.TestCase):
         self.assertIn("Flats", selected_layers)
 
     def test_procedural_brush_profiles_applied(self) -> None:
+        from .brushes import brush_role_for_layer, infer_brush_profile
         from .procedural import generate_procedural_plan
 
-        profile_map = {
-            "gpen": "Ink-2 Fineliner",
-            "marupen": "Ink-1 Precision",
-            "brush": "Wet-1 Water",
-            "marker": "Marker-1 Broad",
-            "pencil": "Pencil-2",
-            "watercolor": "Wet Textured Soft",
-            "airbrush": "Airbrush Soft",
-        }
-        for prof, expected_preset in profile_map.items():
+        for prof in ("gpen", "marupen", "brush", "marker", "pencil", "watercolor", "airbrush"):
             plan = generate_procedural_plan(
                 prompt="anime girl portrait with flowers",
                 seed=100,
@@ -5255,8 +5247,13 @@ class ExtendedCustomizationTests(unittest.TestCase):
                 brush_profile=prof,
             )
             self.assertGreater(len(plan.strokes), 0)
+            policy = plan.metadata["brush_policy"]
+            compatible = policy["compatible_roles"]
             for stroke in plan.strokes:
-                self.assertEqual(stroke.brush_preset, expected_preset)
+                role = brush_role_for_layer(stroke.layer_name)
+                self.assertIn(infer_brush_profile(stroke.brush_preset), compatible[role])
+            if prof in {"gpen", "brush"}:
+                self.assertGreater(len({stroke.brush_preset for stroke in plan.strokes}), 1)
 
     def test_image_converter_extended_options(self) -> None:
         from .image_converter import ImageStrokeConverter

@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 from statistics import fmean, pstdev
+import uuid
 
+from .brushes import brush_role_for_layer, infer_brush_profile
 from .domain import LAYER_RENDER_ORDER, DrawingPlan, Stroke, split_color_alpha
 
 
@@ -34,7 +36,12 @@ class PlanQualityReport:
     semantic_fidelity_score: float = 1.0
     missing_required_elements: tuple[str, ...] = ()
     incomplete_semantic_groups: tuple[str, ...] = ()
-    quality_version: int = 2
+    brush_role_compatibility_score: float = 1.0
+    oversized_stroke_ratio: float = 0.0
+    feature_geometry_score: float = 1.0
+    feature_occlusion_ratio: float = 0.0
+    draft_leak_ratio: float = 0.0
+    quality_version: int = 3
 
 
 @dataclass(frozen=True)
@@ -383,6 +390,163 @@ def _line_cleanliness(plan: DrawingPlan, fragment_ratio: float) -> float:
     return max(0.0, min(1.0, 1.0 - fragment_ratio * 0.6 - reversal_ratio * 0.4))
 
 
+def _brush_contract_score(plan: DrawingPlan) -> float:
+    raw_policy = plan.metadata.get("brush_policy", {})
+    roles = raw_policy.get("roles", {}) if isinstance(raw_policy, dict) else {}
+    compatible_roles = raw_policy.get("compatible_roles", {}) if isinstance(raw_policy, dict) else {}
+    if not isinstance(roles, dict) or not roles:
+        return 1.0
+    comparisons = 0
+    compatible_count = 0
+    for stroke in plan.strokes:
+        if stroke.is_eraser:
+            continue
+        role = brush_role_for_layer(stroke.layer_name)
+        expected = roles.get(role)
+        compatible_spec = compatible_roles.get(role) if isinstance(compatible_roles, dict) else None
+        allowed = (
+            {item for item in compatible_spec if isinstance(item, str)}
+            if isinstance(compatible_spec, (list, tuple))
+            else ({expected} if isinstance(expected, str) else set())
+        )
+        if not allowed:
+            continue
+        comparisons += 1
+        compatible_count += infer_brush_profile(stroke.brush_preset) in allowed
+    return compatible_count / comparisons if comparisons else 1.0
+
+
+def _oversized_stroke_ratio(plan: DrawingPlan, width: float, height: float) -> float:
+    if not plan.strokes:
+        return 0.0
+    basis = max(2.0, min(width, height))
+    limits = {
+        "draft": 0.025,
+        "lineart": 0.040,
+        "highlights": 0.060,
+        "shading": 0.14,
+        "flats": 0.58,
+        "fx": 0.22,
+    }
+    oversized = sum(
+        stroke.size_px * max(point.pressure for point in stroke.points)
+        > basis * limits.get(brush_role_for_layer(stroke.layer_name), 0.10)
+        for stroke in plan.strokes
+    )
+    return oversized / len(plan.strokes)
+
+
+def _generation_seed(plan: DrawingPlan) -> int:
+    value = plan.metadata.get("generation_seed", plan.seed)
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else plan.seed
+
+
+def _feature_uuid(domain: str, seed: int, name: str, index: int = 0) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"ai-stroke/{domain}/{seed}/{name}/{index}"))
+
+
+def _stroke_centroid(stroke: Stroke) -> tuple[float, float]:
+    return fmean(point.x for point in stroke.points), fmean(point.y for point in stroke.points)
+
+
+def _character_feature_metrics(plan: DrawingPlan, width: float, height: float) -> tuple[float, float]:
+    seed = _generation_seed(plan)
+    names = (
+        "jaw_l",
+        "jaw_r",
+        "upper_lash_left",
+        "upper_lash_right",
+        "iris_outline_left",
+        "iris_outline_right",
+        "nose",
+        "mouth",
+        "brow_left",
+        "brow_right",
+    )
+    by_id = {stroke.id: stroke for stroke in plan.strokes}
+    features = {name: by_id.get(_feature_uuid("char", seed, name)) for name in names}
+    presence = sum(stroke is not None for stroke in features.values()) / len(features)
+    constraints: list[float] = []
+
+    left_eye = features["upper_lash_left"]
+    right_eye = features["upper_lash_right"]
+    if left_eye is not None and right_eye is not None:
+        left_center = _stroke_centroid(left_eye)
+        right_center = _stroke_centroid(right_eye)
+        separation = abs(right_center[0] - left_center[0]) / max(1.0, width)
+        alignment = abs(right_center[1] - left_center[1]) / max(1.0, height)
+        constraints.append(1.0 if left_center[0] < right_center[0] and 0.035 <= separation <= 0.32 else 0.0)
+        constraints.append(max(0.0, 1.0 - alignment / 0.035))
+
+    jaw_strokes = [features["jaw_l"], features["jaw_r"]]
+    if all(stroke is not None for stroke in jaw_strokes):
+        jaw_points = [point for stroke in jaw_strokes if stroke is not None for point in stroke.points]
+        jaw_width = max(point.x for point in jaw_points) - min(point.x for point in jaw_points)
+        jaw_height = max(point.y for point in jaw_points) - min(point.y for point in jaw_points)
+        ratio = jaw_height / max(1.0, jaw_width)
+        constraints.append(max(0.0, 1.0 - abs(ratio - 0.62) / 0.42))
+
+    nose = features["nose"]
+    mouth = features["mouth"]
+    if nose is not None and mouth is not None and left_eye is not None and right_eye is not None:
+        nose_center = _stroke_centroid(nose)
+        mouth_center = _stroke_centroid(mouth)
+        eye_mid_x = (_stroke_centroid(left_eye)[0] + _stroke_centroid(right_eye)[0]) * 0.5
+        centered = abs(mouth_center[0] - eye_mid_x) / max(1.0, width)
+        constraints.append(1.0 if nose_center[1] < mouth_center[1] else 0.0)
+        constraints.append(max(0.0, 1.0 - centered / 0.035))
+
+    geometry = presence * 0.55 + (fmean(constraints) if constraints else presence) * 0.45
+
+    eye_points = [point for stroke in (left_eye, right_eye) if stroke is not None for point in stroke.points]
+    if not eye_points:
+        return geometry, 1.0
+    margin_x = width * 0.018
+    margin_y = height * 0.014
+    eye_box = (
+        min(point.x for point in eye_points) - margin_x,
+        min(point.y for point in eye_points) - margin_y,
+        max(point.x for point in eye_points) + margin_x,
+        max(point.y for point in eye_points) + margin_y,
+    )
+    bang_ids = {_feature_uuid("char", seed, "bang_main", index) for index in range(12)}
+    bang_points = [point for stroke in plan.strokes if stroke.id in bang_ids for point in stroke.points]
+    x0, y0, x1, y1 = eye_box
+    intrusion = (
+        sum(x0 <= point.x <= x1 and y0 <= point.y <= y1 for point in bang_points) / len(bang_points)
+        if bang_points
+        else 0.0
+    )
+    return max(0.0, min(1.0, geometry)), max(0.0, min(1.0, intrusion))
+
+
+def _feature_metrics(plan: DrawingPlan, width: float, height: float) -> tuple[float, float]:
+    category = str(plan.metadata.get("prompt_category", ""))
+    if category == "character":
+        return _character_feature_metrics(plan, width, height)
+    if category == "landscape":
+        # 低予算でも山・幹・枝・雲・花弁などの認識特徴が実際に残ったかを見る。
+        from .procedural.landscape import landscape_feature_stroke_ids
+
+        feature_ids = landscape_feature_stroke_ids(plan.prompt, _generation_seed(plan))
+        selected_ids = {stroke.id for stroke in plan.strokes}
+        score = sum(stroke_id in selected_ids for stroke_id in feature_ids) / max(1, len(feature_ids))
+        return score, 0.0
+    manifest = plan.metadata.get("semantic_manifest", ())
+    ratios = (
+        [
+            min(1.0, float(entry.get("featured_count", 0)) / float(entry["featured_available"]))
+            for entry in manifest
+            if isinstance(entry, dict)
+            and isinstance(entry.get("featured_available"), int)
+            and entry["featured_available"] > 0
+        ]
+        if isinstance(manifest, (list, tuple))
+        else []
+    )
+    return (fmean(ratios) if ratios else 1.0), 0.0
+
+
 def evaluate_plan_quality(plan: DrawingPlan, *, grid_size: int = 40) -> PlanQualityReport:
     """構造契約と低解像度合成結果の双方から、計画の健全性を評価する。"""
     if not isinstance(plan, DrawingPlan):
@@ -458,6 +622,12 @@ def evaluate_plan_quality(plan: DrawingPlan, *, grid_size: int = 40) -> PlanQual
     semantic_fidelity = (
         (len(required_elements) - len(missing_required)) / len(required_elements) if required_elements else 1.0
     )
+    brush_role_score = _brush_contract_score(plan)
+    oversized_ratio = _oversized_stroke_ratio(plan, width, height)
+    feature_geometry, feature_occlusion = _feature_metrics(plan, width, height)
+    draft_count = sum(stroke.layer_name.casefold().startswith("draft") for stroke in plan.strokes)
+    draft_leak = 0.0 if plan.metadata.get("draft_policy") == "preview_only" else draft_count / max(1, len(plan.strokes))
+    verified_semantic_fidelity = semantic_fidelity * 0.35 + feature_geometry * 0.65
     raw_manifest = plan.metadata.get("semantic_manifest", ())
     incomplete_groups = (
         tuple(
@@ -474,7 +644,22 @@ def evaluate_plan_quality(plan: DrawingPlan, *, grid_size: int = 40) -> PlanQual
 
     # 構造だけで全面単色が、見た目だけで別題材が満点にならないよう三者を合議する。
     appearance_score = structural_score * 0.65 + visual_score * 0.35
-    score = appearance_score if not required_elements else appearance_score * 0.75 + semantic_fidelity * 0.25
+    has_structured_subject = bool(required_elements) or str(plan.metadata.get("prompt_category", "")) in {
+        "character",
+        "landscape",
+        "creature",
+        "geometry",
+    }
+    score = (
+        appearance_score if not has_structured_subject else appearance_score * 0.70 + verified_semantic_fidelity * 0.30
+    )
+    # 平均的な色差や全面被覆だけで満点にならないよう、役割契約と認識形状を
+    # 乗算ゲートにする。重大な一項目を別の高得点で相殺できない。
+    score *= 0.40 + brush_role_score * 0.60
+    score *= 0.55 + feature_geometry * 0.45
+    score *= max(0.40, 1.0 - oversized_ratio * 1.50)
+    score *= max(0.60, 1.0 - feature_occlusion * 1.25)
+    score *= max(0.55, 1.0 - draft_leak * 2.0)
     issues: list[str] = []
     if coverage < (0.05 if overlay else 0.35):
         issues.append("キャンバス被覆率が低く、白抜けの可能性があります")
@@ -503,6 +688,16 @@ def evaluate_plan_quality(plan: DrawingPlan, *, grid_size: int = 40) -> PlanQual
         issues.append("主役領域と背景の局所明度差が不足しています")
     if raster.has_subject_effects and raster.effect_subject_intrusion_ratio > 0.20:
         issues.append("効果線が主役の安全領域へ入りすぎています")
+    if brush_role_score < 0.95:
+        issues.append("面塗り・陰影・主線の役割に適さないブラシが混在しています")
+    if oversized_ratio > 0.08:
+        issues.append("対象形状に対して太すぎるブラシが多く、細部を潰す可能性があります")
+    if feature_geometry < 0.78:
+        issues.append("題材を認識するための特徴形状または配置制約が不足しています")
+    if feature_occlusion > 0.15:
+        issues.append("前景要素が顔の重要特徴へ入りすぎています")
+    if draft_leak > 0.0:
+        issues.append("下書きストロークが最終描画へ混入します")
 
     # 色数だけで高得点にせず、支配色、明度幅、実際に面積を持つ色数を併用する。
     palette_economy = max(0.0, min(1.0, 1.0 - max(0, raster.significant_color_count - 24) / 24.0))
@@ -546,7 +741,12 @@ def evaluate_plan_quality(plan: DrawingPlan, *, grid_size: int = 40) -> PlanQual
         significant_color_count=raster.significant_color_count,
         subject_background_contrast=round(raster.subject_background_contrast, 3),
         effect_subject_intrusion_ratio=round(raster.effect_subject_intrusion_ratio, 3),
-        semantic_fidelity_score=round(semantic_fidelity, 3),
+        semantic_fidelity_score=round(verified_semantic_fidelity, 3),
         missing_required_elements=missing_required,
         incomplete_semantic_groups=incomplete_groups,
+        brush_role_compatibility_score=round(brush_role_score, 3),
+        oversized_stroke_ratio=round(oversized_ratio, 3),
+        feature_geometry_score=round(feature_geometry, 3),
+        feature_occlusion_ratio=round(feature_occlusion, 3),
+        draft_leak_ratio=round(draft_leak, 3),
     )

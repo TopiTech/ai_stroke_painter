@@ -9,11 +9,13 @@ import random
 from typing import Any
 import uuid
 
+from .brushes import brush_policy_for_profile
 from .domain import MAX_PLAN_STROKES, DrawingPlan, Stroke
 from .procedural import infer_palette_from_prompt
 from .procedural.base import catmull_rom_spline, color_palette, create_stroke, sample_strokes_by_priority
 from .qt_compat import QBuffer, QByteArray, QImage, QIODevice, argb32_image_format, write_only_open_mode
 from .stroke_program import compile_stroke_program, drawing_plan_to_stroke_program
+from .version import generation_trace
 
 MAX_DECODED_IMAGE_PIXELS = 50_000_000
 MAX_ENCODED_IMAGE_BYTES = 25 * 1024 * 1024
@@ -612,7 +614,15 @@ class ImageStrokeConverter:
             title="Image Reference Art",
             iteration=1,
             layers=["Flats", "Shading", "Lineart", "Highlights"],
-            metadata={"generator": "image_to_stroke", "palette": palette_name, "color_mode": color_mode},
+            metadata={
+                "generator": "image_to_stroke",
+                "palette": palette_name,
+                "color_mode": color_mode,
+                "generation_seed": seed,
+                "brush_policy": brush_policy_for_profile(brush_profile).as_dict(),
+                "draft_policy": "preview_only",
+                "generation_trace": generation_trace(generator="image_to_stroke", requested_count=count),
+            },
             canvas_width=target_width,
             canvas_height=target_height,
         )
@@ -639,6 +649,11 @@ class ImageStrokeConverter:
         brush_profile: str = "auto",
         prompt: str = "",
     ) -> list[Stroke]:
+        brush_policy = brush_policy_for_profile(brush_profile)
+
+        def profile_for(layer_name: str, default_profile: str) -> str:
+            return brush_policy.profile_for(layer_name, default_profile=default_profile, operation_kind="path")
+
         # 細部を固定160pxへ潰さず、長辺と総画素の二重予算で解析解像度を適応させる。
         source_w = qimg.width()
         source_h = qimg.height()
@@ -767,7 +782,7 @@ class ImageStrokeConverter:
                     width=target_width,
                     height=target_height,
                     stroke_id=uid("uniform_fill"),
-                    preferred_profile=brush_profile,
+                    preferred_profile=profile_for("Flats", "brush"),
                 )
             ]
 
@@ -891,7 +906,7 @@ class ImageStrokeConverter:
                     width=target_width,
                     height=target_height,
                     stroke_id=uid("edge", i),
-                    preferred_profile=brush_profile,
+                    preferred_profile=profile_for("Lineart", "gpen"),
                 )
             )
 
@@ -968,7 +983,7 @@ class ImageStrokeConverter:
                                 width=target_width,
                                 height=target_height,
                                 stroke_id=uid("shade", len(strokes)),
-                                preferred_profile=brush_profile,
+                                preferred_profile=profile_for("Shading", "marupen"),
                             )
                         )
                         # 最暗部（lum < 0.20）ではクロスハッチングを追加して深みを表現
@@ -989,7 +1004,7 @@ class ImageStrokeConverter:
                                     width=target_width,
                                     height=target_height,
                                     stroke_id=uid("cross_shade", len(strokes)),
-                                    preferred_profile=brush_profile,
+                                    preferred_profile=profile_for("Shading", "marupen"),
                                 )
                             )
 
@@ -1025,7 +1040,7 @@ class ImageStrokeConverter:
                             width=target_width,
                             height=target_height,
                             stroke_id=uid("flat", len(strokes)),
-                            preferred_profile=brush_profile,
+                            preferred_profile=profile_for("Flats", "brush"),
                         )
                     )
 
@@ -1055,7 +1070,7 @@ class ImageStrokeConverter:
                             width=target_width,
                             height=target_height,
                             stroke_id=uid("hl", len(strokes)),
-                            preferred_profile=brush_profile,
+                            preferred_profile=profile_for("Highlights", "gpen"),
                         )
                     )
 

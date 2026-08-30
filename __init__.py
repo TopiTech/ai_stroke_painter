@@ -1,5 +1,10 @@
 """Krita プラグインのエントリーポイント。Krita 外ではドメイン層だけを利用可能にする。"""
 
+from .version import PLUGIN_VERSION
+
+__version__ = PLUGIN_VERSION
+__all__ = ["__version__"]
+
 try:
     from krita import DockWidgetFactory, DockWidgetFactoryBase, Krita
 except ImportError:
