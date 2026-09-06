@@ -43,8 +43,10 @@ def split_color_alpha(color: str) -> tuple[str, float]:
     """Validated CSS-style hex colorを RGB 部分と独立した alpha に分ける。"""
     try:
         if len(color) == 5:
+            # #RGBA 形式: 1桁目のアルファを2桁へ展開
             return color[:4], int(color[4] * 2, 16) / 255.0
         if len(color) == 9:
+            # #RRGGBBAA 形式
             return color[:7], int(color[7:9], 16) / 255.0
     except ValueError:
         pass

@@ -377,7 +377,7 @@ class PlannerAndStorageTests(unittest.TestCase):
                 "kind": "path",
                 "id": "bad",
                 "points": [[0, 0], [1, 1]],
-                "brush": {"is_eraser": "false"},
+                "brush": {"is_eraser": "yes"},
             },
             {
                 "kind": "path",

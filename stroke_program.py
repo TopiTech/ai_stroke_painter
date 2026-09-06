@@ -284,6 +284,15 @@ class ProgramBrush:
             is_eraser = profile_str == "eraser" or "eraser" in preset_str
         elif isinstance(raw_is_eraser, bool):
             is_eraser = raw_is_eraser
+        elif isinstance(raw_is_eraser, str):
+            # LLM 応答等の JSON でブーリアンが文字列 "true"/"false" で来る場合を許容
+            normalized = raw_is_eraser.strip().lower()
+            if normalized in {"true", "1"}:
+                is_eraser = True
+            elif normalized in {"false", "0"}:
+                is_eraser = False
+            else:
+                raise PlanValidationError("brush is_eraser は真偽値である必要があります")
         else:
             raise PlanValidationError("brush is_eraser は真偽値である必要があります")
         return cls(

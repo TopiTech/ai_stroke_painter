@@ -7,7 +7,7 @@ import unittest
 import uuid
 
 from .brushes import brush_policy_for_profile
-from .domain import DrawingPlan, Stroke, StrokePoint, materialize_render_options
+from .domain import DrawingPlan, Stroke, StrokePoint, materialize_render_options, split_color_alpha
 from .procedural import generate_procedural_plan, generate_procedural_program
 from .procedural.base import color_palette
 from .procedural.color_plan import build_color_plan, contrast_ratio
@@ -21,6 +21,7 @@ from .scene_spec import analyze_scene
 from .stroke_program import (
     FillOperation,
     GradientFillOperation,
+    PlanValidationError,
     ProgramBrush,
     ProgramPoint,
     StrokeProgram,
@@ -611,6 +612,81 @@ class QualityV3ContractTests(unittest.TestCase):
         self.assertEqual(trace["plugin_version"], "1.2.0")
         self.assertEqual(len(trace["source_fingerprint"]), 16)
         self.assertEqual(trace["count_mode"], "manual")
+
+
+class ProgramBrushCoercionTests(unittest.TestCase):
+    """ProgramBrush.from_dict の is_eraser 文字列キャスト回帰テスト。"""
+
+    def test_is_eraser_string_true_is_coerced_to_bool(self) -> None:
+        brush = ProgramBrush.from_dict({"profile": "gpen", "is_eraser": "true"})
+        self.assertTrue(brush.is_eraser)
+
+    def test_is_eraser_string_false_is_coerced_to_bool(self) -> None:
+        brush = ProgramBrush.from_dict({"profile": "gpen", "is_eraser": "false"})
+        self.assertFalse(brush.is_eraser)
+
+    def test_is_eraser_string_one_is_coerced_to_bool(self) -> None:
+        brush = ProgramBrush.from_dict({"profile": "gpen", "is_eraser": "1"})
+        self.assertTrue(brush.is_eraser)
+
+    def test_is_eraser_string_zero_is_coerced_to_bool(self) -> None:
+        brush = ProgramBrush.from_dict({"profile": "gpen", "is_eraser": "0"})
+        self.assertFalse(brush.is_eraser)
+
+    def test_is_eraser_bool_true_is_accepted(self) -> None:
+        brush = ProgramBrush.from_dict({"profile": "gpen", "is_eraser": True})
+        self.assertTrue(brush.is_eraser)
+
+    def test_is_eraser_bool_false_is_accepted(self) -> None:
+        brush = ProgramBrush.from_dict({"profile": "gpen", "is_eraser": False})
+        self.assertFalse(brush.is_eraser)
+
+    def test_is_eraser_none_infers_from_profile(self) -> None:
+        brush = ProgramBrush.from_dict({"profile": "eraser"})
+        self.assertTrue(brush.is_eraser)
+
+    def test_is_eraser_invalid_string_raises(self) -> None:
+        with self.assertRaises(PlanValidationError):
+            ProgramBrush.from_dict({"profile": "gpen", "is_eraser": "yes"})
+
+    def test_is_eraser_int_raises(self) -> None:
+        with self.assertRaises(PlanValidationError):
+            ProgramBrush.from_dict({"profile": "gpen", "is_eraser": 1})
+
+
+class SplitColorAlphaTests(unittest.TestCase):
+    """split_color_alpha の #RGBA / #RRGGBBAA 形式回帰テスト。"""
+
+    def test_6_digit_hex_returns_full_alpha(self) -> None:
+        rgb, alpha = split_color_alpha("#232323")
+        self.assertEqual(rgb, "#232323")
+        self.assertAlmostEqual(alpha, 1.0)
+
+    def test_3_digit_hex_returns_full_alpha(self) -> None:
+        rgb, alpha = split_color_alpha("#fff")
+        self.assertEqual(rgb, "#fff")
+        self.assertAlmostEqual(alpha, 1.0)
+
+    def test_5_digit_hex_rgba_extracts_alpha(self) -> None:
+        rgb, alpha = split_color_alpha("#1234")
+        self.assertEqual(rgb, "#123")
+        # '4' * 2 = '44' = 68 / 255 ≈ 0.267
+        self.assertAlmostEqual(alpha, 0x44 / 255.0, places=3)
+
+    def test_9_digit_hex_rrggbbaa_extracts_alpha(self) -> None:
+        rgb, alpha = split_color_alpha("#11223344")
+        self.assertEqual(rgb, "#112233")
+        self.assertAlmostEqual(alpha, 0x44 / 255.0, places=3)
+
+    def test_5_digit_hex_ff_alpha_is_full(self) -> None:
+        rgb, alpha = split_color_alpha("#123f")
+        self.assertEqual(rgb, "#123")
+        self.assertAlmostEqual(alpha, 0xFF / 255.0, places=3)
+
+    def test_9_digit_hex_00_alpha_is_zero(self) -> None:
+        rgb, alpha = split_color_alpha("#11223300")
+        self.assertEqual(rgb, "#112233")
+        self.assertAlmostEqual(alpha, 0.0, places=3)
 
 
 if __name__ == "__main__":

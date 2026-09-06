@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "id": "goal-20260906-codereview",
+  "status": "active",
+  "objective": "プロジェクト全体のコードレビューを実施し、重大な問題を修正し、テストと検証で完了を証明する",
+  "completion_criteria": [
+    "プロジェクト全体の仕様・テスト・設定・主要処理経路を把握し、問題を重要度順に整理する",
+    "正確性・保守性・セキュリティ・性能・依存ライブラリ使用方法・既存仕様との整合性の問題を調査する",
+    "重大な不具合・セキュリティ問題・根本原因を優先的に修正する",
+    "修正に対して再発防止テストを追加する",
+    "python check.py で ALL CHECKS PASSED になる",
+    "調査範囲・問題と重要度・変更内容と理由・互換性影響・テスト結果・未解決事項を報告する"
+  ],
+  "constraints": [
+    "無関係な変更は避ける",
+    "問題の根本解決に有効なリファクタリングは許容する",
+    "公開API・データ形式・UI・設計・依存関係の変更は影響範囲を検証し互換性維持に努める",
+    "既存のユーザー変更を尊重する"
+  ],
+  "non_goals": [
+    "新機能の追加",
+    "仕様変更を伴う改善（根本解決に必要な場合を除く）",
+    "ドキュメントの全面書き直し"
+  ],
+  "verification": [
+    "python check.py の実行（Ruff/Format/Mypy/Pyrefly/quality gates/regression）",
+    "python -m ruff check --fix . && python -m ruff format . での自動修正",
+    "git status --short での状態確認"
+  ],
+  "budget": {
+    "max_iterations": 25,
+    "max_elapsed_minutes": null
+  },
+  "progress": {
+    "iteration": 0,
+    "completed": [],
+    "remaining": [
+      "プロジェクト全体構造の把握",
+      "仕様・テスト・設定の確認",
+      "主要処理経路の理解",
+      "正確性・保守性・セキュリティ・性能の問題調査",
+      "依存ライブラリ使用方法の検証",
+      "UI/アクセシビリティ問題の確認（該当する場合）",
+      "重大問題の修正",
+      "再発防止テストの追加",
+      "check.py 全検証の通過",
+      "最終報告の作成"
+    ],
+    "last_action": null,
+    "last_result": null
+  },
+  "evidence": [],
+  "blockers": [],
+  "created_at": "2026-09-06T00:00:00+09:00",
+  "updated_at": "2026-09-06T00:00:00+09:00"
+}
