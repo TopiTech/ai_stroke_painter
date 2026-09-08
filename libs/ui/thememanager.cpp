@@ -21,6 +21,7 @@
 #include <QApplication>
 #include <QPalette>
 #include <QColor>
+#include <QDir>
 #include <QActionGroup>
 #include <QBitmap>
 #include <QPainter>
@@ -148,6 +149,17 @@ void ThemeManager::slotChangePalette()
 
     QString theme(currentThemeName());
     QString filename        = d->themeMap.value(theme);
+    if (filename.isEmpty() && !d->themeMap.isEmpty()) {
+        for (auto it = d->themeMap.constBegin(); it != d->themeMap.constEnd(); ++it) {
+            if (it.key().contains(QLatin1String("dark"), Qt::CaseInsensitive)) {
+                filename = it.value();
+                break;
+            }
+        }
+        if (filename.isEmpty()) {
+            filename = d->themeMap.first();
+        }
+    }
     KSharedConfigPtr config = KSharedConfig::openConfig(filename);
 
     QPalette palette               = qApp->palette();
@@ -300,6 +312,31 @@ void ThemeManager::populateThemeMap()
 {
     QStringList schemeFiles = KoResourcePaths::findAllAssets("data", "color-schemes/*.colors");
     schemeFiles += KoResourcePaths::findAllAssets("genericdata", "color-schemes/*.colors");
+
+#if defined(AI_STROKE_PAINTER_APP)
+    if (schemeFiles.isEmpty()) {
+        const QString appDir = QCoreApplication::applicationDirPath();
+        const QStringList candidateDirs = {
+            appDir + QStringLiteral("/data/color-schemes"),
+            appDir + QStringLiteral("/data/krita/color-schemes"),
+            appDir + QStringLiteral("/../share/color-schemes"),
+            appDir + QStringLiteral("/../../krita/data/themes"),
+            QStringLiteral("C:/CraftRoot/ai-stroke-painter-archive/previous-package/ai-stroke-painter-package/bin/data/color-schemes")
+        };
+        for (const QString &dirPath : candidateDirs) {
+            QDir dir(dirPath);
+            if (dir.exists()) {
+                const QStringList files = dir.entryList(QStringList() << QStringLiteral("*.colors"), QDir::Files);
+                for (const QString &f : files) {
+                    schemeFiles << dir.absoluteFilePath(f);
+                }
+                if (!schemeFiles.isEmpty()) {
+                    break;
+                }
+            }
+        }
+    }
+#endif
     
     for (int i = 0; i < schemeFiles.size(); ++i) {
         const QString filename  = schemeFiles.at(i);
@@ -309,8 +346,7 @@ void ThemeManager::populateThemeMap()
         const QString name = group.readEntry("Name", info.completeBaseName());
         d->themeMap.insert(name, filename);
     }
-
-
 }
+
 
 }  // namespace Digikam

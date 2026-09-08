@@ -202,7 +202,11 @@ public:
         , windowMenu(new KActionMenu(i18nc("@action:inmenu", "&Window"), parent))
         , documentMenu(new KActionMenu(i18nc("@action:inmenu", "New &View"), parent))
         , workspaceMenu(new KActionMenu(i18nc("@action:inmenu", "Wor&kspace"), parent))
+#if defined(AI_STROKE_PAINTER_APP)
+        , welcomePage(nullptr)
+#else
         , welcomePage(new KisWelcomePageWidget(parent))
+#endif
         , widgetStack(new QStackedWidget(parent))
         , mdiArea(new QMdiArea(parent))
         , windowMapper(new KisSignalMapper(parent))
@@ -215,13 +219,19 @@ public:
         startPage->setObjectName(QStringLiteral("aiIllustrationStartPage"));
         startPage->setAccessibleName(i18n("AI illustration start page"));
         startPage->setStyleSheet(QStringLiteral(
-            "QWidget#aiIllustrationStartPage { background: #101725; color: #edf3ff; }"
-            "QLabel#aiStartTitle { color: #f3f7ff; font-size: 30px; font-weight: 650; }"
-            "QLabel#aiStartBody { color: #aebed9; font-size: 15px; }"));
+            "QWidget#aiIllustrationStartPage { background: #141923; color: #edf3ff; }"
+            "QLabel#aiStartTitle { color: #f3f7ff; font-size: 32px; font-weight: 700; }"
+            "QLabel#aiStartBody { color: #b7c7de; font-size: 15px; }"
+            "QPushButton#aiStartPrimaryBtn { background: #4a88f7; color: #ffffff; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; padding: 10px 22px; }"
+            "QPushButton#aiStartPrimaryBtn:hover { background: #629aff; }"
+            "QPushButton#aiStartPrimaryBtn:pressed { background: #3572df; }"
+            "QPushButton#aiStartSecondaryBtn { background: #1e2636; color: #cddcf0; border: 1px solid #3d4f6d; border-radius: 6px; font-size: 14px; font-weight: 500; padding: 10px 20px; }"
+            "QPushButton#aiStartSecondaryBtn:hover { background: #2a354b; color: #ffffff; border-color: #556c94; }"
+            "QPushButton#aiStartSecondaryBtn:pressed { background: #171f2d; }"));
 
         auto *startLayout = new QVBoxLayout(startPage);
         startLayout->setContentsMargins(56, 48, 56, 48);
-        startLayout->setSpacing(16);
+        startLayout->setSpacing(20);
         startLayout->addStretch(1);
 
         auto *title = new QLabel(i18n("AI Stroke Painter"), startPage);
@@ -234,7 +244,43 @@ public:
         body->setAlignment(Qt::AlignHCenter);
         body->setWordWrap(true);
         startLayout->addWidget(body);
+
+        auto *btnRow = new QHBoxLayout();
+        btnRow->setAlignment(Qt::AlignHCenter);
+        btnRow->setSpacing(14);
+
+        auto *focusPromptBtn = new QPushButton(i18n("作画指示を入力"), startPage);
+        focusPromptBtn->setObjectName(QStringLiteral("aiStartPrimaryBtn"));
+        focusPromptBtn->setCursor(Qt::PointingHandCursor);
+        focusPromptBtn->setToolTip(i18n("右側の AI ワークスペースの指示入力欄にフォーカスします (Ctrl+Alt+A)"));
+        btnRow->addWidget(focusPromptBtn);
+
+        auto *newCanvasBtn = new QPushButton(i18n("新しいキャンバス"), startPage);
+        newCanvasBtn->setObjectName(QStringLiteral("aiStartSecondaryBtn"));
+        newCanvasBtn->setCursor(Qt::PointingHandCursor);
+        newCanvasBtn->setToolTip(i18n("手動で新しい画像キャンバスを作成します (Ctrl+N)"));
+        btnRow->addWidget(newCanvasBtn);
+
+        auto *openFileBtn = new QPushButton(i18n("画像を開く"), startPage);
+        openFileBtn->setObjectName(QStringLiteral("aiStartSecondaryBtn"));
+        openFileBtn->setCursor(Qt::PointingHandCursor);
+        openFileBtn->setToolTip(i18n("既存の画像ファイルを開きます (Ctrl+O)"));
+        btnRow->addWidget(openFileBtn);
+
+        startLayout->addLayout(btnRow);
         startLayout->addStretch(1);
+
+        QObject::connect(focusPromptBtn, &QPushButton::clicked, parent, [parent] {
+            if (QDockWidget *docker = parent->findChild<QDockWidget *>(QStringLiteral("AiIllustrationDocker"))) {
+                docker->show();
+                docker->raise();
+                if (auto *aiDocker = dynamic_cast<KisAiIllustrationDocker *>(docker)) {
+                    aiDocker->focusPrompt();
+                }
+            }
+        });
+        QObject::connect(newCanvasBtn, &QPushButton::clicked, parent, &KisMainWindow::slotFileNew);
+        QObject::connect(openFileBtn, &QPushButton::clicked, parent, [parent] { parent->slotFileOpen(); });
 
         widgetStack->addWidget(startPage);
 #else
@@ -245,6 +291,7 @@ public:
         welcomeScroller->setWidgetResizable(true);
         widgetStack->addWidget(welcomeScroller);
 #endif
+
         widgetStack->addWidget(mdiArea);
         mdiArea->setTabsMovable(true);
         mdiArea->setActivationOrder(QMdiArea::ActivationHistoryOrder);
@@ -465,6 +512,7 @@ KisMainWindow::KisMainWindow(QUuid uuid)
 
 #if defined(AI_STROKE_PAINTER_APP)
     auto *aiIllustrationDocker = new KisAiIllustrationDocker(this);
+    aiIllustrationDocker->setProperty("ShowOnWelcomePage", true);
     addDockWidget(Qt::RightDockWidgetArea, aiIllustrationDocker);
     d->dockWidgetsMap.insert(aiIllustrationDocker->objectName(), aiIllustrationDocker);
     dockwidgetActions[aiIllustrationDocker->toggleViewAction()->text()] = aiIllustrationDocker->toggleViewAction();
@@ -552,7 +600,9 @@ KisMainWindow::KisMainWindow(QUuid uuid)
     createActions();
 
     // the welcome screen needs to grab actions...so make sure this line goes after the createAction() so they exist
-    d->welcomePage->setMainWindow(this);
+    if (d->welcomePage) {
+        d->welcomePage->setMainWindow(this);
+    }
 
     d->recentFiles->setRecentFilesModel(&KisRecentDocumentsModelWrapper::instance()->model());
 
@@ -1134,7 +1184,7 @@ KisView *KisMainWindow::activeView() const
 
 bool KisMainWindow::openDocument(const QString &path, OpenFlags flags)
 {
-    ScopedWidgetDisabler disabler(d->welcomePage->dropFrameBorder);
+    ScopedWidgetDisabler disabler(d->welcomePage ? d->welcomePage->dropFrameBorder : nullptr);
     QApplication::processEvents(); // make UI more responsive
 
     if (!QFile(path).exists()) {
@@ -1760,6 +1810,12 @@ void KisMainWindow::adjustLayoutForWelcomePage()
     resetAutoSaveSettings();
 
     toggleDockersVisibility(false, true);
+#if defined(AI_STROKE_PAINTER_APP)
+    if (QDockWidget *docker = d->dockWidgetsMap.value(QStringLiteral("AiIllustrationDocker"))) {
+        docker->show();
+        docker->raise();
+    }
+#endif
     if (statusBar()) {
         statusBar()->hide();
     }
@@ -3160,7 +3216,9 @@ void KisMainWindow::createActions()
     d->themeManager->setThemeMenuAction(new KActionMenu(i18nc("@action:inmenu", "&Themes"), this));
     d->themeManager->registerThemeActions(actionCollection());
     connect(d->themeManager, SIGNAL(signalThemeChanged()), this, SLOT(slotThemeChanged()), Qt::QueuedConnection);
-    connect(this, SIGNAL(themeChanged()), d->welcomePage, SLOT(slotUpdateThemeColors()), Qt::UniqueConnection);
+    if (d->welcomePage) {
+        connect(this, SIGNAL(themeChanged()), d->welcomePage, SLOT(slotUpdateThemeColors()), Qt::UniqueConnection);
+    }
 #endif
     d->toggleDockers = actionManager->createAction("view_toggledockers");
 
@@ -3377,27 +3435,29 @@ void KisMainWindow::applyAiIllustrationMode()
     QDockWidget *presetDocker = d->dockWidgetsMap.value(QStringLiteral("PresetDocker"));
     QDockWidget *aiDocker = d->dockWidgetsMap.value(QStringLiteral("AiIllustrationDocker"));
 
-    if (colorDocker) {
-        addDockWidget(Qt::RightDockWidgetArea, colorDocker);
-        colorDocker->show();
-    }
-    if (presetDocker && colorDocker) {
-        addDockWidget(Qt::RightDockWidgetArea, presetDocker);
-        tabifyDockWidget(colorDocker, presetDocker);
+    if (aiDocker) {
+        addDockWidget(Qt::RightDockWidgetArea, aiDocker);
+        aiDocker->show();
+        aiDocker->raise();
     }
     if (layerDocker) {
         addDockWidget(Qt::RightDockWidgetArea, layerDocker);
         layerDocker->show();
     }
-    if (aiDocker) {
-        addDockWidget(Qt::RightDockWidgetArea, aiDocker);
-        aiDocker->show();
+    if (colorDocker) {
+        addDockWidget(Qt::RightDockWidgetArea, colorDocker);
+        colorDocker->show();
         if (layerDocker) {
-            tabifyDockWidget(layerDocker, aiDocker);
-            aiDocker->raise();
+            tabifyDockWidget(layerDocker, colorDocker);
+            layerDocker->raise();
         }
     }
+    if (presetDocker && colorDocker) {
+        addDockWidget(Qt::RightDockWidgetArea, presetDocker);
+        tabifyDockWidget(colorDocker, presetDocker);
+    }
 #endif
+
 }
 
 void KisMainWindow::applyToolBarLayout()

@@ -48,6 +48,7 @@
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QStyle>
+#include <QToolButton>
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -138,24 +139,30 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     panel->setAccessibleName(i18n("AI illustration workspace"));
     panel->setStyleSheet(QStringLiteral(
         "QWidget#aiIllustrationPanel { background: #151b28; color: #edf3ff; }"
-        "QLabel#aiTitle { color: #f3f7ff; font-size: 22px; font-weight: 600; }"
-        "QLabel#aiSubtitle { color: #9db0cf; }"
+        "QWidget#aiIllustrationPanel QLabel { color: #dbe5f5; font-size: 13px; }"
+        "QLabel#aiTitle { color: #f3f7ff; font-size: 20px; font-weight: 700; }"
+        "QLabel#aiSubtitle { color: #95a8c5; font-size: 12px; }"
         "QPlainTextEdit, QLineEdit, QSpinBox, QComboBox {"
-        " background: #0f1521; border: 1px solid #334662; border-radius: 5px; padding: 7px; color: #edf3ff; }"
-        "QPlainTextEdit:focus, QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border: 1px solid #83b7ff; }"
-        "QPushButton#aiGenerateButton { background: #6d9df2; color: #07101f; border: none; border-radius: 5px;"
-        " font-weight: 700; min-height: 34px; padding: 6px 12px; }"
-        "QPushButton#aiGenerateButton:hover { background: #94bdff; }"
-        "QPushButton#aiGenerateButton:disabled { background: #33445f; color: #8fa0ba; }"
-        "QPushButton#aiSecondaryButton { background: transparent; color: #bdd5ff; border: 1px solid #4b6388;"
-        " border-radius: 5px; min-height: 32px; padding: 5px 10px; }"
-        "QLabel#aiStatus { color: #aab9d0; padding: 5px 1px; }"
-        "QLabel#aiStatus[error=\"true\"] { color: #ffb5bd; }"
-        "QFrame#aiRule { background: #6d9df2; max-height: 2px; }"));
+        " background: #0f1521; border: 1px solid #314460; border-radius: 5px; padding: 6px 8px; color: #edf3ff; }"
+        "QPlainTextEdit:focus, QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border: 1px solid #6d9df2; }"
+        "QPushButton#aiGenerateButton { background: #4a88f7; color: #ffffff; border: none; border-radius: 5px;"
+        " font-weight: 700; font-size: 14px; min-height: 36px; padding: 6px 14px; }"
+        "QPushButton#aiGenerateButton:hover { background: #629aff; }"
+        "QPushButton#aiGenerateButton:pressed { background: #3572df; }"
+        "QPushButton#aiGenerateButton:disabled { background: #28374d; color: #6d809c; }"
+        "QPushButton#aiSecondaryButton { background: #1a2232; color: #c4d8f5; border: 1px solid #3b4f6e;"
+        " border-radius: 5px; min-height: 32px; padding: 5px 12px; }"
+        "QPushButton#aiSecondaryButton:hover { background: #243046; color: #ffffff; border-color: #526c95; }"
+        "QPushButton#aiSecondaryButton:pressed { background: #141b27; }"
+        "QLabel#aiStatus { color: #a4b8d6; padding: 4px 1px; font-size: 12px; }"
+        "QLabel#aiStatus[error=\"true\"] { color: #ff8e97; font-weight: 600; }"
+        "QFrame#aiRule { background: #314460; max-height: 1px; }"
+        "QToolButton#aiToggleDetails { color: #8ea5c8; background: transparent; border: none; font-size: 12px; text-align: left; padding: 4px 0px; font-weight: 500; }"
+        "QToolButton#aiToggleDetails:hover { color: #c8daf2; }"));
 
     auto *layout = new QVBoxLayout(panel);
-    layout->setContentsMargins(18, 18, 18, 18);
-    layout->setSpacing(12);
+    layout->setContentsMargins(14, 14, 14, 14);
+    layout->setSpacing(8);
 
     auto *title = new QLabel(i18n("AI Stroke Painter"), panel);
     title->setObjectName(QStringLiteral("aiTitle"));
@@ -177,7 +184,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     m_promptEditor = new QPlainTextEdit(panel);
     m_promptEditor->setPlaceholderText(i18n("例: 雨上がりの夜、青い光に包まれた猫と花のある静かな路地 (Ctrl+Enter で生成)"));
-    m_promptEditor->setMinimumHeight(118);
+    m_promptEditor->setMinimumHeight(80);
+    m_promptEditor->setMaximumHeight(140);
     m_promptEditor->setAccessibleName(i18n("Illustration prompt"));
     m_promptEditor->installEventFilter(this);
     layout->addWidget(m_promptEditor);
@@ -212,27 +220,39 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_modeCombo->setAccessibleName(i18n("Generation source"));
     layout->addWidget(m_modeCombo);
 
-    m_remoteOptionsLabel = new QLabel(i18n("OpenAI 互換の Chat Completions エンドポイントを指定します。API キーは保存しません。"), panel);
+    m_detailsToggleBtn = new QToolButton(panel);
+    m_detailsToggleBtn->setObjectName(QStringLiteral("aiToggleDetails"));
+    m_detailsToggleBtn->setCheckable(true);
+    m_detailsToggleBtn->setText(i18n("▶ 詳細設定（エンドポイント / API キー）"));
+    m_detailsToggleBtn->setCursor(Qt::PointingHandCursor);
+    layout->addWidget(m_detailsToggleBtn);
+
+    m_detailsContainer = new QWidget(panel);
+    auto *detailsLayout = new QVBoxLayout(m_detailsContainer);
+    detailsLayout->setContentsMargins(0, 0, 0, 0);
+    detailsLayout->setSpacing(6);
+
+    m_remoteOptionsLabel = new QLabel(i18n("OpenAI 互換の Chat Completions エンドポイントを指定します。API キーは保存しません。"), m_detailsContainer);
     m_remoteOptionsLabel->setObjectName(QStringLiteral("aiSubtitle"));
     m_remoteOptionsLabel->setWordWrap(true);
-    layout->addWidget(m_remoteOptionsLabel);
+    detailsLayout->addWidget(m_remoteOptionsLabel);
 
     auto *remoteForm = new QFormLayout();
     remoteForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     m_remoteForm = remoteForm;
-    m_endpointEditor = new QLineEdit(panel);
+    m_endpointEditor = new QLineEdit(m_detailsContainer);
     m_endpointEditor->setPlaceholderText(QStringLiteral("https://api.openai.com/v1/chat/completions"));
     m_endpointEditor->setAccessibleName(i18n("LLM endpoint"));
-    m_modelEditor = new QLineEdit(panel);
+    m_modelEditor = new QLineEdit(m_detailsContainer);
     m_modelEditor->setPlaceholderText(i18n("モデル名 (例: gpt-4o, o3-mini, deepseek-chat)"));
     m_modelEditor->setAccessibleName(i18n("LLM model name"));
-    m_apiKeyEditor = new QLineEdit(panel);
+    m_apiKeyEditor = new QLineEdit(m_detailsContainer);
     m_apiKeyEditor->setEchoMode(QLineEdit::Password);
     m_apiKeyEditor->setPlaceholderText(i18n("このリクエストだけに使用"));
     m_apiKeyEditor->setAccessibleName(i18n("API key"));
 
-    m_strokeBudgetLabel = new QLabel(i18n("ストローク予算"), panel);
-    m_strokeBudgetSpin = new QSpinBox(panel);
+    m_strokeBudgetLabel = new QLabel(i18n("ストローク予算"), m_detailsContainer);
+    m_strokeBudgetSpin = new QSpinBox(m_detailsContainer);
     m_strokeBudgetSpin->setRange(20, 2000);
     m_strokeBudgetSpin->setValue(500);
     m_strokeBudgetSpin->setSingleStep(50);
@@ -243,7 +263,16 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     remoteForm->addRow(i18n("モデル"), m_modelEditor);
     remoteForm->addRow(i18n("API キー"), m_apiKeyEditor);
     remoteForm->addRow(m_strokeBudgetLabel, m_strokeBudgetSpin);
-    layout->addLayout(remoteForm);
+    detailsLayout->addLayout(remoteForm);
+
+    m_detailsContainer->setVisible(false);
+    layout->addWidget(m_detailsContainer);
+
+    connect(m_detailsToggleBtn, &QToolButton::toggled, this, [this](bool checked) {
+        m_detailsContainer->setVisible(checked);
+        m_detailsToggleBtn->setText(checked ? i18n("▼ 詳細設定（エンドポイント / API キー）")
+                                            : i18n("▶ 詳細設定（エンドポイント / API キー）"));
+    });
 
     QSettings settings;
     const QString savedEndpoint = settings.value(QStringLiteral("AIIllustration/llmEndpoint"),
@@ -256,8 +285,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_previewLabel = new QLabel(i18n("生成結果のプレビューはここに表示されます。"), panel);
     m_previewLabel->setAlignment(Qt::AlignCenter);
     m_previewLabel->setWordWrap(true);
-    m_previewLabel->setMinimumHeight(112);
-    m_previewLabel->setStyleSheet(QStringLiteral("background: #0f1521; border: 1px solid #293a55; color: #7f92b0;"));
+    m_previewLabel->setMinimumHeight(64);
+    m_previewLabel->setStyleSheet(QStringLiteral("background: #0f1521; border: 1px solid #24344d; border-radius: 4px; color: #7f95b5; padding: 4px;"));
     m_previewLabel->setAccessibleName(i18n("Generation preview"));
     layout->addWidget(m_previewLabel);
 
@@ -288,6 +317,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     buttonRow->addWidget(m_cancelButton);
     layout->addLayout(buttonRow);
     layout->addStretch(1);
+
 
     auto *scrollArea = new QScrollArea(this);
     scrollArea->setWidget(panel);
@@ -771,6 +801,17 @@ void KisAiIllustrationDocker::updateModeUi()
         m_modelEditor->setText(savedModel.isEmpty() ? QStringLiteral("dall-e-3") : savedModel);
     }
 
+    if (m_detailsToggleBtn) {
+        m_detailsToggleBtn->setVisible(needsRemote);
+    }
+    if (m_detailsContainer && !needsRemote) {
+        m_detailsContainer->setVisible(false);
+        if (m_detailsToggleBtn) {
+            m_detailsToggleBtn->setChecked(false);
+            m_detailsToggleBtn->setText(i18n("▶ 詳細設定（エンドポイント / API キー）"));
+        }
+    }
+
     if (m_remoteForm) {
         m_remoteForm->setRowVisible(0, needsRemote);
         m_remoteForm->setRowVisible(1, needsRemote);
@@ -778,6 +819,7 @@ void KisAiIllustrationDocker::updateModeUi()
         m_remoteForm->setRowVisible(3, isLlm);
     }
 }
+
 
 void KisAiIllustrationDocker::setBusy(bool busy)
 {

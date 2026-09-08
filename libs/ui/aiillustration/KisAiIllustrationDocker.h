@@ -18,6 +18,8 @@ class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
 class QSpinBox;
+class QToolButton;
+class QWidget;
 class QImage;
 class QString;
 
@@ -81,6 +83,8 @@ private:
     QSpinBox *m_strokeBudgetSpin {nullptr};
     QLabel *m_strokeBudgetLabel {nullptr};
     QLabel *m_remoteOptionsLabel {nullptr};
+    QToolButton *m_detailsToggleBtn {nullptr};
+    QWidget *m_detailsContainer {nullptr};
     QLabel *m_statusLabel {nullptr};
     QLabel *m_previewLabel {nullptr};
     QProgressBar *m_progressBar {nullptr};
