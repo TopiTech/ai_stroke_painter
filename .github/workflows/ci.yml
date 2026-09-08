@@ -7,16 +7,9 @@ on:
     branches: [ main ]
 
 jobs:
-  test:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-          - os: windows-latest
-
+  test-linux:
+    name: Test (Ubuntu / Qt6)
+    runs-on: ubuntu-latest
     env:
       QT_QPA_PLATFORM: offscreen
 
@@ -24,19 +17,44 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install Qt6 (Ubuntu)
-        if: runner.os == 'Linux'
+      - name: Install Qt6 & build dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y qt6-base-dev qt6-base-dev-tools ninja-build
 
-      - name: Install Qt6 (Windows)
-        if: runner.os == 'Windows'
-        uses: jurplel/install-qt-action@v3
+      - name: Configure CMake
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAI_STROKE_STANDALONE_TESTS=ON
+
+      - name: Build AI Stroke Tests
+        run: cmake --build build -j$(nproc)
+
+      - name: Run AI Stroke Tests
+        run: ctest --test-dir build --output-on-failure
+
+  test-windows:
+    name: Test (Windows MinGW / Qt6)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSYS2 & MinGW Qt6
+        uses: msys2/setup-msys2@v2
         with:
-          version: '6.6.3'
-          arch: 'win64_msvc2019_64'
-          cache: true
+          msystem: MINGW64
+          update: false
+          install: >-
+            mingw-w64-x86_64-qt6-base
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-gcc
 
       - name: Configure CMake
         run: |
