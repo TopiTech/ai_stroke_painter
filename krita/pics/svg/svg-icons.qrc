@@ -132,10 +132,6 @@
         <file>light_show_android_log.svg</file>
         <file>dark_krita_log.svg</file>
         <file>light_krita_log.svg</file>
-        <file>light_python_plugin_from_file.svg</file>
-        <file>dark_python_plugin_from_file.svg</file>
-        <file>dark_python_plugin_from_web.svg</file>
-        <file>light_python_plugin_from_web.svg</file>
         <file>broken-preset.svg</file>
         <file>dark_activate-next-layer.svg</file>
         <file>dark_activate-previous-layer.svg</file>
@@ -504,8 +500,6 @@
         <file>light_ratio.svg</file>
         <file>dark_bundle_archive.svg</file>
         <file>light_bundle_archive.svg</file>
-        <file>dark_python.svg</file>
-        <file>light_python.svg</file>
         <file>dark_hamburger_menu_dots.svg</file>
         <file>light_hamburger_menu_dots.svg</file>
         <file>dark_zoom-fit-curve.svg</file>

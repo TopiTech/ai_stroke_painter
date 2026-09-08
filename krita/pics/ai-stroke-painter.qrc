@@ -1,0 +1,7 @@
+<!-- SPDX-FileCopyrightText: 2026 AI Stroke Painter contributors -->
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<RCC>
+    <qresource prefix="/">
+        <file>ai-stroke-painter.svg</file>
+    </qresource>
+</RCC>

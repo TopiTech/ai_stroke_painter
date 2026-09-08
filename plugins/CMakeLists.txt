@@ -1,21 +1,3 @@
-add_subdirectory( assistants )
-add_subdirectory( color )
-add_subdirectory( dockers )
-add_subdirectory( extensions )
-add_subdirectory( filters )
-add_subdirectory( flake )
-add_subdirectory( generators )
-add_subdirectory( impex )
-add_subdirectory( metadata )
-add_subdirectory( paintops )
-add_subdirectory( tools )
-add_subdirectory( qt )
-
-if ((HAVE_PYQT5 OR HAVE_PYQT6) AND HAVE_SIP AND HAVE_PYTHONLIBS)
-    add_subdirectory( python )
-endif()
-
-# This somehow breaks packaging the Qt platform plugin on Android
-if (NOT ANDROID)
-    add_subdirectory( platforms )
-endif()
+# Native AI layers only need colour management and the document/image codecs.
+add_subdirectory(color)
+add_subdirectory(impex)

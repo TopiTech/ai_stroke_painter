@@ -435,6 +435,8 @@ set(kritaui_LIB_SRCS
     KisImportExportUtils.cpp
     KisImportUserFeedbackInterface.cpp
     kis_async_action_feedback.cpp
+    aiillustration/KisAiIllustrationDocker.cpp
+    aiillustration/KisAiIllustrationRenderer.cpp
     KisMainWindow.cpp
     KisOpenPane.cpp
     KisPart.cpp

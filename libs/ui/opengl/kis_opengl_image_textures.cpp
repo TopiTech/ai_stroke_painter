@@ -36,7 +36,7 @@
 
 /// we use Angle's EGL on Windows, so we need access to
 /// EGL_ANGLE_platform_angle definition
-#if defined Q_OS_WIN && (defined QT_OPENGL_DYNAMIC || defined QT_OPENGL_ES_2_ANGLE)
+#if defined Q_OS_WIN && !defined(QT_NO_EGL) && (defined QT_OPENGL_DYNAMIC || defined QT_OPENGL_ES_2_ANGLE)
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #endif
@@ -849,4 +849,3 @@ void KisOpenGLImageTextures::updateTextureFormat()
                           m_renderingIntent,
                           m_conversionFlags));
 }
-

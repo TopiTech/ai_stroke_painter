@@ -1,8 +1,33 @@
 add_subdirectory( dtd )
 add_subdirectory( data )
 add_subdirectory( integration )
-# Install the application icons following the freedesktop icon theme spec
-add_subdirectory( "pics/branding/${BRANDING}" )
+# The focused application uses a self-contained vector identity instead of
+# Krita's branding resources.
+
+if (AI_STROKE_PAINTER_APP)
+    set(AI_STROKE_PAINTER_RUNTIME_NAME "ai-stroke-painter")
+    set(AI_STROKE_PAINTER_DESKTOP_ID "org.aistrokepainter.AIStrokePainter")
+    set(AI_STROKE_PAINTER_MANIFEST_ID "AIStrokePainter.AIStrokePainter")
+    set(AI_STROKE_PAINTER_FILE_DESCRIPTION "AI-first illustration studio")
+    set(AI_STROKE_PAINTER_FOUNDATION "AI Stroke Painter contributors")
+    set(AI_STROKE_PAINTER_PRODUCT_NAME "AI Stroke Painter")
+else()
+    set(AI_STROKE_PAINTER_RUNTIME_NAME "krita")
+    set(AI_STROKE_PAINTER_DESKTOP_ID "org.kde.krita")
+    set(AI_STROKE_PAINTER_MANIFEST_ID "KritaFoundation.Krita.krita")
+    set(AI_STROKE_PAINTER_FILE_DESCRIPTION "Krita digital painting application")
+    set(AI_STROKE_PAINTER_FOUNDATION "Krita Foundation")
+    set(AI_STROKE_PAINTER_PRODUCT_NAME "Krita")
+endif()
+
+# GNU windres loses quotes while invoking its preprocessor, which prevents a
+# resource-enabled target from building when the source path contains spaces.
+# The focused Windows build keeps a plain C++ launcher in that environment;
+# the application itself does not depend on embedded resources to start.
+set(AI_STROKE_PAINTER_SKIP_MINGW_RESOURCES FALSE)
+if (AI_STROKE_PAINTER_APP AND MINGW)
+    set(AI_STROKE_PAINTER_SKIP_MINGW_RESOURCES TRUE)
+endif()
 
 if (ANDROID)
     if (QT_MAJOR_VERSION STREQUAL "5")
@@ -14,7 +39,9 @@ endif()
 set(krita_SRCS main.cc)
 
 # Set the application icon on the application
-if (NOT APPLE)
+if (AI_STROKE_PAINTER_APP)
+    set(ICON_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/pics/ai-stroke-painter.svg")
+elseif (NOT APPLE)
 	file(GLOB ICON_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/pics/branding/${BRANDING}/*-apps-krita.png")
 else()
     # XCode below 26 cannot work with .icon format
@@ -61,24 +88,28 @@ endif()
 
 if (WIN32)
     set(krita_windows_stub_ICONS_SRCS "")
-    ecm_add_app_icon(krita_windows_stub_ICONS_SRCS ICONS ${ICON_SRCS} OUTFILE_BASENAME krita)
+    if (NOT AI_STROKE_PAINTER_SKIP_MINGW_RESOURCES)
+        ecm_add_app_icon(krita_windows_stub_ICONS_SRCS ICONS ${ICON_SRCS} OUTFILE_BASENAME ${AI_STROKE_PAINTER_RUNTIME_NAME})
 
-    # This is used to generate an ICO file for the file icon, We don't actually
-    # want to embed this icon into an EXE.
-	file(GLOB krafile_ICON_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/pics/mimetypes/*-mimetypes-application-x-krita.png")
-    set(krafile_dummy_ICONS_SRCS "")
-    ecm_add_app_icon(krafile_dummy_ICONS_SRCS ICONS ${krafile_ICON_SRCS} OUTFILE_BASENAME kritafile)
-    add_library(krafile_dummy_obj OBJECT ${krafile_dummy_ICONS_SRCS})
+        # This is used to generate an ICO file for the file icon, We don't actually
+        # want to embed this icon into an EXE.
+        file(GLOB krafile_ICON_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/pics/mimetypes/*-mimetypes-application-x-krita.png")
+        set(krafile_dummy_ICONS_SRCS "")
+        ecm_add_app_icon(krafile_dummy_ICONS_SRCS ICONS ${krafile_ICON_SRCS} OUTFILE_BASENAME kritafile)
+        add_library(krafile_dummy_obj OBJECT ${krafile_dummy_ICONS_SRCS})
 
-    # These icons are used to replace those in the shell extension package.
-    install(
-        FILES
-            ${CMAKE_CURRENT_BINARY_DIR}/krita.ico
-            ${CMAKE_CURRENT_BINARY_DIR}/kritafile.ico
-        DESTINATION ${CMAKE_INSTALL_PREFIX}/installer
-    )
+        # These icons are used to replace those in the shell extension package.
+        install(
+            FILES
+                ${CMAKE_CURRENT_BINARY_DIR}/${AI_STROKE_PAINTER_RUNTIME_NAME}.ico
+                ${CMAKE_CURRENT_BINARY_DIR}/kritafile.ico
+            DESTINATION ${CMAKE_INSTALL_PREFIX}/installer
+        )
+    endif()
 elseif(APPLE)
-    if(${XCODE_VERSION} VERSION_GREATER_EQUAL "26.0")
+    if (AI_STROKE_PAINTER_APP)
+      ecm_add_app_icon(krita_SRCS OUTFILE_BASENAME ai-stroke-painter ICONS ${ICON_SRCS})
+    elseif(${XCODE_VERSION} VERSION_GREATER_EQUAL "26.0")
       set_source_files_properties(${ASSETS_FILES} PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
     else()
       ecm_add_app_icon(krita_SRCS OUTFILE_BASENAME krita ICONS ${ICON_SRCS})
@@ -87,25 +118,8 @@ else()
     ecm_add_app_icon(krita_SRCS ICONS ${ICON_SRCS})
 endif()
 
-# Install the mimetype icons
-ecm_install_icons(ICONS
-    "${CMAKE_CURRENT_SOURCE_DIR}/pics/mimetypes/16-mimetypes-application-x-krita.png"
-    "${CMAKE_CURRENT_SOURCE_DIR}/pics/mimetypes/22-mimetypes-application-x-krita.png"
-    "${CMAKE_CURRENT_SOURCE_DIR}/pics/mimetypes/32-mimetypes-application-x-krita.png"
-    "${CMAKE_CURRENT_SOURCE_DIR}/pics/mimetypes/48-mimetypes-application-x-krita.png"
-    "${CMAKE_CURRENT_SOURCE_DIR}/pics/mimetypes/64-mimetypes-application-x-krita.png"
-    "${CMAKE_CURRENT_SOURCE_DIR}/pics/mimetypes/128-mimetypes-application-x-krita.png"
-    "${CMAKE_CURRENT_SOURCE_DIR}/pics/mimetypes/256-mimetypes-application-x-krita.png"
-    "${CMAKE_CURRENT_SOURCE_DIR}/pics/mimetypes/512-mimetypes-application-x-krita.png"
-    "${CMAKE_CURRENT_SOURCE_DIR}/pics/mimetypes/1024-mimetypes-application-x-krita.png"
-    DESTINATION ${KDE_INSTALL_ICONDIR} THEME hicolor)
-
-# Android has a different splash screen.
-if(ANDROID)
-    set(krita_splash_qrc splash-android.qrc)
-else()
-    set(krita_splash_qrc splash.qrc)
-endif()
+install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/pics/ai-stroke-painter.svg"
+        DESTINATION ${KDE_INSTALL_ICONDIR}/hicolor/scalable/apps)
 
 # ==============================================================================
 # KRITA5.XMLGUI UPDATE
@@ -175,21 +189,11 @@ set(krita_QRCS
     ${CMAKE_SOURCE_DIR}/krita/pics/layers/layers-icons.qrc
     ${CMAKE_SOURCE_DIR}/krita/pics/misc-light/misc-light-icons.qrc
     ${CMAKE_SOURCE_DIR}/krita/pics/misc-dark/misc-dark-icons.qrc
-    ${CMAKE_SOURCE_DIR}/krita/pics/paintops/paintops-icons.qrc
-    ${CMAKE_SOURCE_DIR}/krita/pics/tools/SVG/16/tools-svg-16-icons.qrc
-    ${CMAKE_SOURCE_DIR}/krita/pics/tool_transform/tool-transform-icons.qrc
-    ${CMAKE_SOURCE_DIR}/krita/pics/svg/svg-icons.qrc
-    ${CMAKE_SOURCE_DIR}/libs/flake/flake.qrc
     ${CMAKE_SOURCE_DIR}/libs/widgets/kritawidgets.qrc
     ${CMAKE_SOURCE_DIR}/pics/icons.qrc
-    ${CMAKE_SOURCE_DIR}/krita/data/aboutdata/aboutdata.qrc
     ${CMAKE_SOURCE_DIR}/krita/data/shaders/shaders.qrc
     ${CMAKE_SOURCE_DIR}/krita/data/cursors/cursors.qrc
-    ${CMAKE_SOURCE_DIR}/krita/data/gamutmasks/gamutmasks.qrc
-    ${CMAKE_SOURCE_DIR}/plugins/paintops/defaultpresets/defaultpresets.qrc
-    ${CMAKE_SOURCE_DIR}/krita/pics/branding/${BRANDING}/branding.qrc
-    ${CMAKE_SOURCE_DIR}/krita/data/splash/${krita_splash_qrc}
-    ${CMAKE_SOURCE_DIR}/krita/pics/sponsors/sponsors.qrc
+    ${CMAKE_SOURCE_DIR}/krita/pics/ai-stroke-painter.qrc
     CACHE INTERNAL "krita_QRCS"
 )
 
@@ -205,9 +209,10 @@ if (ANDROID AND QT_MAJOR_VERSION STREQUAL "5")
 elseif (WIN32)
     # Build the main implementation into a DLL to be called by a stub EXE.
     kis_add_library(krita SHARED ${krita_SRCS})
-    set_target_properties(krita PROPERTIES PREFIX "")
+    set_target_properties(krita PROPERTIES PREFIX "" OUTPUT_NAME "${AI_STROKE_PAINTER_RUNTIME_NAME}")
 else()
     add_executable(krita ${krita_SRCS})
+    set_target_properties(krita PROPERTIES OUTPUT_NAME "${AI_STROKE_PAINTER_RUNTIME_NAME}")
 endif()
 target_link_libraries(krita
     PRIVATE
@@ -279,7 +284,11 @@ if(APPLE)
 else()
     install(TARGETS krita ${INSTALL_TARGETS_DEFAULT_ARGS})
 endif()
-install(FILES org.kde.krita.desktop DESTINATION ${KDE_INSTALL_APPDIR})
+if (AI_STROKE_PAINTER_APP)
+    install(FILES org.aistrokepainter.AIStrokePainter.desktop DESTINATION ${KDE_INSTALL_APPDIR})
+else()
+    install(FILES org.kde.krita.desktop DESTINATION ${KDE_INSTALL_APPDIR})
+endif()
 
 set(actions_files krita.action kritamenu.action)
 if (ANDROID)
@@ -290,30 +299,40 @@ if (ANDROID)
 endif()
 install(FILES ${actions_files} DESTINATION ${KDE_INSTALL_DATADIR}/krita/actions)
 
-install(FILES  org.kde.krita.appdata.xml DESTINATION ${KDE_INSTALL_METAINFODIR} )
+if (AI_STROKE_PAINTER_APP)
+    install(FILES org.aistrokepainter.AIStrokePainter.appdata.xml DESTINATION ${KDE_INSTALL_METAINFODIR})
+else()
+    install(FILES org.kde.krita.appdata.xml DESTINATION ${KDE_INSTALL_METAINFODIR})
+endif()
 
 install(DIRECTORY DESTINATION ${KDE_INSTALL_DATADIR}/krita/shortcuts)
 
 if (WIN32)
-    configure_file(versioninfo.rc.in ${CMAKE_CURRENT_BINARY_DIR}/versioninfo.rc)
-    if (QT_MAJOR_VERSION STREQUAL "6")
-        configure_file(krita6.exe.manifest.in ${CMAKE_CURRENT_BINARY_DIR}/krita.exe.manifest)
-    else()
-        configure_file(krita.exe.manifest.in ${CMAKE_CURRENT_BINARY_DIR}/krita.exe.manifest)
-    endif()
-    if (MINGW)
-        # CMake does not know how to embed manifest on mingw, so we create our own RC file to be included
-        file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/krita.exe.manifest.rc "1 24 \"krita.exe.manifest\"\n")
-        set(KRITA_MANIFEST_SRC ${CMAKE_CURRENT_BINARY_DIR}/krita.exe.manifest.rc)
-    else()
-        set(KRITA_MANIFEST_SRC
-            ${CMAKE_CURRENT_BINARY_DIR}/krita.exe.manifest)
+    set(krita_windows_stub_RESOURCE_SRCS "")
+    if (NOT AI_STROKE_PAINTER_SKIP_MINGW_RESOURCES)
+        configure_file(versioninfo.rc.in ${CMAKE_CURRENT_BINARY_DIR}/versioninfo.rc)
+        if (QT_MAJOR_VERSION STREQUAL "6")
+            configure_file(krita6.exe.manifest.in ${CMAKE_CURRENT_BINARY_DIR}/${AI_STROKE_PAINTER_RUNTIME_NAME}.exe.manifest)
+        else()
+            configure_file(krita.exe.manifest.in ${CMAKE_CURRENT_BINARY_DIR}/${AI_STROKE_PAINTER_RUNTIME_NAME}.exe.manifest)
+        endif()
+        if (MINGW)
+            # CMake does not know how to embed manifest on mingw, so we create our own RC file to be included
+            file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/${AI_STROKE_PAINTER_RUNTIME_NAME}.exe.manifest.rc "1 24 \"${AI_STROKE_PAINTER_RUNTIME_NAME}.exe.manifest\"\n")
+            set(KRITA_MANIFEST_SRC ${CMAKE_CURRENT_BINARY_DIR}/${AI_STROKE_PAINTER_RUNTIME_NAME}.exe.manifest.rc)
+        else()
+            set(KRITA_MANIFEST_SRC
+                ${CMAKE_CURRENT_BINARY_DIR}/${AI_STROKE_PAINTER_RUNTIME_NAME}.exe.manifest)
+        endif()
+        list(APPEND krita_windows_stub_RESOURCE_SRCS
+            ${CMAKE_CURRENT_BINARY_DIR}/versioninfo.rc
+            ${KRITA_MANIFEST_SRC}
+        )
     endif()
     add_executable(krita_windows_stub_exe
         windows_stub_main.cpp
         ${krita_windows_stub_ICONS_SRCS}
-        ${CMAKE_CURRENT_BINARY_DIR}/versioninfo.rc
-        ${KRITA_MANIFEST_SRC}
+        ${krita_windows_stub_RESOURCE_SRCS}
     )
     target_link_libraries(krita_windows_stub_exe PRIVATE krita)
     if (QT_MAJOR_VERSION STREQUAL "6")
@@ -323,7 +342,7 @@ if (WIN32)
     endif()
     set_target_properties(krita_windows_stub_exe
         PROPERTIES
-            OUTPUT_NAME "krita"
+            OUTPUT_NAME "${AI_STROKE_PAINTER_RUNTIME_NAME}"
     )
     if (MSVC)
         target_link_options(krita_windows_stub_exe PRIVATE "/DEBUG:NONE")
@@ -332,14 +351,13 @@ if (WIN32)
 
     add_executable(krita_windows_stub_com
         windows_stub_main.cpp
-        ${CMAKE_CURRENT_BINARY_DIR}/versioninfo.rc
-        ${KRITA_MANIFEST_SRC}
+        ${krita_windows_stub_RESOURCE_SRCS}
     )
     target_link_libraries(krita_windows_stub_com PRIVATE krita)
     set_target_properties(krita_windows_stub_com
         PROPERTIES
             WIN32_EXECUTABLE false
-            OUTPUT_NAME "krita"
+            OUTPUT_NAME "${AI_STROKE_PAINTER_RUNTIME_NAME}"
             SUFFIX ".com"
     )
     if (MSVC)

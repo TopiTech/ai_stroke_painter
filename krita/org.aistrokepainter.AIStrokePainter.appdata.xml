@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.aistrokepainter.AIStrokePainter</id>
+  <launchable type="desktop-id">org.aistrokepainter.AIStrokePainter.desktop</launchable>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-2.0-or-later</project_license>
+  <name>AI Stroke Painter</name>
+  <summary>AI-first illustration studio</summary>
+  <summary xml:lang="ja">AI を中心にしたイラストレーションスタジオ</summary>
+  <description>
+    <p>AI Stroke Painter turns image-model prompts into editable native raster layers.</p>
+    <p xml:lang="ja">AI Stroke Painter は、画像モデルへの指示を編集可能なネイティブラスターレイヤーへ変換します。</p>
+  </description>
+  <categories>
+    <category>Graphics</category>
+    <category>2DGraphics</category>
+  </categories>
+</component>

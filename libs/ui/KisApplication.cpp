@@ -361,12 +361,10 @@ void KisApplication::addResourceTypes()
     KoResourcePaths::addAssetType("gmic_definitions", "data", "/gmic/");
     KoResourcePaths::addAssetType("kis_shortcuts", "data", "/shortcuts/");
     KoResourcePaths::addAssetType("kis_actions", "data", "/actions");
-    KoResourcePaths::addAssetType("kis_actions", "data", "/pykrita");
     KoResourcePaths::addAssetType("icc_profiles", "data", "/color/icc");
     KoResourcePaths::addAssetType("icc_profiles", "data", "/profiles/");
     KoResourcePaths::addAssetType("tags", "data", "/tags/");
     KoResourcePaths::addAssetType("templates", "data", "/templates");
-    KoResourcePaths::addAssetType("pythonscripts", "data", "/pykrita");
     KoResourcePaths::addAssetType("preset_icons", "data", "/preset_icons");
 #if defined HAVE_SEEXPR
     KoResourcePaths::addAssetType(ResourceType::SeExprScripts, "data", "/seexpr_scripts/", true);
@@ -376,7 +374,6 @@ void KisApplication::addResourceTypes()
     KoResourcePaths::saveLocation("data", "/asl/", true);
     KoResourcePaths::saveLocation("data", "/css_styles/", true);
     KoResourcePaths::saveLocation("data", "/input/", true);
-    KoResourcePaths::saveLocation("data", "/pykrita/", true);
     KoResourcePaths::saveLocation("data", "/color-schemes/", true);
     KoResourcePaths::saveLocation("data", "/preset_icons/", true);
     KoResourcePaths::saveLocation("data", "/preset_icons/tool_icons/", true);
@@ -455,13 +452,13 @@ bool KisApplication::registerResources()
 #endif
 
     if (!KisResourceCacheDb::initialize(databaseLocation)) {
-        QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "Krita: Fatal error"), i18n("%1\n\nKrita will quit now.", KisResourceCacheDb::lastError()));
+        QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "AI Stroke Painter: Fatal error"), i18n("%1\n\nAI Stroke Painter will quit now.", KisResourceCacheDb::lastError()));
     }
 
     KisResourceLocator::LocatorError r = KisResourceLocator::instance()->initialize(KoResourcePaths::getApplicationRoot() + "/share/krita");
     connect(KisResourceLocator::instance(), SIGNAL(progressMessage(const QString&)), this, SLOT(setSplashScreenLoadingText(const QString&)));
     if (r != KisResourceLocator::LocatorError::Ok && qApp->inherits("KisApplication")) {
-        QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "Krita: Fatal error"), KisResourceLocator::instance()->errorMessages().join('\n') + i18n("\n\nKrita will quit now."));
+        QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "AI Stroke Painter: Fatal error"), KisResourceLocator::instance()->errorMessages().join('\n') + i18n("\n\nAI Stroke Painter will quit now."));
         return false;
     }
     return true;

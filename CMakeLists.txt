@@ -13,6 +13,12 @@ message(STATUS "Using CMake version: ${CMAKE_VERSION}")
 # Qt5 is the default, set QT_MAJOR_VERSION to 6 to look for Qt6
 option(BUILD_WITH_QT6 "Build against Qt 6" OFF)
 
+# This repository is a focused AI illustration application, not a selectable
+# Krita build variant.  Keep a compile-time marker for the small amount of
+# shared infrastructure that has an AI-specific code path.
+set(AI_STROKE_PAINTER_APP ON)
+add_compile_definitions(AI_STROKE_PAINTER_APP=1)
+
 if (BUILD_WITH_QT6)
 set(MIN_QT_VERSION 6.0.0)
 set(MIN_FRAMEWORKS_VERSION 6.0.0)
@@ -401,61 +407,9 @@ if(BRANDING STREQUAL "default" AND BUILD_WITH_QT6)
 endif()
 
 message(STATUS "Branding selected: ${BRANDING}")
+message(STATUS "Building the AI Stroke Painter application")
 
 include(MacroJPEG)
-
- #########################################################
-## Look for Python3 - it is also searched by KF5,       ##
-## so we should request the correct version in advance  ##
-#########################################################
-
-function(TestCompileLinkPythonLibs OUTPUT_VARNAME)
-    include(CheckCXXSourceCompiles)
-    set(CMAKE_REQUIRED_INCLUDES ${Python_INCLUDE_DIRS})
-    set(CMAKE_REQUIRED_LIBRARIES ${Python_LIBRARIES})
-    if (MINGW)
-        set(CMAKE_REQUIRED_DEFINITIONS -D_hypot=hypot)
-    endif (MINGW)
-    unset(${OUTPUT_VARNAME} CACHE)
-    CHECK_CXX_SOURCE_COMPILES("
-// https://bugs.python.org/issue22411
-#if defined(_MSC_VER)
-#  ifdef _DEBUG
-#    undef _DEBUG
-#  endif /* _DEBUG */
-#endif /* _MSC_VER */
-#include <Python.h>
-int main(int argc, char *argv[]) {
-    Py_InitializeEx(0);
-}" ${OUTPUT_VARNAME})
-endfunction()
-
-if(NOT WIN32)
-    # On Unix systems we ship our own version of Python and manually set PATH
-    # pointing to that. This version of Python may differ from the one installed
-    # in the system, so we should make sure that the version of Python mentioned
-    # in VIRTUAL_ENV does **not** take precedence over the one we ship ourselves.
-    if(DEFINED ENV{VIRTUAL_ENV})
-        message(WARNING "VIRTUAL_ENV environment variable is set! It may cause clashes with our own Python version. Instructing CMake to ignore the virtual environment...")
-        set (Python_FIND_VIRTUALENV STANDARD)
-    endif()
-endif()
-
-if(WIN32)
-    set(Python_FIND_STRATEGY LOCATION)
-    find_package(Python 3.8 COMPONENTS Development Interpreter)
-    if (Python_FOUND)
-        find_package(PythonLibrary 3.8)
-        TestCompileLinkPythonLibs(CAN_USE_PYTHON_LIBS)
-        if (NOT CAN_USE_PYTHON_LIBS)
-            file(READ ${CMAKE_BINARY_DIR}${CMAKE_FILES_DIRECTORY}/CMakeError.log ERROR_LOG)
-            string(REPLACE "\n" "\n  " ERROR_LOG "${ERROR_LOG}")
-            message(FATAL_ERROR "Compiling with Python library failed, please check whether the architecture is correct!\nCMakeError.log:\n  ${ERROR_LOG}\n\n")
-        endif (NOT CAN_USE_PYTHON_LIBS)
-    endif (Python_FOUND)
-else(WIN32)
-    find_package(PythonLibrary 3.8)
-endif(WIN32)
 
  ########################
 #########################
@@ -956,7 +910,7 @@ add_compile_definitions(
     QT_DISABLE_DEPRECATED_BEFORE=0x050E00
 )
 
-add_definitions(-DTRANSLATION_DOMAIN=\"krita\")
+add_definitions(-DTRANSLATION_DOMAIN=\"ai-stroke-painter\")
 
 #
 # The reason for this mode is that the Debug mode disable inlining
@@ -990,6 +944,11 @@ if(WIN32)
 
         # Our code is UTF-8 encoded.
         add_compile_options(/utf-8)
+    elseif(MINGW AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        # Krita's template-heavy canvas code exceeds the default COFF section
+        # limit with GNU MinGW. Use the extended object format for a reliable
+        # standalone Windows build.
+        add_compile_options($<$<COMPILE_LANGUAGE:CXX>:-Wa,-mbig-obj>)
     endif()
 endif()
 
@@ -1200,27 +1159,11 @@ configure_file(config-gsl.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config-gsl.h )
 ###########################
 
 
-find_package(WebP 1.2.0 COMPONENTS demux mux)
-set_package_properties(WebP PROPERTIES
-    URL "https://developers.google.com/speed/webp"
-    TYPE OPTIONAL
-    PURPOSE "Required by the WebP plugin"
-)
-
-##
-## Test for KSeExpr
-##
-if (QT_MAJOR_VERSION STREQUAL "5")
-    find_package(KSeExpr 4.0.0.0)
-else()
-    find_package(KSeExpr 6.0.0.0)
-endif() 
-set_package_properties(KSeExpr PROPERTIES
-    URL "https://invent.kde.org/graphics/kseexpr"
-    TYPE OPTIONAL
-    PURPOSE "Required by the SeExpr generator layer"
-)
-macro_bool_to_01(KSeExpr_FOUND HAVE_SEEXPR)
+# WebP, SeExpr and the corresponding Krita plug-ins are not part of the
+# AI-first application.  Keep the generated config header deterministic
+# rather than probing build-machine-specific optional dependencies.
+set(KSeExpr_FOUND FALSE)
+set(HAVE_SEEXPR 0)
 configure_file(config-seexpr.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config-seexpr.h )
 
 find_package(ZLIB REQUIRED)
@@ -1231,19 +1174,18 @@ set_package_properties(ZLIB PROPERTIES
     PURPOSE "Required by Krita's PNG and PSD support")
 macro_bool_to_01(ZLIB_FOUND HAVE_ZLIB)
 
-find_package(OpenEXR)
-macro_bool_to_01(OpenEXR_FOUND HAVE_OPENEXR)
-if(OpenEXR_FOUND)
-    set(LINK_OPENEXR_LIB OpenEXR::IlmImf)
-endif()
+# HDR colour spaces and OpenEXR I/O belonged to Krita's broad editing stack.
+# Generated AI layers and the retained PNG/KRA paths use the standard colour
+# pipeline, so omit that optional dependency entirely.
+set(OpenEXR_FOUND FALSE)
+set(HAVE_OPENEXR 0)
+set(LINK_OPENEXR_LIB "")
 
-find_package(TIFF)
-set_package_properties(TIFF PROPERTIES
-    DESCRIPTION "TIFF Library and Utilities"
-    URL "http://www.libtiff.org"
-    TYPE OPTIONAL
-    PURPOSE "Required by the Krita TIFF filter")
-include(CheckLibTIFFPSDSupport)
+# The application keeps native .kra and PNG paths only.  Do not discover the
+# TIFF/PSD-TIFF stack that belonged to Krita's general import/export surface.
+set(TIFF_FOUND FALSE)
+set(TIFF_HAS_PSD_TAGS FALSE)
+set(TIFF_CAN_WRITE_PSD_TAGS FALSE)
 configure_file(config-tiff.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config-tiff.h)
 
 find_package(JPEG)
@@ -1269,118 +1211,29 @@ if(libjpeg-turbo_FOUND)
     set(JPEG_TURBO_LIBRARIES libjpeg-turbo::turbojpeg)
 endif()
 
-find_package(GIF)
-set_package_properties(GIF PROPERTIES
-    DESCRIPTION "Library for loading and saving gif files."
-    URL "http://giflib.sourceforge.net/"
-    TYPE OPTIONAL
-    PURPOSE "Required by the Krita GIF filter")
-
-find_package(HEIF "1.11.0")
-set_package_properties(HEIF PROPERTIES
-    DESCRIPTION "Library for loading and saving heif files."
-    URL "https://github.com/strukturag/libheif"
-    TYPE OPTIONAL
-    PURPOSE "Required by the Krita HEIF filter")
-
-find_package(OpenJPEG "2.3.0")
-set_package_properties(OpenJPEG PROPERTIES
-    DESCRIPTION "Library for loading and saving jp2000 files."
-    URL "https://www.openjpeg.org/"
-    TYPE OPTIONAL
-    PURPOSE "Required by the Krita JP2000 filter")
-
-find_package(JPEGXL 0.7.0)
-set_package_properties(JPEGXL PROPERTIES
-    DESCRIPTION "JPEG XL is a royalty-free raster-graphics file format that supports both lossy and lossless compression and is experimentally supported by Chrome, Firefox, and Edge."
-    URL "https://github.com/libjxl/libjxl"
-    TYPE OPTIONAL
-    PURPOSE "Required by the Krita JPEG-XL filter")
-
-find_package(FFTW3)
-set_package_properties(FFTW3 PROPERTIES
-    DESCRIPTION "A fast, free C FFT library"
-    URL "http://www.fftw.org/"
-    TYPE OPTIONAL
-    PURPOSE "Required by the Krita for fast convolution operators and some G'Mic features")
-macro_bool_to_01(FFTW3_FOUND HAVE_FFTW3)
-if (FFTW3_FOUND)
-    # GMic uses the Threads library if available.
-    find_library(FFTW3_THREADS_LIB fftw3_threads PATHS ${FFTW3_LIBRARY_DIRS})
-endif()
-
-find_package(OpenColorIO 2.0.0)
-set_package_properties(OpenColorIO PROPERTIES
-    DESCRIPTION "The OpenColorIO Library"
-    URL "https://www.opencolorio.org"
-    TYPE OPTIONAL
-    PURPOSE "Required by the Krita LUT docker")
-macro_bool_to_01(OpenColorIO_FOUND HAVE_OCIO)
+# General-purpose codec, convolution, and LUT-docker dependencies are not
+# used by the retained document formats or the native AI workflow.
+set(FFTW3_FOUND FALSE)
+set(HAVE_FFTW3 0)
+set(OpenColorIO_FOUND FALSE)
+set(HAVE_OCIO 0)
 configure_file(config-ocio.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config-ocio.h)
 
-set_package_properties(PythonLibrary PROPERTIES
-    DESCRIPTION "Python Library"
-    URL "https://www.python.org"
-    TYPE OPTIONAL
-    PURPOSE "Required by the Krita PyQt plugin")
-macro_bool_to_01(Python_Development_FOUND HAVE_PYTHONLIBS)
+# Scripting plugins are intentionally not part of this application.
+set(HAVE_PYTHONLIBS 0)
+set(HAVE_SIP 0)
+set(HAVE_PYQT5 0)
+set(HAVE_PYQT6 0)
 
-find_package(SIP "4.19.13")
-set_package_properties(SIP PROPERTIES
-    DESCRIPTION "Support for generating SIP Python bindings"
-    URL "https://github.com/Python-SIP/sip"
-    TYPE OPTIONAL
-    PURPOSE "Required by the Krita PyQt plugin")
-macro_bool_to_01(SIP_FOUND HAVE_SIP)
-
-if (QT_MAJOR_VERSION STREQUAL "5")
-    find_package(PyQt5 "5.6.0")
-    set_package_properties(PyQt5 PROPERTIES
-        DESCRIPTION "Python bindings for Qt5."
-        URL "https://www.riverbankcomputing.com/software/pyqt/download"
-        TYPE OPTIONAL
-        PURPOSE "Required by the Krita PyQt plugin")
-    macro_bool_to_01(PYQT5_FOUND HAVE_PYQT5)
-
-    set(PYQT_VERSION_TAG ${PYQT5_VERSION_TAG})
-    set(PYQT_SIP_NAME ${PYQT5_SIP_NAME})
-    set(PYQT_SIP_TAGS ${PYQT5_SIP_TAGS})
-    set(PYQT_SIP_DIR ${PYQT5_SIP_DIR})
-
-elseif (QT_MAJOR_VERSION STREQUAL "6")
-    find_package(PyQt6 "6.7.0")
-    set_package_properties(PyQt6 PROPERTIES
-        DESCRIPTION "Python bindings for Qt6."
-        URL "https://www.riverbankcomputing.com/software/pyqt/download"
-        TYPE OPTIONAL
-        PURPOSE "Required by the Krita PyQt plugin")
-    macro_bool_to_01(PYQT6_FOUND HAVE_PYQT6)
-
-    set(PYQT_VERSION_TAG ${PYQT6_VERSION_TAG})
-    set(PYQT_SIP_NAME ${PYQT6_SIP_NAME})
-    set(PYQT_SIP_TAGS ${PYQT6_SIP_TAGS})
-    set(PYQT_SIP_DIR ${PYQT6_SIP_DIR})
-endif()
-
-find_package(Mlt7)
-set_package_properties(Mlt7 PROPERTIES DESCRIPTION "Media Lovin' Toolkit (Multimedia Framework)"
-                URL "https://mltframework.org/"
-                PURPOSE "Required to do audio/video synchronization and processing. No MLT = No Audio! ")
-if (Mlt7_FOUND)
-    find_package(SDL2 REQUIRED)
-    set_package_properties(SDL2 PROPERTIES DESCRIPTION "Simple DirectMedia Layer 2"
-                URL "https://www.libsdl.org/"
-                PURPOSE "Required for MLT to render audio buffers. Required **only** when MLT is found on the system." )
-endif()
-macro_bool_to_01(Mlt7_FOUND HAVE_MLT)
+# Animation/video support is outside the scope of the illustration app.
+set(Mlt7_FOUND FALSE)
+set(HAVE_MLT 0)
 configure_file(config-mlt.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config-mlt.h)
 
-find_package(LibMyPaint 1.4.0)
-set_package_properties(LibMyPaint PROPERTIES
-    DESCRIPTION "MyPaint brush engine API for C/C++"
-    TYPE OPTIONAL
-    PURPOSE "Required for the MyPaint brush engine")
-macro_bool_to_01(LibMyPaint_FOUND HAVE_LIBMYPAINT)
+# MyPaint is a general brush-engine dependency.  Generation creates native AI
+# layers instead, so it is excluded from this application.
+set(LibMyPaint_FOUND FALSE)
+set(HAVE_LIBMYPAINT 0)
 configure_file(config-mypaint.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config-mypaint.h )
 
 ##
@@ -1499,16 +1352,6 @@ include (TestBigEndian)
 test_big_endian(CMAKE_WORDS_BIGENDIAN)
 
 ##
-## Test for qt-poppler
-##
-find_package(Poppler COMPONENTS Qt${QT_MAJOR_VERSION})
-set_package_properties(Poppler PROPERTIES
-    DESCRIPTION "A PDF rendering library"
-    URL "https://poppler.freedesktop.org/"
-    TYPE OPTIONAL
-    PURPOSE "Required by the Krita PDF filter.")
-
-##
 ## Test for libav on Android
 ##
 if(ANDROID)
@@ -1557,27 +1400,6 @@ set_package_properties(QUAZIP PROPERTIES
     TYPE REQUIRED
     PURPOSE "Needed for reading and writing KRA and ORA files"
 )
-
-##
-## Test for KDcraw
-##
-if (QT_MAJOR_VERSION STREQUAL "6")
-    find_package(KDcrawQt6 5.0.0)
-    set_package_properties(KDcrawQt6 PROPERTIES
-        DESCRIPTION "A thread-safe wrapper around libraw"
-        URL "https://invent.kde.org/graphics/libkdcraw"
-        TYPE OPTIONAL
-        PURPOSE "Needed for reading RAW files"
-    )
-else()
-    find_package(KF5KDcraw 5.0.0)
-    set_package_properties(KF5KDcraw PROPERTIES
-        DESCRIPTION "A thread-safe wrapper around libraw"
-        URL "https://invent.kde.org/graphics/libkdcraw"
-        TYPE OPTIONAL
-        PURPOSE "Needed for reading RAW files"
-    )
-endif()
 
 ##
 ## Check for freetype
@@ -1678,7 +1500,7 @@ include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}
 add_subdirectory(sdk/tests)
 
 add_subdirectory(libs)
-add_subdirectory(qmlmodules)
+# The upstream QML module collection powered optional Krita workspaces.
 add_subdirectory(plugins)
 if (BUILD_TESTING)
     add_subdirectory(benchmarks)
@@ -1692,10 +1514,9 @@ configure_file(config_convolution.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config_con
 check_function_exists(powf HAVE_POWF)
 configure_file(config-powf.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/config-powf.h)
 
-if(WIN32)
-    include(${CMAKE_CURRENT_LIST_DIR}/packaging/windows/installer/ConfigureInstallerNsis.cmake)
-    include(${CMAKE_CURRENT_LIST_DIR}/packaging/windows/msix/ConfigureMsixFiles.cmake)
-endif()
+# The upstream NSIS/MSIX projects package Krita-specific icons, names, and
+# shell integration. Distribution packaging for this focused application is
+# deliberately kept separate from the source build.
 
 message("\nBroken tests:")
 foreach(tst ${KRITA_BROKEN_TESTS})
@@ -1753,4 +1574,5 @@ elseif(ANDROID)
     message(STATUS "You can export a target by specifying -DQTANDROID_EXPORTED_TARGET=<targetname> and -DANDROID_APK_DIR=<paths>")
 endif()
 
-ki18n_install(po)
+# The application uses its own Japanese-first UI strings and does not ship the
+# upstream Krita translation catalogue.

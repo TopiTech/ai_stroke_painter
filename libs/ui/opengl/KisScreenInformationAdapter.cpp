@@ -16,7 +16,7 @@
 
 
 
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) && !defined(QT_NO_EGL)
 #include <qpa/qplatformnativeinterface.h>
 #include <d3d11.h>
 #include <wrl/client.h>
@@ -47,7 +47,7 @@ void getProcAddressSafe(QOpenGLContext *context, const char *funcName, FuncType 
     }
 }
 
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) && !defined(QT_NO_EGL)
 typedef const char *(EGLAPIENTRYP PFNEGLQUERYSTRINGPROC) (EGLDisplay dpy, EGLint name);
 #endif
 }
@@ -60,7 +60,7 @@ struct KisScreenInformationAdapter::Private
     QOpenGLContext *context;
     QString errorString;
 
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) && !defined(QT_NO_EGL)
     Microsoft::WRL::ComPtr<IDXGIAdapter1> dxgiAdapter;
 #endif
 };
@@ -84,7 +84,7 @@ void KisScreenInformationAdapter::Private::initialize(QOpenGLContext *newContext
 
     try {
 
-#if defined Q_OS_WIN
+#if defined(Q_OS_WIN) && !defined(QT_NO_EGL)
 
         if (!context->isOpenGLES()) {
             throw EGLException("the context is not OpenGL ES");
@@ -167,7 +167,7 @@ void KisScreenInformationAdapter::Private::initialize(QOpenGLContext *newContext
     } catch (EGLException &e) {
         this->context = 0;
         this->errorString = e.what();
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) && !defined(QT_NO_EGL)
         this->dxgiAdapter.Reset();
 #endif
     }
@@ -175,7 +175,7 @@ void KisScreenInformationAdapter::Private::initialize(QOpenGLContext *newContext
 
 bool KisScreenInformationAdapter::isValid() const
 {
-#ifdef Q_OS_WIN
+#if defined(Q_OS_WIN) && !defined(QT_NO_EGL)
     return m_d->context && m_d->dxgiAdapter;
 #else
     return false;
@@ -191,7 +191,7 @@ KisScreenInformationAdapter::ScreenInfo KisScreenInformationAdapter::infoForScre
 {
     ScreenInfo info;
 
-#if defined Q_OS_WIN
+#if defined(Q_OS_WIN) && !defined(QT_NO_EGL)
 
     QPlatformNativeInterface *nativeInterface = qGuiApp->platformNativeInterface();
     HMONITOR monitor = reinterpret_cast<HMONITOR>(nativeInterface->nativeResourceForScreen("handle", screen));

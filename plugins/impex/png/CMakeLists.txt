@@ -1,4 +1,6 @@
-add_subdirectory(tests)
+if (BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
 
 set(kritapngimport_SOURCES
     kis_png_import.cc
@@ -25,5 +27,3 @@ kis_add_library(kritapngexport MODULE ${kritapngexport_SOURCES})
 target_link_libraries(kritapngexport kritaui kritaimpex ${PNG_LIBRARIES})
 
 install(TARGETS kritapngexport  DESTINATION ${KRITA_PLUGIN_INSTALL_DIR})
-
-install(FILES krita_png.desktop DESTINATION ${KDE_INSTALL_APPDIR})

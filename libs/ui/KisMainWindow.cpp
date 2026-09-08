@@ -23,6 +23,7 @@
 #include <QIcon>
 #include <QInputDialog>
 #include <QLayout>
+#include <QLabel>
 #include <QMdiArea>
 #include <QMdiSubWindow>
 #include <QMutex>
@@ -47,6 +48,9 @@
 #include <QTemporaryDir>
 #include <QScrollArea>
 #include <QActionGroup>
+#include <QSet>
+#include <QToolBar>
+#include <QVBoxLayout>
 
 #include <kactioncollection.h>
 #include <kactionmenu.h>
@@ -158,6 +162,7 @@
 #include "KisRecentFilesManager.h"
 #include "KisWidgetConnectionUtils.h"
 #include "KisToolBarStateModel.h"
+#include "aiillustration/KisAiIllustrationDocker.h"
 #include <config-qmdiarea-always-show-subwindow-title.h>
 #include <config-qt-patches-present.h>
 
@@ -205,13 +210,41 @@ public:
     {
         if (id.isNull()) this->id = QUuid::createUuid();
 
+#if defined(AI_STROKE_PAINTER_APP)
+        auto *startPage = new QWidget(parent);
+        startPage->setObjectName(QStringLiteral("aiIllustrationStartPage"));
+        startPage->setAccessibleName(i18n("AI illustration start page"));
+        startPage->setStyleSheet(QStringLiteral(
+            "QWidget#aiIllustrationStartPage { background: #101725; color: #edf3ff; }"
+            "QLabel#aiStartTitle { color: #f3f7ff; font-size: 30px; font-weight: 650; }"
+            "QLabel#aiStartBody { color: #aebed9; font-size: 15px; }"));
+
+        auto *startLayout = new QVBoxLayout(startPage);
+        startLayout->setContentsMargins(56, 48, 56, 48);
+        startLayout->setSpacing(16);
+        startLayout->addStretch(1);
+
+        auto *title = new QLabel(i18n("AI Stroke Painter"), startPage);
+        title->setObjectName(QStringLiteral("aiStartTitle"));
+        title->setAlignment(Qt::AlignHCenter);
+        startLayout->addWidget(title);
+
+        auto *body = new QLabel(i18n("右側の AI ワークスペースにイラストの指示を入力すると、\n生成結果を編集可能なレイヤーとしてキャンバスへ追加します。"), startPage);
+        body->setObjectName(QStringLiteral("aiStartBody"));
+        body->setAlignment(Qt::AlignHCenter);
+        body->setWordWrap(true);
+        startLayout->addWidget(body);
+        startLayout->addStretch(1);
+
+        widgetStack->addWidget(startPage);
+#else
         welcomeScroller = new QScrollArea();
         welcomeScroller->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
         welcomeScroller->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
         welcomeScroller->setWidget(welcomePage);
         welcomeScroller->setWidgetResizable(true);
-
         widgetStack->addWidget(welcomeScroller);
+#endif
         widgetStack->addWidget(mdiArea);
         mdiArea->setTabsMovable(true);
         mdiArea->setActivationOrder(QMdiArea::ActivationHistoryOrder);
@@ -400,6 +433,12 @@ KisMainWindow::KisMainWindow(QUuid uuid)
     connect(KisConfigNotifier::instance(), SIGNAL(configChanged()), this, SLOT(configChanged()));
 
     actionCollection()->addAssociatedWidget(this);
+    KisConfig cfg(true);
+#if defined(AI_STROKE_PAINTER_APP)
+    auto *aiIllustrationDocker = new KisAiIllustrationDocker(this);
+    addDockWidget(Qt::RightDockWidgetArea, aiIllustrationDocker);
+    d->dockWidgetsMap.insert(aiIllustrationDocker->objectName(), aiIllustrationDocker);
+#else
     KoPluginLoader::instance()->load("Krita/ViewPlugin", KoPluginLoader::PluginsConfig(), d->viewManager, false);
 
     // Load the per-application plugins (Right now, only Python) We do this only once, when the first mainwindow is being created.
@@ -408,7 +447,6 @@ KisMainWindow::KisMainWindow(QUuid uuid)
     KoToolBoxFactory toolBoxFactory;
     QDockWidget *toolbox = createDockWidget(&toolBoxFactory);
 
-    KisConfig cfg(true);
     if (cfg.toolOptionsInDocker()) {
         ToolDockerFactory toolDockerFactory;
         d->toolOptionsDocker = qobject_cast<KoToolDocker*>(createDockWidget(&toolDockerFactory));
@@ -438,6 +476,7 @@ KisMainWindow::KisMainWindow(QUuid uuid)
     Q_FOREACH (QString title, dockwidgetActions.keys()) {
         d->dockWidgetMenu->addAction(dockwidgetActions[title]);
     }
+#endif
 
 
     // Style menu actions
@@ -468,11 +507,13 @@ KisMainWindow::KisMainWindow(QUuid uuid)
             this, SLOT(slotUpdateWidgetStyle()));
 #endif
 
+#if !defined(AI_STROKE_PAINTER_APP)
     // Load all the actions from the tool plugins
     // ToolBoxDocker needs them when at setViewManager()
     Q_FOREACH(KoToolFactoryBase *toolFactory, KoToolRegistry::instance()->values()) {
         toolFactory->createActions(actionCollection());
     }
+#endif
 
 
     Q_FOREACH (QDockWidget *wdg, dockWidgets()) {
@@ -575,8 +616,10 @@ KisMainWindow::KisMainWindow(QUuid uuid)
 
     configChanged();
 
+#if !defined(AI_STROKE_PAINTER_APP)
     // Make sure the python plugins create their actions in time
     KisPart::instance()->notifyMainWindowIsBeingCreated(this);
+#endif
 
     // If we have customized the toolbars, load that first
     setLocalXMLFile(KoResourcePaths::locateLocal("data", "krita5.xmlgui"));
@@ -676,6 +719,7 @@ KisMainWindow::KisMainWindow(QUuid uuid)
     }
 
     applyMainWindowSettings(d->windowStateConfig);
+    applyAiIllustrationMode();
 }
 
 KisMainWindow::~KisMainWindow()
@@ -3204,6 +3248,86 @@ void KisMainWindow::createActions()
         QAction *action = actionManager->createAction("lock_toolbars");
         connectControl(action, KisToolBar::toolBarStateModel(), "toolBarsLocked");
     }
+}
+
+void KisMainWindow::applyAiIllustrationMode()
+{
+#if defined(AI_STROKE_PAINTER_APP)
+    setWindowTitle(i18n("AI Stroke Painter"));
+
+    const QStringList visibleActionNames {
+        QStringLiteral("file_new"),
+        QStringLiteral("file_open"),
+        QStringLiteral("file_save"),
+        QStringLiteral("file_save_as"),
+        QStringLiteral("file_export_file"),
+        QStringLiteral("file_quit"),
+        QStringLiteral("edit_undo"),
+        QStringLiteral("edit_redo"),
+        QStringLiteral("help_about_app"),
+    };
+
+    QSet<QAction *> visibleActions;
+    for (const QString &name : visibleActionNames) {
+        if (QAction *action = actionCollection()->action(name)) {
+            visibleActions.insert(action);
+        }
+    }
+
+    for (QAction *action : actionCollection()->actions()) {
+        const bool visible = visibleActions.contains(action);
+        action->setVisible(visible);
+        if (!visible) {
+            action->setEnabled(false);
+        }
+    }
+
+    menuBar()->clear();
+
+    const auto addAction = [this](QMenu *menu, const QString &name) {
+        if (QAction *action = actionCollection()->action(name)) {
+            action->setVisible(true);
+            menu->addAction(action);
+        }
+    };
+
+    QMenu *fileMenu = menuBar()->addMenu(i18n("&File"));
+    addAction(fileMenu, QStringLiteral("file_new"));
+    addAction(fileMenu, QStringLiteral("file_open"));
+    fileMenu->addSeparator();
+    addAction(fileMenu, QStringLiteral("file_save"));
+    addAction(fileMenu, QStringLiteral("file_save_as"));
+    addAction(fileMenu, QStringLiteral("file_export_file"));
+    fileMenu->addSeparator();
+    addAction(fileMenu, QStringLiteral("file_quit"));
+
+    QMenu *editMenu = menuBar()->addMenu(i18n("&Edit"));
+    addAction(editMenu, QStringLiteral("edit_undo"));
+    addAction(editMenu, QStringLiteral("edit_redo"));
+
+    QMenu *aiMenu = menuBar()->addMenu(i18n("&AI"));
+    if (QDockWidget *docker = d->dockWidgetsMap.value(QStringLiteral("AiIllustrationDocker"))) {
+        QAction *toggleAction = docker->toggleViewAction();
+        toggleAction->setText(i18n("AI workspace"));
+        aiMenu->addAction(toggleAction);
+        docker->show();
+    }
+
+    QMenu *helpMenu = menuBar()->addMenu(i18n("&Help"));
+    addAction(helpMenu, QStringLiteral("help_about_app"));
+
+    for (QToolBar *toolBar : findChildren<QToolBar *>()) {
+        toolBar->hide();
+    }
+
+    for (QDockWidget *docker : dockWidgets()) {
+        if (docker->objectName() != QLatin1String("AiIllustrationDocker")) {
+            docker->hide();
+        }
+    }
+
+    setDockNestingEnabled(false);
+#endif
 }
 
 void KisMainWindow::applyToolBarLayout()

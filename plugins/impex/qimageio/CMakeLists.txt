@@ -1,4 +1,6 @@
-add_subdirectory(tests)
+if (BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
 
 set(kritaqimageioexport_SOURCES
     kis_qimageio_export.cpp
@@ -23,5 +25,3 @@ kis_add_library(kritaqimageioimport MODULE ${kritaqimageioimport_SOURCES})
 target_link_libraries(kritaqimageioimport kritaui)
 
 install(TARGETS kritaqimageioimport  DESTINATION ${KRITA_PLUGIN_INSTALL_DIR})
-
-install(FILES krita_qimageio.desktop DESTINATION ${KDE_INSTALL_APPDIR})

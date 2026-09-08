@@ -1,9 +1,0 @@
-{
-    "Id": "Knife Tool",
-    "Type": "Service",
-    "X-KDE-Library": "kritatoolknife",
-    "X-KDE-ServiceTypes": [
-        "Krita/Tool"
-    ],
-    "X-Krita-Version": "28"
-}

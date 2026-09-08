@@ -1,0 +1,14 @@
+[Desktop Entry]
+Name=AI Stroke Painter
+Name[ja]=AI Stroke Painter
+GenericName=AI Illustration Studio
+GenericName[ja]=AI イラストレーションスタジオ
+Comment=Create illustrations with image models and native layers
+Comment[ja]=画像モデルとネイティブレイヤーでイラストを作成します
+Exec=ai-stroke-painter %F
+Icon=ai-stroke-painter
+Type=Application
+Categories=Graphics;2DGraphics;RasterGraphics;
+MimeType=application/x-krita;image/png;image/jpeg;
+StartupNotify=true
+StartupWMClass=ai-stroke-painter

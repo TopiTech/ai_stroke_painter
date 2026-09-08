@@ -15,10 +15,10 @@
 *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 */
 
-#include <KLocalizedTranslator>
 #include <QByteArray>
 #include <QDate>
 #include <QDir>
+#include <QIcon>
 #include <QLibraryInfo>
 #include <QLocale>
 #include <QMessageBox>
@@ -243,7 +243,11 @@ extern "C" MAIN_EXPORT int MAIN_FN(int argc, char **argv)
     qputenv("QT_BEARER_POLL_TIMEOUT", QByteArray::number(-1));
 
     // A per-user unique string, without /, because QLocalServer cannot use names with a / in it
+#if defined(AI_STROKE_PAINTER_APP)
+    QString key = "AIStrokePainter" + QStandardPaths::writableLocation(QStandardPaths::HomeLocation).replace("/", "_");
+#else
     QString key = "Krita5" + QStandardPaths::writableLocation(QStandardPaths::HomeLocation).replace("/", "_");
+#endif
     key = key.replace(":", "_").replace("\\","_");
 
     QCoreApplication::setAttribute(Qt::AA_ShareOpenGLContexts, true);
@@ -656,6 +660,10 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
     // first create the application so we can create a pixmap
     KisApplication app(key, argc, argv);
 
+#if defined(AI_STROKE_PAINTER_APP)
+    app.setWindowIcon(QIcon(QStringLiteral(":/ai-stroke-painter.svg")));
+#endif
+
 #if defined Q_OS_WIN && QT_VERSION > QT_VERSION_CHECK(6, 0, 0)
     const bool forceWinTab = !KisConfig::useWin8PointerInputNoApp(&kritarc);
     using QWindowsApplication = QNativeInterface::Private::QWindowsApplication;
@@ -705,24 +713,34 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
      * On MacOS and Windows we should still be able to fetch translations
      * without deploying the entire package
      */
-    KLocalizedString::addDomainLocaleDir("krita", QDir(root + "share/locale").absolutePath());
+    KLocalizedString::addDomainLocaleDir("ai-stroke-painter", QDir(root + "share/locale").absolutePath());
 #endif
 
-    KLocalizedString::setApplicationDomain("krita");
+    KLocalizedString::setApplicationDomain("ai-stroke-painter");
 
     dbgLocale << "Available translations" << KLocalizedString::availableApplicationTranslations();
-    dbgLocale << "Available domain translations" << KLocalizedString::availableDomainTranslations("krita");
+    dbgLocale << "Available domain translations" << KLocalizedString::availableDomainTranslations("ai-stroke-painter");
 
     /// Initialize application info, it will be used by both, Qt and
     /// DrKonqi of the host system
+#if defined(AI_STROKE_PAINTER_APP)
+    KAboutData aboutData("ai-stroke-painter",
+                          i18n("AI Stroke Painter"),
+                          KritaVersionWrapper::versionString(true),
+                          i18n("AI-first illustration studio"),
+                          KAboutLicense::GPL,
+                          i18nc("@info:credit", "© 2026 AI Stroke Painter contributors"));
+    aboutData.setOrganizationDomain(QByteArrayLiteral("aistrokepainter.local"));
+#else
     KAboutData aboutData("krita",
-                            i18n("Krita"),
-                            KritaVersionWrapper::versionString(true),
-                            i18n("Krita is the full-featured digital art studio"),
-                            KAboutLicense::GPL,
-                            i18nc("@info:credit", "© 1999–2026 The Krita Developers"));
+                          i18n("Krita"),
+                          KritaVersionWrapper::versionString(true),
+                          i18n("Krita is the full-featured digital art studio"),
+                          KAboutLicense::GPL,
+                          i18nc("@info:credit", "© 1999–2026 The Krita Developers"));
     aboutData.setHomepage(QStringLiteral("https://krita.org"));
     aboutData.setOrganizationDomain("krita.org");
+#endif
 
     // this call sets corresponding fields of QApplication as well
     KAboutData::setApplicationData(aboutData);
@@ -802,12 +820,20 @@ if (!qEnvironmentVariableIsEmpty("KRITA_OPENGL_DEBUG")) {
     KisApplication::setAttribute(Qt::AA_DisableWindowContextHelpButton);
 #endif
     app.installEventFilter(KisQtWidgetsTweaker::instance());
+#if defined(AI_STROKE_PAINTER_APP)
+    app.setDesktopFileName(QStringLiteral("org.aistrokepainter.AIStrokePainter"));
+#else
     app.setDesktopFileName(QStringLiteral("org.kde.krita"));
+#endif
 
+    // The focused application opens directly into its AI workspace rather than
+    // presenting Krita's general-purpose splash screen.
+#if !defined(AI_STROKE_PAINTER_APP)
     if (!args.noSplash()) {
         QWidget *splash = new KisSplashScreen();
         app.setSplashScreen(splash);
     }
+#endif
 
 #if defined Q_OS_WIN
     KisConfig cfg(false);
@@ -911,18 +937,6 @@ void removeInstalledTranslators(KisApplication &app)
         KisApplication::removeTranslator(translator);
     }
     dbgLocale << "Removed" << translators.size() << "QTranslator's";
-}
-
-void installPythonPluginUITranslator(KisApplication &app)
-{
-    // Install a KLocalizedTranslator, so that when the bundled Python plugins
-    // load their UI files using uic.loadUi() it can be translated.
-    // These UI files must specify "pykrita_plugin_ui" as their class names.
-    KLocalizedTranslator *translator = new KLocalizedTranslator(&app);
-    translator->setObjectName(QStringLiteral("KLocalizedTranslator.pykrita_plugin_ui"));
-    translator->setTranslationDomain(QStringLiteral("krita"));
-    translator->addContextToMonitor(QStringLiteral("pykrita_plugin_ui"));
-    KisApplication::installTranslator(translator);
 }
 
 void installQtTranslations(KisApplication &app)
@@ -1057,7 +1071,6 @@ void installEcmTranslations(KisApplication &app)
 void installTranslators(KisApplication &app)
 {
     removeInstalledTranslators(app);
-    installPythonPluginUITranslator(app);
     installQtTranslations(app);
     installEcmTranslations(app);
 }

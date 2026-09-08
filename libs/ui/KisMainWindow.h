@@ -471,6 +471,9 @@ private:
 
     void createActions();
 
+    /** Configure the focused menu and docking layout of this fork. */
+    void applyAiIllustrationMode();
+
     void applyToolBarLayout();
 
     QByteArray borrowWorkspace(KisMainWindow *borrower);

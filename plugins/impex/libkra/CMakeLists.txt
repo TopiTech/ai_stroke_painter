@@ -1,4 +1,6 @@
-add_subdirectory(tests)
+if (BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
 
 set(kritalibkra_LIB_SRCS
     kis_colorize_dom_utils.cpp
@@ -27,4 +29,3 @@ set_target_properties(kritalibkra PROPERTIES
     VERSION ${GENERIC_KRITA_LIB_VERSION} SOVERSION ${GENERIC_KRITA_LIB_SOVERSION}
 )
 install(TARGETS kritalibkra ${INSTALL_TARGETS_DEFAULT_ARGS} )
-

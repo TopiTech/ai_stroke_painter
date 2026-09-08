@@ -1,6 +1,8 @@
 project( lcmsengine )
 
-add_subdirectory(tests)
+if (BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
 
 include_directories(SYSTEM
     ${LCMS2_INCLUDE_DIRS}
@@ -87,4 +89,3 @@ target_link_libraries(kritalcmsengine_static kritapigment kritawidgetutils KF${K
 
 target_link_libraries(kritalcmsengine PRIVATE kritalcmsengine_static)
 install(TARGETS kritalcmsengine DESTINATION ${KRITA_PLUGIN_INSTALL_DIR})
-

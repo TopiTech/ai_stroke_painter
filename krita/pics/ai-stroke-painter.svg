@@ -1,0 +1,30 @@
+<!-- SPDX-FileCopyrightText: 2026 AI Stroke Painter contributors -->
+<!-- SPDX-License-Identifier: CC0-1.0 -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="32" y1="20" x2="224" y2="236" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#293b67"/>
+      <stop offset=".54" stop-color="#18243f"/>
+      <stop offset="1" stop-color="#101725"/>
+    </linearGradient>
+    <linearGradient id="stroke" x1="58" y1="178" x2="202" y2="65" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#77d5ff"/>
+      <stop offset=".48" stop-color="#a58cff"/>
+      <stop offset="1" stop-color="#ffe4a6"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect x="12" y="12" width="232" height="232" rx="56" fill="url(#bg)"/>
+  <rect x="13.5" y="13.5" width="229" height="229" rx="54.5" fill="none" stroke="#8fb4ff" stroke-opacity=".34" stroke-width="3"/>
+  <path d="M47 170c28-45 48 34 77-5 19-26 24-75 76-72" fill="none" stroke="#6b82bd" stroke-opacity=".28" stroke-width="26" stroke-linecap="round"/>
+  <path d="M47 170c28-45 48 34 77-5 19-26 24-75 76-72" fill="none" stroke="url(#stroke)" stroke-width="12" stroke-linecap="round"/>
+  <path d="M53 164c20-22 35-3 50 1" fill="none" stroke="#ebf5ff" stroke-opacity=".75" stroke-width="3" stroke-linecap="round"/>
+  <g fill="#fff4c6" filter="url(#glow)">
+    <path d="M179 48l5 16 16 5-16 5-5 16-5-16-16-5 16-5z"/>
+    <path d="M203 98l3 10 10 3-10 3-3 10-3-10-10-3 10-3z" opacity=".9"/>
+    <circle cx="70" cy="83" r="5" opacity=".85"/>
+  </g>
+</svg>

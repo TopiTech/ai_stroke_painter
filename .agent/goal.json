@@ -1,65 +1,58 @@
 {
   "version": 1,
-  "id": "goal-20260908-krita-integration",
-  "status": "completed",
-  "objective": "既存の AI Stroke Painter Krita プラグインを Krita のソースツリーへ統合し、Krita フォークとしてビルド・利用できる状態にしたうえで旧配布形態の不要物を整理する",
+  "id": "goal-20260908-native-ai-illustration",
+  "status": "active",
+  "objective": "AI Stroke Painter を Python の Krita プラグインではなく、Krita の描画基盤を用いるネイティブな独自 AI イラストレーションアプリケーションとして統合し、不要な一般用途 UI を削減して Craft 環境でコンパイルする",
   "completion_criteria": [
-    "AI Stroke Painter が Krita の構成・インストール対象に含まれ、外部 ZIP インポートなしで利用できる",
-    "Python の線分単位描画を、Krita 本体側の連続筆圧ストロークAPIで置き換える",
-    "既存のオフライン生成・画像変換・LLM・プレビュー・レイヤー・保存機能を維持する",
-    "Python 回帰テストと静的解析が成功する",
-    "変更した Krita 側コードについて CMake 構成・インストール検証が成功する",
-    "旧 ZIP 配布物、キャッシュ、統合後に重複するルート直下プラグイン資産が整理される",
-    "最終的なソース、ビルド方法、検証結果が文書化される"
+    "AI 描画 UI・LLM リクエスト・生成結果のキャンバス反映が、PyKrita プラグインマネージャーに依存せず、アプリ本体にコンパイルされる",
+    "起動時の既定 UI が AI イラスト制作向けで、不要な Krita の一般用途メニュー・ドッカー・ワークスペースが露出しない",
+    "必要な文書作成・保存・キャンバス・レイヤー・描画機能は維持される",
+    "旧 Python プラグインのランタイム登録・配布物が除去される",
+    "Craft 環境で対象アプリケーションの構成とコンパイルが成功する",
+    "不要になったソース・設定・生成物を削除し、残存参照がない"
   ],
   "constraints": [
     "既存ユーザー変更を上書きしない",
-    "Krita の既存設計・CMake・プラグイン規約に従う",
-    "APIキーや個人情報を保存しない",
-    "削除前に統合先と重複を確認する",
-    "外部公開やリモートへの push は行わない"
+    "Krita の既存描画基盤と CMake 規約を利用する",
+    "API キーや個人情報を保存しない",
+    "外部公開・リモートへの push は行わない",
+    "大規模削除の前にビルドへの影響を確認する"
   ],
   "non_goals": [
-    "Krita 全体の無関係な改修",
-    "外部AIサービスの契約・認証・課金",
-    "上流KritaへのPR作成"
+    "外部 AI サービスとの契約・課金・認証情報の取得",
+    "上流 Krita への PR 作成",
+    "Krita の描画エンジンを一から再実装する"
   ],
   "verification": [
-    "統合先の python check.py",
-    "334件の通常回帰テストと334件の依存なしヘッドレス回帰テスト",
-    "全24シナリオの Illustration Quality Gates",
-    "隔離CMake configure と試験インストール",
-    "キャッシュ・旧配布物・重複ソースの不在確認"
+    "CMake の AI アプリ本体ターゲットと PyKrita 非依存の静的参照監査",
+    "AI UI と生成・描画経路のユニットテストまたは対象ビルド",
+    "Craft 環境からの configure / compile",
+    "不要プラグイン・キャッシュ・旧配布物の不在確認"
   ],
   "budget": {
-    "max_iterations": 30,
+    "max_iterations": null,
     "max_elapsed_minutes": null
   },
   "progress": {
-    "iteration": 6,
+    "iteration": 1,
     "completed": [
-      "Krita libkis に Node.paintStroke を追加",
-      "SIP binding に連続筆圧ストロークAPIを公開",
-      "Python adapter をネイティブAPI優先へ移行",
-      "AI Stroke Painter を plugins/python に統合",
-      "初回既定有効化とユーザー無効設定の尊重を実装",
-      "CMake install対象と開発ファイル除外を実装・検証",
-      "全Python品質チェックと回帰テストを通過",
-      "旧Bridge・ZIP配布・重複ソース・生成キャッシュを削除",
-      "READMEとARCHITECTUREを統合版向けに更新"
+      "Krita ソースツリーをプロジェクト直下へ移行",
+      "既存 Python プラグインの構成と Craft ルートを確認"
     ],
-    "remaining": [],
-    "last_action": "最終監査",
-    "last_result": "統合、検証、整理の全完了条件を満たした"
+    "remaining": [
+      "ネイティブ AI 機能の実装と本体統合",
+      "専用アプリ UI への削減",
+      "Craft 依存関係の解決とコンパイル",
+      "旧プラグイン資産の削除と完了監査"
+    ],
+    "last_action": "新しい完全統合要件のベースライン監査",
+    "last_result": "Python プラグインが現在の機能本体であり、Craft にはコンパイラはあるが Krita 依存関係は未導入"
   },
   "evidence": [
-    "python check.py: Ruff、format、Mypy、Pyrefly、334通常テスト、334ヘッドレステスト、24品質シナリオが全成功",
-    "CMake隔離configure: 成功",
-    "CMake試験install: manifest/package/manual=true、legacy/dev/cache=false",
-    "Node.h/Node.cpp/Node.sip: paintStroke(points, pressures, strokeStyle) が一致",
-    "最終ファイル監査: cache_dirs=null、legacy_files=null、ルート直下の重複実装なし"
+    "plugins/python/ai_stroke_painter に UI・LLM・生成・描画の Python 実装が存在する",
+    "C:\\CraftRoot に GCC・CMake・Ninja はあるが、Craft の installed package 一覧に Qt/KF/Krita はない"
   ],
   "blockers": [],
-  "created_at": "2026-09-08T17:00:00+09:00",
-  "updated_at": "2026-09-08T18:10:00+09:00"
+  "created_at": "2026-09-08T18:40:00+09:00",
+  "updated_at": "2026-09-08T18:40:00+09:00"
 }
