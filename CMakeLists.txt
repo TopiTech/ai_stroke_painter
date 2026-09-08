@@ -1553,9 +1553,11 @@ add_subdirectory(sdk/tests)
 add_subdirectory(libs)
 # The upstream QML module collection powered optional Krita workspaces.
 add_subdirectory(plugins)
-if (BUILD_TESTING)
-    add_subdirectory(benchmarks)
-endif()
+# Upstream Krita performance benchmarks have been moved to source/benchmarks
+# for future reference and optimization experiments.
+# if (BUILD_TESTING)
+#     add_subdirectory(benchmarks)
+# endif()
 add_subdirectory(krita)
 
 configure_file(KoConfig.h.cmake ${CMAKE_CURRENT_BINARY_DIR}/KoConfig.h )
