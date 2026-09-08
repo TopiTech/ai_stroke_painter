@@ -113,6 +113,23 @@ _ELEMENT_LABELS = {
     "magic_circle": "魔法陣",
 }
 
+_QT_KEY_FALLBACKS = {
+    "Key_Left": 0x01000012,
+    "Key_Up": 0x01000013,
+    "Key_Right": 0x01000014,
+    "Key_Down": 0x01000015,
+    "Key_0": 0x30,
+}
+
+
+def _qt_key_value(name: str) -> Any:
+    """PyQt5/6 のキー列挙値を取得し、ヘッドレステストでは標準値へフォールバックする。"""
+    scoped = getattr(getattr(Qt, "Key", None), name, None) if Qt is not None else None
+    if scoped is not None:
+        return scoped
+    legacy = getattr(Qt, name, None) if Qt is not None else None
+    return legacy if legacy is not None else _QT_KEY_FALLBACKS.get(name)
+
 
 def _format_plan_quality_summary(plan: DrawingPlan) -> str:
     """適用判断に必要な品質・意味不足を一行へまとめる。"""
@@ -389,9 +406,17 @@ class PreviewWidget(QWidget):
         if Qt is not None and hasattr(Qt, "OpenHandCursor") and hasattr(self, "setCursor"):
             with contextlib.suppress(Exception):
                 self.setCursor(Qt.OpenHandCursor)
+        if Qt is not None and hasattr(self, "setFocusPolicy"):
+            focus_policy = getattr(getattr(Qt, "FocusPolicy", None), "StrongFocus", None)
+            if focus_policy is None:
+                focus_policy = getattr(Qt, "StrongFocus", None)
+            if focus_policy is not None:
+                with contextlib.suppress(Exception):
+                    self.setFocusPolicy(focus_policy)
         if hasattr(self, "setToolTip"):
             self.setToolTip(
-                "ストロークプレビュー: マウスホイールでズーム、ドラッグでパン移動、ダブルクリックでリセット"
+                "ストロークプレビュー: マウスホイールでズーム、ドラッグまたは矢印キーで移動、"
+                "+/-でズーム、0またはダブルクリックでリセット"
             )
 
     def reset_view(self) -> None:
@@ -744,6 +769,49 @@ class PreviewWidget(QWidget):
             self.set_zoom_factor(self._zoom_factor * 1.15)
         elif delta < 0:
             self.set_zoom_factor(self._zoom_factor / 1.15)
+        if hasattr(event, "accept"):
+            event.accept()
+
+    def keyPressEvent(self, event: Any) -> None:  # noqa: N802
+        """キーボードだけでもプレビューの移動・ズーム・リセットを操作できるようにする。"""
+        key = getattr(event, "key", lambda: None)()
+        key_deltas: dict[Any, tuple[float, float]] = {}
+        for key_name, pan_delta in (
+            ("Key_Left", (-24.0, 0.0)),
+            ("Key_Up", (0.0, -24.0)),
+            ("Key_Right", (24.0, 0.0)),
+            ("Key_Down", (0.0, 24.0)),
+        ):
+            key_value = _qt_key_value(key_name)
+            if key_value is not None:
+                key_deltas[key_value] = pan_delta
+
+        selected_pan_delta = key_deltas.get(key)
+        if selected_pan_delta is not None:
+            self.set_pan_offset(
+                self._pan_offset_x + selected_pan_delta[0],
+                self._pan_offset_y + selected_pan_delta[1],
+            )
+            if hasattr(event, "accept"):
+                event.accept()
+            return
+
+        text = getattr(event, "text", lambda: "")()
+        zoom_in_keys = tuple(
+            value for value in (_qt_key_value("Key_Plus"), _qt_key_value("Key_Equal")) if value is not None
+        )
+        if text in ("+", "=") or key in zoom_in_keys:
+            self.set_zoom_factor(self._zoom_factor * 1.15)
+        else:
+            zoom_out_key = _qt_key_value("Key_Minus")
+            if text == "-" or (zoom_out_key is not None and key == zoom_out_key):
+                self.set_zoom_factor(self._zoom_factor / 1.15)
+            elif text == "0" or key == _qt_key_value("Key_0"):
+                self.reset_view()
+            else:
+                if hasattr(event, "ignore"):
+                    event.ignore()
+                return
         if hasattr(event, "accept"):
             event.accept()
 
@@ -1214,9 +1282,10 @@ class AIStrokePainterDocker(DockWidget):
         self.prompt.setMaximumHeight(65)
         prompt_layout.addWidget(self.prompt)
 
-        # クイックタグ行
-        quick_tags_layout = QHBoxLayout()
+        # クイックタグ行（Docker の狭い幅でもボタンが横にはみ出さないよう2列で折り返す）
+        quick_tags_layout = QVBoxLayout()
         quick_tags_layout.addWidget(QLabel("タグ追加:"))
+        quick_tag_rows = (QHBoxLayout(), QHBoxLayout(), QHBoxLayout())
         quick_tags: list[tuple[str, str]] = [
             ("アニメ調", "anime style, vibrant colors"),
             ("繊細な線画", "delicate clean lineart, fine details"),
@@ -1225,11 +1294,16 @@ class AIStrokePainterDocker(DockWidget):
             ("集中線", "manga focus speed lines"),
             ("幾何学", "sacred geometry intricate patterns"),
         ]
-        for tag_label, tag_val in quick_tags:
+        for index, (tag_label, tag_val) in enumerate(quick_tags):
             tag_btn = QPushButton(f"+ {tag_label}")
             tag_btn.setToolTip(f"プロンプトに '{tag_val}' を追加します")
+            if hasattr(tag_btn, "setAccessibleName"):
+                tag_btn.setAccessibleName(f"プロンプトタグ追加: {tag_label}")
             tag_btn.clicked.connect(lambda _chk=False, val=tag_val: self._add_prompt_tag(val))
-            quick_tags_layout.addWidget(tag_btn)
+            quick_tag_rows[index // 2].addWidget(tag_btn)
+        for row in quick_tag_rows:
+            row.addStretch()
+            quick_tags_layout.addLayout(row)
         prompt_layout.addLayout(quick_tags_layout)
         tab_main_layout.addWidget(prompt_box)
 
@@ -1485,7 +1559,9 @@ class AIStrokePainterDocker(DockWidget):
 
         # クイックプロファイル選択
         profile_box = QGroupBox("クイック設定プロファイル")
-        profile_row = QHBoxLayout(profile_box)
+        profile_layout = QVBoxLayout(profile_box)
+        profile_row1 = QHBoxLayout()
+        profile_row2 = QHBoxLayout()
         self.profile_openai_btn = QPushButton("OpenAI (gpt-4o)")
         self.profile_openai_btn.clicked.connect(lambda: self._apply_llm_profile("openai"))
         self.profile_ollama_btn = QPushButton("Ollama (ローカル)")
@@ -1494,10 +1570,12 @@ class AIStrokePainterDocker(DockWidget):
         self.profile_lmstudio_btn.clicked.connect(lambda: self._apply_llm_profile("lmstudio"))
         self.profile_deepseek_btn = QPushButton("DeepSeek")
         self.profile_deepseek_btn.clicked.connect(lambda: self._apply_llm_profile("deepseek"))
-        profile_row.addWidget(self.profile_openai_btn)
-        profile_row.addWidget(self.profile_ollama_btn)
-        profile_row.addWidget(self.profile_lmstudio_btn)
-        profile_row.addWidget(self.profile_deepseek_btn)
+        profile_row1.addWidget(self.profile_openai_btn)
+        profile_row1.addWidget(self.profile_ollama_btn)
+        profile_row2.addWidget(self.profile_lmstudio_btn)
+        profile_row2.addWidget(self.profile_deepseek_btn)
+        profile_layout.addLayout(profile_row1)
+        profile_layout.addLayout(profile_row2)
         llm_layout.addWidget(profile_box)
 
         llm_form = QFormLayout()
@@ -2925,7 +3003,8 @@ class AIStrokePainterDocker(DockWidget):
             prev_w.setAccessibleName("ストロークベクタープレビュー")
             if hasattr(prev_w, "setAccessibleDescription"):
                 prev_w.setAccessibleDescription(
-                    "生成されたストロークのベクタープレビュー。マウスホイールでズーム、ドラッグで移動、ダブルクリックでリセット"
+                    "生成されたストロークのベクタープレビュー。マウスホイールでズーム、ドラッグまたは矢印キーで移動、"
+                    "+/-でズーム、0またはダブルクリックでリセット"
                 )
         # 画像変換タブ
         load_b = _get_attr(self, "load_image_btn")

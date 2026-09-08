@@ -8089,7 +8089,10 @@ class ImageGeneratorAndPlannerTests(unittest.TestCase):
 
         fake_png = b"\x89PNG\r\n\x1a\n" + (b"\x00" * 8) + (20).to_bytes(4, "big") + (10).to_bytes(4, "big")
 
-        planner = ImageGenerationPlanner(ImageGeneratorSettings(api_key="sk-fake-key"))
+        log_messages: list[str] = []
+        planner = ImageGenerationPlanner(
+            ImageGeneratorSettings(api_key="sk-fake-key"), log_callback=log_messages.append
+        )
         planner.image_converter.qimage_cls = FakeImage
         with patch.object(planner.image_client, "generate_image", return_value=fake_png):
             plan = planner.plan(
@@ -8102,6 +8105,8 @@ class ImageGeneratorAndPlannerTests(unittest.TestCase):
             self.assertIsNotNone(plan)
             self.assertEqual(plan.prompt, "AI Generated: fantasy anime mountain")
             self.assertEqual(plan.metadata.get("generator"), "text_to_image_to_stroke")
+        self.assertNotIn("fantasy anime mountain", "\n".join(log_messages))
+        self.assertIn("digest=", "\n".join(log_messages))
 
     def test_new_macro_operations_compilation(self) -> None:
         from .stroke_program import (
@@ -9147,6 +9152,26 @@ class SeniorReviewRegressionTests(unittest.TestCase):
         stroke_ids = [s.id for s in plan.strokes]
         self.assertEqual(len(stroke_ids), len(set(stroke_ids)))
 
+    def test_r3b_duplicate_character_macros_do_not_collide_stroke_ids(self) -> None:
+        """R3b: 生成シードが衝突する複数の character マクロでも stroke ID が一意になること。"""
+        from .stroke_program import MacroOperation, StrokeProgram, compile_stroke_program
+
+        # _compile_macro の旧実装は operation hash の下3桁だけをキャラクター生成
+        # シードへ使っていたため、これらのIDでは同じ生成結果とIDが重複した。
+        prog = StrokeProgram(
+            prompt="two characters",
+            seed=42,
+            canvas_width=800,
+            canvas_height=600,
+            operations=[
+                MacroOperation(id="character_36", name="character_face"),
+                MacroOperation(id="character_41", name="character_face"),
+            ],
+        )
+        plan = compile_stroke_program(prog)
+        stroke_ids = [s.id for s in plan.strokes]
+        self.assertEqual(len(stroke_ids), len(set(stroke_ids)))
+
     def test_r4_large_polygon_wash_downsamples_to_max_stroke_points(self) -> None:
         """R4: 頂点数の多いポリゴン塗りでも MAX_STROKE_POINTS を超過せずコンパイルできること。"""
         from .domain import MAX_STROKE_POINTS
@@ -9252,6 +9277,97 @@ class CodeReview2026HardeningTests(unittest.TestCase):
         for input_text, expected_token in cases:
             masked = sanitize_api_key_log(input_text)
             self.assertIn(expected_token, masked, f"failed to mask: {input_text!r} -> {masked!r}")
+
+    def test_configured_api_keys_are_redacted_from_upstream_error_paths(self) -> None:
+        """形式に依存しない設定済みAPIキーが画像生成・LLMの例外とログへ漏れないこと。"""
+        from io import BytesIO
+        from urllib.error import HTTPError
+
+        from .image_generator import ImageGenerationError, ImageGeneratorClient, ImageGeneratorSettings
+
+        image_secret = "custom-image-secret-123"
+        image_error = HTTPError(
+            url="https://example.test/generate",
+            code=502,
+            msg="Bad Gateway",
+            hdrs=cast(Any, {}),
+            fp=BytesIO(f"upstream echoed {image_secret}".encode()),
+        )
+
+        class ImageOpener:
+            def open(self, *_args: Any, **_kwargs: Any) -> Any:
+                raise image_error
+
+        image_client = ImageGeneratorClient(
+            ImageGeneratorSettings(
+                provider="custom_http",
+                endpoint_url="https://example.test/generate",
+                api_key=image_secret,
+            )
+        )
+        with (
+            patch("ai_stroke_painter.image_generator.build_opener", return_value=ImageOpener()),
+            self.assertRaises(ImageGenerationError) as image_ctx,
+        ):
+            image_client.generate_image("test")
+        self.assertNotIn(image_secret, str(image_ctx.exception))
+        self.assertIn("[REDACTED]", str(image_ctx.exception))
+
+        llm_secret = "custom-llm-secret-456"
+        llm_messages: list[str] = []
+        llm_error = HTTPError(
+            url="https://example.test/v1/chat/completions",
+            code=502,
+            msg="Bad Gateway",
+            hdrs=cast(Any, {}),
+            fp=BytesIO(f"upstream echoed {llm_secret}".encode()),
+        )
+
+        def llm_error_opener(_request: Any, **_kwargs: Any) -> Any:
+            raise llm_error
+
+        llm_planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings(
+                "https://example.test/v1",
+                "model",
+                api_key=llm_secret,
+                max_retries=1,
+            ),
+            opener=llm_error_opener,
+            log_callback=llm_messages.append,
+        )
+        with self.assertRaises(LLMPlannerError) as llm_ctx:
+            llm_planner.plan("test", 1, 1, 100, 100)
+        self.assertNotIn(llm_secret, str(llm_ctx.exception))
+        self.assertTrue(llm_messages)
+        self.assertNotIn(llm_secret, "\n".join(llm_messages))
+
+        class ErrorResponse:
+            def read(self, _size: int) -> bytes:
+                return json.dumps({"error": {"message": f"upstream echoed {llm_secret}"}}).encode("utf-8")
+
+            def __enter__(self) -> ErrorResponse:
+                return self
+
+            def __exit__(self, *_args: Any) -> None:
+                pass
+
+        def payload_error_opener(_request: Any, **_kwargs: Any) -> ErrorResponse:
+            return ErrorResponse()
+
+        payload_planner = OpenAICompatiblePlanner(
+            OpenAICompatibleSettings(
+                "https://example.test/v1",
+                "model",
+                api_key=llm_secret,
+                max_retries=1,
+            ),
+            opener=payload_error_opener,
+        )
+        with self.assertRaises(LLMPlannerError) as payload_ctx:
+            payload_planner.plan("test", 1, 1, 100, 100)
+        self.assertNotIn(llm_secret, str(payload_ctx.exception))
+        self.assertIn("[REDACTED]", str(payload_ctx.exception))
 
     def test_krita_adapter_disables_bridge_when_env_invalid(self) -> None:
         """Native Bridge 環境変数が不正な値でもプラグイン全体は開始可能で、bridge だけ None になること。"""
@@ -9400,6 +9516,74 @@ class CodeReviewFinalQualityTests(unittest.TestCase):
         self.assertEqual(prev._zoom_factor, 1.0)
         self.assertEqual(prev._pan_offset_x, 0.0)
         self.assertEqual(prev._pan_offset_y, 0.0)
+
+    def test_preview_widget_keyboard_controls(self) -> None:
+        """PreviewWidget の矢印キー、+/-、0 による操作を検証する。"""
+        from .docker import PreviewWidget, _qt_key_value
+
+        class MockKeyEvent:
+            def __init__(self, key: Any, text: str) -> None:
+                self._key = key
+                self._text = text
+                self.accepted = False
+                self.ignored = False
+
+            def key(self) -> Any:
+                return self._key
+
+            def text(self) -> str:
+                return self._text
+
+            def accept(self) -> None:
+                self.accepted = True
+
+            def ignore(self) -> None:
+                self.ignored = True
+
+        prev = PreviewWidget()
+        right = MockKeyEvent(_qt_key_value("Key_Right"), "")
+        prev.keyPressEvent(right)
+        self.assertTrue(right.accepted)
+        self.assertEqual(prev._pan_offset_x, 24.0)
+        self.assertEqual(prev._pan_offset_y, 0.0)
+
+        zoom_in = MockKeyEvent(None, "+")
+        prev.keyPressEvent(zoom_in)
+        self.assertTrue(zoom_in.accepted)
+        self.assertGreater(prev._zoom_factor, 1.0)
+
+        reset = MockKeyEvent(_qt_key_value("Key_0"), "0")
+        prev.keyPressEvent(reset)
+        self.assertTrue(reset.accepted)
+        self.assertEqual(prev._zoom_factor, 1.0)
+        self.assertEqual(prev._pan_offset_x, 0.0)
+        self.assertEqual(prev._pan_offset_y, 0.0)
+
+    def test_docker_compact_layout_wraps_quick_actions(self) -> None:
+        """狭いDocker向けのクイック操作折返しとタグのアクセシブル名を検証する。"""
+        from .qt_compat import HAS_QT, QPushButton
+
+        if not HAS_QT or not hasattr(QPushButton, "parentWidget"):
+            self.skipTest("実Qtのレイアウト検証にはQtバインディングが必要です")
+
+        docker = AIStrokePainterDocker()
+        try:
+            profile_box = docker.profile_openai_btn.parentWidget()
+            self.assertIsNotNone(profile_box)
+            profile_layout = profile_box.layout()
+            self.assertIsNotNone(profile_layout)
+            self.assertEqual(profile_layout.count(), 2)
+            for row_index in range(2):
+                row = profile_layout.itemAt(row_index).layout()
+                self.assertIsNotNone(row)
+                self.assertEqual(row.count(), 2)
+
+            tag_buttons = [button for button in docker.findChildren(QPushButton) if button.text().startswith("+ ")]
+            self.assertEqual(len(tag_buttons), 6)
+            self.assertTrue(all(button.accessibleName() for button in tag_buttons))
+        finally:
+            with contextlib.suppress(Exception):
+                docker.close()
 
     def test_single_point_stroke_svg_circle_output(self) -> None:
         """1点ストローク（パーティクル・ハイライト点）が SVG で <circle class="stroke-dot"> として出力されること。"""

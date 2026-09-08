@@ -1,14 +1,14 @@
 """Text-to-Image (画像生成 AI) API 連携クライアント。
 
 OpenAI (DALL-E 3 / DALL-E 2 / 互換 API)、Stable Diffusion WebUI (Automatic1111 / Forge)、
-ComfyUI、およびカスタム HTTP 画像生成エンドポイントをサポートし、プロンプトから高精細画像を生成する。
+およびカスタム HTTP 画像生成エンドポイントをサポートし、プロンプトから高精細画像を生成する。
 """
 
 from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 import contextlib
 from dataclasses import dataclass
 import ipaddress
@@ -151,9 +151,20 @@ class ImageGeneratorSettings:
 MAX_IMAGE_RESPONSE_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
-def sanitize_api_key_log(text: str) -> str:
-    """API Key、Bearer トークン、および認証情報を伏字化する。"""
-    masked = re.sub(r"Bearer\s+[A-Za-z0-9_\-\.]{8,}", "Bearer [REDACTED]", text, flags=re.IGNORECASE)
+def sanitize_api_key_log(text: str, secrets: Sequence[str] = ()) -> str:
+    """API Key、Bearer トークン、および認証情報を伏字化する。
+
+    ``secrets`` には設定で受け取った任意形式のキーを渡す。既知のキー形式に
+    依存せず、上流サービスがエラー本文へキーをそのままエコーした場合も
+    ログやユーザー向け例外へ漏らさない。
+    """
+    masked = text
+    for secret in secrets:
+        token = secret.strip()
+        if token:
+            masked = masked.replace(token, "[REDACTED]")
+
+    masked = re.sub(r"Bearer\s+[A-Za-z0-9_\-\.]{8,}", "Bearer [REDACTED]", masked, flags=re.IGNORECASE)
     masked = re.sub(r"sk-[A-Za-z0-9_\-\.]{10,}", "sk-[REDACTED]", masked)
     masked = re.sub(r"sk-proj-[A-Za-z0-9_\-\.]{8,}", "sk-proj-[REDACTED]", masked, flags=re.IGNORECASE)
     masked = re.sub(r"anthropic-[A-Za-z0-9_\-]{8,}", "anthropic-[REDACTED]", masked, flags=re.IGNORECASE)
@@ -341,7 +352,7 @@ class ImageGeneratorClient:
 
     def _log(self, message: str) -> None:
         if self._log_cb:
-            self._log_cb(sanitize_api_key_log(message))
+            self._log_cb(sanitize_api_key_log(message, secrets=(self.settings.api_key,)))
 
     def generate_image(
         self,
@@ -472,15 +483,20 @@ class ImageGeneratorClient:
             err_body = ""
             with contextlib.suppress(Exception):
                 err_body = e.read().decode("utf-8", errors="replace")[:300]
+            with contextlib.suppress(Exception):
+                e.close()
             raise ImageGenerationError(
-                f"画像生成 API エラー (HTTP {e.code}): {sanitize_api_key_log(err_body or str(e.reason))}"
+                f"画像生成 API エラー (HTTP {e.code}): {sanitize_api_key_log(err_body or str(e.reason), secrets=(self.settings.api_key,))}"
             ) from e
         except (URLError, TimeoutError, OSError) as e:
-            raise ImageGenerationError(f"画像生成 API 接続エラー: {e}") from e
+            safe_error = sanitize_api_key_log(str(e), secrets=(self.settings.api_key,))
+            raise ImageGenerationError(f"画像生成 API 接続エラー: {safe_error}") from e
         except json.JSONDecodeError as e:
-            raise ImageGenerationError(f"画像生成 API の応答 JSON 解析に失敗しました: {e}") from e
+            safe_error = sanitize_api_key_log(str(e), secrets=(self.settings.api_key,))
+            raise ImageGenerationError(f"画像生成 API の応答 JSON 解析に失敗しました: {safe_error}") from e
         except (binascii.Error, ValueError, TypeError, KeyError, AttributeError) as e:
-            raise ImageGenerationError(f"画像生成データの処理に失敗しました: {e}") from e
+            safe_error = sanitize_api_key_log(str(e), secrets=(self.settings.api_key,))
+            raise ImageGenerationError(f"画像生成データの処理に失敗しました: {safe_error}") from e
 
     def _call_sd_webui(
         self,
@@ -546,12 +562,17 @@ class ImageGeneratorClient:
             err_body = ""
             with contextlib.suppress(Exception):
                 err_body = e.read().decode("utf-8", errors="replace")[:300]
+            with contextlib.suppress(Exception):
+                e.close()
             raise ImageGenerationError(
-                f"SD WebUI エラー (HTTP {e.code}): {sanitize_api_key_log(err_body or str(e.reason))}"
+                f"SD WebUI エラー (HTTP {e.code}): {sanitize_api_key_log(err_body or str(e.reason), secrets=(self.settings.api_key,))}"
             ) from e
         except (URLError, TimeoutError, OSError) as e:
-            raise ImageGenerationError(f"SD WebUI 接続エラー: {e}") from e
+            safe_error = sanitize_api_key_log(str(e), secrets=(self.settings.api_key,))
+            raise ImageGenerationError(f"SD WebUI 接続エラー: {safe_error}") from e
         except json.JSONDecodeError as e:
-            raise ImageGenerationError(f"SD WebUI の応答 JSON 解析に失敗しました: {e}") from e
+            safe_error = sanitize_api_key_log(str(e), secrets=(self.settings.api_key,))
+            raise ImageGenerationError(f"SD WebUI の応答 JSON 解析に失敗しました: {safe_error}") from e
         except (binascii.Error, ValueError, TypeError, KeyError, AttributeError) as e:
-            raise ImageGenerationError(f"SD WebUI 画像データの処理に失敗しました: {e}") from e
+            safe_error = sanitize_api_key_log(str(e), secrets=(self.settings.api_key,))
+            raise ImageGenerationError(f"SD WebUI 画像データの処理に失敗しました: {safe_error}") from e

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import hashlib
 import math
 from typing import Any, cast
 
@@ -239,9 +240,10 @@ class ImageGenerationPlanner(PlannerPort):
             active_image_bytes = self._cached_image_data
             self._log(f"ステップ {iteration}/{max_iterations}: 生成済み基準画像からストロークを分解・洗練中...")
         else:
-            sanitized_prompt = valid_prompt.replace("\n", " ").replace("\r", " ")[:60]
+            prompt_digest = hashlib.blake2b(valid_prompt.encode("utf-8"), digest_size=6).hexdigest()
             self._log(
-                f"Text-to-Image 画像生成を開始します (Prompt: '{sanitized_prompt}...', Aspect: {target_aspect:.2f})"
+                f"Text-to-Image 画像生成を開始します (Prompt: {len(valid_prompt)} chars, "
+                f"digest={prompt_digest}, Aspect: {target_aspect:.2f})"
             )
             active_image_bytes = self.image_client.generate_image(
                 valid_prompt,

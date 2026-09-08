@@ -2751,12 +2751,13 @@ def _compile_macro(
                 transformed.append(
                     replace(
                         st,
+                        id=_operation_uuid(program, operation.id, len(transformed)),
                         points=tuple(new_points),
                         size_px=max(1.0, st.size_px * scale_ratio),
                     )
                 )
             return transformed
-        return raw_char_strokes
+        return [replace(st, id=_operation_uuid(program, operation.id, idx)) for idx, st in enumerate(raw_char_strokes)]
 
     # -------------------------------------------------------------------------
     # 6.5. 衣服のシワ・落ち影 (Clothing Folds / Drapery AO)
