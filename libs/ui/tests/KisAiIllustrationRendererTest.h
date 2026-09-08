@@ -1,0 +1,22 @@
+/*
+ * SPDX-FileCopyrightText: 2026 AI Stroke Painter contributors
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+#ifndef KIS_AI_ILLUSTRATION_RENDERER_TEST_H
+#define KIS_AI_ILLUSTRATION_RENDERER_TEST_H
+
+#include <QObject>
+
+class KisAiIllustrationRendererTest : public QObject
+{
+    Q_OBJECT
+
+private Q_SLOTS:
+    void testValidateImageEndpoint();
+    void testDisplayEndpoint();
+    void testNormalizedPrompt();
+    void testCreateConceptImage();
+};
+
+#endif // KIS_AI_ILLUSTRATION_RENDERER_TEST_H

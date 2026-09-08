@@ -3326,6 +3326,18 @@ void KisMainWindow::applyAiIllustrationMode()
         toggleAction->setText(i18n("AI workspace"));
         aiMenu->addAction(toggleAction);
         docker->show();
+
+        auto *aiDocker = dynamic_cast<KisAiIllustrationDocker *>(docker);
+        if (aiDocker) {
+            auto *focusPromptAction = new QAction(i18n("Focus Illustration Prompt"), this);
+            focusPromptAction->setShortcut(QKeySequence(Qt::CTRL | Qt::ALT | Qt::Key_A));
+            connect(focusPromptAction, &QAction::triggered, aiDocker, [aiDocker] {
+                aiDocker->show();
+                aiDocker->raise();
+                aiDocker->focusPrompt();
+            });
+            aiMenu->addAction(focusPromptAction);
+        }
     }
 
     QMenu *settingsMenu = menuBar()->addMenu(i18n("&Settings"));

@@ -4,7 +4,7 @@ if (AI_STROKE_STANDALONE_TESTS)
     project(ai_stroke_tests LANGUAGES CXX)
     set(CMAKE_CXX_STANDARD 17)
     set(CMAKE_CXX_STANDARD_REQUIRED ON)
-    find_package(Qt6 REQUIRED COMPONENTS Core Gui Test)
+    find_package(Qt6 REQUIRED COMPONENTS Core Gui Network Test)
     set(CMAKE_AUTOMOC ON)
     enable_testing()
 
@@ -13,11 +13,12 @@ if (AI_STROKE_STANDALONE_TESTS)
     add_library(ai_stroke_core STATIC
         libs/ui/aiillustration/KisAiStrokeProgram.cpp
         libs/ui/aiillustration/KisAiStrokeRenderer.cpp
+        libs/ui/aiillustration/KisAiIllustrationRenderer.cpp
     )
     target_include_directories(ai_stroke_core PUBLIC
         libs/ui
     )
-    target_link_libraries(ai_stroke_core PUBLIC Qt6::Core Qt6::Gui)
+    target_link_libraries(ai_stroke_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network)
 
     add_executable(KisAiStrokeProgramTest
         libs/ui/tests/KisAiStrokeProgramTest.cpp
@@ -38,6 +39,16 @@ if (AI_STROKE_STANDALONE_TESTS)
     )
     target_link_libraries(KisAiStrokeRendererTest PRIVATE ai_stroke_core Qt6::Test)
     add_test(NAME KisAiStrokeRendererTest COMMAND KisAiStrokeRendererTest)
+
+    add_executable(KisAiIllustrationRendererTest
+        libs/ui/tests/KisAiIllustrationRendererTest.cpp
+    )
+    target_include_directories(KisAiIllustrationRendererTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiIllustrationRendererTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiIllustrationRendererTest COMMAND KisAiIllustrationRendererTest)
 
     return()
 endif()

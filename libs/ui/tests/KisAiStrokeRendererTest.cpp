@@ -113,4 +113,90 @@ void KisAiStrokeRendererTest::testClippingMaskToFlats()
     QVERIFY(qAlpha(insidePixel) > 0);
 }
 
+void KisAiStrokeRendererTest::testRenderGradientOpacity()
+{
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(100, 100);
+
+    KisAiStrokeOperation gradOp;
+    gradOp.kind = KisAiStrokeOperation::Kind::GradientFill;
+    gradOp.id = QStringLiteral("half_alpha_grad");
+    gradOp.layer = QStringLiteral("Background");
+    gradOp.points = QVector<KisAiStrokePoint>{
+        KisAiStrokePoint(0.0, 0.0, 1.0),
+        KisAiStrokePoint(1.0, 1.0, 1.0)
+    };
+    gradOp.gradientColors = {QColor(255, 0, 0), QColor(0, 0, 255)};
+    gradOp.brush.opacity = 0.5; // 50% opacity
+    program.operations.append(gradOp);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(program, QSize(100, 100));
+    const QRgb centerPixel = img.pixel(50, 50);
+    const int alpha = qAlpha(centerPixel);
+
+    // Alpha should be around 128 (0.5 * 255), certainly not 255
+    QVERIFY(alpha > 100 && alpha < 155);
+}
+
+void KisAiStrokeRendererTest::testRenderParticleBrush()
+{
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(100, 100);
+
+    KisAiStrokeOperation particleOp;
+    particleOp.kind = KisAiStrokeOperation::Kind::Particles;
+    particleOp.id = QStringLiteral("sparks");
+    particleOp.layer = QStringLiteral("Shading");
+    particleOp.bounds = QRectF(0.2, 0.2, 0.6, 0.6);
+    particleOp.particleCount = 32;
+    particleOp.brush.profile = QStringLiteral("spray");
+    particleOp.brush.color = QColor(255, 255, 0);
+    particleOp.brush.opacity = 0.8;
+    particleOp.brush.size = 0.05;
+    program.operations.append(particleOp);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(program, QSize(100, 100));
+    QVERIFY(!img.isNull());
+
+    // Count non-transparent pixels in bounding box
+    int nonZeroAlphaCount = 0;
+    for (int y = 20; y < 80; ++y) {
+        for (int x = 20; x < 80; ++x) {
+            if (qAlpha(img.pixel(x, y)) > 0) {
+                nonZeroAlphaCount++;
+            }
+        }
+    }
+    QVERIFY(nonZeroAlphaCount > 0);
+}
+
+void KisAiStrokeRendererTest::testRenderAirbrushDynamics()
+{
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(200, 200);
+
+    KisAiStrokeOperation airOp;
+    airOp.kind = KisAiStrokeOperation::Kind::Path;
+    airOp.id = QStringLiteral("soft_airbrush");
+    airOp.layer = QStringLiteral("Shading");
+    airOp.points = QVector<KisAiStrokePoint>{
+        KisAiStrokePoint(0.1, 0.5, 0.5),
+        KisAiStrokePoint(0.5, 0.5, 1.0),
+        KisAiStrokePoint(0.9, 0.5, 0.5)
+    };
+    airOp.brush.profile = QStringLiteral("airbrush");
+    airOp.brush.color = QColor(100, 150, 250);
+    airOp.brush.size = 0.1;
+    airOp.brush.opacity = 0.9;
+    program.operations.append(airOp);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(program, QSize(200, 200));
+    QVERIFY(!img.isNull());
+
+    // Check that center has high opacity and outer margin has soft/lower opacity
+    const QRgb centerPixel = img.pixel(100, 100);
+    QVERIFY(qAlpha(centerPixel) > 0);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)
+

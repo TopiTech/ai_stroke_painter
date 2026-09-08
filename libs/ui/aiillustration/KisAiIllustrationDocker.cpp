@@ -32,6 +32,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QKeyEvent>
 #include <QLabel>
 #include <QLineEdit>
 #include <QNetworkAccessManager>
@@ -42,6 +43,7 @@
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSizePolicy>
 #include <QSpinBox>
@@ -174,9 +176,10 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     layout->addWidget(promptLabel);
 
     m_promptEditor = new QPlainTextEdit(panel);
-    m_promptEditor->setPlaceholderText(i18n("例: 雨上がりの夜、青い光に包まれた猫と花のある静かな路地"));
+    m_promptEditor->setPlaceholderText(i18n("例: 雨上がりの夜、青い光に包まれた猫と花のある静かな路地 (Ctrl+Enter で生成)"));
     m_promptEditor->setMinimumHeight(118);
     m_promptEditor->setAccessibleName(i18n("Illustration prompt"));
+    m_promptEditor->installEventFilter(this);
     layout->addWidget(m_promptEditor);
 
     auto *canvasLabel = new QLabel(i18n("新しいキャンバスの大きさ"), panel);
@@ -187,12 +190,14 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_widthSpin->setRange(256, 4096);
     m_widthSpin->setSingleStep(64);
     m_widthSpin->setValue(1024);
+    m_widthSpin->setPrefix(i18n("幅: "));
     m_widthSpin->setSuffix(QStringLiteral(" px"));
     m_widthSpin->setAccessibleName(i18n("Canvas width"));
     m_heightSpin = new QSpinBox(panel);
     m_heightSpin->setRange(256, 4096);
     m_heightSpin->setSingleStep(64);
     m_heightSpin->setValue(1024);
+    m_heightSpin->setPrefix(i18n("高さ: "));
     m_heightSpin->setSuffix(QStringLiteral(" px"));
     m_heightSpin->setAccessibleName(i18n("Canvas height"));
     canvasRow->addWidget(m_widthSpin);
@@ -214,6 +219,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     auto *remoteForm = new QFormLayout();
     remoteForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    m_remoteForm = remoteForm;
     m_endpointEditor = new QLineEdit(panel);
     m_endpointEditor->setPlaceholderText(QStringLiteral("https://api.openai.com/v1/chat/completions"));
     m_endpointEditor->setAccessibleName(i18n("LLM endpoint"));
@@ -240,8 +246,10 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     layout->addLayout(remoteForm);
 
     QSettings settings;
-    const QString savedEndpoint = settings.value(QStringLiteral("AIIllustration/endpoint")).toString();
-    const QString savedModel = settings.value(QStringLiteral("AIIllustration/model")).toString();
+    const QString savedEndpoint = settings.value(QStringLiteral("AIIllustration/llmEndpoint"),
+        settings.value(QStringLiteral("AIIllustration/endpoint"))).toString();
+    const QString savedModel = settings.value(QStringLiteral("AIIllustration/llmModel"),
+        settings.value(QStringLiteral("AIIllustration/model"))).toString();
     m_endpointEditor->setText(savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/chat/completions") : savedEndpoint);
     m_modelEditor->setText(savedModel.isEmpty() ? QStringLiteral("gpt-4o") : savedModel);
 
@@ -281,7 +289,12 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     layout->addLayout(buttonRow);
     layout->addStretch(1);
 
-    setWidget(panel);
+    auto *scrollArea = new QScrollArea(this);
+    scrollArea->setWidget(panel);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    setWidget(scrollArea);
 
     connect(m_newCanvasButton, &QPushButton::clicked, this, [this] { createCanvas(); });
     connect(m_generateButton, &QPushButton::clicked, this, [this] { generateIllustration(); });
@@ -291,7 +304,28 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     updateModeUi();
 }
 
-KisAiIllustrationDocker::~KisAiIllustrationDocker() = default;
+KisAiIllustrationDocker::~KisAiIllustrationDocker()
+{
+    if (m_reply) {
+        m_reply->disconnect(this);
+        m_reply->abort();
+        m_reply->deleteLater();
+        m_reply = nullptr;
+    }
+}
+
+bool KisAiIllustrationDocker::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_promptEditor && event->type() == QEvent::KeyPress) {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        if ((keyEvent->modifiers() & Qt::ControlModifier) &&
+            (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)) {
+            generateIllustration();
+            return true;
+        }
+    }
+    return QDockWidget::eventFilter(watched, event);
+}
 
 void KisAiIllustrationDocker::focusPrompt()
 {
@@ -333,6 +367,10 @@ void KisAiIllustrationDocker::createCanvas()
 
 void KisAiIllustrationDocker::generateIllustration()
 {
+    if (m_reply) {
+        return;
+    }
+
     const QString prompt = KisAiIllustrationRenderer::normalizedPrompt(m_promptEditor->toPlainText());
     if (prompt.isEmpty()) {
         setStatus(i18n("まず、描きたいイラストの指示を入力してください。"), true);
@@ -407,6 +445,8 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     }
 
     QSettings settings;
+    settings.setValue(QStringLiteral("AIIllustration/llmEndpoint"), endpoint);
+    settings.setValue(QStringLiteral("AIIllustration/llmModel"), model);
     settings.setValue(QStringLiteral("AIIllustration/endpoint"), endpoint);
     settings.setValue(QStringLiteral("AIIllustration/model"), model);
 
@@ -484,7 +524,18 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         return;
     }
     if (!requestSucceeded) {
-        setStatus(i18n("LLM への接続または応答に失敗しました (HTTP %1)。", httpStatus), true);
+        QString detail;
+        QJsonParseError parseErr;
+        const QJsonDocument errDoc = QJsonDocument::fromJson(response, &parseErr);
+        if (!errDoc.isNull() && errDoc.isObject()) {
+            const QJsonObject errObj = errDoc.object().value(QStringLiteral("error")).toObject();
+            detail = errObj.value(QStringLiteral("message")).toString().trimmed();
+        }
+        if (!detail.isEmpty()) {
+            setStatus(i18n("LLM への接続または応答に失敗しました (HTTP %1): %2", httpStatus, detail), true);
+        } else {
+            setStatus(i18n("LLM への接続または応答に失敗しました (HTTP %1)。", httpStatus), true);
+        }
         return;
     }
 
@@ -547,8 +598,8 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
     }
 
     QSettings settings;
-    settings.setValue(QStringLiteral("AIIllustration/endpoint"), endpoint);
-    settings.setValue(QStringLiteral("AIIllustration/model"), model);
+    settings.setValue(QStringLiteral("AIIllustration/imageEndpoint"), endpoint);
+    settings.setValue(QStringLiteral("AIIllustration/imageModel"), model);
 
     QNetworkRequest request {QUrl(endpoint)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
@@ -623,7 +674,18 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
         return;
     }
     if (!requestSucceeded) {
-        setStatus(i18n("画像モデルへの接続または応答に失敗しました (HTTP %1)。", httpStatus), true);
+        QString detail;
+        QJsonParseError parseErr;
+        const QJsonDocument errDoc = QJsonDocument::fromJson(response, &parseErr);
+        if (!errDoc.isNull() && errDoc.isObject()) {
+            const QJsonObject errObj = errDoc.object().value(QStringLiteral("error")).toObject();
+            detail = errObj.value(QStringLiteral("message")).toString().trimmed();
+        }
+        if (!detail.isEmpty()) {
+            setStatus(i18n("画像モデルへの接続または応答に失敗しました (HTTP %1): %2", httpStatus, detail), true);
+        } else {
+            setStatus(i18n("画像モデルへの接続または応答に失敗しました (HTTP %1)。", httpStatus), true);
+        }
         return;
     }
     if (response.size() > MAX_REMOTE_RESPONSE_BYTES) {
@@ -652,14 +714,38 @@ void KisAiIllustrationDocker::cancelRemoteRequest()
 
     m_requestWasCancelled = true;
     m_reply->abort();
-    setStatus(i18n("画像生成を中止しています…"));
+    setStatus(i18n("リクエストを中止しています…"));
 }
 
 void KisAiIllustrationDocker::updateModeUi()
 {
-    const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
-    const bool isLlm = (mode == GenerationMode::LlmStrokes);
-    const bool isRemoteImage = (mode == GenerationMode::RemoteImage);
+    const auto newMode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
+
+    // Save current values before switching modes
+    QSettings settings;
+    if (m_currentMode == GenerationMode::LlmStrokes) {
+        const QString ep = m_endpointEditor->text().trimmed();
+        const QString mdl = m_modelEditor->text().trimmed();
+        if (!ep.isEmpty()) {
+            settings.setValue(QStringLiteral("AIIllustration/llmEndpoint"), ep);
+        }
+        if (!mdl.isEmpty()) {
+            settings.setValue(QStringLiteral("AIIllustration/llmModel"), mdl);
+        }
+    } else if (m_currentMode == GenerationMode::RemoteImage) {
+        const QString ep = m_endpointEditor->text().trimmed();
+        const QString mdl = m_modelEditor->text().trimmed();
+        if (!ep.isEmpty()) {
+            settings.setValue(QStringLiteral("AIIllustration/imageEndpoint"), ep);
+        }
+        if (!mdl.isEmpty()) {
+            settings.setValue(QStringLiteral("AIIllustration/imageModel"), mdl);
+        }
+    }
+
+    m_currentMode = newMode;
+    const bool isLlm = (newMode == GenerationMode::LlmStrokes);
+    const bool isRemoteImage = (newMode == GenerationMode::RemoteImage);
     const bool needsRemote = isLlm || isRemoteImage;
 
     m_remoteOptionsLabel->setVisible(needsRemote);
@@ -667,25 +753,29 @@ void KisAiIllustrationDocker::updateModeUi()
         m_remoteOptionsLabel->setText(i18n("OpenAI 互換の Chat Completions エンドポイント (/v1/chat/completions) を指定します。API キーは保存しません。"));
         m_endpointEditor->setPlaceholderText(QStringLiteral("https://api.openai.com/v1/chat/completions"));
         m_modelEditor->setPlaceholderText(i18n("モデル名 (例: gpt-4o, o3-mini, deepseek-chat)"));
+
+        const QString savedEndpoint = settings.value(QStringLiteral("AIIllustration/llmEndpoint"),
+            settings.value(QStringLiteral("AIIllustration/endpoint"))).toString();
+        const QString savedModel = settings.value(QStringLiteral("AIIllustration/llmModel"),
+            settings.value(QStringLiteral("AIIllustration/model"))).toString();
+        m_endpointEditor->setText(savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/chat/completions") : savedEndpoint);
+        m_modelEditor->setText(savedModel.isEmpty() ? QStringLiteral("gpt-4o") : savedModel);
     } else if (isRemoteImage) {
         m_remoteOptionsLabel->setText(i18n("OpenAI 互換の画像生成エンドポイント (/v1/images/generations) を指定します。API キーは保存しません。"));
         m_endpointEditor->setPlaceholderText(QStringLiteral("https://provider.example/v1/images/generations"));
         m_modelEditor->setPlaceholderText(i18n("画像モデル名 (例: dall-e-3)"));
+
+        const QString savedEndpoint = settings.value(QStringLiteral("AIIllustration/imageEndpoint")).toString();
+        const QString savedModel = settings.value(QStringLiteral("AIIllustration/imageModel")).toString();
+        m_endpointEditor->setText(savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/images/generations") : savedEndpoint);
+        m_modelEditor->setText(savedModel.isEmpty() ? QStringLiteral("dall-e-3") : savedModel);
     }
 
-    m_endpointEditor->setVisible(needsRemote);
-    m_modelEditor->setVisible(needsRemote);
-    m_apiKeyEditor->setVisible(needsRemote);
-
-    if (m_strokeBudgetLabel) m_strokeBudgetLabel->setVisible(isLlm);
-    if (m_strokeBudgetSpin) m_strokeBudgetSpin->setVisible(isLlm);
-
-    const auto labels = findChildren<QLabel *>();
-    for (QLabel *label : labels) {
-        const QString text = label->text();
-        if (text == i18n("エンドポイント") || text == i18n("モデル") || text == i18n("API キー")) {
-            label->setVisible(needsRemote);
-        }
+    if (m_remoteForm) {
+        m_remoteForm->setRowVisible(0, needsRemote);
+        m_remoteForm->setRowVisible(1, needsRemote);
+        m_remoteForm->setRowVisible(2, needsRemote);
+        m_remoteForm->setRowVisible(3, isLlm);
     }
 }
 

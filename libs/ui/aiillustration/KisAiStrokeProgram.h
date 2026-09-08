@@ -159,9 +159,19 @@ public:
     static KisAiStrokeProgram createDeterministicProgram(const QString &prompt, const QSize &canvasSize);
 
     /**
-     * Safely parse CSS-like hex color with alpha (#RGB, #RRGGBB, #RRGGBBAA).
+     * Safely parse CSS-like hex color with alpha (#RGB, #RRGGBB, #RRGGBBAA) or CSS rgb/rgba/named.
      */
     static QColor parseColor(const QString &colorStr, const QColor &fallback = QColor(35, 35, 35));
+
+    /**
+     * Compute a stable 32-bit hash across sessions and platforms (FNV-1a).
+     */
+    static quint32 stableSeed(const QString &text);
+
+    /**
+     * Attempt to repair truncated JSON containing an operations or strokes array.
+     */
+    static QString repairTruncatedJson(const QString &jsonText);
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_H

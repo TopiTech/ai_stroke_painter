@@ -17,6 +17,12 @@ private Q_SLOTS:
     void testParseValidProgram();
     void testBuildChatCompletionsPayload();
     void testStrokeProgramJsonSchema();
+    void testTruncatedJsonRecovery();
+    void testLayerAndKindAliases();
+    void testObjectPointParsing();
+    void testPixelCoordinateAutoNormalization();
+    void testColorAndBrushParsing();
+    void testStableSeed();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

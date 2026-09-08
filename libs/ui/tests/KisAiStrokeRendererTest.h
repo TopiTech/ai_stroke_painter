@@ -16,6 +16,9 @@ private Q_SLOTS:
     void testCatmullRomSpline();
     void testRenderProgramToImage();
     void testClippingMaskToFlats();
+    void testRenderGradientOpacity();
+    void testRenderParticleBrush();
+    void testRenderAirbrushDynamics();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

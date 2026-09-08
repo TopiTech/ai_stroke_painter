@@ -15,6 +15,7 @@
 #include "kis_paint_layer.h"
 #include <KoCompositeOpRegistry.h>
 #include <klocalizedstring.h>
+#include <kundo2magicstring.h>
 #else
 #define i18n(str, ...) QStringLiteral(str)
 #endif
@@ -269,6 +270,7 @@ bool KisAiStrokeRenderer::renderProgramToLayers(
     KisNodeSP root = image->root();
     KisNodeSP aboveNode = root->lastChild();
     KisNodeCommandsAdapter adapter(viewManager);
+    adapter.beginMacro(kundo2_i18n("AI Illustration"));
 
     QImage flatsImage;
     bool hasFlats = false;
@@ -318,9 +320,17 @@ bool KisAiStrokeRenderer::renderProgramToLayers(
             layer->setCompositeOpId(COMPOSITE_OVER);
         }
 
+        layer->setDirty(bounds);
         adapter.addNode(layer, root, aboveNode);
         aboveNode = layer;
         ++layersAdded;
+    }
+
+    adapter.endMacro();
+
+    image->refreshGraphAsync();
+    if (viewManager) {
+        viewManager->updateGUI();
     }
 
     if (viewManager && viewManager->document()) {
@@ -552,11 +562,31 @@ void KisAiStrokeRenderer::drawPathOperation(
         painter.setBrush(cOuter);
         painter.drawPolygon(outerPoly);
 
-        // Mid and core
+        // Mid body
         painter.setBrush(cMid);
         painter.drawPolygon(ribbonPoly);
+
+        // Inner core (narrower width)
+        QPolygonF innerPoly;
+        innerPoly.reserve(sampleCount * 2);
+        for (int i = 0; i < sampleCount; ++i) {
+            const QPointF &curr = curveSamples.at(i).pos;
+            const qreal w = curveSamples.at(i).width * 0.45;
+            QPointF tangent = (i < sampleCount - 1) ? (curveSamples.at(i + 1).pos - curr) : (curr - curveSamples.at(i - 1).pos);
+            const qreal tLen = std::hypot(tangent.x(), tangent.y());
+            QPointF normal = (tLen > 0.0001) ? QPointF(-tangent.y() / tLen, tangent.x() / tLen) : QPointF(0, 1);
+            innerPoly.append(curr + normal * w);
+        }
+        for (int i = sampleCount - 1; i >= 0; --i) {
+            const QPointF &curr = curveSamples.at(i).pos;
+            const qreal w = curveSamples.at(i).width * 0.45;
+            QPointF tangent = (i < sampleCount - 1) ? (curveSamples.at(i + 1).pos - curr) : (curr - curveSamples.at(i - 1).pos);
+            const qreal tLen = std::hypot(tangent.x(), tangent.y());
+            QPointF normal = (tLen > 0.0001) ? QPointF(-tangent.y() / tLen, tangent.x() / tLen) : QPointF(0, 1);
+            innerPoly.append(curr - normal * w);
+        }
         painter.setBrush(color);
-        painter.drawPolygon(ribbonPoly);
+        painter.drawPolygon(innerPoly);
 
     } else if (profile == QLatin1String("watercolor")) {
         // Transparent wash with subtle water-fringe contour
@@ -612,30 +642,49 @@ void KisAiStrokeRenderer::drawGradientFillOperation(
     const QSize &canvasSize
 )
 {
-    if (op.polygon.size() < 3) return;
-
-    QPolygonF poly = scalePolygon(op.polygon, canvasSize);
-    if (op.smooth && poly.size() >= 3) {
-        poly = generateCatmullRomSpline(poly, 4, true);
+    QPolygonF poly;
+    if (op.polygon.size() >= 3) {
+        poly = scalePolygon(op.polygon, canvasSize);
+        if (op.smooth && poly.size() >= 3) {
+            poly = generateCatmullRomSpline(poly, 4, true);
+        }
+    } else {
+        poly = QPolygonF(QRectF(0, 0, canvasSize.width(), canvasSize.height()));
     }
 
     const QRectF b = poly.boundingRect();
 
-    const qreal rad = op.angleDeg * PI / 180.0;
-    const QPointF center = b.center();
-    const qreal len = qMax(b.width(), b.height()) * 0.6;
-    const QPointF p1 = center - QPointF(std::cos(rad) * len, std::sin(rad) * len);
-    const QPointF p2 = center + QPointF(std::cos(rad) * len, std::sin(rad) * len);
+    QPointF p1, p2;
+    if (op.points.size() >= 2) {
+        p1 = scalePoint(op.points.first().pos, canvasSize);
+        p2 = scalePoint(op.points.last().pos, canvasSize);
+    } else {
+        const qreal rad = op.angleDeg * PI / 180.0;
+        const QPointF center = b.center();
+        const qreal len = qMax(b.width(), b.height()) * 0.6;
+        p1 = center - QPointF(std::cos(rad) * len, std::sin(rad) * len);
+        p2 = center + QPointF(std::cos(rad) * len, std::sin(rad) * len);
+    }
 
     QLinearGradient grad(p1, p2);
+    const qreal brushOpacity = qBound<qreal>(0.0, op.brush.opacity, 1.0);
     if (!op.gradientColors.isEmpty()) {
         const int count = op.gradientColors.size();
         for (int i = 0; i < count; ++i) {
             const qreal pos = (count > 1) ? qreal(i) / (count - 1) : 0.0;
-            grad.setColorAt(pos, op.gradientColors.at(i));
+            QColor col = op.gradientColors.at(i);
+            col.setAlphaF(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0));
+            grad.setColorAt(pos, col);
+        }
+        if (count == 1) {
+            QColor col = op.gradientColors.at(0);
+            col.setAlphaF(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0));
+            grad.setColorAt(1.0, col);
         }
     } else {
-        grad.setColorAt(0.0, op.brush.color);
+        QColor col = op.brush.color;
+        col.setAlphaF(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0));
+        grad.setColorAt(0.0, col);
         grad.setColorAt(1.0, Qt::transparent);
     }
 
@@ -733,10 +782,12 @@ void KisAiStrokeRenderer::drawParticlesOperation(
                       normBounds.height() * canvasSize.height());
 
     const int count = qBound(1, op.particleCount, 300);
-    QRandomGenerator rng(qHash(op.id.isEmpty() ? QStringLiteral("particles") : op.id));
+    QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id.isEmpty() ? QStringLiteral("particles") : op.id));
 
     painter.setPen(Qt::NoPen);
-    painter.setBrush(op.brush.color);
+    QColor partColor = op.brush.color;
+    partColor.setAlphaF(qBound<qreal>(0.0, partColor.alphaF() * op.brush.opacity, 1.0));
+    painter.setBrush(partColor);
 
     for (int i = 0; i < count; ++i) {
         const qreal x = area.left() + rng.generateDouble() * area.width();

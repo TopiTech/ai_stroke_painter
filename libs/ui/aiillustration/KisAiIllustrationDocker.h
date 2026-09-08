@@ -35,6 +35,9 @@ public:
 
     void focusPrompt();
 
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private:
     enum class GenerationMode {
         LlmStrokes,    // Text-based LLM coordinate strokes (Chat Completions)
@@ -65,9 +68,11 @@ private:
     bool m_requestWasCancelled {false};
     bool m_requestTimedOut {false};
     bool m_responseTooLarge {false};
+    GenerationMode m_currentMode {GenerationMode::LlmStrokes};
 
     QPlainTextEdit *m_promptEditor {nullptr};
     QComboBox *m_modeCombo {nullptr};
+    class QFormLayout *m_remoteForm {nullptr};
     QLineEdit *m_endpointEditor {nullptr};
     QLineEdit *m_modelEditor {nullptr};
     QLineEdit *m_apiKeyEditor {nullptr};

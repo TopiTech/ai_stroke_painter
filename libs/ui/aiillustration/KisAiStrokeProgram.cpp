@@ -35,11 +35,39 @@ bool isReasoningModel(const QString &model)
 }
 }
 
+quint32 KisAiStrokeProgramCodec::stableSeed(const QString &text)
+{
+    const QByteArray bytes = text.toUtf8();
+    quint32 h = 2166136261u;
+    for (char b : bytes) {
+        h = (h ^ static_cast<quint8>(b)) * 16777619u;
+    }
+    return h;
+}
+
 QColor KisAiStrokeProgramCodec::parseColor(const QString &colorStr, const QColor &fallback)
 {
     QString s = colorStr.trimmed();
     if (s.isEmpty()) {
         return fallback;
+    }
+
+    if (s.startsWith(QLatin1String("rgb"), Qt::CaseInsensitive)) {
+        static const QRegularExpression rgbRegex(
+            QStringLiteral(R"(rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\))"),
+            QRegularExpression::CaseInsensitiveOption);
+        const auto match = rgbRegex.match(s);
+        if (match.hasMatch()) {
+            const int r = qBound(0, match.captured(1).toInt(), 255);
+            const int g = qBound(0, match.captured(2).toInt(), 255);
+            const int b = qBound(0, match.captured(3).toInt(), 255);
+            int a = 255;
+            if (match.lastCapturedIndex() >= 4 && !match.captured(4).isEmpty()) {
+                const qreal alphaVal = match.captured(4).toDouble();
+                a = qBound(0, qRound(alphaVal * 255.0), 255);
+            }
+            return QColor(r, g, b, a);
+        }
     }
 
     if (s.startsWith(QLatin1Char('#'))) {
@@ -48,19 +76,19 @@ QColor KisAiStrokeProgramCodec::parseColor(const QString &colorStr, const QColor
 
     if (s.length() == 3) {
         // RGB -> RRGGBB
-        bool ok = false;
-        const int r = s.mid(0, 1).repeated(2).toInt(&ok, 16);
-        const int g = s.mid(1, 1).repeated(2).toInt(&ok, 16);
-        const int b = s.mid(2, 1).repeated(2).toInt(&ok, 16);
-        if (ok) return QColor(r, g, b);
+        bool okR = false, okG = false, okB = false;
+        const int r = s.mid(0, 1).repeated(2).toInt(&okR, 16);
+        const int g = s.mid(1, 1).repeated(2).toInt(&okG, 16);
+        const int b = s.mid(2, 1).repeated(2).toInt(&okB, 16);
+        if (okR && okG && okB) return QColor(r, g, b);
     } else if (s.length() == 4) {
         // RGBA -> RRGGBBAA
-        bool ok = false;
-        const int r = s.mid(0, 1).repeated(2).toInt(&ok, 16);
-        const int g = s.mid(1, 1).repeated(2).toInt(&ok, 16);
-        const int b = s.mid(2, 1).repeated(2).toInt(&ok, 16);
-        const int a = s.mid(3, 1).repeated(2).toInt(&ok, 16);
-        if (ok) return QColor(r, g, b, a);
+        bool okR = false, okG = false, okB = false, okA = false;
+        const int r = s.mid(0, 1).repeated(2).toInt(&okR, 16);
+        const int g = s.mid(1, 1).repeated(2).toInt(&okG, 16);
+        const int b = s.mid(2, 1).repeated(2).toInt(&okB, 16);
+        const int a = s.mid(3, 1).repeated(2).toInt(&okA, 16);
+        if (okR && okG && okB && okA) return QColor(r, g, b, a);
     } else if (s.length() == 6) {
         bool ok = false;
         const int val = s.toInt(&ok, 16);
@@ -69,6 +97,11 @@ QColor KisAiStrokeProgramCodec::parseColor(const QString &colorStr, const QColor
         bool ok = false;
         const uint val = s.toUInt(&ok, 16);
         if (ok) return QColor((val >> 24) & 0xFF, (val >> 16) & 0xFF, (val >> 8) & 0xFF, val & 0xFF);
+    }
+
+    const QColor fromStr = QColor::fromString(colorStr.trimmed());
+    if (fromStr.isValid()) {
+        return fromStr;
     }
 
     const QColor named(colorStr);
@@ -288,39 +321,134 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(
     responseFormat[QStringLiteral("type")] = QStringLiteral("json_object");
     payload[QStringLiteral("response_format")] = responseFormat;
 
+    const int calculatedTokens = qBound(4096, strokeBudget * 60 + (reasoning ? 8192 : 2048), 32768);
     if (reasoning) {
-        payload[QStringLiteral("max_completion_tokens")] = 4096;
+        payload[QStringLiteral("max_completion_tokens")] = calculatedTokens;
         if (!reasoningEffort.isEmpty() && reasoningEffort.toLower() != QLatin1String("none")) {
             payload[QStringLiteral("reasoning_effort")] = reasoningEffort.toLower();
         }
     } else {
-        payload[QStringLiteral("max_tokens")] = 4096;
+        payload[QStringLiteral("max_tokens")] = calculatedTokens;
         payload[QStringLiteral("temperature")] = 0.7;
     }
 
     return payload;
 }
 
+QString KisAiStrokeProgramCodec::repairTruncatedJson(const QString &jsonText)
+{
+    QString text = jsonText.trimmed();
+    if (text.isEmpty()) return text;
+
+    QJsonParseError testErr;
+    QJsonDocument::fromJson(text.toUtf8(), &testErr);
+    if (testErr.error == QJsonParseError::NoError) {
+        return text;
+    }
+
+    const int opsIdx = text.indexOf(QStringLiteral("\"operations\""));
+    const int strokesIdx = text.indexOf(QStringLiteral("\"strokes\""));
+    const int targetIdx = opsIdx >= 0 ? opsIdx : strokesIdx;
+
+    if (targetIdx >= 0) {
+        const int bracketIdx = text.indexOf(QLatin1Char('['), targetIdx);
+        if (bracketIdx >= 0) {
+            int lastCloseBrace = -1;
+            int depth = 0;
+            bool inString = false;
+            bool escape = false;
+
+            for (int i = bracketIdx + 1; i < text.length(); ++i) {
+                const QChar ch = text.at(i);
+                if (escape) {
+                    escape = false;
+                    continue;
+                }
+                if (ch == QLatin1Char('\\')) {
+                    escape = true;
+                    continue;
+                }
+                if (ch == QLatin1Char('"')) {
+                    inString = !inString;
+                    continue;
+                }
+                if (inString) continue;
+
+                if (ch == QLatin1Char('{')) {
+                    depth++;
+                } else if (ch == QLatin1Char('}')) {
+                    depth--;
+                    if (depth == 0) {
+                        lastCloseBrace = i;
+                    }
+                } else if (ch == QLatin1Char(']')) {
+                    lastCloseBrace = -1;
+                    break;
+                }
+            }
+
+            if (lastCloseBrace > bracketIdx) {
+                QString repaired = text.left(lastCloseBrace + 1);
+                repaired.append(QStringLiteral("\n  ]\n}"));
+                QJsonParseError repErr;
+                const QJsonDocument testDoc = QJsonDocument::fromJson(repaired.toUtf8(), &repErr);
+                if (!testDoc.isNull() && testDoc.isObject()) {
+                    return repaired;
+                }
+            }
+        }
+    }
+
+    int openBraces = text.count(QLatin1Char('{')) - text.count(QLatin1Char('}'));
+    int openBrackets = text.count(QLatin1Char('[')) - text.count(QLatin1Char(']'));
+    QString fallback = text;
+    while (openBrackets > 0) {
+        fallback.append(QLatin1Char(']'));
+        openBrackets--;
+    }
+    while (openBraces > 0) {
+        fallback.append(QLatin1Char('}'));
+        openBraces--;
+    }
+    return fallback;
+}
+
 QString KisAiStrokeProgramCodec::sanitizeAndExtractJson(const QString &rawText)
 {
     QString text = rawText.trimmed();
 
-    // 1. Remove <think> ... </think> or thinking tags
-    static const QRegularExpression thinkRe(QStringLiteral("(?s)<think>.*?</think>"));
+    // 1. Remove <think> ... </think> or thinking tags (including unclosed tags if truncated)
+    static const QRegularExpression thinkRe(QStringLiteral("(?s)<think>.*?(?:</think>|$)"));
     text.remove(thinkRe);
+    static const QRegularExpression thoughtRe(QStringLiteral("(?s)<thought>.*?(?:</thought>|$)"));
+    text.remove(thoughtRe);
 
-    // 2. Extract ```json ... ``` codeblock if present
-    static const QRegularExpression codeBlockRe(QStringLiteral("```(?:json)?\\s*([\\s\\S]*?)```"));
+    // 2. Extract ```json ... ``` codeblock if present (tolerant of missing closing fence)
+    static const QRegularExpression codeBlockRe(QStringLiteral("```(?:json)?\\s*([\\s\\S]*?)(?:```|$)"));
     const auto match = codeBlockRe.match(text);
     if (match.hasMatch()) {
-        text = match.captured(1).trimmed();
+        const QString block = match.captured(1).trimmed();
+        if (block.contains(QLatin1Char('{'))) {
+            text = block;
+        }
     }
 
     // 3. Find outermost { ... }
     const int firstBrace = text.indexOf(QLatin1Char('{'));
-    const int lastBrace = text.lastIndexOf(QLatin1Char('}'));
-    if (firstBrace >= 0 && lastBrace > firstBrace) {
-        text = text.mid(firstBrace, lastBrace - firstBrace + 1).trimmed();
+    if (firstBrace >= 0) {
+        const int lastBrace = text.lastIndexOf(QLatin1Char('}'));
+        if (lastBrace > firstBrace) {
+            text = text.mid(firstBrace, lastBrace - firstBrace + 1).trimmed();
+        } else {
+            text = text.mid(firstBrace).trimmed();
+        }
+    }
+
+    // 4. If invalid or truncated, attempt recovery
+    QJsonParseError pErr;
+    QJsonDocument::fromJson(text.toUtf8(), &pErr);
+    if (pErr.error != QJsonParseError::NoError) {
+        text = repairTruncatedJson(text);
     }
 
     return text;
@@ -401,6 +529,18 @@ bool KisAiStrokeProgramCodec::parseProgramJson(
     outProgram->prompt = rootObj.value(QStringLiteral("prompt")).toString();
     outProgram->title = rootObj.value(QStringLiteral("title")).toString(QStringLiteral("AI Artwork"));
     outProgram->seed = rootObj.value(QStringLiteral("seed")).toInt(42);
+
+    if (rootObj.contains(QStringLiteral("canvas_size")) || rootObj.contains(QStringLiteral("canvas"))) {
+        const QJsonObject cObj = rootObj.contains(QStringLiteral("canvas_size"))
+            ? rootObj.value(QStringLiteral("canvas_size")).toObject()
+            : rootObj.value(QStringLiteral("canvas")).toObject();
+        const int cw = cObj.value(QStringLiteral("width")).toInt(cObj.value(QStringLiteral("w")).toInt(0));
+        const int ch = cObj.value(QStringLiteral("height")).toInt(cObj.value(QStringLiteral("h")).toInt(0));
+        if (cw > 0 && ch > 0) {
+            outProgram->canvasSize = QSize(cw, ch);
+        }
+    }
+
     outProgram->operations.clear();
 
     const auto parseBrush = [](const QJsonObject &bObj) -> KisAiStrokeBrush {
@@ -412,54 +552,145 @@ bool KisAiStrokeProgramCodec::parseProgramJson(
         b.opacity = clamp01(bObj.value(QStringLiteral("opacity")).toDouble(1.0));
         b.isEraser = bObj.value(QStringLiteral("is_eraser")).toBool(false);
         b.presetHint = bObj.value(QStringLiteral("preset_hint")).toString();
+
+        // Safety: a ratio size >= 1.0 would cover 100%+ of the canvas; treat as pixels
+        if (b.sizeMode.compare(QLatin1String("ratio"), Qt::CaseInsensitive) == 0 && b.size >= 1.0) {
+            b.sizeMode = QStringLiteral("px");
+        }
         return b;
     };
+
+    const auto normalizeLayerName = [](const QString &name) -> QString {
+        const QString lower = name.trimmed().toLower();
+        if (lower == QLatin1String("flat") || lower == QLatin1String("flats") ||
+            lower == QLatin1String("base") || lower == QLatin1String("background") ||
+            lower == QLatin1String("color") || lower == QLatin1String("colors")) {
+            return QStringLiteral("Flats");
+        }
+        if (lower == QLatin1String("shading") || lower == QLatin1String("shade") ||
+            lower == QLatin1String("shadow") || lower == QLatin1String("shadows")) {
+            return QStringLiteral("Shading");
+        }
+        if (lower == QLatin1String("lineart") || lower == QLatin1String("line_art") ||
+            lower == QLatin1String("line art") || lower == QLatin1String("lines") ||
+            lower == QLatin1String("line") || lower == QLatin1String("ink")) {
+            return QStringLiteral("Lineart");
+        }
+        if (lower == QLatin1String("highlight") || lower == QLatin1String("highlights") ||
+            lower == QLatin1String("specular") || lower == QLatin1String("glint")) {
+            return QStringLiteral("Highlights");
+        }
+        if (lower == QLatin1String("fx") || lower == QLatin1String("effects") ||
+            lower == QLatin1String("effect") || lower == QLatin1String("particles")) {
+            return QStringLiteral("FX");
+        }
+        return name.trimmed().isEmpty() ? QStringLiteral("Lineart") : name.trimmed();
+    };
+
+    const auto normalizeKind = [](const QString &rawKind) -> KisAiStrokeOperation::Kind {
+        const QString k = rawKind.trimmed().toLower();
+        if (k == QLatin1String("path") || k == QLatin1String("stroke") ||
+            k == QLatin1String("line") || k == QLatin1String("contour")) {
+            return KisAiStrokeOperation::Kind::Path;
+        }
+        if (k == QLatin1String("fill") || k == QLatin1String("polygon") ||
+            k == QLatin1String("color_fill") || k == QLatin1String("solid_fill")) {
+            return KisAiStrokeOperation::Kind::Fill;
+        }
+        if (k == QLatin1String("gradient_fill") || k == QLatin1String("gradient") ||
+            k == QLatin1String("gradientfill") || k == QLatin1String("gradient-fill")) {
+            return KisAiStrokeOperation::Kind::GradientFill;
+        }
+        if (k == QLatin1String("ribbon") || k == QLatin1String("band") ||
+            k == QLatin1String("tapered_path") || k == QLatin1String("taper")) {
+            return KisAiStrokeOperation::Kind::Ribbon;
+        }
+        if (k == QLatin1String("particles") || k == QLatin1String("particle") ||
+            k == QLatin1String("scatter") || k == QLatin1String("sparkles")) {
+            return KisAiStrokeOperation::Kind::Particles;
+        }
+        return KisAiStrokeOperation::Kind::Unknown;
+    };
+
+    const auto parsePoint = [](const QJsonValue &pv, qreal defaultPressure = 0.8) -> QPair<QPointF, qreal> {
+        if (pv.isArray()) {
+            const QJsonArray pa = pv.toArray();
+            if (pa.size() >= 2) {
+                const qreal x = pa.at(0).toDouble();
+                const qreal y = pa.at(1).toDouble();
+                const qreal p = pa.size() >= 3 ? pa.at(2).toDouble(defaultPressure) : defaultPressure;
+                return {QPointF(x, y), p};
+            }
+        } else if (pv.isObject()) {
+            const QJsonObject po = pv.toObject();
+            const qreal x = po.value(QStringLiteral("x")).toDouble();
+            const qreal y = po.value(QStringLiteral("y")).toDouble();
+            const qreal p = po.contains(QStringLiteral("pressure")) ? po.value(QStringLiteral("pressure")).toDouble(defaultPressure) : defaultPressure;
+            return {QPointF(x, y), p};
+        }
+        return {QPointF(), -1.0};
+    };
+
+    constexpr int MAX_OPERATIONS = 2000;
+    constexpr int MAX_POINTS_PER_STROKE = 1000;
+
+    const qreal canvasW = outProgram->canvasSize.width() > 0 ? outProgram->canvasSize.width() : 1024.0;
+    const qreal canvasH = outProgram->canvasSize.height() > 0 ? outProgram->canvasSize.height() : 1024.0;
 
     // v2: operations array
     if (rootObj.contains(QStringLiteral("operations"))) {
         const QJsonArray opArray = rootObj.value(QStringLiteral("operations")).toArray();
-        for (const QJsonValue &v : opArray) {
+        const int count = qMin(opArray.size(), MAX_OPERATIONS);
+        for (int oi = 0; oi < count; ++oi) {
+            const QJsonValue &v = opArray.at(oi);
             if (!v.isObject()) continue;
             const QJsonObject o = v.toObject();
             KisAiStrokeOperation op;
-            const QString kindStr = o.value(QStringLiteral("kind")).toString().toLower();
+            op.kind = normalizeKind(o.value(QStringLiteral("kind")).toString());
             op.id = o.value(QStringLiteral("id")).toString();
-            op.layer = o.value(QStringLiteral("layer")).toString(QStringLiteral("Lineart"));
+            op.layer = normalizeLayerName(o.value(QStringLiteral("layer")).toString(QStringLiteral("Lineart")));
             op.brush = parseBrush(o.value(QStringLiteral("brush")).toObject());
 
-            if (kindStr == QLatin1String("path")) {
-                op.kind = KisAiStrokeOperation::Kind::Path;
+            if (op.kind == KisAiStrokeOperation::Kind::Path) {
                 op.closed = o.value(QStringLiteral("closed")).toBool(false);
                 op.smooth = o.value(QStringLiteral("smooth")).toBool(true);
                 op.role = o.value(QStringLiteral("role")).toString(QStringLiteral("auto"));
                 const QJsonArray pts = o.value(QStringLiteral("points")).toArray();
-                for (const QJsonValue &pv : pts) {
-                    if (pv.isArray()) {
-                        const QJsonArray pa = pv.toArray();
-                        if (pa.size() >= 2) {
-                            const qreal px = pa.at(0).toDouble();
-                            const qreal py = pa.at(1).toDouble();
-                            const qreal pr = pa.size() >= 3 ? pa.at(2).toDouble(0.8) : 0.8;
-                            op.points.append(KisAiStrokePoint(px, py, pr));
-                        }
+                const int ptCount = qMin(pts.size(), MAX_POINTS_PER_STROKE);
+                qreal maxCoord = 0.0;
+                for (int pi = 0; pi < ptCount; ++pi) {
+                    const auto pt = parsePoint(pts.at(pi), 0.8);
+                    if (pt.second >= 0.0) {
+                        op.points.append(KisAiStrokePoint(pt.first.x(), pt.first.y(), pt.second));
+                        maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
                     }
                 }
-            } else if (kindStr == QLatin1String("fill")) {
-                op.kind = KisAiStrokeOperation::Kind::Fill;
+                // Auto-normalize if coordinates were provided in pixel values instead of [0.0, 1.0]
+                if (maxCoord > 1.5) {
+                    for (KisAiStrokePoint &p : op.points) {
+                        p.pos = QPointF(p.pos.x() / canvasW, p.pos.y() / canvasH);
+                    }
+                }
+            } else if (op.kind == KisAiStrokeOperation::Kind::Fill) {
                 op.fillStyle = o.value(QStringLiteral("style")).toString(QStringLiteral("wash"));
                 op.angleDeg = o.value(QStringLiteral("angle_deg")).toDouble(0.0);
                 op.spacing = o.value(QStringLiteral("spacing")).toDouble(0.5);
                 const QJsonArray poly = o.value(QStringLiteral("polygon")).toArray();
-                for (const QJsonValue &pv : poly) {
-                    if (pv.isArray()) {
-                        const QJsonArray pa = pv.toArray();
-                        if (pa.size() >= 2) {
-                            op.polygon.append(QPointF(pa.at(0).toDouble(), pa.at(1).toDouble()));
-                        }
+                const int polyCount = qMin(poly.size(), MAX_POINTS_PER_STROKE);
+                qreal maxCoord = 0.0;
+                for (int pi = 0; pi < polyCount; ++pi) {
+                    const auto pt = parsePoint(poly.at(pi));
+                    if (pt.second >= 0.0) {
+                        op.polygon.append(pt.first);
+                        maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
                     }
                 }
-            } else if (kindStr == QLatin1String("gradient_fill")) {
-                op.kind = KisAiStrokeOperation::Kind::GradientFill;
+                if (maxCoord > 1.5) {
+                    for (QPointF &p : op.polygon) {
+                        p = QPointF(p.x() / canvasW, p.y() / canvasH);
+                    }
+                }
+            } else if (op.kind == KisAiStrokeOperation::Kind::GradientFill) {
                 op.fillStyle = o.value(QStringLiteral("style")).toString(QStringLiteral("linear"));
                 op.angleDeg = o.value(QStringLiteral("angle_deg")).toDouble(90.0);
                 const QJsonArray colors = o.value(QStringLiteral("colors")).toArray();
@@ -467,36 +698,53 @@ bool KisAiStrokeProgramCodec::parseProgramJson(
                     op.gradientColors.append(parseColor(cv.toString()));
                 }
                 const QJsonArray poly = o.value(QStringLiteral("polygon")).toArray();
-                for (const QJsonValue &pv : poly) {
-                    if (pv.isArray()) {
-                        const QJsonArray pa = pv.toArray();
-                        if (pa.size() >= 2) {
-                            op.polygon.append(QPointF(pa.at(0).toDouble(), pa.at(1).toDouble()));
-                        }
+                const int polyCount = qMin(poly.size(), MAX_POINTS_PER_STROKE);
+                qreal maxCoord = 0.0;
+                for (int pi = 0; pi < polyCount; ++pi) {
+                    const auto pt = parsePoint(poly.at(pi));
+                    if (pt.second >= 0.0) {
+                        op.polygon.append(pt.first);
+                        maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
                     }
                 }
-            } else if (kindStr == QLatin1String("ribbon")) {
-                op.kind = KisAiStrokeOperation::Kind::Ribbon;
+                if (maxCoord > 1.5) {
+                    for (QPointF &p : op.polygon) {
+                        p = QPointF(p.x() / canvasW, p.y() / canvasH);
+                    }
+                }
+            } else if (op.kind == KisAiStrokeOperation::Kind::Ribbon) {
                 op.widthStart = o.value(QStringLiteral("width_start")).toDouble(0.02);
                 op.widthMid = o.value(QStringLiteral("width_mid")).toDouble(0.015);
                 op.widthEnd = o.value(QStringLiteral("width_end")).toDouble(0.005);
                 const QJsonArray spine = o.value(QStringLiteral("spine")).toArray();
-                for (const QJsonValue &pv : spine) {
-                    if (pv.isArray()) {
-                        const QJsonArray pa = pv.toArray();
-                        if (pa.size() >= 2) {
-                            op.spine.append(QPointF(pa.at(0).toDouble(), pa.at(1).toDouble()));
-                        }
+                const int spineCount = qMin(spine.size(), MAX_POINTS_PER_STROKE);
+                qreal maxCoord = 0.0;
+                for (int pi = 0; pi < spineCount; ++pi) {
+                    const auto pt = parsePoint(spine.at(pi));
+                    if (pt.second >= 0.0) {
+                        op.spine.append(pt.first);
+                        maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
                     }
                 }
-            } else if (kindStr == QLatin1String("particles")) {
-                op.kind = KisAiStrokeOperation::Kind::Particles;
+                if (maxCoord > 1.5) {
+                    for (QPointF &p : op.spine) {
+                        p = QPointF(p.x() / canvasW, p.y() / canvasH);
+                    }
+                }
+            } else if (op.kind == KisAiStrokeOperation::Kind::Particles) {
                 op.particleShape = o.value(QStringLiteral("shape")).toString(QStringLiteral("petal"));
                 op.particleCount = o.value(QStringLiteral("count")).toInt(16);
                 const QJsonArray b = o.value(QStringLiteral("bounds")).toArray();
                 if (b.size() >= 4) {
-                    op.bounds = QRectF(QPointF(b.at(0).toDouble(), b.at(1).toDouble()),
-                                       QPointF(b.at(2).toDouble(), b.at(3).toDouble())).normalized();
+                    qreal x1 = b.at(0).toDouble();
+                    qreal y1 = b.at(1).toDouble();
+                    qreal x2 = b.at(2).toDouble();
+                    qreal y2 = b.at(3).toDouble();
+                    if (qMax(qMax(x1, y1), qMax(x2, y2)) > 1.5) {
+                        x1 /= canvasW; y1 /= canvasH;
+                        x2 /= canvasW; y2 /= canvasH;
+                    }
+                    op.bounds = QRectF(QPointF(x1, y1), QPointF(x2, y2)).normalized();
                 } else {
                     op.bounds = QRectF(0.1, 0.1, 0.8, 0.8);
                 }
@@ -511,13 +759,15 @@ bool KisAiStrokeProgramCodec::parseProgramJson(
     // v1 fallback: strokes array
     if (outProgram->operations.isEmpty() && rootObj.contains(QStringLiteral("strokes"))) {
         const QJsonArray strokeArray = rootObj.value(QStringLiteral("strokes")).toArray();
-        for (const QJsonValue &sv : strokeArray) {
+        const int count = qMin(strokeArray.size(), MAX_OPERATIONS);
+        for (int si = 0; si < count; ++si) {
+            const QJsonValue &sv = strokeArray.at(si);
             if (!sv.isObject()) continue;
             const QJsonObject s = sv.toObject();
             KisAiStrokeOperation op;
             op.kind = KisAiStrokeOperation::Kind::Path;
             op.id = s.value(QStringLiteral("id")).toString();
-            op.layer = s.value(QStringLiteral("layer_name")).toString(QStringLiteral("Lineart"));
+            op.layer = normalizeLayerName(s.value(QStringLiteral("layer_name")).toString(QStringLiteral("Lineart")));
             op.brush.color = parseColor(s.value(QStringLiteral("color")).toString(QStringLiteral("#232323")));
             op.brush.size = s.value(QStringLiteral("size_px")).toDouble(6.0) / 1024.0;
             op.brush.opacity = clamp01(s.value(QStringLiteral("opacity")).toDouble(1.0));
@@ -525,17 +775,18 @@ bool KisAiStrokeProgramCodec::parseProgramJson(
             op.brush.profile = QStringLiteral("gpen");
 
             const QJsonArray pts = s.value(QStringLiteral("points")).toArray();
-            for (const QJsonValue &pv : pts) {
-                if (pv.isArray()) {
-                    const QJsonArray pa = pv.toArray();
-                    if (pa.size() >= 2) {
-                        op.points.append(KisAiStrokePoint(pa.at(0).toDouble(), pa.at(1).toDouble(), pa.size() >= 3 ? pa.at(2).toDouble(0.8) : 0.8));
-                    }
-                } else if (pv.isObject()) {
-                    const QJsonObject po = pv.toObject();
-                    op.points.append(KisAiStrokePoint(po.value(QStringLiteral("x")).toDouble(),
-                                                      po.value(QStringLiteral("y")).toDouble(),
-                                                      po.value(QStringLiteral("pressure")).toDouble(0.8)));
+            const int ptCount = qMin(pts.size(), MAX_POINTS_PER_STROKE);
+            qreal maxCoord = 0.0;
+            for (int pi = 0; pi < ptCount; ++pi) {
+                const auto pt = parsePoint(pts.at(pi), 0.8);
+                if (pt.second >= 0.0) {
+                    op.points.append(KisAiStrokePoint(pt.first.x(), pt.first.y(), pt.second));
+                    maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
+                }
+            }
+            if (maxCoord > 1.5) {
+                for (KisAiStrokePoint &p : op.points) {
+                    p.pos = QPointF(p.pos.x() / canvasW, p.pos.y() / canvasH);
                 }
             }
 
@@ -562,7 +813,7 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgram(const QSt
     program.title = QStringLiteral("Procedural Artwork: ") + prompt.left(24);
     program.canvasSize = canvasSize;
 
-    QRandomGenerator rng(qHash(prompt.simplified()));
+    QRandomGenerator rng(stableSeed(prompt.simplified()));
     const int baseHue = rng.bounded(360);
 
     const auto makeHslColor = [](int h, int s, int l, int a = 255) {

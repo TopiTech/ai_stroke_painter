@@ -4,6 +4,7 @@
  */
 
 #include "KisAiIllustrationRenderer.h"
+#include "KisAiStrokeProgram.h"
 
 #include <QColor>
 #include <QFont>
@@ -32,7 +33,10 @@ QSize boundedSize(const QSize &requestedSize)
 
 bool isLoopbackHost(const QString &host)
 {
-    const QString normalized = host.trimmed().toLower();
+    QString normalized = host.trimmed().toLower();
+    if (normalized.startsWith(QLatin1Char('[')) && normalized.endsWith(QLatin1Char(']'))) {
+        normalized = normalized.mid(1, normalized.length() - 2);
+    }
     if (normalized == QLatin1String("localhost") || normalized.endsWith(QLatin1String(".localhost"))) {
         return true;
     }
@@ -160,16 +164,16 @@ bool KisAiIllustrationRenderer::validateImageEndpoint(const QString &endpoint, Q
     };
 
     if (!url.isValid() || (scheme != QLatin1String("https") && scheme != QLatin1String("http"))) {
-        return fail(QStringLiteral("画像モデルの URL は http:// または https:// で指定してください。"));
+        return fail(QStringLiteral("エンドポイントの URL は http:// または https:// で指定してください。"));
     }
     if (url.host().isEmpty()) {
-        return fail(QStringLiteral("画像モデルの URL にホスト名がありません。"));
+        return fail(QStringLiteral("エンドポイントの URL にホスト名がありません。"));
     }
     if (!url.userName().isEmpty() || !url.password().isEmpty()) {
-        return fail(QStringLiteral("画像モデルの URL に認証情報を含めることはできません。"));
+        return fail(QStringLiteral("エンドポイントの URL に認証情報を含めることはできません。"));
     }
     if (scheme == QLatin1String("http") && !isLoopbackHost(url.host())) {
-        return fail(QStringLiteral("外部の画像モデルには HTTPS を使用してください。"));
+        return fail(QStringLiteral("外部のエンドポイントには HTTPS を使用してください。"));
     }
 
     return true;
@@ -179,7 +183,7 @@ QString KisAiIllustrationRenderer::displayEndpoint(const QString &endpoint)
 {
     const QUrl url = QUrl::fromUserInput(endpoint.trimmed());
     if (!url.isValid() || url.host().isEmpty()) {
-        return QStringLiteral("画像モデル");
+        return QStringLiteral("API エンドポイント");
     }
 
     return url.scheme().toLower() + QStringLiteral("://") + url.host();
@@ -189,7 +193,7 @@ QImage KisAiIllustrationRenderer::createConceptImage(const QString &prompt, cons
 {
     const QSize size = boundedSize(requestedSize);
     const QString normalized = normalizedPrompt(prompt);
-    QRandomGenerator random(qHash(normalized));
+    QRandomGenerator random(KisAiStrokeProgramCodec::stableSeed(normalized));
     const int hue = static_cast<int>(random.bounded(360));
 
     QImage image(size, QImage::Format_ARGB32_Premultiplied);

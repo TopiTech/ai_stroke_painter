@@ -10,7 +10,11 @@
 #include <QSize>
 #include <QString>
 
+#ifdef AI_STROKE_STANDALONE
+#define KRITAUI_EXPORT
+#else
 #include "kritaui_export.h"
+#endif
 
 /**
  * Lightweight native image generation helpers used by the AI illustration

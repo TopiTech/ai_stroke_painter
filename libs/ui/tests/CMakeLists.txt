@@ -209,3 +209,9 @@ if (${INSTALL_BENCHMARKS})
         data/DA_RGBA\ bluegreen_small1.png
         DESTINATION ${CMAKE_INSTALL_BINDIR}/data)
 endif()
+
+kis_add_test(KisAiIllustrationRendererTest.cpp
+    TEST_NAME KisAiIllustrationRendererTest
+    LINK_LIBRARIES kritaui kritatestsdk
+)
+
