@@ -15,7 +15,11 @@
 #include <QString>
 #include <QVector>
 
+#ifdef AI_STROKE_STANDALONE
+#define KRITAUI_EXPORT
+#else
 #include "kritaui_export.h"
+#endif
 
 struct KRITAUI_EXPORT KisAiStrokePoint
 {

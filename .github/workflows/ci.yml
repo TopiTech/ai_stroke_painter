@@ -7,56 +7,43 @@ on:
     branches: [ main ]
 
 jobs:
-  build-and-test:
-    name: Build & Test (Windows MinGW / Qt6)
-    runs-on: windows-latest
+  test:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: windows-latest
+
+    env:
+      QT_QPA_PLATFORM: offscreen
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
-      - name: Set up Ninja
-        uses: asepticvoid/setup-ninja@v1.0.0
+      - name: Install Qt6 (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-base-dev qt6-base-dev-tools ninja-build
 
-      - name: Cache Compiler & Dependencies
-        uses: actions/cache@v4
+      - name: Install Qt6 (Windows)
+        if: runner.os == 'Windows'
+        uses: jurplel/install-qt-action@v3
         with:
-          path: |
-            C:\CraftRoot
-            ~/.ccache
-          key: ${{ runner.os }}-craft-qt6-${{ hashFiles('CMakeLists.txt', 'libs/**/CMakeLists.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-craft-qt6-
+          version: '6.6.3'
+          arch: 'win64_msvc2019_64'
+          cache: true
 
       - name: Configure CMake
-        shell: pwsh
         run: |
-          if (Test-Path "C:\CraftRoot\bin") {
-            $env:PATH = "C:\CraftRoot\bin;C:\CraftRoot\mingw64\bin;" + $env:PATH
-          }
-          cmake -S . -B build `
-            -G Ninja `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DBUILD_WITH_QT6=ON `
-            -DALLOW_UNSTABLE=QT6 `
-            -DBUILD_TESTING=ON `
-            -DCMAKE_UNITY_BUILD=ON `
-            -DCMAKE_UNITY_BUILD_BATCH_SIZE=8
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAI_STROKE_STANDALONE_TESTS=ON
 
-      - name: Build Core Application & AI Stroke Tests
-        shell: pwsh
-        run: |
-          if (Test-Path "C:\CraftRoot\bin") {
-            $env:PATH = "C:\CraftRoot\bin;C:\CraftRoot\mingw64\bin;" + $env:PATH
-          }
-          cmake --build build --target ai-stroke-painter KisAiStrokeProgramTest KisAiStrokeRendererTest -- -j$env:NUMBER_OF_PROCESSORS
+      - name: Build AI Stroke Tests
+        run: cmake --build build
 
-      - name: Run AI Stroke Unit Tests
-        shell: pwsh
-        run: |
-          if (Test-Path "C:\CraftRoot\bin") {
-            $env:PATH = "C:\CraftRoot\bin;C:\CraftRoot\mingw64\bin;" + $env:PATH
-          }
-          ctest --test-dir build -R KisAiStroke --output-on-failure
+      - name: Run AI Stroke Tests
+        run: ctest --test-dir build --output-on-failure

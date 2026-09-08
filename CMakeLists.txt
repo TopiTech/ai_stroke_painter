@@ -1,4 +1,46 @@
 cmake_minimum_required(VERSION 3.19.0 FATAL_ERROR)
+option(AI_STROKE_STANDALONE_TESTS "Build standalone AI stroke tests without full Krita dependency stack" OFF)
+if (AI_STROKE_STANDALONE_TESTS)
+    project(ai_stroke_tests LANGUAGES CXX)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    find_package(Qt6 REQUIRED COMPONENTS Core Gui Test)
+    set(CMAKE_AUTOMOC ON)
+    enable_testing()
+
+    add_definitions(-DAI_STROKE_STANDALONE)
+
+    add_library(ai_stroke_core STATIC
+        libs/ui/aiillustration/KisAiStrokeProgram.cpp
+        libs/ui/aiillustration/KisAiStrokeRenderer.cpp
+    )
+    target_include_directories(ai_stroke_core PUBLIC
+        libs/ui
+    )
+    target_link_libraries(ai_stroke_core PUBLIC Qt6::Core Qt6::Gui)
+
+    add_executable(KisAiStrokeProgramTest
+        libs/ui/tests/KisAiStrokeProgramTest.cpp
+    )
+    target_include_directories(KisAiStrokeProgramTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiStrokeProgramTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiStrokeProgramTest COMMAND KisAiStrokeProgramTest)
+
+    add_executable(KisAiStrokeRendererTest
+        libs/ui/tests/KisAiStrokeRendererTest.cpp
+    )
+    target_include_directories(KisAiStrokeRendererTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiStrokeRendererTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiStrokeRendererTest COMMAND KisAiStrokeRendererTest)
+
+    return()
+endif()
 
 set(SUPPORTED_LANGUAGES CXX C)
 

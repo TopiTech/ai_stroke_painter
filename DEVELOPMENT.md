@@ -128,7 +128,13 @@ cmake --install build-ai --prefix "$craftRoot\ai-stroke-painter"
 AI ストロークのパース・スキーマ生成・スプライン曲線補間・クリッピングマスクの回帰テストを実行します。
 
 ```powershell
+# フルビルド環境でのテスト
 ctest --test-dir build-ai -R KisAiStroke --output-on-failure
+
+# Qt6 のみを用いた高速スタンドアロンテスト（CI / 軽量環境向け・約1秒で完了）
+cmake -B build-test -G Ninja -DAI_STROKE_STANDALONE_TESTS=ON
+cmake --build build-test
+ctest --test-dir build-test --output-on-failure
 ```
 
 ### ビルドが失敗したとき

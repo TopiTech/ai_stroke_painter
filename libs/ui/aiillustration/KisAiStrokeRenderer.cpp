@@ -5,6 +5,7 @@
 
 #include "KisAiStrokeRenderer.h"
 
+#ifndef AI_STROKE_STANDALONE
 #include "KisDocument.h"
 #include "KisPart.h"
 #include "KisView.h"
@@ -13,6 +14,10 @@
 #include "kis_node_commands_adapter.h"
 #include "kis_paint_layer.h"
 #include <KoCompositeOpRegistry.h>
+#include <klocalizedstring.h>
+#else
+#define i18n(str, ...) QStringLiteral(str)
+#endif
 
 #include <QColor>
 #include <QLinearGradient>
@@ -23,7 +28,6 @@
 #include <QPolygonF>
 #include <QRandomGenerator>
 #include <QStringList>
-#include <klocalizedstring.h>
 
 #include <cmath>
 
@@ -209,6 +213,7 @@ QImage KisAiStrokeRenderer::renderProgramToImage(
     return compositeImage;
 }
 
+#ifndef AI_STROKE_STANDALONE
 bool KisAiStrokeRenderer::renderProgramToLayers(
     KisImageWSP image,
     KisViewManager *viewManager,
@@ -330,6 +335,7 @@ bool KisAiStrokeRenderer::renderProgramToLayers(
 
     return layersAdded > 0;
 }
+#endif
 
 void KisAiStrokeRenderer::rasterizeOperation(
     QPainter &painter,

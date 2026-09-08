@@ -13,10 +13,14 @@
 #include <QVector>
 
 #include "KisAiStrokeProgram.h"
+#ifndef AI_STROKE_STANDALONE
 #include "kis_types.h"
 #include "kritaui_export.h"
 
 class KisViewManager;
+#else
+#define KRITAUI_EXPORT
+#endif
 
 /**
  * Native coordinate stroke rasterizer that materializes a KisAiStrokeProgram
@@ -37,6 +41,7 @@ public:
         bool closed = false
     );
 
+#ifndef AI_STROKE_STANDALONE
     /**
      * Render the stroke program into discrete paint layers on the specified Krita image.
      * Each layer group (Flats, Shading, Lineart, Highlights, FX) is created as an independent
@@ -51,6 +56,7 @@ public:
         QString *statusMessage = nullptr,
         bool clipShadingToFlats = true
     );
+#endif
 
     /**
      * Render the complete stroke program into a composite QImage (useful for previewing).
