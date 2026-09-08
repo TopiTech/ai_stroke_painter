@@ -1,163 +1,125 @@
-# AI Stroke Painter Pro
+![Picture](https://krita.org/images/krita-logo-light.svg)
 
-Krita 上で、プロフェッショナルな本格イラスト・アニメ線画・風景・エフェクト・幾何学アートの描画計画を生成し、マルチレイヤーへ自動分割して筆圧付きストロークを描画する次世代 AI ペイントプラグインです。
+| CI Name     | Master | Stable | Release |
+| ------------------- | ---------------- | ------ | ------- |
+| Pipeline | [![pipeline status](https://invent.kde.org/graphics/krita/badges/master/pipeline.svg)](https://invent.kde.org/graphics/krita/-/commits/master) | [![pipeline status](https://invent.kde.org/graphics/krita/badges/krita/5.2/pipeline.svg)](https://invent.kde.org/graphics/krita/-/commits/krita/5.2) | [![Latest Release](https://invent.kde.org/graphics/krita/-/badges/release.svg)](https://invent.kde.org/graphics/krita/-/releases) |
 
-## 🌟 主な機能とカスタマイズ性
+Note: Nightly builds are not covered by this table atm
 
-1. **本格プロシージャル・イラストエンジン (Offline High-Quality Generation)**
-   - **👤 キャラクター / ポートレート**: アニメ美少女・少年の顔、二重まぶた・瞳・ハイライト・まつ毛、繊細な毛流れ（前髪・サイド・天使の輪）、衣服やリボンのシワ
-   - **🌿 自然・風景**: 山岳・稜線テクスチャ、樹木（幹・枝・葉クラスタ）、葛飾北斎風の大波・水しぶき、積乱雲、バラ・桜の花、和風水墨画
-   - **💥 マンガ・アニメ効果線**: 迫力の集中線（中心部抜け・強弱ランダム）、流線・スピード線、カケアミ（クロスハッチング陰影）、魔法陣・ルーンエフェクト
-   - **🌀 幾何学・都市**: 万華鏡マンダラ（極座標対称）、サイバーパンク都市スカイライン（パース、ビル群、窓グリッド）、装飾フレーム
-   - **🐱 動物・クリーチャー**: 猫（輪郭・耳・ヒゲ・瞳）、犬、鳥（翼・羽毛）、ドラゴン
-   - **🎨 12種類のカラーパレット**: アニメカラー、モノクロ線画、サイバーパンク、自然アースカラー、パステル・ゆめかわ、透明水彩、80s レトロポップ、ダークファンタジー、クラシックセピア、ボタニカル・植物、水墨画(墨・朱印)、サイバーゴールド
-   - **🖌️ 8種類のブラシプロファイル・タッチ切替**: 自動(Auto)、Gペン(強弱ダイナミクス)、丸ペン(均一細線)、毛筆(うねりと太さ変化)、マーカー(均一筆圧)、鉛筆(繊細な筆圧とデッサンタッチ)、透明水彩(にじみ・グラデーション)、エアブラシ(滑らかなボカシ)
-   - **明暗面を先に設計する値ベース描画**: 背景→環境→主役の順に、髪・顔・衣服・動物胴体・空・海・山・都市地平線を独立した色面として構成。少ない本数では広いグラデーションを意図的な単一値へ縮退し、楕円を筆圧付き主軸と輪郭内の陰影へ変換することで、帯状分断や輪郭外への膨張を抑えます。
+Krita is a free and open source digital painting application. It is for artists who want to create professional work from start to end. Krita is used by comic book artists, illustrators, concept artists, matte and texture painters and in the digital VFX industry.
 
-2. **🖼️ 参照画像の読み込み & 画像解析設定 (Image-to-Stroke)**
-   - ローカル画像（PNG, JPG, WebP, BMP）を読み込み、連結輪郭トレース・被写体内にクリップした多方向陰影ハッチング・知覚色パレット近似・微小ノイズ除去により、完全オフラインで自然な手描きストロークへ自動変換。元画像の縦横比と透過領域を維持します。
-   - 読み込み上限は 25 MB / 展開後 5,000 万画素です。
-   - **エッジ感度調整**: 0.02〜0.50（微細なディテール線から大胆な主線まで自在にコントロール）
-   - **立体感ハッチング密度**: 標準 (Medium)、高密度 (High)、低密度 (Low)、オフ (Off) - 最暗部でのクロスハッチング対応
-   - **下塗り描画切替**: ON / OFF
-   - **カラーモード**: 元画像カラー直接サンプリング / 選択パレット近似マッピング
+If you are reading this on GitHub, be aware that this is just a mirror. Our real code repository is provided by KDE: https://invent.kde.org/graphics/krita.git
 
-3. **🖌️ ブラシ・描画 & レイヤートランザクション**
-   - **失敗・停止時の自動ロールバック**: マルチ/単一レイヤー出力は実行専用コンテナだけを除去し、アクティブレイヤー直接描画は描画前の画素スナップショットを同じレイヤーへ復元します。直接描画中はキャンバス入力を保護し、後から外部変更を検出した場合はユーザーの変更を上書きしないよう自動復元を中止して通知します。標準Krita APIで安全性を担保し、環境固有のUndoマクロには依存しません。
-   - **描画スケーリング**: 太さ倍率（0.1x〜5.0x） & 不透明度（10%〜100%）
-   - **レイヤー出力モード**:
-     - *マルチレイヤー分割*: 実行ごとに一意な出力グループを作り、Flats, Shading, Lineart, Highlights, FX 各レイヤーへ自動分割。Draft は安全なプレビュー専用で、最終適用・保存から自動除外
-     - *アクティブレイヤー*: 選択中のペイントレイヤーへ直接描画（失敗・停止時は描画前の画素へ自動復元。外部変更を検出した場合は上書きせず通知）
-     - *単一新規レイヤー*: 1枚の新規レイヤーにまとめて描画
-   - **出力グループ / レイヤー名カスタマイズ**: 任意の名称を設定可能
-   - **画面更新間隔**: 5〜100線分ごと（リアルタイム描画と処理速度のバランス調整）
-   - **累積保存**: Auto-Refine の全反復を統合し、太さ・不透明度・レイヤーモードを実描画どおり焼き込んだ JSON / SVG を最終時だけ保存
-   - **役割別ブラシ解決**: UI で選んだ画材を尊重しつつ、下塗り・陰影・主線・ハイライトごとに互換ブラシへ割り当て、全レイヤーが同じ筆になる平板化を防止
-   - **連続筆圧パス**: 筆圧変化を少数の連続区間へまとめ、短い線分の継ぎ目が連続曲線を壊す描画を抑制
+![Picture](https://krita.org/images/hero-image-50.webp)
 
-4. **🤖 OpenAI 互換 LLM / Vision & 自律ビジョン改善ループ (Auto-Refine)**
-   - OpenAI Chat Completions 互換エンドポイントをサポート。Claude / Gemini は互換ゲートウェイ経由、Ollama / vLLM / LM Studio は互換 API を有効にして利用します。
-   - **サンプリング調整**: Temperature（0.0〜2.0） & Top-P（0.1〜1.0）
-   - **思考モデル最適化**: Reasoning Effort（Low / Medium / High / None）対応。推論トークンと出力JSONを安全に分離・パース。
-   - **Vision 解像度**: 256x256, 512x512, 768x768, 1024x1024 から選択可能。
-   - **消しゴム彫刻 (`brush.is_eraser: true`)**: 輪郭の修正やハイライト彫刻の自律指示に対応。従来v1のストローク直下 `is_eraser` も読み込み可能です。
-   - **追加カスタム描画指示**: システムプロンプトへ独自の画風・タッチ指示を追加可能。
-   - **多段階自律改善（1〜10回反復）**: 下書き → 下塗り → 陰影 → 主線 → 仕上げと進行し、各中間ステップのキャンバスを次の API リクエストへ添付して視覚評価します。
-   - **Goal Mode**: モデルの明示的な完成申告、完成度 85%以上、累積計画の独立品質スコア 70%以上が揃った場合だけ早期完了します。
-   - 参照画像は初回だけ、最新キャンバスは各改善ステップで送信します。送信前に最大 Vision 解像度へ縮小し、位置・作者などの私的メタデータを除去します。
-   - LLM 障害時のオフライン生成への切替は明示的なオプトインです。既定ではエラーを表示し、生成元を偽りません。
-   - LLM は解像度非依存の **StrokeProgram v2**（path / fill / hatch / particles）を優先出力し、少ない命令で面・陰影・連続曲線を構成します。従来の DrawingPlan v1 応答も互換入力として利用できます。
+### Repository Status
 
-5. **✨ プリセット管理 & Docker UI / UX**
-   - **12種類のビルトインプリセット**（美少女アニメ顔、少年ヒーロー、山と桜、浮世絵大波、透明水彩野花、集中線、魔法陣、優雅な猫、サイバー都市、マンダラ、水墨画の松、バラの花束）
-   - **カスタムプリセット保存 & 削除**: 現在のプロンプト・パレット・本数・ブラシ設定に名前を付けて QSettings に保存可能。
-   - **📤 プリセットの JSON 入出力 (Import / Export)**: 作成したカスタムプリセットをワンクリックで JSON ファイルとして書き出し・読み込み共有可能。
-   - **初期設定リセット (🔄)**: 全設定を標準デフォルト値にワンクリックで復元。
-   - **安全な適用前プレビュー**: 生成結果をレイヤーブレンド・レイヤー内消しゴム込みで確認し、既定では「キャンバスへ適用」を押すまで実キャンバスを変更しません。太さ倍率・不透明度変更も即時反映されます。
-   - **適用前の品質診断**: 品質スコア、意味充足率、主役コントラスト、効果侵入率をプレビュー直下へ表示し、ストローク不足で欠けた人物・動物・背景・効果を日本語で通知します。
-   - **SVG ベクターエクスポート**: マルチレイヤーの乗算／加算近似と、単一レイヤーの適用順を反映した Illustrator / Inkscape 互換出力。
-   - **🐞 デバッグモード**: リアルタイム通信ログ、コピー、保存機能。プロンプト・推論・応答本文は記録せず、長さと短い識別ハッシュだけを残します。
+For branch: `master`
 
----
+| Freeze type    | Status                                                               |
+|----------------|----------------------------------------------------------------------|
+| Feature Freeze | features are allowed                                                 |
+| String Freeze  | strings are allowed                                                  |
 
-## 動作要件
 
-- **Krita 6.0 以降**（`Node.paintLine` 対応）
-- Python プラグインを有効にした Krita
+### User Manual
+https://docs.krita.org/en/user_manual.html
 
----
+### Development Notes and Build Instructions
 
-## インストール
+Please follow [the online documentation](https://docs.krita.org/en/untranslatable_pages/building_krita.html).
 
-1. プロジェクトディレクトリで配布用 ZIP をビルドします：
-   ```powershell
-   python build_plugin.py
-   ```
-2. 生成された `dist/ai_stroke_painter.zip` を、Krita の **ツール > スクリプト > Pythonプラグインをインポート** から選択します。
-3. Krita を再起動後、**設定 > Kritaの設定 > Pythonプラグインマネージャ** で **AI Stroke Painter Pro** を有効化し、再起動します。
-4. **設定 > ドッキングパネル > AI Stroke Painter Pro** を表示します。
+Other developer guides, notes and wiki:
 
----
+https://docs.krita.org/en/untranslatable_pages.html
 
-## 使い方
+Apidox:
 
-### 1. プリセットから即座に描画
-1. Krita で新規ドキュメントを開きます。
-2. Docker 上部の **クイック・プリセット** から希望のモチーフ（例: 「👤 美少女アニメ顔」「🌊 浮世絵風の大波」など）を選び、**適用** を押します。
-3. **プレビュー生成**をクリックし、結果を確認してから**キャンバスへ適用**を押します。
+https://api.kde.org/legacy/krita/html/index.html
 
-### 2. 参照画像から描画 (Image-to-Stroke)
-1. **画像を選択...** ボタンからお好みのイラストや写真を読み込みます。
-2. **プレビュー生成**をクリックし、結果を確認してから**キャンバスへ適用**を押します。
+### Bugs and Wishes
 
-### 3. 自律反復改善ループ (Auto-Refine)
-1. Planner エンジンで **OpenAI 互換 LLM / Vision** を選択し、**自律反復改善 (Auto-Refine)** にチェックを入れて反復回数（例: 3〜5回）を設定します。オフライン・プロシージャルモードではこの機能は利用できません。
-2. **プレビュー生成**を押します。各ステップでプレビューを確認し、**キャンバスへ適用**すると次の視覚評価へ進みます。
-3. 途中で止めたい場合は **⏹ 停止** ボタンをクリックします。
+https://bugs.kde.org/buglist.cgi?bug_status=UNCONFIRMED&bug_status=CONFIRMED&bug_status=ASSIGNED&bug_status=REOPENED&list_id=1315444&product=krita&query_format=advanced
 
-> Auto-Refine を有効にすると、各中間ステップのキャンバス画像が設定した API エンドポイントへ送信されます。機密情報を含むキャンバスでは使用しないでください。進行中の HTTP リクエスト自体は即時中断できず、応答またはタイムアウト後に停止します。
+### Discussion Forum
 
-### 4. OpenAI / Vision 互換 LLM を使う
-1. Planner エンジンで **OpenAI 互換 LLM / Vision** を選択します。
-2. Base URL（例: `https://api.openai.com/v1` またはローカル Ollama/vLLM `http://127.0.0.1:11434`）とモデル名（例: `gpt-4o`, `deepseek-chat` など）を入力します。
-   - ※ `/v1` や `/chat/completions` の省略・重複は自動補正されます。
-   - API Key を使う外部接続は HTTPS 必須です。HTTP は `localhost` / ループバック接続だけ許可され、URL 内のユーザー名・パスワードは拒否されます。
-3. 必要に応じて **タイムアウト（秒）**（デフォルト 120 秒）を調整します。
-4. **API 接続テスト** ボタンで疎通を確認後、描画を実行します。
-5. API エラー時にもオフライン生成を続けたい場合だけ、**API失敗時にオフライン生成へフォールバック**を有効にします。
+* https://krita-artists.org/
 
-API Key はプラグイン設定へ保存しません。入力欄を空にすると `OPENAI_API_KEY` 環境変数を利用します。デバッグログは Bearer token / `sk-...` を伏字化し、通常のプロンプト・推論・応答本文やローカルのフルパスを記録しません。API提供者のエラー文なども含み得るため、ログを共有する前には必ず内容を確認してください。
+### IRC channel
 
-### 5. 🐞 デバッグモード (Debug Mode)
-1. 「🐞 デバッグモード」にチェックを入れると、リアルタイム通信・処理ログパネルが表示されます。
-2. リクエスト送信、HTTPステータス、レスポンス所要秒数、トークン情報、座標自動変換、ストローク構築、エラー詳細がタイムスタンプ付きで記録されます。送受信本文は記録されません。
-3. **📋 ログをコピー**、**🗑️ クリア**、**💾 ログを保存...** ボタンでトラブルシューティングが簡単に行えます。
+Most of the developers hang out here. If you are interested in helping with the project this is a great place to start.
 
----
+libera.chat, #krita
 
-## 設計とアーキテクチャ
+### Project Website
 
-- `domain.py`: `Stroke`, `StrokePoint`, `DrawingPlan`, `VisionCritique`, SVGエクスポート
-- `stroke_program.py`: 正規化座標の StrokeProgram v2、v1移行、低予算グラデーション／楕円値形状を含む決定論的コンパイラ
-- `scene_spec.py`: 主役・環境・モチーフ・効果を単一カテゴリへ潰さない複数ラベル意味解析
-- `brushes.py`: 全生成経路で共有する意味的ブラシ登録とレイヤー役割別の互換ポリシー
-- `procedural/`: 人物、風景、効果線、幾何学、動物の専門エンジンと、RenderGraph／意味単位の品質予算配分。構図ボックス、色役割、顔・動物・都市・山・波の認識特徴を低本数でも保持
-- `image_converter.py`: 参照画像解析 & オフライン Image-to-Stroke エンジン
-- `llm_planner.py`: マルチモーダル (画像添付・キャプチャ) & 階層的プロンプティング Adapter
-- `krita_adapter.py`: キャンバスキャプチャ、マルチレイヤー管理、画素スナップショット式ロールバック、連続パス・筆圧描画、実ブラシ解決トレース
-- `docker.py`: プレビュー、プリセット入出力、自律ループワーカー、最新 UI
-- `storage.py`: 衝突のない JSON / SVG 保存・読込
-- `ports.py`: 拡張境界ポート定義
-- `native_bridge.py`: 1本の全点列を渡すloopback限定・認証付き連続ストローク境界
-- `quality.py`: 実ブラシ径・不透明度を反映した低解像度合成と面積被覆、特徴形状、顔パーツ遮蔽、過大ストローク、役割別ブラシ適合、Draft 漏出、必須要素充足率を含む品質評価 v3
-- `version.py`: プラグイン版とソース指紋を生成結果へ記録し、インストール版の取り違えを追跡
+https://www.krita.org
 
----
+### Nightly builds
 
-## 検証・品質チェック
+#### Unstable
 
-以下のワンコマンドですべての静的解析（Ruff / Mypy / Pyrefly）、通常環境の回帰テスト、Qt を読み込まないヘッドレス互換テストを実行できます：
+* https://cdn.kde.org/ci-builds/graphics/krita/master/
 
-```powershell
-python check.py
-```
+#### Stable
 
-全12ビルトインプリセットの手動／Auto、計24シナリオの決定性・被覆・レイヤー・ブラシ・パレット・必須意味要素・生成時間ゲートは、プロジェクトの親ディレクトリから次で実行できます：
+* https://cdn.kde.org/ci-builds/graphics/krita/krita-5.2/
 
-```powershell
-python -m ai_stroke_painter.quality_check
-```
+#### Developers builds
 
-実Krita APIの確認は、Krita 6 の Python Scripter で次を実行します。使い捨て256px文書だけを作成し、終了時に破棄します：
+##### Linux build with debug symbols in Qt and Krita
 
-```python
-from ai_stroke_painter.krita_smoke import run_krita_smoke_test
+1) Go to Jobs section of Krita's CI: https://invent.kde.org/graphics/krita/-/jobs
+2) Search for the latest `linux-debug-weekly` job
+3) Enter the job and click on Artifacts->Browse
+4) Download the AppImage
 
-print(run_krita_smoke_test())
-```
+##### Linux build with ASAN in Qt and Krita
 
-### 任意のNative Bridge
+1) Go to Jobs section of Krita's CI: https://invent.kde.org/graphics/krita/-/jobs
+2) Search for the latest `linux-asan-weekly` job
+3) Enter the job and click on Artifacts->Browse
+4) Download the AppImage
+5) Set up environment variable for ASAN:
+    ```bash
+        export ASAN_OPTIONS=new_delete_type_mismatch=0:detect_leaks=0
+    ```
+6) Run the AppImage in the modified environment
 
-連続ストロークhelperを導入する場合は `AI_STROKE_BRIDGE_PORT` と16文字以上の `AI_STROKE_BRIDGE_TOKEN` をKrita起動前に設定します。接続開始前の失敗だけ互換 `Node.paintLine` 描画へ戻ります。helperは全点のKrita描画完了後に応答する必要があり、送信後の応答欠落・不正応答・一部点だけの受理は二重描画を避けるため中止します。
+##### Windows build with ASAN in Qt and Krita
 
-GitHub Actions でも Python 3.10 / 3.12 に対して静的解析、回帰試験、配布 ZIP ビルドを実行します。
+1) Go to Jobs section of Krita's CI: https://invent.kde.org/graphics/krita/-/jobs
+2) Search for the latest `windows-asan-weekly` job
+3) Enter the job and click on Artifacts->Browse
+4) Download the .zip file
+5) Open terminal
+6) Set up environment variable for ASAN:
+    ```
+        set ASAN_OPTIONS=new_delete_type_mismatch=0:detect_leaks=0
+    ```
+7) Change working directory to `c:\path\where\you\downloaded\krita-5.3.0-prealpha-git12345\bin`.
+   That is important, otherwise ASAN will not be able to locate llvm-symbolizer.exe and the
+   backtraces generated by ASAN will not contain proper symbols.
+    ```
+        cd c:\path\where\you\downloaded\krita-5.3.0-prealpha-git12345\bin
+    ```
+8) Run krita
+    ```
+        krita.com
+    ```
+
+### License
+
+Krita as a whole is licensed under the GNU Public License, Version 3. Individual files may have a different, but compatible license.
+
+### AI Moratorium
+
+Since the Krita developer community cannot currently find consensus on whether the use of AI tools to assist development is acceptable or not, we have decided to put a moratorium on the use of these tools until October 2026.
+
+The reason for pushing this off to October are:
+
+1) if we'd allow the use of AI in development right now, the backlash from our users and supporters will be furious.
+2) KDE as a whole does not have a policy in place, and if our policy would conflict with KDE's we'd potentially have to revert contributions made with AI
+3) The development of AI itself might change for the better or the worse in the next period. Microsoft is already backtracking from their CoPilot brand. Acceptance of AI can change for better or worse. The environmental impact of AI could lessen.
+
+Until we make a decision, the use of AI when working on Krita is not allowed.

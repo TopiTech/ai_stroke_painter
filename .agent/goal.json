@@ -1,56 +1,65 @@
 {
   "version": 1,
-  "id": "goal-20260906-codereview",
-  "status": "active",
-  "objective": "プロジェクト全体のコードレビューを実施し、重大な問題を修正し、テストと検証で完了を証明する",
+  "id": "goal-20260908-krita-integration",
+  "status": "completed",
+  "objective": "既存の AI Stroke Painter Krita プラグインを Krita のソースツリーへ統合し、Krita フォークとしてビルド・利用できる状態にしたうえで旧配布形態の不要物を整理する",
   "completion_criteria": [
-    "プロジェクト全体の仕様・テスト・設定・主要処理経路を把握し、問題を重要度順に整理する",
-    "正確性・保守性・セキュリティ・性能・依存ライブラリ使用方法・既存仕様との整合性の問題を調査する",
-    "重大な不具合・セキュリティ問題・根本原因を優先的に修正する",
-    "修正に対して再発防止テストを追加する",
-    "python check.py で ALL CHECKS PASSED になる",
-    "調査範囲・問題と重要度・変更内容と理由・互換性影響・テスト結果・未解決事項を報告する"
+    "AI Stroke Painter が Krita の構成・インストール対象に含まれ、外部 ZIP インポートなしで利用できる",
+    "Python の線分単位描画を、Krita 本体側の連続筆圧ストロークAPIで置き換える",
+    "既存のオフライン生成・画像変換・LLM・プレビュー・レイヤー・保存機能を維持する",
+    "Python 回帰テストと静的解析が成功する",
+    "変更した Krita 側コードについて CMake 構成・インストール検証が成功する",
+    "旧 ZIP 配布物、キャッシュ、統合後に重複するルート直下プラグイン資産が整理される",
+    "最終的なソース、ビルド方法、検証結果が文書化される"
   ],
   "constraints": [
-    "無関係な変更は避ける",
-    "問題の根本解決に有効なリファクタリングは許容する",
-    "公開API・データ形式・UI・設計・依存関係の変更は影響範囲を検証し互換性維持に努める",
-    "既存のユーザー変更を尊重する"
+    "既存ユーザー変更を上書きしない",
+    "Krita の既存設計・CMake・プラグイン規約に従う",
+    "APIキーや個人情報を保存しない",
+    "削除前に統合先と重複を確認する",
+    "外部公開やリモートへの push は行わない"
   ],
   "non_goals": [
-    "新機能の追加",
-    "仕様変更を伴う改善（根本解決に必要な場合を除く）",
-    "ドキュメントの全面書き直し"
+    "Krita 全体の無関係な改修",
+    "外部AIサービスの契約・認証・課金",
+    "上流KritaへのPR作成"
   ],
   "verification": [
-    "python check.py の実行（Ruff/Format/Mypy/Pyrefly/quality gates/regression）",
-    "python -m ruff check --fix . && python -m ruff format . での自動修正",
-    "git status --short での状態確認"
+    "統合先の python check.py",
+    "334件の通常回帰テストと334件の依存なしヘッドレス回帰テスト",
+    "全24シナリオの Illustration Quality Gates",
+    "隔離CMake configure と試験インストール",
+    "キャッシュ・旧配布物・重複ソースの不在確認"
   ],
   "budget": {
-    "max_iterations": 25,
+    "max_iterations": 30,
     "max_elapsed_minutes": null
   },
   "progress": {
-    "iteration": 0,
-    "completed": [],
-    "remaining": [
-      "プロジェクト全体構造の把握",
-      "仕様・テスト・設定の確認",
-      "主要処理経路の理解",
-      "正確性・保守性・セキュリティ・性能の問題調査",
-      "依存ライブラリ使用方法の検証",
-      "UI/アクセシビリティ問題の確認（該当する場合）",
-      "重大問題の修正",
-      "再発防止テストの追加",
-      "check.py 全検証の通過",
-      "最終報告の作成"
+    "iteration": 6,
+    "completed": [
+      "Krita libkis に Node.paintStroke を追加",
+      "SIP binding に連続筆圧ストロークAPIを公開",
+      "Python adapter をネイティブAPI優先へ移行",
+      "AI Stroke Painter を plugins/python に統合",
+      "初回既定有効化とユーザー無効設定の尊重を実装",
+      "CMake install対象と開発ファイル除外を実装・検証",
+      "全Python品質チェックと回帰テストを通過",
+      "旧Bridge・ZIP配布・重複ソース・生成キャッシュを削除",
+      "READMEとARCHITECTUREを統合版向けに更新"
     ],
-    "last_action": null,
-    "last_result": null
+    "remaining": [],
+    "last_action": "最終監査",
+    "last_result": "統合、検証、整理の全完了条件を満たした"
   },
-  "evidence": [],
+  "evidence": [
+    "python check.py: Ruff、format、Mypy、Pyrefly、334通常テスト、334ヘッドレステスト、24品質シナリオが全成功",
+    "CMake隔離configure: 成功",
+    "CMake試験install: manifest/package/manual=true、legacy/dev/cache=false",
+    "Node.h/Node.cpp/Node.sip: paintStroke(points, pressures, strokeStyle) が一致",
+    "最終ファイル監査: cache_dirs=null、legacy_files=null、ルート直下の重複実装なし"
+  ],
   "blockers": [],
-  "created_at": "2026-09-06T00:00:00+09:00",
-  "updated_at": "2026-09-06T00:00:00+09:00"
+  "created_at": "2026-09-08T17:00:00+09:00",
+  "updated_at": "2026-09-08T18:10:00+09:00"
 }
