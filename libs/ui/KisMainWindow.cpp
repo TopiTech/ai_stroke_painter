@@ -2119,6 +2119,12 @@ void KisMainWindow::openCommandBar()
 
 void KisMainWindow::slotStoragesWarning(const QString &/*location*/)
 {
+#if defined(AI_STROKE_PAINTER_APP)
+    // The focused UI has no brush-selection workflow.  A missing or
+    // incompatible legacy brush preset must not block prompt-based image
+    // generation; the resource locator still repairs the baseline bundle.
+    return;
+#else
     QString warning;
     if (!checkActiveBundlesAvailable()) {
         warning = i18n("You don't have any resource bundles enabled.");
@@ -2137,7 +2143,7 @@ void KisMainWindow::slotStoragesWarning(const QString &/*location*/)
     if (!checkActiveBundlesAvailable()) {
         QMessageBox::warning(this, i18nc("@title:window", "Krita"), warning + i18n("\nOnly your local resources are available."));
     }
-
+#endif
 }
 
 bool KisMainWindow::restoreWorkspace(KoResourceSP res)

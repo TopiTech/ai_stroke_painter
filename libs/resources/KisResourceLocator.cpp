@@ -140,6 +140,20 @@ KisResourceLocator::LocatorError KisResourceLocator::initialize(const QString &i
         initializationStatus = InitializationStatus::Initialized;
     }
 
+#if defined(AI_STROKE_PAINTER_APP)
+    // Earlier AI Stroke Painter builds omitted all bundles.  Restore the one
+    // baseline bundle required by Krita's resource cache even for profiles
+    // that have already completed their first-run initialization.
+    const QString baselineBundle = QStringLiteral("Krita_4_Default_Resources.bundle");
+    const QString bundledPath = installationResourcesLocation + QStringLiteral("/bundles/") + baselineBundle;
+    const QString localPath = d->resourceLocation + baselineBundle;
+    if (QFileInfo::exists(bundledPath) && !QFileInfo::exists(localPath)) {
+        if (!QFile::copy(bundledPath, localPath)) {
+            qWarning() << "Could not restore the AI Stroke Painter baseline resource bundle" << bundledPath;
+        }
+    }
+#endif
+
     if (!synchronizeDb()) {
         return LocatorError::CannotSynchronizeDb;
     }

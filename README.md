@@ -20,6 +20,8 @@ use HTTPS unless they target a loopback development server.
   layer insertion.
 - Native `.kra` document read/write support and PNG/Qt image import/export.
 - Colour management required by the retained document/canvas foundation.
+- One internal baseline resource bundle, used only to initialise and repair
+  Krita's resource database. It does not restore the general brush UI.
 - A deliberately small application menu: document operations, undo/redo, and
   the AI workspace.
 
@@ -35,7 +37,7 @@ After preparing `C:\CraftRoot`, configure and build from this directory:
 $env:PATH = 'C:\CraftRoot\dev-utils\meson-venv\Scripts;C:\CraftRoot\bin;C:\CraftRoot\mingw64\bin;C:\CraftRoot\dev-utils\bin;' + $env:PATH
 $env:PKG_CONFIG_PATH = 'C:\CraftRoot\lib\pkgconfig'
 
-cmake -S . -B build-ai -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_WITH_QT6=ON
+cmake -S . -B build-ai -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_WITH_QT6=ON -DALLOW_UNSTABLE=QT6 -DBUILD_TESTING=OFF -DCMAKE_C_COMPILER=C:\CraftRoot\mingw64\bin\gcc.exe -DCMAKE_CXX_COMPILER=C:\CraftRoot\mingw64\bin\g++.exe -DCMAKE_PREFIX_PATH=C:\CraftRoot -DCMAKE_INCLUDE_PATH=C:\CraftRoot\include -DCMAKE_LIBRARY_PATH=C:\CraftRoot\lib -DZLIB_ROOT=C:\CraftRoot -DPNG_ROOT=C:\CraftRoot
 cmake --build build-ai --target all -- -j4
 cmake --install build-ai --prefix C:\CraftRoot\ai-stroke-painter
 ```

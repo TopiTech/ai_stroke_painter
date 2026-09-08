@@ -24,6 +24,7 @@
 #endif
 
 #include <QStandardPaths>
+#include <QCoreApplication>
 #include <QScreen>
 #include <QDir>
 #include <QFile>
@@ -455,7 +456,16 @@ bool KisApplication::registerResources()
         QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "AI Stroke Painter: Fatal error"), i18n("%1\n\nAI Stroke Painter will quit now.", KisResourceCacheDb::lastError()));
     }
 
-    KisResourceLocator::LocatorError r = KisResourceLocator::instance()->initialize(KoResourcePaths::getApplicationRoot() + "/share/krita");
+#if defined(AI_STROKE_PAINTER_APP)
+    // The self-contained Windows package keeps its runtime data next to the
+    // launcher, at bin/data/krita.  Do not use Krita's Unix-style share path:
+    // it would leave the bundled baseline resources undiscoverable on first
+    // launch and after an older profile is repaired.
+    const QString installationResourcesLocation = QCoreApplication::applicationDirPath() + QStringLiteral("/data/krita");
+#else
+    const QString installationResourcesLocation = KoResourcePaths::getApplicationRoot() + QStringLiteral("/share/krita");
+#endif
+    KisResourceLocator::LocatorError r = KisResourceLocator::instance()->initialize(installationResourcesLocation);
     connect(KisResourceLocator::instance(), SIGNAL(progressMessage(const QString&)), this, SLOT(setSplashScreenLoadingText(const QString&)));
     if (r != KisResourceLocator::LocatorError::Ok && qApp->inherits("KisApplication")) {
         QMessageBox::critical(qApp->activeWindow(), i18nc("@title:window", "AI Stroke Painter: Fatal error"), KisResourceLocator::instance()->errorMessages().join('\n') + i18n("\n\nAI Stroke Painter will quit now."));
