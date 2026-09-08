@@ -37,12 +37,17 @@ public:
 
 private:
     enum class GenerationMode {
-        LocalConcept,
-        RemoteImage,
+        LlmStrokes,    // Text-based LLM coordinate strokes (Chat Completions)
+        LocalStrokes,  // Offline procedural coordinate strokes
+        RemoteImage,   // Image generation model API (DALL-E)
+        LocalConcept,  // Offline deterministic single concept image
     };
 
     void createCanvas();
     void generateIllustration();
+    void generateLlmStrokes(const QString &prompt);
+    void finishLlmStrokesRequest();
+    void generateLocalStrokes(const QString &prompt);
     void generateLocalConcept(const QString &prompt);
     void generateRemoteImage(const QString &prompt);
     void finishRemoteImageRequest();
@@ -68,6 +73,8 @@ private:
     QLineEdit *m_apiKeyEditor {nullptr};
     QSpinBox *m_widthSpin {nullptr};
     QSpinBox *m_heightSpin {nullptr};
+    QSpinBox *m_strokeBudgetSpin {nullptr};
+    QLabel *m_strokeBudgetLabel {nullptr};
     QLabel *m_remoteOptionsLabel {nullptr};
     QLabel *m_statusLabel {nullptr};
     QLabel *m_previewLabel {nullptr};

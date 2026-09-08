@@ -6,6 +6,8 @@
 #include "KisAiIllustrationDocker.h"
 
 #include "KisAiIllustrationRenderer.h"
+#include "KisAiStrokeProgram.h"
+#include "KisAiStrokeRenderer.h"
 #include "KisDocument.h"
 #include "KisMainWindow.h"
 #include "KisPart.h"
@@ -198,12 +200,14 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     layout->addLayout(canvasRow);
 
     m_modeCombo = new QComboBox(panel);
+    m_modeCombo->addItem(i18n("LLM 座標ストローク描画 (Chat Completions)"), static_cast<int>(GenerationMode::LlmStrokes));
+    m_modeCombo->addItem(i18n("ローカル座標ストローク描画"), static_cast<int>(GenerationMode::LocalStrokes));
+    m_modeCombo->addItem(i18n("画像モデル API (DALL-E)"), static_cast<int>(GenerationMode::RemoteImage));
     m_modeCombo->addItem(i18n("ローカル・コンセプトスケッチ"), static_cast<int>(GenerationMode::LocalConcept));
-    m_modeCombo->addItem(i18n("画像モデル API"), static_cast<int>(GenerationMode::RemoteImage));
     m_modeCombo->setAccessibleName(i18n("Generation source"));
     layout->addWidget(m_modeCombo);
 
-    m_remoteOptionsLabel = new QLabel(i18n("OpenAI 互換の画像生成エンドポイントを指定します。API キーは保存しません。"), panel);
+    m_remoteOptionsLabel = new QLabel(i18n("OpenAI 互換の Chat Completions エンドポイントを指定します。API キーは保存しません。"), panel);
     m_remoteOptionsLabel->setObjectName(QStringLiteral("aiSubtitle"));
     m_remoteOptionsLabel->setWordWrap(true);
     layout->addWidget(m_remoteOptionsLabel);
@@ -211,23 +215,35 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     auto *remoteForm = new QFormLayout();
     remoteForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
     m_endpointEditor = new QLineEdit(panel);
-    m_endpointEditor->setPlaceholderText(QStringLiteral("https://provider.example/v1/images/generations"));
-    m_endpointEditor->setAccessibleName(i18n("Image model endpoint"));
+    m_endpointEditor->setPlaceholderText(QStringLiteral("https://api.openai.com/v1/chat/completions"));
+    m_endpointEditor->setAccessibleName(i18n("LLM endpoint"));
     m_modelEditor = new QLineEdit(panel);
-    m_modelEditor->setPlaceholderText(i18n("画像モデル名"));
-    m_modelEditor->setAccessibleName(i18n("Image model name"));
+    m_modelEditor->setPlaceholderText(i18n("モデル名 (例: gpt-4o, o3-mini, deepseek-chat)"));
+    m_modelEditor->setAccessibleName(i18n("LLM model name"));
     m_apiKeyEditor = new QLineEdit(panel);
     m_apiKeyEditor->setEchoMode(QLineEdit::Password);
     m_apiKeyEditor->setPlaceholderText(i18n("このリクエストだけに使用"));
-    m_apiKeyEditor->setAccessibleName(i18n("Image model API key"));
+    m_apiKeyEditor->setAccessibleName(i18n("API key"));
+
+    m_strokeBudgetLabel = new QLabel(i18n("ストローク予算"), panel);
+    m_strokeBudgetSpin = new QSpinBox(panel);
+    m_strokeBudgetSpin->setRange(20, 2000);
+    m_strokeBudgetSpin->setValue(500);
+    m_strokeBudgetSpin->setSingleStep(50);
+    m_strokeBudgetSpin->setSuffix(i18n(" 本"));
+    m_strokeBudgetSpin->setAccessibleName(i18n("Stroke budget"));
+
     remoteForm->addRow(i18n("エンドポイント"), m_endpointEditor);
     remoteForm->addRow(i18n("モデル"), m_modelEditor);
     remoteForm->addRow(i18n("API キー"), m_apiKeyEditor);
+    remoteForm->addRow(m_strokeBudgetLabel, m_strokeBudgetSpin);
     layout->addLayout(remoteForm);
 
     QSettings settings;
-    m_endpointEditor->setText(settings.value(QStringLiteral("AIIllustration/endpoint")).toString());
-    m_modelEditor->setText(settings.value(QStringLiteral("AIIllustration/model")).toString());
+    const QString savedEndpoint = settings.value(QStringLiteral("AIIllustration/endpoint")).toString();
+    const QString savedModel = settings.value(QStringLiteral("AIIllustration/model")).toString();
+    m_endpointEditor->setText(savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/chat/completions") : savedEndpoint);
+    m_modelEditor->setText(savedModel.isEmpty() ? QStringLiteral("gpt-4o") : savedModel);
 
     m_previewLabel = new QLabel(i18n("生成結果のプレビューはここに表示されます。"), panel);
     m_previewLabel->setAlignment(Qt::AlignCenter);
@@ -329,10 +345,169 @@ void KisAiIllustrationDocker::generateIllustration()
     }
 
     const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
-    if (mode == GenerationMode::RemoteImage) {
+    switch (mode) {
+    case GenerationMode::LlmStrokes:
+        generateLlmStrokes(prompt);
+        break;
+    case GenerationMode::LocalStrokes:
+        generateLocalStrokes(prompt);
+        break;
+    case GenerationMode::RemoteImage:
         generateRemoteImage(prompt);
-    } else {
+        break;
+    case GenerationMode::LocalConcept:
         generateLocalConcept(prompt);
+        break;
+    }
+}
+
+void KisAiIllustrationDocker::generateLocalStrokes(const QString &prompt)
+{
+    setBusy(true);
+    setStatus(i18n("ローカルの座標ストロークを生成しています…"));
+
+    const QSize canvasSize(m_widthSpin->value(), m_heightSpin->value());
+    const KisAiStrokeProgram program = KisAiStrokeProgramCodec::createDeterministicProgram(prompt, canvasSize);
+
+    const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, m_previewLabel->size());
+    m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+
+    KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
+    if (view && view->image()) {
+        QString statusMsg;
+        if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
+            setStatus(statusMsg);
+        } else {
+            setStatus(statusMsg, true);
+        }
+    } else {
+        setStatus(i18n("キャンバスが利用できないため、ストロークを描画できませんでした。"), true);
+    }
+    setBusy(false);
+}
+
+void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
+{
+    QString errorMessage;
+    const QString endpoint = m_endpointEditor->text().trimmed();
+    const QString model = m_modelEditor->text().trimmed();
+    const QString apiKey = m_apiKeyEditor->text();
+
+    if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
+        setStatus(errorMessage, true);
+        return;
+    }
+    if (model.isEmpty()) {
+        setStatus(i18n("LLM モデル名を入力してください。"), true);
+        return;
+    }
+    if (apiKey.isEmpty()) {
+        setStatus(i18n("このリクエストに使う API キーを入力してください。"), true);
+        return;
+    }
+
+    QSettings settings;
+    settings.setValue(QStringLiteral("AIIllustration/endpoint"), endpoint);
+    settings.setValue(QStringLiteral("AIIllustration/model"), model);
+
+    QNetworkRequest request{QUrl(endpoint)};
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+
+    const QSize canvasSize(m_widthSpin->value(), m_heightSpin->value());
+    const QJsonObject payload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
+        model,
+        prompt,
+        canvasSize,
+        m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500
+    );
+
+    m_requestWasCancelled = false;
+    m_requestTimedOut = false;
+    m_responseTooLarge = false;
+    m_reply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    m_reply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
+    m_apiKeyEditor->clear();
+    setBusy(true);
+    setStatus(i18n("%1 に LLM 座標ストローク生成を依頼しています…", KisAiIllustrationRenderer::displayEndpoint(endpoint)));
+
+    connect(m_reply.data(), &QNetworkReply::downloadProgress, this, [this](qint64 received, qint64) {
+        if (m_reply && received > MAX_REMOTE_RESPONSE_BYTES) {
+            m_responseTooLarge = true;
+            setStatus(i18n("LLM の応答が上限を超えたため中止しました。"), true);
+            m_reply->abort();
+        }
+    });
+    connect(m_reply.data(), &QNetworkReply::finished, this, [this] { finishLlmStrokesRequest(); });
+
+    const QPointer<QNetworkReply> pendingReply = m_reply;
+    QTimer::singleShot(REMOTE_REQUEST_TIMEOUT_MS, this, [this, pendingReply] {
+        if (m_reply && m_reply.data() == pendingReply.data()) {
+            m_requestTimedOut = true;
+            m_reply->abort();
+        }
+    });
+}
+
+void KisAiIllustrationDocker::finishLlmStrokesRequest()
+{
+    QPointer<QNetworkReply> reply = m_reply;
+    m_reply = nullptr;
+    const bool requestWasCancelled = m_requestWasCancelled;
+    const bool requestTimedOut = m_requestTimedOut;
+    const bool responseTooLarge = m_responseTooLarge;
+    m_requestWasCancelled = false;
+    m_requestTimedOut = false;
+    m_responseTooLarge = false;
+    setBusy(false);
+
+    if (!reply) {
+        return;
+    }
+
+    const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const bool requestSucceeded = reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300;
+    const QByteArray response = reply->readAll();
+    reply->deleteLater();
+
+    if (requestWasCancelled) {
+        setStatus(i18n("LLM ストローク生成を中止しました。"));
+        return;
+    }
+    if (requestTimedOut) {
+        setStatus(i18n("LLM の応答が 2 分以内に届かなかったため中止しました。"), true);
+        return;
+    }
+    if (responseTooLarge) {
+        setStatus(i18n("LLM の応答が上限を超えています。"), true);
+        return;
+    }
+    if (!requestSucceeded) {
+        setStatus(i18n("LLM への接続または応答に失敗しました (HTTP %1)。", httpStatus), true);
+        return;
+    }
+
+    KisAiStrokeProgram program;
+    QString parseError;
+    if (!KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError)) {
+        setStatus(parseError, true);
+        return;
+    }
+
+    const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, m_previewLabel->size());
+    m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+
+    KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
+    if (view && view->image()) {
+        QString statusMsg;
+        if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
+            setStatus(statusMsg);
+        } else {
+            setStatus(statusMsg, true);
+        }
+    } else {
+        setStatus(i18n("キャンバスが利用できないため、ストロークを描画できませんでした。"), true);
     }
 }
 
@@ -482,17 +657,34 @@ void KisAiIllustrationDocker::cancelRemoteRequest()
 
 void KisAiIllustrationDocker::updateModeUi()
 {
-    const bool remoteMode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt()) == GenerationMode::RemoteImage;
-    m_remoteOptionsLabel->setVisible(remoteMode);
-    m_endpointEditor->setVisible(remoteMode);
-    m_modelEditor->setVisible(remoteMode);
-    m_apiKeyEditor->setVisible(remoteMode);
+    const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
+    const bool isLlm = (mode == GenerationMode::LlmStrokes);
+    const bool isRemoteImage = (mode == GenerationMode::RemoteImage);
+    const bool needsRemote = isLlm || isRemoteImage;
+
+    m_remoteOptionsLabel->setVisible(needsRemote);
+    if (isLlm) {
+        m_remoteOptionsLabel->setText(i18n("OpenAI 互換の Chat Completions エンドポイント (/v1/chat/completions) を指定します。API キーは保存しません。"));
+        m_endpointEditor->setPlaceholderText(QStringLiteral("https://api.openai.com/v1/chat/completions"));
+        m_modelEditor->setPlaceholderText(i18n("モデル名 (例: gpt-4o, o3-mini, deepseek-chat)"));
+    } else if (isRemoteImage) {
+        m_remoteOptionsLabel->setText(i18n("OpenAI 互換の画像生成エンドポイント (/v1/images/generations) を指定します。API キーは保存しません。"));
+        m_endpointEditor->setPlaceholderText(QStringLiteral("https://provider.example/v1/images/generations"));
+        m_modelEditor->setPlaceholderText(i18n("画像モデル名 (例: dall-e-3)"));
+    }
+
+    m_endpointEditor->setVisible(needsRemote);
+    m_modelEditor->setVisible(needsRemote);
+    m_apiKeyEditor->setVisible(needsRemote);
+
+    if (m_strokeBudgetLabel) m_strokeBudgetLabel->setVisible(isLlm);
+    if (m_strokeBudgetSpin) m_strokeBudgetSpin->setVisible(isLlm);
 
     const auto labels = findChildren<QLabel *>();
     for (QLabel *label : labels) {
         const QString text = label->text();
         if (text == i18n("エンドポイント") || text == i18n("モデル") || text == i18n("API キー")) {
-            label->setVisible(remoteMode);
+            label->setVisible(needsRemote);
         }
     }
 }

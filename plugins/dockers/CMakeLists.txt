@@ -1,0 +1,3 @@
+add_subdirectory(layerdocker)
+add_subdirectory(advancedcolorselector)
+add_subdirectory(presetdocker)

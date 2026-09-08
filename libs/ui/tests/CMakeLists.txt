@@ -171,6 +171,16 @@ krita_add_broken_unit_test( kis_categories_mapper_test.cpp testing_categories_ma
     LINK_LIBRARIES kritaui kritatestsdk
     )
 
+kis_add_test( KisAiStrokeProgramTest.cpp
+    TEST_NAME KisAiStrokeProgramTest
+    LINK_LIBRARIES kritaui kritatestsdk
+    )
+
+kis_add_test( KisAiStrokeRendererTest.cpp
+    TEST_NAME KisAiStrokeRendererTest
+    LINK_LIBRARIES kritaui kritatestsdk
+    )
+
 
 if (${INSTALL_BENCHMARKS})
     install(TARGETS FreehandStrokeBenchmark  ${INSTALL_TARGETS_DEFAULT_ARGS})

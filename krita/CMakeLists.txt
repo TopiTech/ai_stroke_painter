@@ -189,6 +189,11 @@ set(krita_QRCS
     ${CMAKE_SOURCE_DIR}/krita/pics/layers/layers-icons.qrc
     ${CMAKE_SOURCE_DIR}/krita/pics/misc-light/misc-light-icons.qrc
     ${CMAKE_SOURCE_DIR}/krita/pics/misc-dark/misc-dark-icons.qrc
+    ${CMAKE_SOURCE_DIR}/krita/pics/paintops/paintops-icons.qrc
+    ${CMAKE_SOURCE_DIR}/krita/pics/tools/SVG/16/tools-svg-16-icons.qrc
+    ${CMAKE_SOURCE_DIR}/krita/pics/svg/svg-icons.qrc
+    ${CMAKE_SOURCE_DIR}/libs/flake/flake.qrc
+    ${CMAKE_SOURCE_DIR}/plugins/paintops/defaultpresets/defaultpresets.qrc
     ${CMAKE_SOURCE_DIR}/libs/widgets/kritawidgets.qrc
     ${CMAKE_SOURCE_DIR}/pics/icons.qrc
     ${CMAKE_SOURCE_DIR}/krita/data/shaders/shaders.qrc

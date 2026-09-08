@@ -24,13 +24,16 @@
 | `CMakeLists.txt` | Qt/KF6 の検出、AI 専用コンパイル定義、依存機能の選択 |
 | `krita/CMakeLists.txt` | アプリ名、アイコン、Windows ランチャー、インストール先 |
 | `krita/main.cc` | アプリケーション起動、デスクトップ ID、AI 専用識別情報 |
-| `libs/ui/aiillustration/` | AI Illustration Docker とローカル描画/API取り込み |
+| `libs/ui/aiillustration/KisAiIllustrationDocker` | AI Illustration ワークスペース（Dock）UI |
+| `libs/ui/aiillustration/KisAiStrokeProgram` | LLM 用 StrokeProgram v2 スキーマ、プロンプト、JSON パーサー |
+| `libs/ui/aiillustration/KisAiStrokeRenderer` | 座標ストロークのラスタライズ、Krita レイヤー群（Flats, Shading, Lineart, Highlights, FX）の構築 |
+| `libs/ui/aiillustration/KisAiIllustrationRenderer` | 決定論的スケッチ生成およびエンドポイント検証 |
 | `libs/ui/KisMainWindow.cpp` | AI 専用メニュー・Dock 構成、旧ブラシ警告の抑止 |
 | `libs/ui/KisApplication.cpp` | 起動時のリソース初期化、`bin/data/krita` の探索 |
 | `libs/resources/KisResourceLocator.cpp` | 標準バンドルの初回コピー・既存プロファイル復旧 |
 | `krita/data/bundles/` | リソース DB 初期化に必要な標準バンドル |
 | `krita/data/profiles/`, `shortcuts/`, `metadata/` | 最小限の Krita データ |
-| `libs/ui/CMakeLists.txt` | AI Docker/Renderer を `kritaui` に組み込むソース一覧 |
+| `libs/ui/CMakeLists.txt` | AI Docker/Stroke/Renderer を `kritaui` に組み込むソース一覧 |
 
 ### Windows の実行ファイル構造
 
@@ -43,13 +46,16 @@ Windows では、Krita の実装本体を `bin/ai-stroke-painter.dll` にし、�
 
 1. `KisAiIllustrationDocker` がプロンプトを正規化します（空白を整理し、12,000文字で切り詰め）。
 2. 現在の View がなければ、指定サイズの RGB8 ラスタ―キャンバスを作成します。
-3. ローカルモードでは `KisAiIllustrationRenderer::createConceptImage()` がプロンプトの
-   ハッシュを乱数シードにして再現可能な画像を `QPainter` で構成します。ローカル描画の
-   最大辺は 1,536 px です。
-4. API モードでは `QNetworkAccessManager` が JSON を POST し、応答の
-   `data[0].b64_json` を画像へデコードします。
-5. 画像はキャンバスサイズに収まるよう中央配置され、透明背景の新しい
-   `KisPaintLayer` に変換されます。元のレイヤーは直接変更しません。
+3. **LLM 座標ストローク描画モード**:
+   - `KisAiStrokeProgramCodec::buildChatCompletionsPayload()` がプロンプト・キャンバス寸法・作画戦略システムプロンプトから OpenAI Chat Completions (`/v1/chat/completions`) 互換の JSON リクエストを構築します。
+   - レスポンスの思考タグ（`<think>`）除去やコードブロック抽出を行い、`StrokeProgram` をパースします。
+   - `KisAiStrokeRenderer::renderProgramToLayers()` が、指定された座標・筆圧・スタイルに基づき、`Flats`, `Shading`, `Lineart`, `Highlights`, `FX` の独立した `KisPaintLayer` を自動作成してキャンバスへ直接描画します（Undo/Redo 対応）。
+4. **ローカル座標ストローク描画モード**:
+   - `KisAiStrokeProgramCodec::createDeterministicProgram()` がプロンプトをシードに決定論的な多層座標ストロークを生成し、上記同様にキャンバスへ描画します。
+5. **画像モデル API モード**:
+   - `QNetworkAccessManager` が OpenAI 互換の画像生成 API (`/v1/images/generations`) に POST し、`data[0].b64_json` を画像へデコードして新規レイヤーに追加します。
+6. **ローカル・コンセプトスケッチモード**:
+   - `KisAiIllustrationRenderer::createConceptImage()` が単一のコンセプト画像を生成してレイヤーに追加します。
 
 API リクエストは次の形式です。
 
@@ -88,11 +94,10 @@ API リクエストは次の形式です。
 不足時に QMessageBox を表示します。AI ビルドではブラシ選択フローが存在しないため、
 この警告だけを無効化し、リソースロケーターによる DB 初期化は維持しています。
 
-## 5. クリーンビルド（Windows/Craft）
+## 5. 高速ビルドおよびクリーンビルド（Windows/Craft）
 
-以下はソースルートから実行する配布ビルドです。`build-ai` は生成物なので、配布が終わったら
-ソースツリーから削除して構いません。配布先はソース外の `C:\CraftRoot\ai-stroke-painter`
-に置きます。
+以下はソースルートから実行する推奨配布ビルドです。
+Unity Build（`-DAI_ENABLE_UNITY_BUILD=ON`）を有効にすることでヘッダー解析をまとめ、コンパイル時間を大幅に短縮できます。また、システムの論理コア数に合わせて並列ジョブ数（`$env:NUMBER_OF_PROCESSORS`）を割り当てます。
 
 ```powershell
 $craftRoot = 'C:\CraftRoot'
@@ -103,7 +108,8 @@ cmake -S . -B build-ai -G Ninja `
   -DCMAKE_BUILD_TYPE=Release `
   -DBUILD_WITH_QT6=ON `
   -DALLOW_UNSTABLE=QT6 `
-  -DBUILD_TESTING=OFF `
+  -DAI_ENABLE_UNITY_BUILD=ON `
+  -DBUILD_TESTING=ON `
   -DCMAKE_C_COMPILER="$craftRoot\mingw64\bin\gcc.exe" `
   -DCMAKE_CXX_COMPILER="$craftRoot\mingw64\bin\g++.exe" `
   -DCMAKE_PREFIX_PATH="$craftRoot" `
@@ -112,13 +118,18 @@ cmake -S . -B build-ai -G Ninja `
   -DZLIB_ROOT="$craftRoot" `
   -DPNG_ROOT="$craftRoot"
 
-cmake --build build-ai --target all --parallel 4
+# アプリケーション本体と AI ストローク単体テストを並列ビルド
+cmake --build build-ai --target ai-stroke-painter KisAiStrokeProgramTest KisAiStrokeRendererTest -- -j$env:NUMBER_OF_PROCESSORS
 cmake --install build-ai --prefix "$craftRoot\ai-stroke-painter"
 ```
 
-テストターゲットを含めたい場合だけ `-DBUILD_TESTING=ON` に変更します。`all` は多数の
-Krita テストも構成対象にするため、配布ビルドでは `OFF` が推奨です。ソース変更後に
-`ninja -C build-ai all -j4` を使うと差分だけを再ビルドできます。
+### 単体テストの実行（CI / ローカル）
+
+AI ストロークのパース・スキーマ生成・スプライン曲線補間・クリッピングマスクの回帰テストを実行します。
+
+```powershell
+ctest --test-dir build-ai -R KisAiStroke --output-on-failure
+```
 
 ### ビルドが失敗したとき
 

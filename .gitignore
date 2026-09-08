@@ -54,6 +54,7 @@ env_deactivate
 krita-deps-management/
 
 # AI Stroke Painter development artifacts
+build-*/
 dist/
 .ruff_cache/
 .mypy_cache/

@@ -1,3 +1,5 @@
-# Native AI layers only need colour management and the document/image codecs.
 add_subdirectory(color)
+add_subdirectory(dockers)
 add_subdirectory(impex)
+add_subdirectory(paintops)
+add_subdirectory(tools)

@@ -434,16 +434,6 @@ KisMainWindow::KisMainWindow(QUuid uuid)
 
     actionCollection()->addAssociatedWidget(this);
     KisConfig cfg(true);
-#if defined(AI_STROKE_PAINTER_APP)
-    auto *aiIllustrationDocker = new KisAiIllustrationDocker(this);
-    addDockWidget(Qt::RightDockWidgetArea, aiIllustrationDocker);
-    d->dockWidgetsMap.insert(aiIllustrationDocker->objectName(), aiIllustrationDocker);
-#else
-    KoPluginLoader::instance()->load("Krita/ViewPlugin", KoPluginLoader::PluginsConfig(), d->viewManager, false);
-
-    // Load the per-application plugins (Right now, only Python) We do this only once, when the first mainwindow is being created.
-    KoPluginLoader::instance()->load("Krita/ApplicationPlugin", KoPluginLoader::PluginsConfig(), qApp, true);
-
     KoToolBoxFactory toolBoxFactory;
     QDockWidget *toolbox = createDockWidget(&toolBoxFactory);
 
@@ -473,10 +463,21 @@ KisMainWindow::KisMainWindow(QUuid uuid)
     }
     connect(KoToolManager::instance(), SIGNAL(toolOptionWidgetsChanged(KoCanvasController*,QList<QPointer<QWidget> >)), this, SLOT(newOptionWidgets(KoCanvasController*,QList<QPointer<QWidget> >)));
 
+#if defined(AI_STROKE_PAINTER_APP)
+    auto *aiIllustrationDocker = new KisAiIllustrationDocker(this);
+    addDockWidget(Qt::RightDockWidgetArea, aiIllustrationDocker);
+    d->dockWidgetsMap.insert(aiIllustrationDocker->objectName(), aiIllustrationDocker);
+    dockwidgetActions[aiIllustrationDocker->toggleViewAction()->text()] = aiIllustrationDocker->toggleViewAction();
+#else
+    KoPluginLoader::instance()->load("Krita/ViewPlugin", KoPluginLoader::PluginsConfig(), d->viewManager, false);
+
+    // Load the per-application plugins (Right now, only Python) We do this only once, when the first mainwindow is being created.
+    KoPluginLoader::instance()->load("Krita/ApplicationPlugin", KoPluginLoader::PluginsConfig(), qApp, true);
+#endif
+
     Q_FOREACH (QString title, dockwidgetActions.keys()) {
         d->dockWidgetMenu->addAction(dockwidgetActions[title]);
     }
-#endif
 
 
     // Style menu actions
@@ -3261,38 +3262,12 @@ void KisMainWindow::applyAiIllustrationMode()
 #if defined(AI_STROKE_PAINTER_APP)
     setWindowTitle(i18n("AI Stroke Painter"));
 
-    const QStringList visibleActionNames {
-        QStringLiteral("file_new"),
-        QStringLiteral("file_open"),
-        QStringLiteral("file_save"),
-        QStringLiteral("file_save_as"),
-        QStringLiteral("file_export_file"),
-        QStringLiteral("file_quit"),
-        QStringLiteral("edit_undo"),
-        QStringLiteral("edit_redo"),
-        QStringLiteral("help_about_app"),
-    };
-
-    QSet<QAction *> visibleActions;
-    for (const QString &name : visibleActionNames) {
-        if (QAction *action = actionCollection()->action(name)) {
-            visibleActions.insert(action);
-        }
-    }
-
-    for (QAction *action : actionCollection()->actions()) {
-        const bool visible = visibleActions.contains(action);
-        action->setVisible(visible);
-        if (!visible) {
-            action->setEnabled(false);
-        }
-    }
-
     menuBar()->clear();
 
     const auto addAction = [this](QMenu *menu, const QString &name) {
         if (QAction *action = actionCollection()->action(name)) {
             action->setVisible(true);
+            action->setEnabled(true);
             menu->addAction(action);
         }
     };
@@ -3300,16 +3275,50 @@ void KisMainWindow::applyAiIllustrationMode()
     QMenu *fileMenu = menuBar()->addMenu(i18n("&File"));
     addAction(fileMenu, QStringLiteral("file_new"));
     addAction(fileMenu, QStringLiteral("file_open"));
+    addAction(fileMenu, QStringLiteral("file_open_recent"));
     fileMenu->addSeparator();
     addAction(fileMenu, QStringLiteral("file_save"));
     addAction(fileMenu, QStringLiteral("file_save_as"));
     addAction(fileMenu, QStringLiteral("file_export_file"));
     fileMenu->addSeparator();
+    addAction(fileMenu, QStringLiteral("file_close"));
     addAction(fileMenu, QStringLiteral("file_quit"));
 
     QMenu *editMenu = menuBar()->addMenu(i18n("&Edit"));
     addAction(editMenu, QStringLiteral("edit_undo"));
     addAction(editMenu, QStringLiteral("edit_redo"));
+    editMenu->addSeparator();
+    addAction(editMenu, QStringLiteral("edit_cut"));
+    addAction(editMenu, QStringLiteral("edit_copy"));
+    addAction(editMenu, QStringLiteral("edit_paste"));
+    addAction(editMenu, QStringLiteral("clear"));
+
+    QMenu *viewMenu = menuBar()->addMenu(i18n("&View"));
+    addAction(viewMenu, QStringLiteral("view_zoom_in"));
+    addAction(viewMenu, QStringLiteral("view_zoom_out"));
+    addAction(viewMenu, QStringLiteral("zoom_to_100pct"));
+    addAction(viewMenu, QStringLiteral("zoom_to_fit"));
+    viewMenu->addSeparator();
+    addAction(viewMenu, QStringLiteral("mirror_canvas"));
+    addAction(viewMenu, QStringLiteral("reset_canvas_rotation"));
+    addAction(viewMenu, QStringLiteral("reset_display"));
+    viewMenu->addSeparator();
+    addAction(viewMenu, QStringLiteral("view_show_canvas_only"));
+
+    QMenu *layerMenu = menuBar()->addMenu(i18n("&Layer"));
+    addAction(layerMenu, QStringLiteral("add_new_paint_layer"));
+    addAction(layerMenu, QStringLiteral("duplicatelayer"));
+    addAction(layerMenu, QStringLiteral("merge_layer"));
+    addAction(layerMenu, QStringLiteral("flatten_image"));
+    layerMenu->addSeparator();
+    addAction(layerMenu, QStringLiteral("remove_layer"));
+    addAction(layerMenu, QStringLiteral("layer_properties"));
+
+    QMenu *selectMenu = menuBar()->addMenu(i18n("&Select"));
+    addAction(selectMenu, QStringLiteral("select_all"));
+    addAction(selectMenu, QStringLiteral("deselect"));
+    addAction(selectMenu, QStringLiteral("reselect"));
+    addAction(selectMenu, QStringLiteral("invert_selection"));
 
     QMenu *aiMenu = menuBar()->addMenu(i18n("&AI"));
     if (QDockWidget *docker = d->dockWidgetsMap.value(QStringLiteral("AiIllustrationDocker"))) {
@@ -3319,20 +3328,63 @@ void KisMainWindow::applyAiIllustrationMode()
         docker->show();
     }
 
+    QMenu *settingsMenu = menuBar()->addMenu(i18n("&Settings"));
+    if (d->dockWidgetMenu) {
+        settingsMenu->addAction(d->dockWidgetMenu);
+    }
+    if (!d->toolbarList.isEmpty()) {
+        QMenu *toolbarsMenu = settingsMenu->addMenu(i18n("&Toolbars Shown"));
+        for (QAction *tbAction : d->toolbarList) {
+            toolbarsMenu->addAction(tbAction);
+        }
+    }
+
     QMenu *helpMenu = menuBar()->addMenu(i18n("&Help"));
     addAction(helpMenu, QStringLiteral("help_about_app"));
 
     for (QToolBar *toolBar : findChildren<QToolBar *>()) {
-        toolBar->hide();
-    }
-
-    for (QDockWidget *docker : dockWidgets()) {
-        if (docker->objectName() != QLatin1String("AiIllustrationDocker")) {
-            docker->hide();
+        const QString objName = toolBar->objectName();
+        if (objName == QLatin1String("BrushesAndStuff") ||
+            objName == QLatin1String("mainToolBar") ||
+            objName == QLatin1String("editToolBar")) {
+            toolBar->show();
+        } else {
+            toolBar->hide();
         }
     }
 
-    setDockNestingEnabled(false);
+    setDockNestingEnabled(true);
+
+    if (QDockWidget *tb = d->dockWidgetsMap.value(QStringLiteral("ToolBox"))) {
+        addDockWidget(Qt::LeftDockWidgetArea, tb);
+        tb->show();
+    }
+
+    QDockWidget *layerDocker = d->dockWidgetsMap.value(QStringLiteral("KisLayerBox"));
+    QDockWidget *colorDocker = d->dockWidgetsMap.value(QStringLiteral("ColorSelectorNg"));
+    QDockWidget *presetDocker = d->dockWidgetsMap.value(QStringLiteral("PresetDocker"));
+    QDockWidget *aiDocker = d->dockWidgetsMap.value(QStringLiteral("AiIllustrationDocker"));
+
+    if (colorDocker) {
+        addDockWidget(Qt::RightDockWidgetArea, colorDocker);
+        colorDocker->show();
+    }
+    if (presetDocker && colorDocker) {
+        addDockWidget(Qt::RightDockWidgetArea, presetDocker);
+        tabifyDockWidget(colorDocker, presetDocker);
+    }
+    if (layerDocker) {
+        addDockWidget(Qt::RightDockWidgetArea, layerDocker);
+        layerDocker->show();
+    }
+    if (aiDocker) {
+        addDockWidget(Qt::RightDockWidgetArea, aiDocker);
+        aiDocker->show();
+        if (layerDocker) {
+            tabifyDockWidget(layerDocker, aiDocker);
+            aiDocker->raise();
+        }
+    }
 #endif
 }
 

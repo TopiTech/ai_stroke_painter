@@ -354,6 +354,15 @@ add_feature_info("Enable updaters" ENABLE_UPDATERS "Enable updaters/update notif
 option(KRITA_ENABLE_PCH "Enable precompiled headers support" OFF)
 add_feature_info("Precompiled Headers" KRITA_ENABLE_PCH "precompiled headers make build process faster on some systems")
 
+option(AI_ENABLE_UNITY_BUILD "Enable CMake Unity Build for fast compilation" OFF)
+if (AI_ENABLE_UNITY_BUILD)
+    set(CMAKE_UNITY_BUILD ON)
+    if (NOT DEFINED CMAKE_UNITY_BUILD_BATCH_SIZE)
+        set(CMAKE_UNITY_BUILD_BATCH_SIZE 8)
+    endif()
+    add_feature_info("Unity Build" AI_ENABLE_UNITY_BUILD "Unity Build batches C++ translation units for 50-70% faster builds")
+endif()
+
 option(USE_EXTERNAL_RAQM "Fetch Raqm dependency online instead of the embedded one" OFF)
 
 if(ANDROID)

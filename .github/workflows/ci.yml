@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    name: Build & Test (Windows MinGW / Qt6)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Ninja
+        uses: asepticvoid/setup-ninja@v1.0.0
+
+      - name: Cache Compiler & Dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            C:\CraftRoot
+            ~/.ccache
+          key: ${{ runner.os }}-craft-qt6-${{ hashFiles('CMakeLists.txt', 'libs/**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-craft-qt6-
+
+      - name: Configure CMake
+        shell: pwsh
+        run: |
+          if (Test-Path "C:\CraftRoot\bin") {
+            $env:PATH = "C:\CraftRoot\bin;C:\CraftRoot\mingw64\bin;" + $env:PATH
+          }
+          cmake -S . -B build `
+            -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DBUILD_WITH_QT6=ON `
+            -DALLOW_UNSTABLE=QT6 `
+            -DBUILD_TESTING=ON `
+            -DCMAKE_UNITY_BUILD=ON `
+            -DCMAKE_UNITY_BUILD_BATCH_SIZE=8
+
+      - name: Build Core Application & AI Stroke Tests
+        shell: pwsh
+        run: |
+          if (Test-Path "C:\CraftRoot\bin") {
+            $env:PATH = "C:\CraftRoot\bin;C:\CraftRoot\mingw64\bin;" + $env:PATH
+          }
+          cmake --build build --target ai-stroke-painter KisAiStrokeProgramTest KisAiStrokeRendererTest -- -j$env:NUMBER_OF_PROCESSORS
+
+      - name: Run AI Stroke Unit Tests
+        shell: pwsh
+        run: |
+          if (Test-Path "C:\CraftRoot\bin") {
+            $env:PATH = "C:\CraftRoot\bin;C:\CraftRoot\mingw64\bin;" + $env:PATH
+          }
+          ctest --test-dir build -R KisAiStroke --output-on-failure
