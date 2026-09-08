@@ -507,13 +507,13 @@ KisMainWindow::KisMainWindow(QUuid uuid)
             this, SLOT(slotUpdateWidgetStyle()));
 #endif
 
-#if !defined(AI_STROKE_PAINTER_APP)
-    // Load all the actions from the tool plugins
-    // ToolBoxDocker needs them when at setViewManager()
+    // Tool instances are still created by KoToolManager when a canvas is
+    // attached, even in the focused AI application.  Their auxiliary
+    // actions must therefore be registered before the first view is created;
+    // applyAiIllustrationMode() hides these actions from the user afterwards.
     Q_FOREACH(KoToolFactoryBase *toolFactory, KoToolRegistry::instance()->values()) {
         toolFactory->createActions(actionCollection());
     }
-#endif
 
 
     Q_FOREACH (QDockWidget *wdg, dockWidgets()) {
