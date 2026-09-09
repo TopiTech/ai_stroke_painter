@@ -418,6 +418,74 @@ void KisAiStrokeProgramTest::testProceduralCharacterGeneration()
     QVERIFY(hasHatch);
 }
 
+void KisAiStrokeProgramTest::testNormalizeLayerName()
+{
+    // Flats aliases
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("flat")), QStringLiteral("Flats"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("flats")), QStringLiteral("Flats"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("Base")), QStringLiteral("Flats"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("background")), QStringLiteral("Flats"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("color")), QStringLiteral("Flats"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("colors")), QStringLiteral("Flats"));
+
+    // Shading aliases
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("shading")), QStringLiteral("Shading"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("shade")), QStringLiteral("Shading"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("shadow")), QStringLiteral("Shading"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("Shadows")), QStringLiteral("Shading"));
+
+    // Lineart aliases
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("lineart")), QStringLiteral("Lineart"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("line_art")), QStringLiteral("Lineart"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("line art")), QStringLiteral("Lineart"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("lines")), QStringLiteral("Lineart"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("ink")), QStringLiteral("Lineart"));
+
+    // Highlights aliases
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("highlight")), QStringLiteral("Highlights"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("highlights")), QStringLiteral("Highlights"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("specular")), QStringLiteral("Highlights"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("glint")), QStringLiteral("Highlights"));
+
+    // FX aliases
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("fx")), QStringLiteral("FX"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("effects")), QStringLiteral("FX"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("particles")), QStringLiteral("FX"));
+
+    // Empty and custom
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("")), QStringLiteral("Lineart"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("   ")), QStringLiteral("Lineart"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("SpecialOverlay")), QStringLiteral("SpecialOverlay"));
+}
+
+void KisAiStrokeProgramTest::testCountLayerOperationsAndFormatSummary()
+{
+    KisAiStrokeProgram program;
+    auto addOp = [&program](const QString &layer) {
+        KisAiStrokeOperation op;
+        op.layer = layer;
+        program.operations.append(op);
+    };
+
+    addOp(QStringLiteral("flat"));
+    addOp(QStringLiteral("background"));
+    addOp(QStringLiteral("shading"));
+    addOp(QStringLiteral("shadow"));
+    addOp(QStringLiteral("lines"));
+    addOp(QStringLiteral("glint"));
+    addOp(QStringLiteral("particles"));
+
+    const QMap<QString, int> counts = KisAiStrokeProgramCodec::countLayerOperations(program);
+    QCOMPARE(counts.value(QStringLiteral("Flats")), 2);
+    QCOMPARE(counts.value(QStringLiteral("Shading")), 2);
+    QCOMPARE(counts.value(QStringLiteral("Lineart")), 1);
+    QCOMPARE(counts.value(QStringLiteral("Highlights")), 1);
+    QCOMPARE(counts.value(QStringLiteral("FX")), 1);
+
+    const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
+    QCOMPARE(summary, QStringLiteral("Flats: 2, Shading: 2, Lineart: 1, Highlights: 1, FX: 1"));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

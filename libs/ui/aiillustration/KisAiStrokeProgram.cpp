@@ -545,6 +545,55 @@ bool KisAiStrokeProgramCodec::parseResponse(
     return parseProgramJson(programDoc.object(), outProgram, errorMessage);
 }
 
+QString KisAiStrokeProgramCodec::normalizeLayerName(const QString &name)
+{
+    const QString lower = name.trimmed().toLower();
+    if (lower == QLatin1String("flat") || lower == QLatin1String("flats") ||
+        lower == QLatin1String("base") || lower == QLatin1String("background") ||
+        lower == QLatin1String("color") || lower == QLatin1String("colors")) {
+        return QStringLiteral("Flats");
+    }
+    if (lower == QLatin1String("shading") || lower == QLatin1String("shade") ||
+        lower == QLatin1String("shadow") || lower == QLatin1String("shadows")) {
+        return QStringLiteral("Shading");
+    }
+    if (lower == QLatin1String("lineart") || lower == QLatin1String("line_art") ||
+        lower == QLatin1String("line art") || lower == QLatin1String("lines") ||
+        lower == QLatin1String("line") || lower == QLatin1String("ink")) {
+        return QStringLiteral("Lineart");
+    }
+    if (lower == QLatin1String("highlight") || lower == QLatin1String("highlights") ||
+        lower == QLatin1String("specular") || lower == QLatin1String("glint")) {
+        return QStringLiteral("Highlights");
+    }
+    if (lower == QLatin1String("fx") || lower == QLatin1String("effects") ||
+        lower == QLatin1String("effect") || lower == QLatin1String("particles")) {
+        return QStringLiteral("FX");
+    }
+    return name.trimmed().isEmpty() ? QStringLiteral("Lineart") : name.trimmed();
+}
+
+QMap<QString, int> KisAiStrokeProgramCodec::countLayerOperations(const KisAiStrokeProgram &program)
+{
+    QMap<QString, int> counts;
+    for (const auto &op : program.operations) {
+        const QString layer = normalizeLayerName(op.layer);
+        counts[layer]++;
+    }
+    return counts;
+}
+
+QString KisAiStrokeProgramCodec::formatLayerSummary(const KisAiStrokeProgram &program)
+{
+    const QMap<QString, int> counts = countLayerOperations(program);
+    return QStringLiteral("Flats: %1, Shading: %2, Lineart: %3, Highlights: %4, FX: %5")
+        .arg(counts.value(QStringLiteral("Flats"), 0))
+        .arg(counts.value(QStringLiteral("Shading"), 0))
+        .arg(counts.value(QStringLiteral("Lineart"), 0))
+        .arg(counts.value(QStringLiteral("Highlights"), 0))
+        .arg(counts.value(QStringLiteral("FX"), 0));
+}
+
 bool KisAiStrokeProgramCodec::parseProgramJson(
     const QJsonObject &rootObj,
     KisAiStrokeProgram *outProgram,
@@ -588,33 +637,6 @@ bool KisAiStrokeProgramCodec::parseProgramJson(
             b.sizeMode = QStringLiteral("px");
         }
         return b;
-    };
-
-    const auto normalizeLayerName = [](const QString &name) -> QString {
-        const QString lower = name.trimmed().toLower();
-        if (lower == QLatin1String("flat") || lower == QLatin1String("flats") ||
-            lower == QLatin1String("base") || lower == QLatin1String("background") ||
-            lower == QLatin1String("color") || lower == QLatin1String("colors")) {
-            return QStringLiteral("Flats");
-        }
-        if (lower == QLatin1String("shading") || lower == QLatin1String("shade") ||
-            lower == QLatin1String("shadow") || lower == QLatin1String("shadows")) {
-            return QStringLiteral("Shading");
-        }
-        if (lower == QLatin1String("lineart") || lower == QLatin1String("line_art") ||
-            lower == QLatin1String("line art") || lower == QLatin1String("lines") ||
-            lower == QLatin1String("line") || lower == QLatin1String("ink")) {
-            return QStringLiteral("Lineart");
-        }
-        if (lower == QLatin1String("highlight") || lower == QLatin1String("highlights") ||
-            lower == QLatin1String("specular") || lower == QLatin1String("glint")) {
-            return QStringLiteral("Highlights");
-        }
-        if (lower == QLatin1String("fx") || lower == QLatin1String("effects") ||
-            lower == QLatin1String("effect") || lower == QLatin1String("particles")) {
-            return QStringLiteral("FX");
-        }
-        return name.trimmed().isEmpty() ? QStringLiteral("Lineart") : name.trimmed();
     };
 
     const auto normalizeKind = [](const QString &rawKind) -> KisAiStrokeOperation::Kind {

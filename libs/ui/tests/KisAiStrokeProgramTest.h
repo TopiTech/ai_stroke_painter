@@ -26,6 +26,8 @@ private Q_SLOTS:
     void testPromptAnalyzerDomainClassification();
     void testHatchOperationParsing();
     void testProceduralCharacterGeneration();
+    void testNormalizeLayerName();
+    void testCountLayerOperationsAndFormatSummary();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

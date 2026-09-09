@@ -271,5 +271,76 @@ void KisAiStrokeRendererTest::testRenderRadialGradient()
     QVERIFY(qRed(centerPixel) > 200); // Inner color is reddish
 }
 
+void KisAiStrokeRendererTest::testRenderZeroDimensionsFallback()
+{
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(200, 200);
+
+    KisAiStrokeOperation fillOp;
+    fillOp.kind = KisAiStrokeOperation::Kind::Fill;
+    fillOp.id = QStringLiteral("bg");
+    fillOp.layer = QStringLiteral("Flats");
+    fillOp.polygon = QPolygonF{QPointF(0.0, 0.0), QPointF(1.0, 0.0), QPointF(1.0, 1.0), QPointF(0.0, 1.0)};
+    fillOp.brush.color = QColor(100, 150, 200);
+    program.operations.append(fillOp);
+
+    // 1. QSize(0, 0) targetSize: should fallback to program.canvasSize (200, 200)
+    const QImage imgZero = KisAiStrokeRenderer::renderProgramToImage(program, QSize(0, 0));
+    QVERIFY(!imgZero.isNull());
+    QCOMPARE(imgZero.size(), QSize(200, 200));
+    QVERIFY(qAlpha(imgZero.pixel(100, 100)) > 0);
+
+    // 2. Negative dimensions: should also fallback to program.canvasSize
+    const QImage imgNeg = KisAiStrokeRenderer::renderProgramToImage(program, QSize(-1, -1));
+    QVERIFY(!imgNeg.isNull());
+    QCOMPARE(imgNeg.size(), QSize(200, 200));
+
+    // 3. Sub-64 dimensions: should fallback to program.canvasSize
+    const QImage imgSmall = KisAiStrokeRenderer::renderProgramToImage(program, QSize(32, 32));
+    QVERIFY(!imgSmall.isNull());
+    QCOMPARE(imgSmall.size(), QSize(200, 200));
+
+    // 4. When program.canvasSize is also zero/invalid: fallback to default 1024x1024
+    KisAiStrokeProgram emptySizeProg = program;
+    emptySizeProg.canvasSize = QSize(0, 0);
+    const QImage imgBothZero = KisAiStrokeRenderer::renderProgramToImage(emptySizeProg, QSize(0, 0));
+    QVERIFY(!imgBothZero.isNull());
+    QCOMPARE(imgBothZero.size(), QSize(1024, 1024));
+    QVERIFY(qAlpha(imgBothZero.pixel(512, 512)) > 0);
+}
+
+void KisAiStrokeRendererTest::testUnnormalizedLayerRendering()
+{
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(200, 200);
+
+    // Layer named "flat" (alias for "Flats")
+    KisAiStrokeOperation flatOp;
+    flatOp.kind = KisAiStrokeOperation::Kind::Fill;
+    flatOp.id = QStringLiteral("base_box");
+    flatOp.layer = QStringLiteral("flat");
+    flatOp.polygon = QPolygonF{QPointF(0.2, 0.2), QPointF(0.8, 0.2), QPointF(0.8, 0.8), QPointF(0.2, 0.8)};
+    flatOp.brush.color = QColor(200, 200, 200);
+    program.operations.append(flatOp);
+
+    // Layer named "shade" (alias for "Shading") with silhouette clipping
+    KisAiStrokeOperation shadeOp;
+    shadeOp.kind = KisAiStrokeOperation::Kind::Fill;
+    shadeOp.id = QStringLiteral("shade_all");
+    shadeOp.layer = QStringLiteral("shade");
+    shadeOp.polygon = QPolygonF{QPointF(0.0, 0.0), QPointF(1.0, 0.0), QPointF(1.0, 1.0), QPointF(0.0, 1.0)};
+    shadeOp.brush.color = QColor(50, 50, 50, 128);
+    program.operations.append(shadeOp);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(program, QSize(200, 200), true);
+    QVERIFY(!img.isNull());
+
+    // Center pixel inside the flat polygon should be painted
+    QVERIFY(qAlpha(img.pixel(100, 100)) > 0);
+
+    // Corner pixel outside the flat polygon must be clipped / transparent because Shading clips to Flats!
+    QCOMPARE(qAlpha(img.pixel(10, 10)), 0);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)
 

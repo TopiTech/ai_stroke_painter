@@ -196,7 +196,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     connect(m_presetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
         const QString text = m_presetCombo->itemData(idx).toString();
         if (!text.isEmpty()) {
-            m_promptEditor->setPlainText(text);
+            if (m_promptEditor) {
+                m_promptEditor->setPlainText(text);
+            }
             focusPrompt();
         }
     });
@@ -381,7 +383,9 @@ bool KisAiIllustrationDocker::eventFilter(QObject *watched, QEvent *event)
 
 void KisAiIllustrationDocker::focusPrompt()
 {
-    m_promptEditor->setFocus();
+    if (m_promptEditor) {
+        m_promptEditor->setFocus();
+    }
 }
 
 void KisAiIllustrationDocker::createCanvas()
@@ -459,24 +463,18 @@ void KisAiIllustrationDocker::generateLocalStrokes(const QString &prompt)
     const QSize canvasSize(m_widthSpin->value(), m_heightSpin->value());
     const KisAiStrokeProgram program = KisAiStrokeProgramCodec::createDeterministicProgram(prompt, canvasSize);
 
-    const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, m_previewLabel->size());
-    m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
+    const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize);
+    if (!preview.isNull()) {
+        m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    }
 
     KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
     if (view && view->image()) {
         QString statusMsg;
         if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
-            int flats = 0, shading = 0, lineart = 0, highlights = 0, fx = 0;
-            for (const auto &op : program.operations) {
-                const QString l = op.layer.trimmed().toLower();
-                if (l == QLatin1String("flats") || l == QLatin1String("flat") || l == QLatin1String("base")) flats++;
-                else if (l == QLatin1String("shading") || l == QLatin1String("shade")) shading++;
-                else if (l == QLatin1String("highlights") || l == QLatin1String("highlight")) highlights++;
-                else if (l == QLatin1String("fx") || l == QLatin1String("particles")) fx++;
-                else lineart++;
-            }
-            const QString detailMsg = QStringLiteral("%1 (Flats: %2, Shading: %3, Lineart: %4, Highlights: %5, FX: %6)")
-                .arg(statusMsg).arg(flats).arg(shading).arg(lineart).arg(highlights).arg(fx);
+            const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
+            const QString detailMsg = QStringLiteral("%1 (%2)").arg(statusMsg, summary);
             setStatus(detailMsg);
         } else {
             setStatus(statusMsg, true);
@@ -609,24 +607,18 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         return;
     }
 
-    const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, m_previewLabel->size());
-    m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
+    const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize);
+    if (!preview.isNull()) {
+        m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    }
 
     KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
     if (view && view->image()) {
         QString statusMsg;
         if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
-            int flats = 0, shading = 0, lineart = 0, highlights = 0, fx = 0;
-            for (const auto &op : program.operations) {
-                const QString l = op.layer.trimmed().toLower();
-                if (l == QLatin1String("flats") || l == QLatin1String("flat") || l == QLatin1String("base")) flats++;
-                else if (l == QLatin1String("shading") || l == QLatin1String("shade")) shading++;
-                else if (l == QLatin1String("highlights") || l == QLatin1String("highlight")) highlights++;
-                else if (l == QLatin1String("fx") || l == QLatin1String("particles")) fx++;
-                else lineart++;
-            }
-            const QString detailMsg = QStringLiteral("%1 (Flats: %2, Shading: %3, Lineart: %4, Highlights: %5, FX: %6)")
-                .arg(statusMsg).arg(flats).arg(shading).arg(lineart).arg(highlights).arg(fx);
+            const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
+            const QString detailMsg = QStringLiteral("%1 (%2)").arg(statusMsg, summary);
             setStatus(detailMsg);
         } else {
             setStatus(statusMsg, true);
@@ -643,7 +635,8 @@ void KisAiIllustrationDocker::generateLocalConcept(const QString &prompt)
 
     const QSize canvasSize(m_widthSpin->value(), m_heightSpin->value());
     const QImage result = KisAiIllustrationRenderer::createConceptImage(prompt, canvasSize);
-    m_previewLabel->setPixmap(QPixmap::fromImage(result).scaled(m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
+    m_previewLabel->setPixmap(QPixmap::fromImage(result).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 
     if (addImageAsLayer(result, promptForLayerName(prompt))) {
         setStatus(i18n("コンセプトスケッチを新しいレイヤーに追加しました。"));
@@ -774,7 +767,8 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
         return;
     }
 
-    m_previewLabel->setPixmap(QPixmap::fromImage(image).scaled(m_previewLabel->size(), Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
+    m_previewLabel->setPixmap(QPixmap::fromImage(image).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
     if (addImageAsLayer(image, promptForLayerName(m_promptEditor->toPlainText()))) {
         setStatus(i18n("画像モデルの結果を新しいレイヤーに追加しました。"));
     }

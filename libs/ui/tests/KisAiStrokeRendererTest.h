@@ -21,6 +21,8 @@ private Q_SLOTS:
     void testRenderAirbrushDynamics();
     void testRenderHatchOperation();
     void testRenderRadialGradient();
+    void testRenderZeroDimensionsFallback();
+    void testUnnormalizedLayerRendering();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

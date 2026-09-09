@@ -132,7 +132,13 @@ QImage KisAiStrokeRenderer::renderProgramToImage(
     bool clipShadingToFlats
 )
 {
-    const QSize size = targetSize.isValid() ? targetSize : program.canvasSize;
+    QSize size = (!targetSize.isEmpty() && targetSize.width() >= 64 && targetSize.height() >= 64)
+        ? targetSize
+        : program.canvasSize;
+    if (size.width() < 64 || size.height() < 64) {
+        size = QSize(1024, 1024);
+    }
+
     QImage compositeImage(size, QImage::Format_ARGB32_Premultiplied);
     compositeImage.fill(Qt::transparent);
 
@@ -147,8 +153,7 @@ QImage KisAiStrokeRenderer::renderProgramToImage(
 
     QMap<QString, QVector<KisAiStrokeOperation>> layerBuckets;
     for (const KisAiStrokeOperation &op : program.operations) {
-        QString lName = op.layer.trimmed();
-        if (lName.isEmpty()) lName = QStringLiteral("Lineart");
+        const QString lName = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
         layerBuckets[lName].append(op);
     }
 
@@ -250,8 +255,7 @@ bool KisAiStrokeRenderer::renderProgramToLayers(
 
     QMap<QString, QVector<KisAiStrokeOperation>> layerBuckets;
     for (const KisAiStrokeOperation &op : program.operations) {
-        QString lName = op.layer.trimmed();
-        if (lName.isEmpty()) lName = QStringLiteral("Lineart");
+        const QString lName = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
         layerBuckets[lName].append(op);
     }
 

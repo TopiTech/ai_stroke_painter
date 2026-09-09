@@ -8,6 +8,7 @@
 
 #include <QColor>
 #include <QJsonObject>
+#include <QMap>
 #include <QPointF>
 #include <QPolygonF>
 #include <QRectF>
@@ -186,6 +187,22 @@ public:
      * Attempt to repair truncated JSON containing an operations or strokes array.
      */
     static QString repairTruncatedJson(const QString &jsonText);
+
+    /**
+     * Normalize layer name into one of the standard layers: Flats, Shading, Lineart, Highlights, FX.
+     * Returns trimmed original name if no standard alias matched, or "Lineart" if empty.
+     */
+    static QString normalizeLayerName(const QString &name);
+
+    /**
+     * Count operations per normalized layer for a given program.
+     */
+    static QMap<QString, int> countLayerOperations(const KisAiStrokeProgram &program);
+
+    /**
+     * Format a summary of operations per standard layer (e.g. "Flats: 2, Shading: 3, Lineart: 4, Highlights: 1, FX: 0").
+     */
+    static QString formatLayerSummary(const KisAiStrokeProgram &program);
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_H
