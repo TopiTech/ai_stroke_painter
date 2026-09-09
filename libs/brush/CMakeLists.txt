@@ -1,4 +1,6 @@
-add_subdirectory( tests )
+if (AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
+    add_subdirectory(tests)
+endif()
 
 set(kritalibbrush_LIB_SRCS
     kis_predefined_brush_factory.cpp
@@ -35,4 +37,3 @@ set_target_properties(kritalibbrush PROPERTIES
 )
 
 install(TARGETS kritalibbrush  ${INSTALL_TARGETS_DEFAULT_ARGS})
-

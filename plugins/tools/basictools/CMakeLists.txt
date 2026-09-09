@@ -1,4 +1,6 @@
-add_subdirectory(tests)
+if (AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
+    add_subdirectory(tests)
+endif()
 
 set(kritadefaulttools_static_SRCS
     kis_tool_colorsampler.cc

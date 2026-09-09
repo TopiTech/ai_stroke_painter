@@ -50,6 +50,14 @@ if (AI_STROKE_STANDALONE_TESTS)
     )
     target_link_libraries(KisAiIllustrationRendererTest PRIVATE ai_stroke_core Qt6::Test)
     add_test(NAME KisAiIllustrationRendererTest COMMAND KisAiIllustrationRendererTest)
+    set_tests_properties(
+        KisAiStrokeProgramTest
+        KisAiStrokeRendererTest
+        KisAiIllustrationRendererTest
+        PROPERTIES
+            LABELS "AIStroke"
+            TIMEOUT 60
+    )
 
     # Qt and MinGW DLLs live outside the build tree on Windows. Keep the
     # documented `ctest --test-dir build-test` command self-contained instead
@@ -77,6 +85,11 @@ endif()
 project(krita LANGUAGES ${SUPPORTED_LANGUAGES})
 message(STATUS "Using CMake version: ${CMAKE_VERSION}")
 
+# This repository is a focused AI illustration application.  Keep the normal
+# test build opt-in so a distribution configure does not accidentally pull in
+# the large upstream Krita test suite.
+option(BUILD_TESTING "Build test targets" OFF)
+
 # Select the Qt version we want to use
 # Qt5 is the default, set QT_MAJOR_VERSION to 6 to look for Qt6
 option(BUILD_WITH_QT6 "Build against Qt 6" OFF)
@@ -86,6 +99,24 @@ option(BUILD_WITH_QT6 "Build against Qt 6" OFF)
 # shared infrastructure that has an AI-specific code path.
 set(AI_STROKE_PAINTER_APP ON)
 add_compile_definitions(AI_STROKE_PAINTER_APP=1)
+
+option(AI_STROKE_PAINTER_BUILD_UPSTREAM_TESTS
+    "Build and register upstream Krita tests in addition to the focused AI tests"
+    OFF)
+mark_as_advanced(AI_STROKE_PAINTER_BUILD_UPSTREAM_TESTS)
+
+set(AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS OFF)
+if (BUILD_TESTING AND AI_STROKE_PAINTER_BUILD_UPSTREAM_TESTS)
+    set(AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS ON)
+endif()
+
+if (BUILD_TESTING)
+    if (AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
+        message(STATUS "AI Stroke Painter upstream Krita tests are enabled")
+    else()
+        message(STATUS "AI Stroke Painter focused test suite is enabled")
+    endif()
+endif()
 
 if (BUILD_WITH_QT6)
 set(MIN_QT_VERSION 6.0.0)
@@ -1574,7 +1605,9 @@ include_directories(BEFORE ${CMAKE_CURRENT_SOURCE_DIR}
                            ${CMAKE_CURRENT_BINARY_DIR}
 )
 
-add_subdirectory(sdk/tests)
+if (BUILD_TESTING)
+    add_subdirectory(sdk/tests)
+endif()
 
 add_subdirectory(libs)
 # The upstream QML module collection powered optional Krita workspaces.

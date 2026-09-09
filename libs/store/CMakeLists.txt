@@ -1,6 +1,8 @@
 include_directories(${QUAZIP_INCLUDE_DIRS})
 
-add_subdirectory(tests)
+if (AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
+    add_subdirectory(tests)
+endif()
 
 set(kritastore_LIB_SRCS
     KoDirectoryStore.cpp
@@ -29,4 +31,3 @@ set_target_properties(kritastore PROPERTIES
     VERSION ${GENERIC_KRITA_LIB_VERSION} SOVERSION ${GENERIC_KRITA_LIB_SOVERSION}
 )
 install(TARGETS kritastore ${INSTALL_TARGETS_DEFAULT_ARGS} )
-

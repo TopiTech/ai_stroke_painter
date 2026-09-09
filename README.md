@@ -134,6 +134,7 @@ cmake -S . -B build-ai -G Ninja `
   -DBUILD_WITH_QT6=ON `
   -DALLOW_UNSTABLE=QT6 `
   -DBUILD_TESTING=OFF `
+  -DAI_STROKE_PAINTER_BUILD_UPSTREAM_TESTS=OFF `
   -DCMAKE_C_COMPILER="$craftRoot\mingw64\bin\gcc.exe" `
   -DCMAKE_CXX_COMPILER="$craftRoot\mingw64\bin\g++.exe" `
   -DCMAKE_PREFIX_PATH="$craftRoot" `

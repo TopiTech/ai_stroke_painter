@@ -9,8 +9,10 @@ foreach(_obj IN LISTS __per_arch_factory_objs __per_arch_alpha_applicator_factor
     message("    * ${_obj}")
 endforeach()
 
-add_subdirectory(tests)
-add_subdirectory(benchmarks)
+if (AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
+    add_subdirectory(tests)
+    add_subdirectory(benchmarks)
+endif()
 
 set(kritapigment_SRCS
     DebugPigment.cpp

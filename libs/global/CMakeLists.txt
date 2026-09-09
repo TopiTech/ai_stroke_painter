@@ -1,4 +1,6 @@
-add_subdirectory( tests )
+if (AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
+    add_subdirectory(tests)
+endif()
 
 include(CheckFunctionExists)
 check_function_exists(backtrace HAVE_BACKTRACE)
@@ -121,4 +123,3 @@ set_target_properties(kritaglobal PROPERTIES
 )
 
 install(TARGETS kritaglobal  ${INSTALL_TARGETS_DEFAULT_ARGS})
-

@@ -1,3 +1,26 @@
+# The focused AI build only registers the tests for the functionality that is
+# part of this application. The upstream Krita tests remain available through
+# AI_STROKE_PAINTER_BUILD_UPSTREAM_TESTS=ON when the full test stack is wanted.
+if (NOT AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
+    kis_add_test(KisAiStrokeProgramTest.cpp
+        TEST_NAME KisAiStrokeProgramTest
+        LINK_LIBRARIES kritaui kritatestsdk)
+    kis_add_test(KisAiStrokeRendererTest.cpp
+        TEST_NAME KisAiStrokeRendererTest
+        LINK_LIBRARIES kritaui kritatestsdk)
+    kis_add_test(KisAiIllustrationRendererTest.cpp
+        TEST_NAME KisAiIllustrationRendererTest
+        LINK_LIBRARIES kritaui kritatestsdk)
+    set_tests_properties(
+        libs-ui-KisAiStrokeProgramTest
+        libs-ui-KisAiStrokeRendererTest
+        libs-ui-KisAiIllustrationRendererTest
+        PROPERTIES
+            LABELS "AIStroke"
+            TIMEOUT 60)
+    return()
+endif()
+
 # These cover the public libkis API. The AI Stroke Painter build intentionally
 # omits that library, so do not create targets that cannot be compiled or linked.
 if(TARGET kritalibkis)
@@ -220,3 +243,10 @@ kis_add_test(KisAiIllustrationRendererTest.cpp
     TEST_NAME KisAiIllustrationRendererTest
     LINK_LIBRARIES kritaui kritatestsdk
 )
+set_tests_properties(
+    libs-ui-KisAiStrokeProgramTest
+    libs-ui-KisAiStrokeRendererTest
+    libs-ui-KisAiIllustrationRendererTest
+    PROPERTIES
+        LABELS "AIStroke"
+        TIMEOUT 60)

@@ -111,6 +111,7 @@ cmake -S . -B build-ai -G Ninja `
   -DALLOW_UNSTABLE=QT6 `
   -DAI_ENABLE_UNITY_BUILD=ON `
   -DBUILD_TESTING=ON `
+  -DAI_STROKE_PAINTER_BUILD_UPSTREAM_TESTS=OFF `
   -DCMAKE_C_COMPILER="$craftRoot\mingw64\bin\gcc.exe" `
   -DCMAKE_CXX_COMPILER="$craftRoot\mingw64\bin\g++.exe" `
   -DCMAKE_PREFIX_PATH="$craftRoot" `
@@ -119,24 +120,39 @@ cmake -S . -B build-ai -G Ninja `
   -DZLIB_ROOT="$craftRoot" `
   -DPNG_ROOT="$craftRoot"
 
-# アプリケーション本体と AI ストローク単体テストを並列ビルド
+# アプリケーション本体と AI Stroke Painter の検証テストを並列ビルド
 # 実行ファイル名は ai-stroke-painter だが、CMake のアプリケーションターゲット名は krita。
-cmake --build build-ai --target krita KisAiStrokeProgramTest KisAiStrokeRendererTest --parallel $env:NUMBER_OF_PROCESSORS
+cmake --build build-ai --target krita KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest --parallel $env:NUMBER_OF_PROCESSORS
 cmake --install build-ai --prefix "$craftRoot\ai-stroke-painter"
 ```
 
 ### 単体テストの実行（CI / ローカル）
 
 AI ストロークのパース・スキーマ生成・品質補正・Centripetal スプライン・筆圧テーパー・スーパーサンプリング・クリッピングマスク・代表作品の画素品質指標を回帰テストします。
+通常のAIビルドでは、プロジェクトの対象範囲に含まれないKrita上流テストを登録せず、次の3つのQt Test実行ファイル（多数のテストケースを含む）だけを検証します。
 
 ```powershell
-# フルビルド環境でのテスト
-ctest --test-dir build-ai -R KisAiStroke --output-on-failure
+# AI Stroke Painterの対象機能を全件実行（BUILD_TESTING=ONのbuild-ai）
+ctest --test-dir build-ai --output-on-failure --no-tests=error
+
+# AI Stroke Painterのテストだけを明示して実行する場合
+ctest --test-dir build-ai -L AIStroke --output-on-failure --no-tests=error
 
 # Qt6 のみを用いた高速スタンドアロンテスト（CI / 軽量環境向け・約1秒で完了）
 cmake -B build-test -G Ninja -DAI_STROKE_STANDALONE_TESTS=ON
 cmake --build build-test
-ctest --test-dir build-test --output-on-failure
+ctest --test-dir build-test --output-on-failure --no-tests=error
+```
+
+Krita上流の回帰テストを調査・更新する必要がある場合だけ、完全なリソース・プラグイン構成を用意したビルドで明示的に有効化します。AI Stroke Painterの通常検証には含めません。
+
+```powershell
+cmake -S . -B build-ai-upstream -G Ninja `
+  -DBUILD_WITH_QT6=ON `
+  -DALLOW_UNSTABLE=QT6 `
+  -DBUILD_TESTING=ON `
+  -DAI_STROKE_PAINTER_BUILD_UPSTREAM_TESTS=ON `
+  -DCMAKE_PREFIX_PATH="$craftRoot"
 ```
 
 ### ビルドが失敗したとき

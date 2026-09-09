@@ -30,7 +30,7 @@ jobs:
         run: cmake --build build -j$(nproc)
 
       - name: Run AI Stroke Tests
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --no-tests=error
 
   test-windows:
     name: Test (Windows MinGW / Qt6)
@@ -64,4 +64,4 @@ jobs:
         run: cmake --build build
 
       - name: Run AI Stroke Tests
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --output-on-failure --no-tests=error

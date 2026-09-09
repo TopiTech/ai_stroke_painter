@@ -1,6 +1,8 @@
 include_directories(${QUAZIP_INCLUDE_DIRS})
 
-add_subdirectory(tests)
+if (AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
+    add_subdirectory(tests)
+endif()
 
 set(kritaresources_LIB_SRCS
     KisResourceCacheDb.cpp
@@ -86,4 +88,3 @@ set_target_properties(kritaresources PROPERTIES
     VERSION ${GENERIC_KRITA_LIB_VERSION} SOVERSION ${GENERIC_KRITA_LIB_SOVERSION}
 )
 install(TARGETS kritaresources ${INSTALL_TARGETS_DEFAULT_ARGS} )
-

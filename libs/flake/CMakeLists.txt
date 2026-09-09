@@ -11,8 +11,10 @@ include_directories(
 )
 
 add_subdirectory(styles)
-add_subdirectory(tests)
-add_subdirectory(resources/tests)
+if (AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
+    add_subdirectory(tests)
+    add_subdirectory(resources/tests)
+endif()
 
 set(DISABLE_CLIP_MASK_PAINTER_ON_MACOS FALSE)
 if (APPLE)
@@ -308,4 +310,3 @@ set_target_properties(kritaflake PROPERTIES
 )
 
 install(TARGETS kritaflake  ${INSTALL_TARGETS_DEFAULT_ARGS})
-

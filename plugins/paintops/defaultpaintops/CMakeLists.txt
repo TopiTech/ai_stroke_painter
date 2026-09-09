@@ -1,4 +1,6 @@
-add_subdirectory(brush/tests)
+if (AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
+    add_subdirectory(brush/tests)
+endif()
 
 include_directories(brush
                     duplicate

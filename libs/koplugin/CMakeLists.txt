@@ -6,7 +6,7 @@ set(kritaplugin_LIB_SRCS
 )
 
 # help plugin trader find installed plugins when run from uninstalled tests
-if (BUILD_TESTING)
+if (AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
     add_definitions(-DCMAKE_INSTALL_PREFIX="${CMAKE_INSTALL_PREFIX}")
 endif()
 
@@ -28,6 +28,6 @@ set_target_properties(kritaplugin PROPERTIES
 )
 install(TARGETS kritaplugin ${INSTALL_TARGETS_DEFAULT_ARGS} )
 
-if (BUILD_TESTING)
+if (AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
     add_subdirectory(tests)
 endif()

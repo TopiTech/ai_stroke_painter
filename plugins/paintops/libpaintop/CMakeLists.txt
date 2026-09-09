@@ -144,4 +144,6 @@ set_target_properties(kritalibpaintop PROPERTIES
 install(TARGETS kritalibpaintop  ${INSTALL_TARGETS_DEFAULT_ARGS})
 
 
-add_subdirectory(tests)
+if (AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
+    add_subdirectory(tests)
+endif()
