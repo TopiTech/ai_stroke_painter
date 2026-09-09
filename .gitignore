@@ -60,3 +60,6 @@ dist/
 .mypy_cache/
 .pytest_cache/
 .commandcode/
+
+# Gradle caches and generated build state
+.gradle/
