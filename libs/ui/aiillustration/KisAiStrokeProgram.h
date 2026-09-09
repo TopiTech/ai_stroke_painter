@@ -177,7 +177,9 @@ public:
     );
 
     /**
-     * Parse a JSON object or string into a KisAiStrokeProgram.
+     * Parse a JSON object into a KisAiStrokeProgram.
+     * Coordinate units are decoded here; call refineForRendering() before
+     * rasterization when using this low-level parser directly.
      */
     static bool parseProgramJson(
         const QJsonObject &rootObj,

@@ -559,8 +559,9 @@ void KisAiStrokeRendererTest::testRenderMangaLinesWithOriginCenter()
     }
     QVERIFY(drawnPixels > 50);
 
-    // Verify asymmetry: more lines should be drawn in the bottom-right quadrant
-    // (far from origin) than in the top-left quadrant (close to origin).
+    // The configured outer radius ends before the far bottom-right quadrant.
+    // With the origin as the center, the visible near-origin quadrant should
+    // therefore contain more rendered pixels than the distant quadrant.
     int topLeftCount = 0;
     int bottomRightCount = 0;
     for (int y = 0; y < 100; ++y) {
@@ -573,7 +574,7 @@ void KisAiStrokeRendererTest::testRenderMangaLinesWithOriginCenter()
             if (rendered.pixelColor(x, y).alpha() > 50) ++bottomRightCount;
         }
     }
-    QVERIFY(bottomRightCount > topLeftCount);
+    QVERIFY(topLeftCount > bottomRightCount);
 }
 
 void KisAiStrokeRendererTest::testNewBrushProfilesRendering()

@@ -646,9 +646,29 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
         return false;
     }
 
+    // Keep JSON parsing and rendering-safety repairs as separate stages. This
+    // preserves the parser's coordinate-unit decision (including its exact
+    // threshold) while ensuring untrusted model responses are canonicalized
+    // before they reach the renderer.
+    const auto parseAndRefine = [outProgram, errorMessage](const QJsonObject &programObject) {
+        if (!KisAiStrokeProgramCodec::parseProgramJson(programObject, outProgram, errorMessage)) {
+            return false;
+        }
+
+        KisAiStrokeQualityReport qualityReport;
+        *outProgram = KisAiStrokeProgramCodec::refineForRendering(*outProgram, &qualityReport);
+        if (outProgram->operations.isEmpty()) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("描画可能なストローク操作が1件も含まれていません。");
+            }
+            return false;
+        }
+        return true;
+    };
+
     // Direct StrokeProgram check
     if (root.contains(QStringLiteral("operations")) || root.contains(QStringLiteral("strokes"))) {
-        return parseProgramJson(root, outProgram, errorMessage);
+        return parseAndRefine(root);
     }
 
     // OpenAI Chat Completions choices[0].message.content
@@ -681,7 +701,7 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
         return false;
     }
 
-    return parseProgramJson(programDoc.object(), outProgram, errorMessage);
+    return parseAndRefine(programDoc.object());
 }
 
 QString KisAiStrokeProgramCodec::normalizeLayerName(const QString &name)
@@ -1162,9 +1182,6 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
             }
         }
     }
-
-    KisAiStrokeQualityReport qualityReport;
-    *outProgram = refineForRendering(*outProgram, &qualityReport);
 
     if (outProgram->operations.isEmpty()) {
         if (errorMessage) {
