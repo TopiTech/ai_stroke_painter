@@ -437,6 +437,7 @@ set(kritaui_LIB_SRCS
     kis_async_action_feedback.cpp
     aiillustration/KisAiIllustrationDocker.cpp
     aiillustration/KisAiIllustrationRenderer.cpp
+    aiillustration/KisAiPromptAnalyzer.cpp
     aiillustration/KisAiStrokeProgram.cpp
     aiillustration/KisAiStrokeRenderer.cpp
     KisMainWindow.cpp

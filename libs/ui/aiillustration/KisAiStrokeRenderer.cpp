@@ -377,6 +377,9 @@ void KisAiStrokeRenderer::rasterizeOperation(
     case KisAiStrokeOperation::Kind::Particles:
         drawParticlesOperation(painter, op, canvasSize);
         break;
+    case KisAiStrokeOperation::Kind::Hatch:
+        drawHatchOperation(painter, op, canvasSize);
+        break;
     default:
         break;
     }
@@ -653,6 +656,43 @@ void KisAiStrokeRenderer::drawGradientFillOperation(
     }
 
     const QRectF b = poly.boundingRect();
+    const qreal brushOpacity = qBound<qreal>(0.0, op.brush.opacity, 1.0);
+
+    if (op.isRadial || op.fillStyle.compare(QLatin1String("radial"), Qt::CaseInsensitive) == 0) {
+        QPointF centerPt;
+        if (op.gradientCenter != QPointF(0.5, 0.5) || op.polygon.isEmpty()) {
+            centerPt = scalePoint(op.gradientCenter, canvasSize);
+        } else {
+            centerPt = b.center();
+        }
+        const qreal r = qMax(5.0, op.gradientRadius * qMin(canvasSize.width(), canvasSize.height()));
+        QRadialGradient radGrad(centerPt, r);
+
+        if (!op.gradientColors.isEmpty()) {
+            const int count = op.gradientColors.size();
+            for (int i = 0; i < count; ++i) {
+                const qreal pos = (count > 1) ? qreal(i) / (count - 1) : 0.0;
+                QColor col = op.gradientColors.at(i);
+                col.setAlphaF(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0));
+                radGrad.setColorAt(pos, col);
+            }
+            if (count == 1) {
+                QColor col = op.gradientColors.at(0);
+                col.setAlphaF(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0));
+                radGrad.setColorAt(1.0, col);
+            }
+        } else {
+            QColor col = op.brush.color;
+            col.setAlphaF(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0));
+            radGrad.setColorAt(0.0, col);
+            radGrad.setColorAt(1.0, Qt::transparent);
+        }
+
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(radGrad);
+        painter.drawPolygon(poly);
+        return;
+    }
 
     QPointF p1, p2;
     if (op.points.size() >= 2) {
@@ -667,7 +707,6 @@ void KisAiStrokeRenderer::drawGradientFillOperation(
     }
 
     QLinearGradient grad(p1, p2);
-    const qreal brushOpacity = qBound<qreal>(0.0, op.brush.opacity, 1.0);
     if (!op.gradientColors.isEmpty()) {
         const int count = op.gradientColors.size();
         for (int i = 0; i < count; ++i) {
@@ -812,4 +851,59 @@ void KisAiStrokeRenderer::drawParticlesOperation(
             painter.drawEllipse(QPointF(x, y), r, r);
         }
     }
+}
+
+void KisAiStrokeRenderer::drawHatchOperation(
+    QPainter &painter,
+    const KisAiStrokeOperation &op,
+    const QSize &canvasSize
+)
+{
+    if (op.polygon.size() < 3) return;
+
+    QPolygonF poly = scalePolygon(op.polygon, canvasSize);
+    if (op.smooth && poly.size() >= 3) {
+        poly = generateCatmullRomSpline(poly, 4, true);
+    }
+
+    const QRectF b = poly.boundingRect();
+    if (b.isEmpty()) return;
+
+    painter.save();
+    QPainterPath clipPath;
+    clipPath.addPolygon(poly);
+    painter.setClipPath(clipPath);
+
+    QColor color = op.brush.color;
+    color.setAlphaF(qBound<qreal>(0.0, op.brush.opacity * color.alphaF(), 1.0));
+
+    const qreal minDim = qMin(canvasSize.width(), canvasSize.height());
+    const qreal penWidth = effectiveBrushWidth(op.brush, 0.8, canvasSize) * 0.35;
+    QPen pen(color, penWidth, Qt::SolidLine, Qt::RoundCap);
+    painter.setPen(pen);
+
+    const qreal spacing = qMax<qreal>(2.0, op.spacing * minDim);
+    const QPointF center = b.center();
+    const qreal radius = std::hypot(b.width(), b.height()) * 0.55;
+
+    auto drawPass = [&](qreal angleDeg) {
+        const qreal rad = angleDeg * PI / 180.0;
+        const QPointF dir(std::cos(rad), std::sin(rad));
+        const QPointF norm(-std::sin(rad), std::cos(rad));
+
+        const int numLines = qRound(radius * 2.0 / spacing);
+        for (int i = -numLines; i <= numLines; ++i) {
+            const QPointF lineMid = center + norm * (i * spacing);
+            const QPointF p1 = lineMid - dir * radius;
+            const QPointF p2 = lineMid + dir * radius;
+            painter.drawLine(p1, p2);
+        }
+    };
+
+    drawPass(op.angleDeg);
+    if (op.crossHatch) {
+        drawPass(op.angleDeg + 90.0);
+    }
+
+    painter.restore();
 }

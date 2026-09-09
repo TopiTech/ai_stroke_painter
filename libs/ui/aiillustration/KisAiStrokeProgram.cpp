@@ -4,6 +4,7 @@
  */
 
 #include "KisAiStrokeProgram.h"
+#include "KisAiPromptAnalyzer.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -165,6 +166,11 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
     };
     opProps[QStringLiteral("style")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("angle_deg")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("number")}};
+    opProps[QStringLiteral("spacing")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("number")}};
+    opProps[QStringLiteral("cross_hatch")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")}};
+    opProps[QStringLiteral("is_radial")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")}};
+    opProps[QStringLiteral("center")] = pointItem;
+    opProps[QStringLiteral("radius")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("number")}};
     opProps[QStringLiteral("bounds")] = QJsonObject{
         {QStringLiteral("type"), QStringLiteral("array")},
         {QStringLiteral("items"), pointItem}
@@ -199,12 +205,17 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
     return schema;
 }
 
-QString KisAiStrokeProgramCodec::buildSystemPrompt(const QSize &canvasSize, const QString &prompt)
+QString KisAiStrokeProgramCodec::buildSystemPrompt(
+    const QSize &canvasSize,
+    const QString &prompt,
+    const QString &customInstructions
+)
 {
-    Q_UNUSED(prompt);
     const qreal aspect = canvasSize.height() > 0 ? qreal(canvasSize.width()) / canvasSize.height() : 1.0;
+    const auto spec = KisAiPromptAnalyzer::analyze(prompt, canvasSize);
+    const QString artDirection = KisAiPromptAnalyzer::generateArtDirection(spec, canvasSize);
 
-    return QStringLiteral(
+    QString systemText = QStringLiteral(
         "You are an autonomous AI master digital painter directing layer-by-layer drawing plans for Krita.\n"
         "Generate a rich, cohesive, painterly illustration by specifying coordinate-directed strokes in StrokeProgram JSON format.\n"
         "Output ONLY valid JSON. Do NOT include markdown explanations, thought text, or conversational chatter.\n\n"
@@ -224,11 +235,13 @@ QString KisAiStrokeProgramCodec::buildSystemPrompt(const QSize &canvasSize, cons
         "  Employ warm key lights paired with cool shadows, or cool ambient light paired with warm saturated bounced light.\n"
         "- Clean Silhouettes: Ensure Flats cover the full subject silhouette so that Shading and Highlights stay cleanly bounded.\n\n"
         "=== OPERATION KINDS ===\n"
-        "- 'gradient_fill': Full/partial sky & background washes. Polygon [ [x, y], ... ], colors [ '#hex', ... ], angle_deg (0=horizontal, 90=vertical).\n"
+        "- 'gradient_fill': Full/partial sky & background washes. Polygon [ [x, y], ... ], colors [ '#hex', ... ], angle_deg (0=horizontal, 90=vertical), is_radial (true/false), center [cx, cy], radius.\n"
         "- 'fill': Color masses, silhouettes, hair/clothing base, shadow blocks. Polygon [ [x, y], ... ], brush { 'profile': 'watercolor'/'brush', 'color': '#hex' }, style ('wash'/'contour'/'directional').\n"
+        "- 'hatch': Parallel shading or cross-hatching. Polygon [ [x, y], ... ], angle_deg (0-180), spacing (0.005-0.03), cross_hatch (true/false), brush { 'profile': 'pencil'/'gpen', 'color': '#hex' }.\n"
         "- 'ribbon': Tapered organic strokes (tree trunks, hair clumps, cloth folds). Spine [ [x, y], ... ], width_start, width_mid, width_end (0.005-0.05).\n"
         "- 'path': Expressive linework, contours, facial features. Points [ [x, y, pressure], ... ] where pressure is 0.1-1.0. brush { 'profile': 'gpen'/'pencil'/'airbrush'/'watercolor', 'color': '#hex', 'size': 0.002-0.01 }.\n"
         "- 'particles': Atmospheric particles. Bounds [x1, y1, x2, y2], count (10-50), shape ('petal'/'sparkle'/'star'/'dot'), brush { 'color': '#hex' }.\n\n"
+        "%4\n"
         "=== OUTPUT SCHEMA EXAMPLE ===\n"
         "{\n"
         "  \"schema_version\": 2,\n"
@@ -250,6 +263,16 @@ QString KisAiStrokeProgramCodec::buildSystemPrompt(const QSize &canvasSize, cons
         "      \"layer\": \"Flats\",\n"
         "      \"polygon\": [[0.0,0.55],[1.0,0.55],[1.0,1.0],[0.0,1.0]],\n"
         "      \"brush\": {\"profile\": \"brush\", \"color\": \"#2d3748\", \"size\": 0.04, \"is_eraser\": false}\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"hatch\",\n"
+        "      \"id\": \"ground_shade\",\n"
+        "      \"layer\": \"Shading\",\n"
+        "      \"polygon\": [[0.1,0.65],[0.5,0.65],[0.4,0.85],[0.1,0.85]],\n"
+        "      \"angle_deg\": 45,\n"
+        "      \"spacing\": 0.015,\n"
+        "      \"cross_hatch\": false,\n"
+        "      \"brush\": {\"profile\": \"pencil\", \"color\": \"#1a202c\", \"size\": 0.002, \"is_eraser\": false}\n"
         "    },\n"
         "    {\n"
         "      \"kind\": \"ribbon\",\n"
@@ -279,7 +302,13 @@ QString KisAiStrokeProgramCodec::buildSystemPrompt(const QSize &canvasSize, cons
         "    }\n"
         "  ]\n"
         "}"
-    ).arg(canvasSize.width()).arg(canvasSize.height()).arg(QString::number(aspect, 'f', 2));
+    ).arg(canvasSize.width()).arg(canvasSize.height()).arg(QString::number(aspect, 'f', 2)).arg(artDirection);
+
+    if (!customInstructions.trimmed().isEmpty()) {
+        systemText += QStringLiteral("\n\n[USER CUSTOM INSTRUCTIONS]\n") + customInstructions.trimmed();
+    }
+
+    return systemText;
 }
 
 QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(
@@ -287,11 +316,12 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(
     const QString &prompt,
     const QSize &canvasSize,
     int strokeBudget,
-    const QString &reasoningEffort
+    const QString &reasoningEffort,
+    const QString &customInstructions
 )
 {
     const bool reasoning = isReasoningModel(model);
-    const QString systemText = buildSystemPrompt(canvasSize, prompt);
+    const QString systemText = buildSystemPrompt(canvasSize, prompt, customInstructions);
 
     QJsonObject userObj;
     userObj[QStringLiteral("prompt")] = prompt;
@@ -609,6 +639,10 @@ bool KisAiStrokeProgramCodec::parseProgramJson(
             k == QLatin1String("scatter") || k == QLatin1String("sparkles")) {
             return KisAiStrokeOperation::Kind::Particles;
         }
+        if (k == QLatin1String("hatch") || k == QLatin1String("cross_hatch") ||
+            k == QLatin1String("crosshatch") || k == QLatin1String("shading_hatch")) {
+            return KisAiStrokeOperation::Kind::Hatch;
+        }
         return KisAiStrokeOperation::Kind::Unknown;
     };
 
@@ -693,10 +727,40 @@ bool KisAiStrokeProgramCodec::parseProgramJson(
             } else if (op.kind == KisAiStrokeOperation::Kind::GradientFill) {
                 op.fillStyle = o.value(QStringLiteral("style")).toString(QStringLiteral("linear"));
                 op.angleDeg = o.value(QStringLiteral("angle_deg")).toDouble(90.0);
+                op.isRadial = o.value(QStringLiteral("is_radial")).toBool(op.fillStyle.compare(QLatin1String("radial"), Qt::CaseInsensitive) == 0);
+                if (o.contains(QStringLiteral("center"))) {
+                    const auto cp = parsePoint(o.value(QStringLiteral("center")));
+                    if (cp.second >= 0.0) {
+                        op.gradientCenter = cp.first;
+                        if (qMax(op.gradientCenter.x(), op.gradientCenter.y()) > 1.5) {
+                            op.gradientCenter = QPointF(op.gradientCenter.x() / canvasW, op.gradientCenter.y() / canvasH);
+                        }
+                    }
+                }
+                op.gradientRadius = o.value(QStringLiteral("radius")).toDouble(0.5);
                 const QJsonArray colors = o.value(QStringLiteral("colors")).toArray();
                 for (const QJsonValue &cv : colors) {
                     op.gradientColors.append(parseColor(cv.toString()));
                 }
+                const QJsonArray poly = o.value(QStringLiteral("polygon")).toArray();
+                const int polyCount = qMin(poly.size(), MAX_POINTS_PER_STROKE);
+                qreal maxCoord = 0.0;
+                for (int pi = 0; pi < polyCount; ++pi) {
+                    const auto pt = parsePoint(poly.at(pi));
+                    if (pt.second >= 0.0) {
+                        op.polygon.append(pt.first);
+                        maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
+                    }
+                }
+                if (maxCoord > 1.5) {
+                    for (QPointF &p : op.polygon) {
+                        p = QPointF(p.x() / canvasW, p.y() / canvasH);
+                    }
+                }
+            } else if (op.kind == KisAiStrokeOperation::Kind::Hatch) {
+                op.angleDeg = o.value(QStringLiteral("angle_deg")).toDouble(45.0);
+                op.spacing = o.value(QStringLiteral("spacing")).toDouble(0.015);
+                op.crossHatch = o.value(QStringLiteral("cross_hatch")).toBool(o.value(QStringLiteral("crosshatch")).toBool(false));
                 const QJsonArray poly = o.value(QStringLiteral("polygon")).toArray();
                 const int polyCount = qMin(poly.size(), MAX_POINTS_PER_STROKE);
                 qreal maxCoord = 0.0;
@@ -813,6 +877,7 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgram(const QSt
     program.title = QStringLiteral("Procedural Artwork: ") + prompt.left(24);
     program.canvasSize = canvasSize;
 
+    const auto spec = KisAiPromptAnalyzer::analyze(prompt, canvasSize);
     QRandomGenerator rng(stableSeed(prompt.simplified()));
     const int baseHue = rng.bounded(360);
 
@@ -822,16 +887,317 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgram(const QSt
         return c;
     };
 
-    // 1. Flats: Sky wash
+    if (spec.domain == KisAiPromptAnalyzer::DomainType::Character) {
+        // =========================================================================
+        // CHARACTER PORTRAIT (Anime Girl Portrait with Exquisite Eyes & Hair)
+        // =========================================================================
+        const QColor skinColor(QStringLiteral("#fff0e6"));
+        const QColor blushColor(QStringLiteral("#ff9fb2"));
+        const QColor hairColor = parseColor(spec.hairColor, QColor(QStringLiteral("#2d2036")));
+        const QColor eyeColor = parseColor(spec.eyeColor, QColor(QStringLiteral("#3884ff")));
+        const QColor inkColor(QStringLiteral("#1c1824"));
+
+        // 1. Flats: Back hair mass
+        {
+            KisAiStrokeOperation backHair;
+            backHair.kind = KisAiStrokeOperation::Kind::Fill;
+            backHair.id = QStringLiteral("back_hair");
+            backHair.layer = QStringLiteral("Flats");
+            backHair.brush.color = hairColor.darker(130);
+            backHair.polygon << QPointF(0.20, 0.35) << QPointF(0.50, 0.15) << QPointF(0.80, 0.35)
+                             << QPointF(0.88, 0.75) << QPointF(0.68, 0.85) << QPointF(0.32, 0.85)
+                             << QPointF(0.12, 0.75);
+            program.operations.append(backHair);
+        }
+
+        // 2. Flats: Face & Neck Skin Base
+        {
+            KisAiStrokeOperation skin;
+            skin.kind = KisAiStrokeOperation::Kind::Fill;
+            skin.id = QStringLiteral("skin_base");
+            skin.layer = QStringLiteral("Flats");
+            skin.brush.color = skinColor;
+            skin.polygon << QPointF(0.30, 0.32) << QPointF(0.50, 0.28) << QPointF(0.70, 0.32)
+                         << QPointF(0.72, 0.52) << QPointF(0.50, 0.70) << QPointF(0.28, 0.52);
+            program.operations.append(skin);
+
+            KisAiStrokeOperation neck;
+            neck.kind = KisAiStrokeOperation::Kind::Fill;
+            neck.id = QStringLiteral("neck_base");
+            neck.layer = QStringLiteral("Flats");
+            neck.brush.color = skinColor.darker(105);
+            neck.polygon << QPointF(0.42, 0.65) << QPointF(0.58, 0.65) << QPointF(0.62, 0.85)
+                         << QPointF(0.38, 0.85);
+            program.operations.append(neck);
+        }
+
+        // 3. Flats: Sclera & Irises
+        for (int side : {-1, 1}) {
+            const qreal ecx = 0.50 + side * 0.13;
+            const qreal ecy = 0.46;
+
+            KisAiStrokeOperation sclera;
+            sclera.kind = KisAiStrokeOperation::Kind::Fill;
+            sclera.id = QStringLiteral("sclera_") + (side < 0 ? QStringLiteral("l") : QStringLiteral("r"));
+            sclera.layer = QStringLiteral("Flats");
+            sclera.brush.color = QColor(QStringLiteral("#f8f9fa"));
+            sclera.polygon << QPointF(ecx - 0.055, ecy) << QPointF(ecx, ecy - 0.035)
+                           << QPointF(ecx + 0.055, ecy) << QPointF(ecx, ecy + 0.035);
+            program.operations.append(sclera);
+
+            KisAiStrokeOperation iris;
+            iris.kind = KisAiStrokeOperation::Kind::GradientFill;
+            iris.id = QStringLiteral("iris_") + (side < 0 ? QStringLiteral("l") : QStringLiteral("r"));
+            iris.layer = QStringLiteral("Flats");
+            iris.isRadial = true;
+            iris.gradientCenter = QPointF(ecx, ecy);
+            iris.gradientRadius = 0.035;
+            iris.gradientColors << eyeColor.lighter(130) << eyeColor << eyeColor.darker(150);
+            iris.polygon << QPointF(ecx - 0.032, ecy - 0.035) << QPointF(ecx + 0.032, ecy - 0.035)
+                         << QPointF(ecx + 0.032, ecy + 0.035) << QPointF(ecx - 0.032, ecy + 0.035);
+            program.operations.append(iris);
+        }
+
+        // 4. Flats: Front Hair Clumps
+        {
+            KisAiStrokeOperation bangs;
+            bangs.kind = KisAiStrokeOperation::Kind::Fill;
+            bangs.id = QStringLiteral("bangs_mass");
+            bangs.layer = QStringLiteral("Flats");
+            bangs.brush.color = hairColor;
+            bangs.polygon << QPointF(0.24, 0.30) << QPointF(0.50, 0.18) << QPointF(0.76, 0.30)
+                          << QPointF(0.72, 0.42) << QPointF(0.58, 0.38) << QPointF(0.50, 0.44)
+                          << QPointF(0.42, 0.38) << QPointF(0.28, 0.42);
+            program.operations.append(bangs);
+        }
+
+        // 5. Shading: Cheek blush, neck AO, hair cast shadow
+        {
+            // Forehead / Bangs cast shadow
+            KisAiStrokeOperation bangsCast;
+            bangsCast.kind = KisAiStrokeOperation::Kind::Fill;
+            bangsCast.id = QStringLiteral("bangs_shadow");
+            bangsCast.layer = QStringLiteral("Shading");
+            bangsCast.brush.color = QColor(QStringLiteral("#c48b80"));
+            bangsCast.brush.opacity = 0.45;
+            bangsCast.polygon << QPointF(0.28, 0.38) << QPointF(0.50, 0.40) << QPointF(0.72, 0.38)
+                              << QPointF(0.70, 0.44) << QPointF(0.50, 0.46) << QPointF(0.30, 0.44);
+            program.operations.append(bangsCast);
+
+            // Neck Contact Hatch Shading
+            KisAiStrokeOperation neckHatch;
+            neckHatch.kind = KisAiStrokeOperation::Kind::Hatch;
+            neckHatch.id = QStringLiteral("neck_hatch");
+            neckHatch.layer = QStringLiteral("Shading");
+            neckHatch.brush.color = QColor(QStringLiteral("#a36a60"));
+            neckHatch.brush.opacity = 0.55;
+            neckHatch.angleDeg = 45.0;
+            neckHatch.spacing = 0.012;
+            neckHatch.polygon << QPointF(0.40, 0.66) << QPointF(0.60, 0.66) << QPointF(0.62, 0.82)
+                              << QPointF(0.38, 0.82);
+            program.operations.append(neckHatch);
+
+            // Cheeks Soft Blush
+            for (int side : {-1, 1}) {
+                KisAiStrokeOperation blush;
+                blush.kind = KisAiStrokeOperation::Kind::Fill;
+                blush.id = QStringLiteral("blush_") + (side < 0 ? QStringLiteral("l") : QStringLiteral("r"));
+                blush.layer = QStringLiteral("Shading");
+                blush.brush.color = blushColor;
+                blush.brush.opacity = 0.35;
+                const qreal bcx = 0.50 + side * 0.14;
+                blush.polygon << QPointF(bcx - 0.04, 0.52) << QPointF(bcx + 0.04, 0.52)
+                              << QPointF(bcx + 0.04, 0.56) << QPointF(bcx - 0.04, 0.56);
+                program.operations.append(blush);
+            }
+        }
+
+        // 6. Lineart: Face contour, exquisite eyelashes, double eyelids, nose, mouth
+        {
+            // Jawline
+            KisAiStrokeOperation jaw;
+            jaw.kind = KisAiStrokeOperation::Kind::Path;
+            jaw.id = QStringLiteral("jawline");
+            jaw.layer = QStringLiteral("Lineart");
+            jaw.brush.profile = QStringLiteral("gpen");
+            jaw.brush.color = inkColor;
+            jaw.brush.size = 0.0035;
+            jaw.points << KisAiStrokePoint(0.28, 0.48, 0.4)
+                       << KisAiStrokePoint(0.32, 0.58, 0.8)
+                       << KisAiStrokePoint(0.50, 0.70, 0.9)
+                       << KisAiStrokePoint(0.68, 0.58, 0.8)
+                       << KisAiStrokePoint(0.72, 0.48, 0.4);
+            program.operations.append(jaw);
+
+            // Eyes: Upper lashes, double eyelid, pupil, lower lash
+            for (int side : {-1, 1}) {
+                const qreal ecx = 0.50 + side * 0.13;
+                const qreal ecy = 0.46;
+
+                // Upper thick eyelash arch
+                KisAiStrokeOperation upperLash;
+                upperLash.kind = KisAiStrokeOperation::Kind::Path;
+                upperLash.id = QStringLiteral("upper_lash_") + (side < 0 ? QStringLiteral("l") : QStringLiteral("r"));
+                upperLash.layer = QStringLiteral("Lineart");
+                upperLash.brush.profile = QStringLiteral("gpen");
+                upperLash.brush.color = inkColor;
+                upperLash.brush.size = 0.0045;
+                upperLash.points << KisAiStrokePoint(ecx - side * 0.05, ecy + 0.005, 0.3)
+                                 << KisAiStrokePoint(ecx, ecy - 0.025, 1.0)
+                                 << KisAiStrokePoint(ecx + side * 0.055, ecy - 0.015, 0.7)
+                                 << KisAiStrokePoint(ecx + side * 0.07, ecy - 0.025, 0.2); // Outer flick
+                program.operations.append(upperLash);
+
+                // Double eyelid crease (delicate fine line)
+                KisAiStrokeOperation doubleLid;
+                doubleLid.kind = KisAiStrokeOperation::Kind::Path;
+                doubleLid.id = QStringLiteral("double_lid_") + (side < 0 ? QStringLiteral("l") : QStringLiteral("r"));
+                doubleLid.layer = QStringLiteral("Lineart");
+                doubleLid.brush.profile = QStringLiteral("gpen");
+                doubleLid.brush.color = inkColor;
+                doubleLid.brush.size = 0.0018;
+                doubleLid.points << KisAiStrokePoint(ecx - side * 0.035, ecy - 0.035, 0.3)
+                                 << KisAiStrokePoint(ecx, ecy - 0.042, 0.6)
+                                 << KisAiStrokePoint(ecx + side * 0.04, ecy - 0.038, 0.2);
+                program.operations.append(doubleLid);
+
+                // Pupil Core
+                KisAiStrokeOperation pupil;
+                pupil.kind = KisAiStrokeOperation::Kind::Path;
+                pupil.id = QStringLiteral("pupil_") + (side < 0 ? QStringLiteral("l") : QStringLiteral("r"));
+                pupil.layer = QStringLiteral("Lineart");
+                pupil.brush.profile = QStringLiteral("gpen");
+                pupil.brush.color = inkColor;
+                pupil.brush.size = 0.007;
+                pupil.points << KisAiStrokePoint(ecx, ecy - 0.005, 1.0)
+                             << KisAiStrokePoint(ecx, ecy + 0.005, 1.0);
+                program.operations.append(pupil);
+            }
+
+            // Nose tip point & Mouth smile line
+            KisAiStrokeOperation nose;
+            nose.kind = KisAiStrokeOperation::Kind::Path;
+            nose.id = QStringLiteral("nose");
+            nose.layer = QStringLiteral("Lineart");
+            nose.brush.profile = QStringLiteral("gpen");
+            nose.brush.color = inkColor;
+            nose.brush.size = 0.0022;
+            nose.points << KisAiStrokePoint(0.50, 0.54, 0.6) << KisAiStrokePoint(0.505, 0.548, 0.4);
+            program.operations.append(nose);
+
+            KisAiStrokeOperation mouth;
+            mouth.kind = KisAiStrokeOperation::Kind::Path;
+            mouth.id = QStringLiteral("mouth");
+            mouth.layer = QStringLiteral("Lineart");
+            mouth.brush.profile = QStringLiteral("gpen");
+            mouth.brush.color = inkColor;
+            mouth.brush.size = 0.0025;
+            mouth.points << KisAiStrokePoint(0.46, 0.61, 0.3)
+                         << KisAiStrokePoint(0.50, 0.616, 0.8)
+                         << KisAiStrokePoint(0.54, 0.61, 0.3);
+            program.operations.append(mouth);
+
+            // Hair Strands (Ribbons & Fine Paths)
+            KisAiStrokeOperation hairStrandL;
+            hairStrandL.kind = KisAiStrokeOperation::Kind::Ribbon;
+            hairStrandL.id = QStringLiteral("hair_strand_l");
+            hairStrandL.layer = QStringLiteral("Lineart");
+            hairStrandL.brush.color = hairColor.darker(110);
+            hairStrandL.widthStart = 0.025;
+            hairStrandL.widthMid = 0.018;
+            hairStrandL.widthEnd = 0.004;
+            hairStrandL.spine << QPointF(0.32, 0.28) << QPointF(0.24, 0.48) << QPointF(0.22, 0.70);
+            program.operations.append(hairStrandL);
+
+            KisAiStrokeOperation hairStrandR;
+            hairStrandR.kind = KisAiStrokeOperation::Kind::Ribbon;
+            hairStrandR.id = QStringLiteral("hair_strand_r");
+            hairStrandR.layer = QStringLiteral("Lineart");
+            hairStrandR.brush.color = hairColor.darker(110);
+            hairStrandR.widthStart = 0.025;
+            hairStrandR.widthMid = 0.018;
+            hairStrandR.widthEnd = 0.004;
+            hairStrandR.spine << QPointF(0.68, 0.28) << QPointF(0.76, 0.48) << QPointF(0.78, 0.70);
+            program.operations.append(hairStrandR);
+        }
+
+        // 7. Highlights: Specular catchlights & angel halo
+        {
+            for (int side : {-1, 1}) {
+                const qreal ecx = 0.50 + side * 0.13;
+                const qreal ecy = 0.46;
+
+                // Main bright eye catchlight
+                KisAiStrokeOperation catchlight;
+                catchlight.kind = KisAiStrokeOperation::Kind::Path;
+                catchlight.id = QStringLiteral("catchlight_") + (side < 0 ? QStringLiteral("l") : QStringLiteral("r"));
+                catchlight.layer = QStringLiteral("Highlights");
+                catchlight.brush.profile = QStringLiteral("gpen");
+                catchlight.brush.color = QColor(QStringLiteral("#ffffff"));
+                catchlight.brush.size = 0.0045;
+                catchlight.points << KisAiStrokePoint(ecx - 0.012, ecy - 0.012, 1.0)
+                                  << KisAiStrokePoint(ecx - 0.008, ecy - 0.008, 1.0);
+                program.operations.append(catchlight);
+
+                // Crescent lower rim glow
+                KisAiStrokeOperation crescent;
+                crescent.kind = KisAiStrokeOperation::Kind::Path;
+                crescent.id = QStringLiteral("crescent_") + (side < 0 ? QStringLiteral("l") : QStringLiteral("r"));
+                crescent.layer = QStringLiteral("Highlights");
+                crescent.brush.profile = QStringLiteral("gpen");
+                crescent.brush.color = QColor(QStringLiteral("#aae0ff"));
+                crescent.brush.size = 0.0022;
+                crescent.points << KisAiStrokePoint(ecx - 0.018, ecy + 0.018, 0.4)
+                                << KisAiStrokePoint(ecx, ecy + 0.025, 0.8)
+                                << KisAiStrokePoint(ecx + 0.018, ecy + 0.018, 0.4);
+                program.operations.append(crescent);
+            }
+
+            // Hair Angel Halo Rim Light
+            KisAiStrokeOperation halo;
+            halo.kind = KisAiStrokeOperation::Kind::Path;
+            halo.id = QStringLiteral("hair_halo");
+            halo.layer = QStringLiteral("Highlights");
+            halo.brush.profile = QStringLiteral("airbrush");
+            halo.brush.color = QColor(QStringLiteral("#ffffff"));
+            halo.brush.opacity = 0.65;
+            halo.brush.size = 0.012;
+            halo.points << KisAiStrokePoint(0.32, 0.26, 0.2)
+                        << KisAiStrokePoint(0.50, 0.22, 0.8)
+                        << KisAiStrokePoint(0.68, 0.26, 0.2);
+            program.operations.append(halo);
+        }
+
+        // 8. FX: Floating sparkles / Petals
+        {
+            KisAiStrokeOperation fx;
+            fx.kind = KisAiStrokeOperation::Kind::Particles;
+            fx.id = QStringLiteral("sparkles");
+            fx.layer = QStringLiteral("FX");
+            fx.brush.color = QColor(QStringLiteral("#ffebf0"));
+            fx.bounds = QRectF(0.10, 0.15, 0.80, 0.75);
+            fx.particleCount = 24;
+            fx.particleShape = spec.hasSakura ? QStringLiteral("petal") : QStringLiteral("sparkle");
+            program.operations.append(fx);
+        }
+
+        return program;
+    }
+
+    // =========================================================================
+    // LANDSCAPE / NATURE / GENERAL PROCEDURAL SCENERY
+    // =========================================================================
+
+    // 1. Flats: Sky wash with time-of-day gradient
     {
         KisAiStrokeOperation sky;
         sky.kind = KisAiStrokeOperation::Kind::GradientFill;
         sky.id = QStringLiteral("sky_gradient");
         sky.layer = QStringLiteral("Flats");
         sky.polygon << QPointF(0.0, 0.0) << QPointF(1.0, 0.0) << QPointF(1.0, 0.65) << QPointF(0.0, 0.65);
-        sky.gradientColors << makeHslColor(baseHue - 25, 140, 60)
-                           << makeHslColor(baseHue, 160, 140)
-                           << makeHslColor(baseHue + 35, 190, 220);
+        for (const QString &cStr : spec.skyGradientColors) {
+            sky.gradientColors.append(parseColor(cStr));
+        }
         sky.angleDeg = 90.0;
         program.operations.append(sky);
     }
@@ -871,18 +1237,21 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgram(const QSt
         program.operations.append(ground);
     }
 
-    // 4. Shading: Mountain shadow facets
+    // 4. Shading: Mountain shadow facets & Hatching
     {
-        KisAiStrokeOperation mtnShadow;
-        mtnShadow.kind = KisAiStrokeOperation::Kind::Fill;
-        mtnShadow.id = QStringLiteral("mountain_shadow");
-        mtnShadow.layer = QStringLiteral("Shading");
-        mtnShadow.brush.color = makeHslColor(baseHue - 10, 90, 45, 180);
-        mtnShadow.polygon << QPointF(0.22, 0.38)
-                          << QPointF(0.35, 0.49)
-                          << QPointF(0.28, 0.60)
-                          << QPointF(0.12, 0.56);
-        program.operations.append(mtnShadow);
+        KisAiStrokeOperation mtnHatch;
+        mtnHatch.kind = KisAiStrokeOperation::Kind::Hatch;
+        mtnHatch.id = QStringLiteral("mountain_hatch");
+        mtnHatch.layer = QStringLiteral("Shading");
+        mtnHatch.brush.color = makeHslColor(baseHue - 10, 90, 45, 180);
+        mtnHatch.angleDeg = 35.0;
+        mtnHatch.spacing = 0.015;
+        mtnHatch.crossHatch = false;
+        mtnHatch.polygon << QPointF(0.22, 0.38)
+                         << QPointF(0.35, 0.49)
+                         << QPointF(0.28, 0.60)
+                         << QPointF(0.12, 0.56);
+        program.operations.append(mtnHatch);
     }
 
     // 5. Lineart: Trunk ribbon
@@ -941,11 +1310,10 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgram(const QSt
         particles.kind = KisAiStrokeOperation::Kind::Particles;
         particles.id = QStringLiteral("floating_particles");
         particles.layer = QStringLiteral("FX");
-        particles.brush.color = makeHslColor(baseHue + 50, 180, 210, 200);
+        particles.brush.color = spec.hasSakura ? QColor(QStringLiteral("#ffb8cd")) : makeHslColor(baseHue + 50, 180, 210, 200);
         particles.bounds = QRectF(0.1, 0.15, 0.8, 0.8);
-        particles.particleCount = 28;
-        particles.particleShape = prompt.contains(QStringLiteral("桜")) || prompt.toLower().contains(QLatin1String("sakura"))
-            ? QStringLiteral("petal") : QStringLiteral("sparkle");
+        particles.particleCount = 32;
+        particles.particleShape = spec.hasSakura ? QStringLiteral("petal") : QStringLiteral("sparkle");
         program.operations.append(particles);
     }
 

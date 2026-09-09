@@ -51,6 +51,7 @@ struct KRITAUI_EXPORT KisAiStrokeOperation
         GradientFill,
         Ribbon,
         Particles,
+        Hatch,
         Unknown
     };
 
@@ -65,12 +66,20 @@ struct KRITAUI_EXPORT KisAiStrokeOperation
     bool smooth {true};
     QString role {QStringLiteral("auto")};
 
-    // Fill & GradientFill
+    // Fill & GradientFill & Hatch
     QPolygonF polygon;
     QString fillStyle {QStringLiteral("wash")}; // wash, contour, scanline, radial, directional
     QVector<QColor> gradientColors;
     qreal angleDeg {0.0};
     qreal spacing {0.5};
+
+    // GradientFill detailed properties
+    bool isRadial {false};
+    QPointF gradientCenter {0.5, 0.5};
+    qreal gradientRadius {0.5};
+
+    // Hatch
+    bool crossHatch {false};
 
     // Ribbon
     QVector<QPointF> spine;
@@ -114,14 +123,19 @@ public:
         const QString &prompt,
         const QSize &canvasSize,
         int strokeBudget = 500,
-        const QString &reasoningEffort = QString()
+        const QString &reasoningEffort = QString(),
+        const QString &customInstructions = QString()
     );
 
     /**
      * Generate the comprehensive artistic digital painting system prompt with
      * layer hierarchy, 4-tier lighting, spatial anchors, and schema instructions.
      */
-    static QString buildSystemPrompt(const QSize &canvasSize, const QString &prompt);
+    static QString buildSystemPrompt(
+        const QSize &canvasSize,
+        const QString &prompt,
+        const QString &customInstructions = QString()
+    );
 
     /**
      * JSON schema for OpenAI Structured Outputs (response_format: json_schema).

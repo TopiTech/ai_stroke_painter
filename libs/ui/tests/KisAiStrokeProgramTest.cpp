@@ -18,6 +18,7 @@
 #endif
 
 #include "aiillustration/KisAiStrokeProgram.h"
+#include "aiillustration/KisAiPromptAnalyzer.h"
 
 void KisAiStrokeProgramTest::testSanitizeAndExtractJson()
 {
@@ -323,5 +324,100 @@ void KisAiStrokeProgramTest::testStableSeed()
     QVERIFY(seedA1 > 0);
 }
 
+void KisAiStrokeProgramTest::testPromptAnalyzerDomainClassification()
+{
+    const QSize size(1024, 1024);
+
+    // 1. Character
+    const auto specChar = KisAiPromptAnalyzer::analyze(QStringLiteral("anime girl portrait with blue eyes and silver hair"), size);
+    QCOMPARE(static_cast<int>(specChar.domain), static_cast<int>(KisAiPromptAnalyzer::DomainType::Character));
+    QCOMPARE(specChar.eyeColor, QStringLiteral("#3884ff"));
+    QCOMPARE(specChar.hairColor, QStringLiteral("#e0e4f0"));
+
+    // 2. Landscape with Sunset & Sakura
+    const auto specLand = KisAiPromptAnalyzer::analyze(QStringLiteral("sunset mountain with sakura trees"), size);
+    QCOMPARE(static_cast<int>(specLand.domain), static_cast<int>(KisAiPromptAnalyzer::DomainType::Landscape));
+    QCOMPARE(static_cast<int>(specLand.timeOfDay), static_cast<int>(KisAiPromptAnalyzer::TimeOfDay::Sunset));
+    QVERIFY(specLand.hasSakura);
+    QVERIFY(!specLand.skyGradientColors.isEmpty());
+
+    // 3. Cyberpunk
+    const auto specCyber = KisAiPromptAnalyzer::analyze(QStringLiteral("cyberpunk city skyline with neon"), size);
+    QCOMPARE(static_cast<int>(specCyber.domain), static_cast<int>(KisAiPromptAnalyzer::DomainType::Cyberpunk));
+
+    // 4. Creature
+    const auto specCat = KisAiPromptAnalyzer::analyze(QStringLiteral("mystical black cat with gold eyes"), size);
+    QCOMPARE(static_cast<int>(specCat.domain), static_cast<int>(KisAiPromptAnalyzer::DomainType::Creature));
+    QCOMPARE(specCat.eyeColor, QStringLiteral("#f4a261"));
+
+    // 5. Botanical
+    const auto specRose = KisAiPromptAnalyzer::analyze(QStringLiteral("delicate rose bouquet with green leaves"), size);
+    QCOMPARE(static_cast<int>(specRose.domain), static_cast<int>(KisAiPromptAnalyzer::DomainType::Botanical));
+}
+
+void KisAiStrokeProgramTest::testHatchOperationParsing()
+{
+    const QString json = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"hatch\",\n"
+        "      \"id\": \"shading_test\",\n"
+        "      \"layer\": \"Shading\",\n"
+        "      \"angle_deg\": 60,\n"
+        "      \"spacing\": 0.025,\n"
+        "      \"cross_hatch\": true,\n"
+        "      \"polygon\": [[0.1, 0.1], [0.4, 0.1], [0.4, 0.4], [0.1, 0.4]],\n"
+        "      \"brush\": {\"profile\": \"pencil\", \"color\": \"#2a2a2a\", \"size\": 0.003, \"is_eraser\": false}\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+
+    KisAiStrokeProgram program;
+    QString error;
+    QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(QJsonDocument::fromJson(json.toUtf8()).object(), &program, &error));
+    QCOMPARE(program.operations.size(), 1);
+
+    const auto &op = program.operations.first();
+    QCOMPARE(static_cast<int>(op.kind), static_cast<int>(KisAiStrokeOperation::Kind::Hatch));
+    QCOMPARE(op.layer, QStringLiteral("Shading"));
+    QCOMPARE(op.angleDeg, 60.0);
+    QCOMPARE(op.spacing, 0.025);
+    QVERIFY(op.crossHatch);
+    QCOMPARE(op.polygon.size(), 4);
+    QCOMPARE(op.brush.profile, QStringLiteral("pencil"));
+}
+
+void KisAiStrokeProgramTest::testProceduralCharacterGeneration()
+{
+    const QSize size(1024, 1024);
+    const KisAiStrokeProgram program = KisAiStrokeProgramCodec::createDeterministicProgram(
+        QStringLiteral("anime girl portrait with blue eyes and silver hair"),
+        size
+    );
+
+    QVERIFY(program.isValid());
+    QVERIFY(program.operations.size() >= 10);
+
+    QSet<QString> layers;
+    bool hasHatch = false;
+    for (const auto &op : program.operations) {
+        layers.insert(op.layer);
+        if (op.kind == KisAiStrokeOperation::Kind::Hatch) {
+            hasHatch = true;
+        }
+    }
+
+    QVERIFY(layers.contains(QStringLiteral("Flats")));
+    QVERIFY(layers.contains(QStringLiteral("Shading")));
+    QVERIFY(layers.contains(QStringLiteral("Lineart")));
+    QVERIFY(layers.contains(QStringLiteral("Highlights")));
+    QVERIFY(layers.contains(QStringLiteral("FX")));
+    QVERIFY(hasHatch);
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
+
 

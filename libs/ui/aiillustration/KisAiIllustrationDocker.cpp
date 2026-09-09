@@ -177,7 +177,29 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     auto *subtitle = new QLabel(i18n("描きたい情景を言葉で指定すると、結果を新しいレイヤーとして追加します。"), panel);
     subtitle->setObjectName(QStringLiteral("aiSubtitle"));
     subtitle->setWordWrap(true);
-    layout->addWidget(subtitle);
+    auto *presetRow = new QHBoxLayout();
+    auto *presetLabel = new QLabel(i18n("クイック・プリセット:"), panel);
+    m_presetCombo = new QComboBox(panel);
+    m_presetCombo->addItem(i18n("プリセットを選択…"), QString());
+    m_presetCombo->addItem(i18n("👤 美少女アニメ顔 (Anime Girl)"), QStringLiteral("アニメ美少女のクローズアップポートレート、大きな輝く青い瞳、二重まぶた、繊細なまつ毛、さらさらの銀髪、柔らかい頬の赤み、天使の輪"));
+    m_presetCombo->addItem(i18n("🌸 山と桜の風景 (Mountain & Sakura)"), QStringLiteral("壮大な富士山と満開の桜の木、夕暮れのグラデーション空、舞い散る花びら、伝統的な日本風景"));
+    m_presetCombo->addItem(i18n("🏙️ サイバーパンク都市 (Cyberpunk City)"), QStringLiteral("ネオン輝くサイバーパンク高層ビル群、夜の摩天楼、雨に反射する光、ホログラム広告、近未来都市"));
+    m_presetCombo->addItem(i18n("🌊 浮世絵風の大波 (Ukiyo-e Great Wave)"), QStringLiteral("葛飾北斎風のダイナミックな大波、力強い水しぶき、伝統的な青と白のコントラスト、富士山"));
+    m_presetCombo->addItem(i18n("✨ 魔法陣とルーン (Magic Circle)"), QStringLiteral("神秘的な幾何学魔法陣、古代ルーン文字、輝くエネルギー粒子、神聖な光のエフェクト"));
+    m_presetCombo->addItem(i18n("🐱 幻想的な黒猫 (Mystical Black Cat)"), QStringLiteral("月夜に佇む美しい黒猫、金色に輝く瞳、繊細なヒゲ、神秘的な夜空と星の光"));
+    m_presetCombo->addItem(i18n("🌹 バラの花束 (Botanical Rose)"), QStringLiteral("咲き誇る深紅のバラの花束、重なり合う繊細な花びら、朝露のハイライト、瑞々しい緑の葉"));
+    m_presetCombo->setAccessibleName(i18n("Quick illustration presets"));
+    presetRow->addWidget(presetLabel);
+    presetRow->addWidget(m_presetCombo, 1);
+    layout->addLayout(presetRow);
+
+    connect(m_presetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
+        const QString text = m_presetCombo->itemData(idx).toString();
+        if (!text.isEmpty()) {
+            m_promptEditor->setPlainText(text);
+            focusPrompt();
+        }
+    });
 
     auto *promptLabel = new QLabel(i18n("イラストの指示"), panel);
     layout->addWidget(promptLabel);
@@ -444,7 +466,18 @@ void KisAiIllustrationDocker::generateLocalStrokes(const QString &prompt)
     if (view && view->image()) {
         QString statusMsg;
         if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
-            setStatus(statusMsg);
+            int flats = 0, shading = 0, lineart = 0, highlights = 0, fx = 0;
+            for (const auto &op : program.operations) {
+                const QString l = op.layer.trimmed().toLower();
+                if (l == QLatin1String("flats") || l == QLatin1String("flat") || l == QLatin1String("base")) flats++;
+                else if (l == QLatin1String("shading") || l == QLatin1String("shade")) shading++;
+                else if (l == QLatin1String("highlights") || l == QLatin1String("highlight")) highlights++;
+                else if (l == QLatin1String("fx") || l == QLatin1String("particles")) fx++;
+                else lineart++;
+            }
+            const QString detailMsg = QStringLiteral("%1 (Flats: %2, Shading: %3, Lineart: %4, Highlights: %5, FX: %6)")
+                .arg(statusMsg).arg(flats).arg(shading).arg(lineart).arg(highlights).arg(fx);
+            setStatus(detailMsg);
         } else {
             setStatus(statusMsg, true);
         }
@@ -583,7 +616,18 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     if (view && view->image()) {
         QString statusMsg;
         if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
-            setStatus(statusMsg);
+            int flats = 0, shading = 0, lineart = 0, highlights = 0, fx = 0;
+            for (const auto &op : program.operations) {
+                const QString l = op.layer.trimmed().toLower();
+                if (l == QLatin1String("flats") || l == QLatin1String("flat") || l == QLatin1String("base")) flats++;
+                else if (l == QLatin1String("shading") || l == QLatin1String("shade")) shading++;
+                else if (l == QLatin1String("highlights") || l == QLatin1String("highlight")) highlights++;
+                else if (l == QLatin1String("fx") || l == QLatin1String("particles")) fx++;
+                else lineart++;
+            }
+            const QString detailMsg = QStringLiteral("%1 (Flats: %2, Shading: %3, Lineart: %4, Highlights: %5, FX: %6)")
+                .arg(statusMsg).arg(flats).arg(shading).arg(lineart).arg(highlights).arg(fx);
+            setStatus(detailMsg);
         } else {
             setStatus(statusMsg, true);
         }

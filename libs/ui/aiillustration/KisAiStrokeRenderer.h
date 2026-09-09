@@ -104,6 +104,12 @@ private:
         const KisAiStrokeOperation &op,
         const QSize &canvasSize
     );
+
+    static void drawHatchOperation(
+        QPainter &painter,
+        const KisAiStrokeOperation &op,
+        const QSize &canvasSize
+    );
 };
 
 #endif // KIS_AI_STROKE_RENDERER_H

@@ -193,9 +193,82 @@ void KisAiStrokeRendererTest::testRenderAirbrushDynamics()
     const QImage img = KisAiStrokeRenderer::renderProgramToImage(program, QSize(200, 200));
     QVERIFY(!img.isNull());
 
-    // Check that center has high opacity and outer margin has soft/lower opacity
     const QRgb centerPixel = img.pixel(100, 100);
     QVERIFY(qAlpha(centerPixel) > 0);
+}
+
+void KisAiStrokeRendererTest::testRenderHatchOperation()
+{
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(200, 200);
+
+    KisAiStrokeOperation hatchOp;
+    hatchOp.kind = KisAiStrokeOperation::Kind::Hatch;
+    hatchOp.id = QStringLiteral("hatch_test");
+    hatchOp.layer = QStringLiteral("Shading");
+    hatchOp.polygon = QPolygonF{
+        QPointF(0.25, 0.25),
+        QPointF(0.75, 0.25),
+        QPointF(0.75, 0.75),
+        QPointF(0.25, 0.75)
+    };
+    hatchOp.angleDeg = 45.0;
+    hatchOp.spacing = 0.05;
+    hatchOp.crossHatch = true;
+    hatchOp.brush.color = QColor(40, 40, 40);
+    hatchOp.brush.size = 0.01;
+    hatchOp.brush.opacity = 1.0;
+    program.operations.append(hatchOp);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(program, QSize(200, 200));
+    QVERIFY(!img.isNull());
+
+    // Polygon interior (50..150, 50..150) should have hatch lines painted
+    int insidePaintedCount = 0;
+    for (int y = 60; y < 140; ++y) {
+        for (int x = 60; x < 140; ++x) {
+            if (qAlpha(img.pixel(x, y)) > 0) {
+                insidePaintedCount++;
+            }
+        }
+    }
+    QVERIFY(insidePaintedCount > 0);
+
+    // Polygon exterior (e.g. top-left corner (10, 10)) MUST be completely clipped/transparent
+    QCOMPARE(qAlpha(img.pixel(10, 10)), 0);
+    QCOMPARE(qAlpha(img.pixel(190, 190)), 0);
+}
+
+void KisAiStrokeRendererTest::testRenderRadialGradient()
+{
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(200, 200);
+
+    KisAiStrokeOperation radOp;
+    radOp.kind = KisAiStrokeOperation::Kind::GradientFill;
+    radOp.id = QStringLiteral("radial_test");
+    radOp.layer = QStringLiteral("Flats");
+    radOp.isRadial = true;
+    radOp.gradientCenter = QPointF(0.5, 0.5);
+    radOp.gradientRadius = 0.4;
+    radOp.gradientColors = QVector<QColor>{
+        QColor(255, 100, 50),
+        QColor(20, 20, 80)
+    };
+    radOp.polygon = QPolygonF{
+        QPointF(0.1, 0.1),
+        QPointF(0.9, 0.1),
+        QPointF(0.9, 0.9),
+        QPointF(0.1, 0.9)
+    };
+    program.operations.append(radOp);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(program, QSize(200, 200));
+    QVERIFY(!img.isNull());
+
+    const QRgb centerPixel = img.pixel(100, 100);
+    QVERIFY(qAlpha(centerPixel) > 200);
+    QVERIFY(qRed(centerPixel) > 200); // Inner color is reddish
 }
 
 KISTEST_MAIN(KisAiStrokeRendererTest)

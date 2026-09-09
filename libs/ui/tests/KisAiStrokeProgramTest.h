@@ -23,6 +23,9 @@ private Q_SLOTS:
     void testPixelCoordinateAutoNormalization();
     void testColorAndBrushParsing();
     void testStableSeed();
+    void testPromptAnalyzerDomainClassification();
+    void testHatchOperationParsing();
+    void testProceduralCharacterGeneration();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

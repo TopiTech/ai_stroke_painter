@@ -11,6 +11,7 @@ if (AI_STROKE_STANDALONE_TESTS)
     add_definitions(-DAI_STROKE_STANDALONE)
 
     add_library(ai_stroke_core STATIC
+        libs/ui/aiillustration/KisAiPromptAnalyzer.cpp
         libs/ui/aiillustration/KisAiStrokeProgram.cpp
         libs/ui/aiillustration/KisAiStrokeRenderer.cpp
         libs/ui/aiillustration/KisAiIllustrationRenderer.cpp

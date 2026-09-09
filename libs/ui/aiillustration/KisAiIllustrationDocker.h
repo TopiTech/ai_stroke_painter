@@ -72,6 +72,7 @@ private:
     bool m_responseTooLarge {false};
     GenerationMode m_currentMode {GenerationMode::LlmStrokes};
 
+    QComboBox *m_presetCombo {nullptr};
     QPlainTextEdit *m_promptEditor {nullptr};
     QComboBox *m_modeCombo {nullptr};
     class QFormLayout *m_remoteForm {nullptr};
