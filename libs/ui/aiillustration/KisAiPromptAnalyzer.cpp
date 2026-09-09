@@ -201,6 +201,56 @@ KisAiPromptAnalyzer::SemanticSpec KisAiPromptAnalyzer::analyze(
         spec.eyeColor = QStringLiteral("#f4a261");
     }
 
+    // 5. Art Style Classification
+    if (text.contains(QStringLiteral("anime")) || text.contains(QStringLiteral("manga")) ||
+        text.contains(QStringLiteral("cel")) || text.contains(QStringLiteral("アニメ")) ||
+        text.contains(QStringLiteral("セル画")) || text.contains(QStringLiteral("漫画"))) {
+        spec.style = ArtStyle::AnimeCel;
+    } else if (text.contains(QStringLiteral("watercolor")) || text.contains(QStringLiteral("aquarelle")) ||
+               text.contains(QStringLiteral("水彩")) || text.contains(QStringLiteral("透明水彩"))) {
+        spec.style = ArtStyle::Watercolor;
+    } else if (text.contains(QStringLiteral("impasto")) || text.contains(QStringLiteral("oil painting")) ||
+               text.contains(QStringLiteral("painterly")) || text.contains(QStringLiteral("厚塗り")) ||
+               text.contains(QStringLiteral("油絵")) || text.contains(QStringLiteral("油彩"))) {
+        spec.style = ArtStyle::Impasto;
+    } else if (text.contains(QStringLiteral("sketch")) || text.contains(QStringLiteral("ink")) ||
+               text.contains(QStringLiteral("hatching")) || text.contains(QStringLiteral("スケッチ")) ||
+               text.contains(QStringLiteral("ペン画")) || text.contains(QStringLiteral("線画"))) {
+        spec.style = ArtStyle::InkSketch;
+    } else if (text.contains(QStringLiteral("cyber")) || text.contains(QStringLiteral("neon")) ||
+               text.contains(QStringLiteral("glowing")) || text.contains(QStringLiteral("ネオン")) ||
+               text.contains(QStringLiteral("サイバー"))) {
+        spec.style = ArtStyle::CyberNeon;
+    } else {
+        spec.style = (spec.domain == DomainType::Cyberpunk) ? ArtStyle::CyberNeon :
+                     (spec.domain == DomainType::MangaFx) ? ArtStyle::InkSketch :
+                     (spec.domain == DomainType::Character) ? ArtStyle::AnimeCel : ArtStyle::General;
+    }
+
+    // 6. Color Harmony Computation
+    switch (spec.timeOfDay) {
+    case TimeOfDay::Day:
+        spec.harmony.keyLight = QColor(255, 250, 240);       // Warm sunlight
+        spec.harmony.ambientShadow = QColor(45, 55, 80);     // Cool sky ambient
+        spec.harmony.accentColor = QColor(255, 110, 130);    // Vibrant coral
+        break;
+    case TimeOfDay::Sunset:
+        spec.harmony.keyLight = QColor(255, 180, 110);       // Golden amber
+        spec.harmony.ambientShadow = QColor(60, 30, 70);     // Deep plum/violet
+        spec.harmony.accentColor = QColor(255, 230, 130);    // Rim gold
+        break;
+    case TimeOfDay::Night:
+        spec.harmony.keyLight = QColor(160, 200, 255);       // Cool lunar blue
+        spec.harmony.ambientShadow = QColor(15, 20, 35);     // Obsidian navy
+        spec.harmony.accentColor = QColor(100, 240, 255);    // Cyan bioluminescence
+        break;
+    case TimeOfDay::Fantasy:
+        spec.harmony.keyLight = QColor(240, 190, 255);       // Ethereal lilac
+        spec.harmony.ambientShadow = QColor(40, 25, 60);     // Mystical purple
+        spec.harmony.accentColor = QColor(255, 150, 220);    // Radiant magenta
+        break;
+    }
+
     return spec;
 }
 
@@ -216,6 +266,11 @@ QString KisAiPromptAnalyzer::generateArtDirection(
     const int formShadMax = qMax(55, qRound(minDim * 0.06));
 
     QString out;
+    out += QStringLiteral("=== ART STYLE DIRECTIVE: %1 ===\n").arg(styleName(spec.style));
+    out += QStringLiteral("COLOR HARMONY: Key Light (%1) | Ambient Shadow (%2) | Accent (%3)\n\n")
+        .arg(spec.harmony.keyLight.name())
+        .arg(spec.harmony.ambientShadow.name())
+        .arg(spec.harmony.accentColor.name());
 
     // Composition anchor
     switch (spec.composition) {
@@ -365,6 +420,80 @@ QString KisAiPromptAnalyzer::generateArtDirection(
         );
         break;
     }
+    }
+
+    return out;
+}
+
+QString KisAiPromptAnalyzer::styleName(ArtStyle style)
+{
+    switch (style) {
+    case ArtStyle::AnimeCel:
+        return QStringLiteral("Anime Cel-Shading");
+    case ArtStyle::Watercolor:
+        return QStringLiteral("Luminous Watercolor");
+    case ArtStyle::Impasto:
+        return QStringLiteral("Textured Impasto");
+    case ArtStyle::InkSketch:
+        return QStringLiteral("Manga Ink Sketch");
+    case ArtStyle::CyberNeon:
+        return QStringLiteral("Cyberpunk Neon");
+    case ArtStyle::General:
+    default:
+        return QStringLiteral("Painterly Digital");
+    }
+}
+
+QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const SemanticSpec &spec, const QSize &canvasSize)
+{
+    QString out;
+    const QString styleStr = styleName(spec.style);
+    out += QStringLiteral("=== GOAL MODE PHASE %1 EXECUTION ===\n").arg(phase);
+    out += QStringLiteral("Active Art Style: %1\n").arg(styleStr);
+    out += QStringLiteral("Key Light: %1 | Ambient Shadow: %2 | Accent: %3\n\n")
+        .arg(spec.harmony.keyLight.name())
+        .arg(spec.harmony.ambientShadow.name())
+        .arg(spec.harmony.accentColor.name());
+
+    switch (phase) {
+    case 1: // Phase 1: Background & Flats (Silhouette & Base Volumes)
+        out += QStringLiteral(
+            "PHASE 1 MISSION: [BACKGROUND & SILHOUETTE FLATS]\n"
+            "- Target Layers: 'Background' (skies, far distance) and 'Flats' (character masses, skin, hair, clothes).\n"
+            "- CRITICAL: Do NOT draw linework, shadows, or highlights yet! Dedicate 100% of geometry to solid base coverage.\n"
+            "- Ensure zero white canvas gaps. Large fills and gradient fills should establish seamless foundations.\n"
+            "- Reusable Landmark Coordinates: Form clear geometric silhouettes so later Shading and Lineart can register cleanly.\n"
+        );
+        break;
+    case 2: // Phase 2: Shading & Ambient Occlusion
+        out += QStringLiteral(
+            "PHASE 2 MISSION: [3D SHADING & FORM VOLUMES]\n"
+            "- Target Layer: 'Shading' ONLY (rendered with Multiply and clipped to Flats).\n"
+            "- Look at the Phase 1 canvas image: locate the key light and cast shadows beneath forms.\n"
+            "- Add core form shadows, contact ambient occlusion (AO) under chin/hair/folds, and delicate blush/hatch tones.\n"
+            "- Color Selection: Use cool ambient tones (%1) for shadows to create warm-cool color harmony.\n"
+        ).arg(spec.harmony.ambientShadow.name());
+        break;
+    case 3: // Phase 3: Precision Lineart
+        out += QStringLiteral(
+            "PHASE 3 MISSION: [PRECISION LINEART & ANATOMICAL DETAIL]\n"
+            "- Target Layer: 'Lineart' ONLY (rendered with crisp tapering Catmull-Rom splines).\n"
+            "- Look at the canvas image with Flats & Shading in place: draw sharp structural contours and expressive details.\n"
+            "- Facial Micro-Details: Upper lash arches, iris rings, pupil cores, subtle double eyelids, delicate nose/lips.\n"
+            "- Hair & Fabric: Continuous fluid S-curves for hair clumps and cloth folds. Use gpen or brush profile.\n"
+            "- Avoid pure black #000000; use rich deep ink tones like #1c1828 or #241a18.\n"
+        );
+        break;
+    case 4: // Phase 4: Highlights, FX & Polish
+    default:
+        out += QStringLiteral(
+            "PHASE 4 MISSION: [SPECULAR HIGHLIGHTS, MANGA LINES & FX POLISH]\n"
+            "- Target Layers: 'Highlights' (Screen blend) and 'FX' (Particles, MangaLines).\n"
+            "- Specular Glints: Eye catchlights (#ffffff), lip glints, nose tip point, hair angel halo rim lighting.\n"
+            "- Dynamic FX: Floating petals, embers, stars, or manga_lines (speed/focus lines) directed toward the focal anchor.\n"
+            "- Final Goal Check: Bring the illustration to 100% presentation readiness.\n"
+        );
+        break;
     }
 
     return out;

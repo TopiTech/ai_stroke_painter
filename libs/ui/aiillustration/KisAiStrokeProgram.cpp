@@ -218,7 +218,8 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
                                                               QStringLiteral("gradient_fill"),
                                                               QStringLiteral("ribbon"),
                                                               QStringLiteral("particles"),
-                                                              QStringLiteral("hatch")}}};
+                                                              QStringLiteral("hatch"),
+                                                              QStringLiteral("manga_lines")}}};
     opProps[QStringLiteral("id")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("layer")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("brush")] = brushSchema;
@@ -239,6 +240,14 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
     opProps[QStringLiteral("center")] = pointSchema;
     opProps[QStringLiteral("radius")] =
         QJsonObject{{QStringLiteral("type"), QStringLiteral("number")}, {QStringLiteral("exclusiveMinimum"), 0.0}};
+    opProps[QStringLiteral("inner_radius")] =
+        QJsonObject{{QStringLiteral("type"), QStringLiteral("number")}, {QStringLiteral("minimum"), 0.0}};
+    opProps[QStringLiteral("outer_radius")] =
+        QJsonObject{{QStringLiteral("type"), QStringLiteral("number")}, {QStringLiteral("exclusiveMinimum"), 0.0}};
+    opProps[QStringLiteral("density")] =
+        QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")}, {QStringLiteral("minimum"), 4}};
+    opProps[QStringLiteral("line_length_jitter")] =
+        QJsonObject{{QStringLiteral("type"), QStringLiteral("number")}, {QStringLiteral("minimum"), 0.0}};
     opProps[QStringLiteral("width_start")] =
         QJsonObject{{QStringLiteral("type"), QStringLiteral("number")}, {QStringLiteral("exclusiveMinimum"), 0.0}};
     opProps[QStringLiteral("width_mid")] =
@@ -261,6 +270,12 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
     rootProps[QStringLiteral("schema_version")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")}};
     rootProps[QStringLiteral("prompt")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     rootProps[QStringLiteral("title")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    rootProps[QStringLiteral("visual_critique")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    rootProps[QStringLiteral("step_phase")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    rootProps[QStringLiteral("current_step")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")}};
+    rootProps[QStringLiteral("total_steps")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")}};
+    rootProps[QStringLiteral("goal_reached")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")}};
+    rootProps[QStringLiteral("completion_score")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("number")}};
     rootProps[QStringLiteral("operations")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("array")},
                                                           {QStringLiteral("items"), opItem},
                                                           {QStringLiteral("minItems"), 1},
@@ -293,15 +308,15 @@ QString KisAiStrokeProgramCodec::buildSystemPrompt(const QSize &canvasSize,
             "bottom-right.\n"
             "Canvas size: %1x%2 (Aspect %3:1).\n\n"
             "=== LAYER ARCHITECTURE & COMPOSITION (Back-to-Front) ===\n"
-            "1. 'Flats': Backdrop gradients, sky wash, terrain base, major silhouette color blocking (hair base, skin "
-            "base, clothing base).\n"
-            "2. 'Shading': Form shadows, ambient occlusion, depth crevices, cast shadows (rendered with Multiply blend "
+            "1. 'Background': Far distance, sky washes, atmospheric depth (rendered behind all subjects; NOT clipped).\n"
+            "2. 'Flats': Major subject silhouette color blocking (hair base, skin base, clothing base, foreground terrain).\n"
+            "3. 'Shading': Form shadows, ambient occlusion, depth crevices, cast shadows (rendered with Multiply blend "
             "and automatically clipped to Flats).\n"
-            "3. 'Lineart': Crisp contours, facial details, hair strands, structural outlines (rendered with natural "
+            "4. 'Lineart': Crisp contours, facial details, hair strands, structural outlines (rendered with natural "
             "Catmull-Rom spline curves and tapering).\n"
-            "4. 'Highlights': Specular glints, eye catchlights, rim lighting, atmospheric glow (rendered with Screen "
+            "5. 'Highlights': Specular glints, eye catchlights, rim lighting, atmospheric glow (rendered with Screen "
             "blend and clipped to Flats).\n"
-            "5. 'FX': Particle accents, petals, embers, stars, sparkles, bloom.\n\n"
+            "6. 'FX': Particle accents, petals, embers, stars, sparkles, bloom, manga focus lines.\n\n"
             "=== MASTER DRAWING WORKFLOW (MANDATORY) ===\n"
             "Silently design the complete image before emitting JSON: establish a focal point, horizon/gesture, "
             "foreground-midground-background depth, and a limited 5-8 color palette.\n"
@@ -331,16 +346,17 @@ QString KisAiStrokeProgramCodec::buildSystemPrompt(const QSize &canvasSize,
             "- 'gradient_fill': Full/partial sky & background washes. Polygon [ [x, y], ... ], colors [ '#hex', ... ], "
             "angle_deg (0=horizontal, 90=vertical), is_radial (true/false), center [cx, cy], radius.\n"
             "- 'fill': Color masses, silhouettes, hair/clothing base, shadow blocks. Polygon [ [x, y], ... ], brush { "
-            "'profile': 'watercolor'/'brush', 'color': '#hex' }, style ('wash'/'contour'/'directional').\n"
+            "'profile': 'watercolor'/'brush'/'marker', 'color': '#hex' }, style ('wash'/'contour'/'directional').\n"
             "- 'hatch': Parallel shading or cross-hatching. Polygon [ [x, y], ... ], angle_deg (0-180), spacing "
             "(0.005-0.03), cross_hatch (true/false), brush { 'profile': 'pencil'/'gpen', 'color': '#hex' }.\n"
             "- 'ribbon': Tapered organic strokes (tree trunks, hair clumps, cloth folds). Spine [ [x, y], ... ], "
             "width_start, width_mid, width_end (0.005-0.05).\n"
             "- 'path': Expressive linework, contours, facial features. Points [ [x, y, pressure], ... ] where pressure "
-            "is 0.1-1.0. brush { 'profile': 'gpen'/'pencil'/'airbrush'/'watercolor', 'color': '#hex', 'size': "
+            "is 0.1-1.0. brush { 'profile': 'gpen'/'pencil'/'airbrush'/'watercolor'/'marker'/'crayon'/'neon'/'splatter', 'color': '#hex', 'size': "
             "0.002-0.01 }.\n"
             "- 'particles': Atmospheric particles. Bounds [x1, y1, x2, y2], count (10-50), shape "
-            "('petal'/'sparkle'/'star'/'dot'), brush { 'color': '#hex' }.\n\n"
+            "('petal'/'sparkle'/'star'/'dot'), brush { 'color': '#hex' }.\n"
+            "- 'manga_lines': Radial speed/focus lines toward a center. center [cx, cy], inner_radius (0.05-0.3), outer_radius (0.5-1.0), density (16-80), brush { 'profile': 'gpen', 'color': '#hex', 'size': 0.002 }.\n\n"
             "%4\n"
             "=== OUTPUT SCHEMA EXAMPLE ===\n"
             "{\n"
@@ -666,9 +682,11 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
 QString KisAiStrokeProgramCodec::normalizeLayerName(const QString &name)
 {
     const QString lower = name.trimmed().toLower();
+    if (lower == QLatin1String("background") || lower == QLatin1String("bg") || lower == QLatin1String("backdrop")) {
+        return QStringLiteral("Background");
+    }
     if (lower == QLatin1String("flat") || lower == QLatin1String("flats") || lower == QLatin1String("base")
-        || lower == QLatin1String("background") || lower == QLatin1String("color")
-        || lower == QLatin1String("colors")) {
+        || lower == QLatin1String("color") || lower == QLatin1String("colors")) {
         return QStringLiteral("Flats");
     }
     if (lower == QLatin1String("shading") || lower == QLatin1String("shade") || lower == QLatin1String("shadow")
@@ -684,7 +702,7 @@ QString KisAiStrokeProgramCodec::normalizeLayerName(const QString &name)
         return QStringLiteral("Highlights");
     }
     if (lower == QLatin1String("fx") || lower == QLatin1String("effects") || lower == QLatin1String("effect")
-        || lower == QLatin1String("particles")) {
+        || lower == QLatin1String("particles") || lower == QLatin1String("manga_lines")) {
         return QStringLiteral("FX");
     }
     return name.trimmed().isEmpty() ? QStringLiteral("Lineart") : name.trimmed();
@@ -703,12 +721,16 @@ QMap<QString, int> KisAiStrokeProgramCodec::countLayerOperations(const KisAiStro
 QString KisAiStrokeProgramCodec::formatLayerSummary(const KisAiStrokeProgram &program)
 {
     const QMap<QString, int> counts = countLayerOperations(program);
-    return QStringLiteral("Flats: %1, Shading: %2, Lineart: %3, Highlights: %4, FX: %5")
-        .arg(counts.value(QStringLiteral("Flats"), 0))
-        .arg(counts.value(QStringLiteral("Shading"), 0))
-        .arg(counts.value(QStringLiteral("Lineart"), 0))
-        .arg(counts.value(QStringLiteral("Highlights"), 0))
-        .arg(counts.value(QStringLiteral("FX"), 0));
+    QStringList parts;
+    if (counts.value(QStringLiteral("Background"), 0) > 0) {
+        parts << QStringLiteral("Background: %1").arg(counts.value(QStringLiteral("Background"), 0));
+    }
+    parts << QStringLiteral("Flats: %1").arg(counts.value(QStringLiteral("Flats"), 0));
+    parts << QStringLiteral("Shading: %1").arg(counts.value(QStringLiteral("Shading"), 0));
+    parts << QStringLiteral("Lineart: %1").arg(counts.value(QStringLiteral("Lineart"), 0));
+    parts << QStringLiteral("Highlights: %1").arg(counts.value(QStringLiteral("Highlights"), 0));
+    parts << QStringLiteral("FX: %1").arg(counts.value(QStringLiteral("FX"), 0));
+    return parts.join(QStringLiteral(", "));
 }
 
 bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
@@ -723,6 +745,12 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
     outProgram->prompt = rootObj.value(QStringLiteral("prompt")).toString();
     outProgram->title = rootObj.value(QStringLiteral("title")).toString(QStringLiteral("AI Artwork"));
     outProgram->seed = rootObj.value(QStringLiteral("seed")).toInt(42);
+    outProgram->visualCritique = rootObj.value(QStringLiteral("visual_critique")).toString();
+    outProgram->stepPhase = rootObj.value(QStringLiteral("step_phase")).toString(QStringLiteral("complete"));
+    outProgram->currentStep = rootObj.value(QStringLiteral("current_step")).toInt(1);
+    outProgram->totalSteps = rootObj.value(QStringLiteral("total_steps")).toInt(1);
+    outProgram->goalReached = rootObj.value(QStringLiteral("goal_reached")).toBool(true);
+    outProgram->completionScore = rootObj.value(QStringLiteral("completion_score")).toDouble(1.0);
 
     if (rootObj.contains(QStringLiteral("canvas_size")) || rootObj.contains(QStringLiteral("canvas"))) {
         const QJsonObject cObj = rootObj.contains(QStringLiteral("canvas_size"))
@@ -779,6 +807,10 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
         if (k == QLatin1String("hatch") || k == QLatin1String("cross_hatch") || k == QLatin1String("crosshatch")
             || k == QLatin1String("shading_hatch")) {
             return KisAiStrokeOperation::Kind::Hatch;
+        }
+        if (k == QLatin1String("manga_lines") || k == QLatin1String("mangalines") || k == QLatin1String("speed_lines")
+            || k == QLatin1String("focus_lines") || k == QLatin1String("radial_lines")) {
+            return KisAiStrokeOperation::Kind::MangaLines;
         }
         return KisAiStrokeOperation::Kind::Unknown;
     };
@@ -1032,6 +1064,20 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 } else {
                     op.bounds = QRectF(0.1, 0.1, 0.8, 0.8);
                 }
+            } else if (op.kind == KisAiStrokeOperation::Kind::MangaLines) {
+                if (o.contains(QStringLiteral("center"))) {
+                    const auto cp = parsePoint(o.value(QStringLiteral("center")));
+                    if (cp.second >= 0.0) {
+                        op.gradientCenter = cp.first;
+                        if (qMax(op.gradientCenter.x(), op.gradientCenter.y()) > 1.5) {
+                            op.gradientCenter = QPointF(op.gradientCenter.x() / canvasW, op.gradientCenter.y() / canvasH);
+                        }
+                    }
+                }
+                op.innerRadius = o.value(QStringLiteral("inner_radius")).toDouble(0.15);
+                op.outerRadius = o.value(QStringLiteral("outer_radius")).toDouble(0.70);
+                op.density = qBound(4, o.value(QStringLiteral("density")).toInt(48), 120);
+                op.lineLengthJitter = o.value(QStringLiteral("line_length_jitter")).toDouble(0.20);
             }
 
             if (op.kind != KisAiStrokeOperation::Kind::Unknown) {
@@ -1131,6 +1177,14 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             profile = QStringLiteral("airbrush");
         if (profile == QLatin1String("flat") || profile == QLatin1String("paint"))
             profile = QStringLiteral("brush");
+        if (profile == QLatin1String("felt") || profile == QLatin1String("copic"))
+            profile = QStringLiteral("marker");
+        if (profile == QLatin1String("pastel") || profile == QLatin1String("chalk") || profile == QLatin1String("oil_pastel"))
+            profile = QStringLiteral("crayon");
+        if (profile == QLatin1String("glow") || profile == QLatin1String("laser") || profile == QLatin1String("light"))
+            profile = QStringLiteral("neon");
+        if (profile == QLatin1String("spatter") || profile == QLatin1String("blot") || profile == QLatin1String("fleck"))
+            profile = QStringLiteral("splatter");
         if (profile.isEmpty() || profile == QLatin1String("auto")) {
             if (op.kind == KisAiStrokeOperation::Kind::Hatch)
                 profile = QStringLiteral("pencil");
@@ -1297,6 +1351,15 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             renderable = op.bounds.width() > 1.0e-4 && op.bounds.height() > 1.0e-4;
             break;
         }
+        case KisAiStrokeOperation::Kind::MangaLines: {
+            op.gradientCenter = clampedPoint(op.gradientCenter, &localReport.repairedValues);
+            op.innerRadius = qBound<qreal>(0.01, std::isfinite(op.innerRadius) ? op.innerRadius : 0.15, 0.8);
+            op.outerRadius = qBound<qreal>(op.innerRadius + 0.05, std::isfinite(op.outerRadius) ? op.outerRadius : 0.70, 1.5);
+            op.density = qBound(4, op.density, 180);
+            op.lineLengthJitter = qBound<qreal>(0.0, std::isfinite(op.lineLengthJitter) ? op.lineLengthJitter : 0.20, 0.9);
+            renderable = op.density > 0 && op.outerRadius > op.innerRadius;
+            break;
+        }
         case KisAiStrokeOperation::Kind::Unknown:
             renderable = false;
             break;
@@ -1319,7 +1382,11 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
         localReport.warnings.append(QStringLiteral("The program has low structural detail or layer coverage."));
     }
     refined.completionScore = localReport.score;
-    refined.goalReached = localReport.score >= 0.6;
+    if (program.totalSteps > 1) {
+        refined.goalReached = program.goalReached || (program.currentStep >= program.totalSteps);
+    } else {
+        refined.goalReached = localReport.score >= 0.6;
+    }
     if (report)
         *report = localReport;
     return refined;
@@ -1360,6 +1427,11 @@ qreal KisAiStrokeProgramCodec::qualityScore(const KisAiStrokeProgram &program)
         } else if (op.kind == KisAiStrokeOperation::Kind::Particles) {
             occupied = occupied.isNull() ? op.bounds : occupied.united(op.bounds);
             geometryPoints += op.particleCount;
+        } else if (op.kind == KisAiStrokeOperation::Kind::MangaLines) {
+            const QRectF bounds(op.gradientCenter.x() - op.outerRadius, op.gradientCenter.y() - op.outerRadius,
+                                op.outerRadius * 2.0, op.outerRadius * 2.0);
+            occupied = occupied.isNull() ? bounds : occupied.united(bounds);
+            geometryPoints += op.density * 2;
         }
     }
 
@@ -1370,6 +1442,9 @@ qreal KisAiStrokeProgramCodec::qualityScore(const KisAiStrokeProgram &program)
                                  QStringLiteral("Highlights")}) {
         if (layers.contains(layer))
             ++essentialLayers;
+    }
+    if (layers.contains(QStringLiteral("Background")) && essentialLayers < 4) {
+        ++essentialLayers;
     }
     const qreal layerScore = qreal(essentialLayers) / 4.0;
     const qreal primitiveScore = qMin<qreal>(1.0, qreal(kinds.size()) / 4.0);
@@ -1411,6 +1486,20 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgram(const QSt
         const QColor hairColor = parseColor(spec.hairColor, QColor(QStringLiteral("#2d2036")));
         const QColor eyeColor = parseColor(spec.eyeColor, QColor(QStringLiteral("#3884ff")));
         const QColor inkColor(QStringLiteral("#1c1824"));
+
+        // 0. Background: Subtle vignette / atmosphere
+        {
+            KisAiStrokeOperation bg;
+            bg.kind = KisAiStrokeOperation::Kind::GradientFill;
+            bg.id = QStringLiteral("bg_vignette");
+            bg.layer = QStringLiteral("Background");
+            bg.polygon << QPointF(0.0, 0.0) << QPointF(1.0, 0.0) << QPointF(1.0, 1.0) << QPointF(0.0, 1.0);
+            bg.gradientColors << makeHslColor(baseHue + 20, 40, 245) << makeHslColor(baseHue + 40, 60, 220);
+            bg.isRadial = true;
+            bg.gradientCenter = QPointF(0.50, 0.50);
+            bg.gradientRadius = 0.75;
+            program.operations.append(bg);
+        }
 
         // 1. Flats: Back hair mass
         {
@@ -1688,7 +1777,442 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgram(const QSt
             program.operations.append(fx);
         }
 
-        return program;
+        return refineForRendering(program);
+    }
+    else if (spec.domain == KisAiPromptAnalyzer::DomainType::Cyberpunk) {
+        // 0. Background: Dark neon skyline gradient
+        {
+            KisAiStrokeOperation bg;
+            bg.kind = KisAiStrokeOperation::Kind::GradientFill;
+            bg.id = QStringLiteral("cyber_sky");
+            bg.layer = QStringLiteral("Background");
+            bg.polygon << QPointF(0.0, 0.0) << QPointF(1.0, 0.0) << QPointF(1.0, 0.70) << QPointF(0.0, 0.70);
+            bg.gradientColors << QColor(QStringLiteral("#0b0c16")) << QColor(QStringLiteral("#1e0836")) << QColor(QStringLiteral("#380e4a"));
+            bg.angleDeg = 90.0;
+            program.operations.append(bg);
+        }
+
+        // 1. Flats: Skyscraper silhouettes & Ground highway
+        {
+            KisAiStrokeOperation city;
+            city.kind = KisAiStrokeOperation::Kind::Fill;
+            city.id = QStringLiteral("skyscrapers");
+            city.layer = QStringLiteral("Flats");
+            city.brush.color = QColor(QStringLiteral("#101726"));
+            city.polygon << QPointF(0.05, 0.65) << QPointF(0.05, 0.28) << QPointF(0.22, 0.28) << QPointF(0.22, 0.38)
+                         << QPointF(0.35, 0.38) << QPointF(0.35, 0.20) << QPointF(0.48, 0.20) << QPointF(0.48, 0.32)
+                         << QPointF(0.62, 0.32) << QPointF(0.62, 0.16) << QPointF(0.78, 0.16) << QPointF(0.78, 0.35)
+                         << QPointF(0.95, 0.35) << QPointF(0.95, 0.65);
+            program.operations.append(city);
+
+            KisAiStrokeOperation highway;
+            highway.kind = KisAiStrokeOperation::Kind::Fill;
+            highway.id = QStringLiteral("highway_ground");
+            highway.layer = QStringLiteral("Flats");
+            highway.brush.color = QColor(QStringLiteral("#0c0d14"));
+            highway.polygon << QPointF(0.0, 0.62) << QPointF(1.0, 0.62) << QPointF(1.0, 1.0) << QPointF(0.0, 1.0);
+            program.operations.append(highway);
+        }
+
+        // 2. Shading: Building shadow panels
+        {
+            KisAiStrokeOperation shade;
+            shade.kind = KisAiStrokeOperation::Kind::Hatch;
+            shade.id = QStringLiteral("building_shading");
+            shade.layer = QStringLiteral("Shading");
+            shade.brush.color = QColor(QStringLiteral("#060910"));
+            shade.angleDeg = 90.0;
+            shade.spacing = 0.012;
+            shade.crossHatch = false;
+            shade.polygon << QPointF(0.35, 0.20) << QPointF(0.48, 0.20) << QPointF(0.48, 0.62) << QPointF(0.35, 0.62);
+            program.operations.append(shade);
+        }
+
+        // 3. Lineart: Architectural edges & road grid
+        {
+            KisAiStrokeOperation grid;
+            grid.kind = KisAiStrokeOperation::Kind::Path;
+            grid.id = QStringLiteral("city_lineart");
+            grid.layer = QStringLiteral("Lineart");
+            grid.brush.profile = QStringLiteral("gpen");
+            grid.brush.color = QColor(QStringLiteral("#1e2b40"));
+            grid.brush.size = 0.003;
+            grid.points << KisAiStrokePoint(0.0, 0.62, 0.8) << KisAiStrokePoint(0.50, 0.62, 0.9) << KisAiStrokePoint(1.0, 0.62, 0.8);
+            program.operations.append(grid);
+
+            KisAiStrokeOperation antenna;
+            antenna.kind = KisAiStrokeOperation::Kind::Ribbon;
+            antenna.id = QStringLiteral("spire");
+            antenna.layer = QStringLiteral("Lineart");
+            antenna.brush.color = QColor(QStringLiteral("#283e5c"));
+            antenna.widthStart = 0.012;
+            antenna.widthMid = 0.006;
+            antenna.widthEnd = 0.001;
+            antenna.spine << QPointF(0.62, 0.25) << QPointF(0.62, 0.08);
+            program.operations.append(antenna);
+        }
+
+        // 4. Highlights: Neon glows (Cyan & Magenta)
+        {
+            KisAiStrokeOperation neonCyan;
+            neonCyan.kind = KisAiStrokeOperation::Kind::Path;
+            neonCyan.id = QStringLiteral("neon_cyan");
+            neonCyan.layer = QStringLiteral("Highlights");
+            neonCyan.brush.profile = QStringLiteral("neon");
+            neonCyan.brush.color = QColor(QStringLiteral("#00f0ff"));
+            neonCyan.brush.size = 0.004;
+            neonCyan.points << KisAiStrokePoint(0.08, 0.32, 0.9) << KisAiStrokePoint(0.18, 0.32, 0.9);
+            program.operations.append(neonCyan);
+
+            KisAiStrokeOperation neonMagenta;
+            neonMagenta.kind = KisAiStrokeOperation::Kind::Path;
+            neonMagenta.id = QStringLiteral("neon_magenta");
+            neonMagenta.layer = QStringLiteral("Highlights");
+            neonMagenta.brush.profile = QStringLiteral("neon");
+            neonMagenta.brush.color = QColor(QStringLiteral("#ff007f"));
+            neonMagenta.brush.size = 0.005;
+            neonMagenta.points << KisAiStrokePoint(0.38, 0.25, 0.9) << KisAiStrokePoint(0.38, 0.45, 0.9);
+            program.operations.append(neonMagenta);
+        }
+
+        // 5. FX: Manga Lines (Perspective speed) & cyber particles
+        {
+            KisAiStrokeOperation speed;
+            speed.kind = KisAiStrokeOperation::Kind::MangaLines;
+            speed.id = QStringLiteral("cyber_perspective_lines");
+            speed.layer = QStringLiteral("FX");
+            speed.brush.profile = QStringLiteral("neon");
+            speed.brush.color = QColor(QStringLiteral("#00e5ff"));
+            speed.brush.size = 0.002;
+            speed.gradientCenter = QPointF(0.50, 0.62);
+            speed.innerRadius = 0.10;
+            speed.outerRadius = 0.75;
+            speed.density = 36;
+            speed.lineLengthJitter = 0.25;
+            program.operations.append(speed);
+
+            KisAiStrokeOperation particles;
+            particles.kind = KisAiStrokeOperation::Kind::Particles;
+            particles.id = QStringLiteral("cyber_sparks");
+            particles.layer = QStringLiteral("FX");
+            particles.brush.color = QColor(QStringLiteral("#ff00a0"));
+            particles.bounds = QRectF(0.05, 0.20, 0.90, 0.75);
+            particles.particleCount = 28;
+            particles.particleShape = QStringLiteral("sparkle");
+            program.operations.append(particles);
+        }
+
+        return refineForRendering(program);
+    }
+    else if (spec.domain == KisAiPromptAnalyzer::DomainType::Botanical) {
+        // 0. Background: Soft watercolor wash
+        {
+            KisAiStrokeOperation bg;
+            bg.kind = KisAiStrokeOperation::Kind::GradientFill;
+            bg.id = QStringLiteral("botanical_bg");
+            bg.layer = QStringLiteral("Background");
+            bg.polygon << QPointF(0.0, 0.0) << QPointF(1.0, 0.0) << QPointF(1.0, 1.0) << QPointF(0.0, 1.0);
+            bg.gradientColors << QColor(QStringLiteral("#fcfaf6")) << QColor(QStringLiteral("#f4eee1"));
+            bg.angleDeg = 45.0;
+            program.operations.append(bg);
+        }
+
+        // 1. Flats: Leaves & Petals
+        {
+            KisAiStrokeOperation leaf;
+            leaf.kind = KisAiStrokeOperation::Kind::Fill;
+            leaf.id = QStringLiteral("broad_leaf");
+            leaf.layer = QStringLiteral("Flats");
+            leaf.brush.profile = QStringLiteral("watercolor");
+            leaf.brush.color = QColor(QStringLiteral("#4a7a53"));
+            leaf.polygon << QPointF(0.35, 0.65) << QPointF(0.18, 0.58) << QPointF(0.12, 0.72) << QPointF(0.32, 0.76);
+            program.operations.append(leaf);
+
+            KisAiStrokeOperation blossom;
+            blossom.kind = KisAiStrokeOperation::Kind::Fill;
+            blossom.id = QStringLiteral("flower_petals");
+            blossom.layer = QStringLiteral("Flats");
+            blossom.brush.profile = QStringLiteral("watercolor");
+            blossom.brush.color = QColor(QStringLiteral("#e64966"));
+            blossom.polygon << QPointF(0.40, 0.35) << QPointF(0.50, 0.22) << QPointF(0.60, 0.35)
+                            << QPointF(0.68, 0.48) << QPointF(0.50, 0.60) << QPointF(0.32, 0.48);
+            program.operations.append(blossom);
+        }
+
+        // 2. Shading: Inner petal depth & leaf vein hatch
+        {
+            KisAiStrokeOperation petalShade;
+            petalShade.kind = KisAiStrokeOperation::Kind::Fill;
+            petalShade.id = QStringLiteral("inner_petal_shade");
+            petalShade.layer = QStringLiteral("Shading");
+            petalShade.brush.profile = QStringLiteral("brush");
+            petalShade.brush.color = QColor(QStringLiteral("#b02542"));
+            petalShade.polygon << QPointF(0.44, 0.40) << QPointF(0.50, 0.32) << QPointF(0.56, 0.40)
+                               << QPointF(0.53, 0.52) << QPointF(0.47, 0.52);
+            program.operations.append(petalShade);
+
+            KisAiStrokeOperation veinHatch;
+            veinHatch.kind = KisAiStrokeOperation::Kind::Hatch;
+            veinHatch.id = QStringLiteral("leaf_veins");
+            veinHatch.layer = QStringLiteral("Shading");
+            veinHatch.brush.color = QColor(QStringLiteral("#2f5236"));
+            veinHatch.angleDeg = 30.0;
+            veinHatch.spacing = 0.015;
+            veinHatch.polygon << QPointF(0.35, 0.65) << QPointF(0.18, 0.58) << QPointF(0.12, 0.72) << QPointF(0.32, 0.76);
+            program.operations.append(veinHatch);
+        }
+
+        // 3. Lineart: Organic stem ribbon & petal contours
+        {
+            KisAiStrokeOperation stem;
+            stem.kind = KisAiStrokeOperation::Kind::Ribbon;
+            stem.id = QStringLiteral("flower_stem");
+            stem.layer = QStringLiteral("Lineart");
+            stem.brush.color = QColor(QStringLiteral("#334d36"));
+            stem.widthStart = 0.024;
+            stem.widthMid = 0.018;
+            stem.widthEnd = 0.010;
+            stem.spine << QPointF(0.48, 0.95) << QPointF(0.49, 0.75) << QPointF(0.50, 0.58);
+            program.operations.append(stem);
+
+            KisAiStrokeOperation contour;
+            contour.kind = KisAiStrokeOperation::Kind::Path;
+            contour.id = QStringLiteral("petal_contour");
+            contour.layer = QStringLiteral("Lineart");
+            contour.brush.profile = QStringLiteral("gpen");
+            contour.brush.color = QColor(QStringLiteral("#5c1422"));
+            contour.brush.size = 0.003;
+            contour.points << KisAiStrokePoint(0.40, 0.35, 0.8) << KisAiStrokePoint(0.50, 0.22, 0.9)
+                           << KisAiStrokePoint(0.60, 0.35, 0.8) << KisAiStrokePoint(0.68, 0.48, 0.7)
+                           << KisAiStrokePoint(0.50, 0.60, 0.8) << KisAiStrokePoint(0.32, 0.48, 0.7);
+            contour.closed = true;
+            program.operations.append(contour);
+        }
+
+        // 4. Highlights: Dewdrops
+        {
+            KisAiStrokeOperation dew;
+            dew.kind = KisAiStrokeOperation::Kind::Path;
+            dew.id = QStringLiteral("dewdrop");
+            dew.layer = QStringLiteral("Highlights");
+            dew.brush.profile = QStringLiteral("gpen");
+            dew.brush.color = QColor(QStringLiteral("#ffffff"));
+            dew.brush.size = 0.003;
+            dew.points << KisAiStrokePoint(0.45, 0.30, 1.0) << KisAiStrokePoint(0.46, 0.31, 1.0);
+            program.operations.append(dew);
+        }
+
+        // 5. FX: Floating pollen particles
+        {
+            KisAiStrokeOperation pollen;
+            pollen.kind = KisAiStrokeOperation::Kind::Particles;
+            pollen.id = QStringLiteral("pollen");
+            pollen.layer = QStringLiteral("FX");
+            pollen.brush.color = QColor(QStringLiteral("#ffe5b4"));
+            pollen.bounds = QRectF(0.15, 0.15, 0.70, 0.70);
+            pollen.particleCount = 20;
+            pollen.particleShape = QStringLiteral("petal");
+            program.operations.append(pollen);
+        }
+
+        return refineForRendering(program);
+    }
+    else if (spec.domain == KisAiPromptAnalyzer::DomainType::Creature) {
+        // 0. Background: Misty dragon cavern
+        {
+            KisAiStrokeOperation bg;
+            bg.kind = KisAiStrokeOperation::Kind::GradientFill;
+            bg.id = QStringLiteral("creature_bg");
+            bg.layer = QStringLiteral("Background");
+            bg.polygon << QPointF(0.0, 0.0) << QPointF(1.0, 0.0) << QPointF(1.0, 1.0) << QPointF(0.0, 1.0);
+            bg.gradientColors << QColor(QStringLiteral("#18141c")) << QColor(QStringLiteral("#2d1822"));
+            bg.angleDeg = 90.0;
+            program.operations.append(bg);
+        }
+
+        // 1. Flats: Creature body & wing silhouette
+        {
+            KisAiStrokeOperation wing;
+            wing.kind = KisAiStrokeOperation::Kind::Fill;
+            wing.id = QStringLiteral("creature_wing");
+            wing.layer = QStringLiteral("Flats");
+            wing.brush.color = QColor(QStringLiteral("#381822"));
+            wing.polygon << QPointF(0.48, 0.45) << QPointF(0.18, 0.22) << QPointF(0.08, 0.38) << QPointF(0.24, 0.52);
+            program.operations.append(wing);
+
+            KisAiStrokeOperation body;
+            body.kind = KisAiStrokeOperation::Kind::Fill;
+            body.id = QStringLiteral("creature_body");
+            body.layer = QStringLiteral("Flats");
+            body.brush.color = QColor(QStringLiteral("#4a1d28"));
+            body.polygon << QPointF(0.42, 0.32) << QPointF(0.58, 0.32) << QPointF(0.68, 0.52)
+                         << QPointF(0.55, 0.78) << QPointF(0.40, 0.78) << QPointF(0.35, 0.52);
+            program.operations.append(body);
+        }
+
+        // 2. Shading: Scale cross-hatch shading
+        {
+            KisAiStrokeOperation scaleHatch;
+            scaleHatch.kind = KisAiStrokeOperation::Kind::Hatch;
+            scaleHatch.id = QStringLiteral("scale_hatch");
+            scaleHatch.layer = QStringLiteral("Shading");
+            scaleHatch.brush.color = QColor(QStringLiteral("#1e0a12"));
+            scaleHatch.angleDeg = 45.0;
+            scaleHatch.spacing = 0.012;
+            scaleHatch.crossHatch = true;
+            scaleHatch.polygon << QPointF(0.42, 0.38) << QPointF(0.58, 0.38) << QPointF(0.55, 0.78) << QPointF(0.40, 0.78);
+            program.operations.append(scaleHatch);
+        }
+
+        // 3. Lineart: Horns ribbon & claw paths
+        {
+            KisAiStrokeOperation horn;
+            horn.kind = KisAiStrokeOperation::Kind::Ribbon;
+            horn.id = QStringLiteral("creature_horn");
+            horn.layer = QStringLiteral("Lineart");
+            horn.brush.color = QColor(QStringLiteral("#1a080e"));
+            horn.widthStart = 0.030;
+            horn.widthMid = 0.016;
+            horn.widthEnd = 0.002;
+            horn.spine << QPointF(0.46, 0.34) << QPointF(0.38, 0.22) << QPointF(0.32, 0.12);
+            program.operations.append(horn);
+
+            KisAiStrokeOperation spineContour;
+            spineContour.kind = KisAiStrokeOperation::Kind::Path;
+            spineContour.id = QStringLiteral("spine_contour");
+            spineContour.layer = QStringLiteral("Lineart");
+            spineContour.brush.profile = QStringLiteral("gpen");
+            spineContour.brush.color = QColor(QStringLiteral("#1a080e"));
+            spineContour.brush.size = 0.004;
+            spineContour.points << KisAiStrokePoint(0.32, 0.12, 0.4) << KisAiStrokePoint(0.42, 0.32, 0.9)
+                                << KisAiStrokePoint(0.35, 0.52, 0.8) << KisAiStrokePoint(0.40, 0.78, 0.9);
+            program.operations.append(spineContour);
+        }
+
+        // 4. Highlights: Glowing creature eye & horn tip
+        {
+            KisAiStrokeOperation eyeGlow;
+            eyeGlow.kind = KisAiStrokeOperation::Kind::Path;
+            eyeGlow.id = QStringLiteral("creature_eye");
+            eyeGlow.layer = QStringLiteral("Highlights");
+            eyeGlow.brush.profile = QStringLiteral("neon");
+            eyeGlow.brush.color = QColor(QStringLiteral("#ffaa00"));
+            eyeGlow.brush.size = 0.005;
+            eyeGlow.points << KisAiStrokePoint(0.48, 0.36, 1.0) << KisAiStrokePoint(0.52, 0.36, 1.0);
+            program.operations.append(eyeGlow);
+        }
+
+        // 5. FX: Dragon fire sparks
+        {
+            KisAiStrokeOperation sparks;
+            sparks.kind = KisAiStrokeOperation::Kind::Particles;
+            sparks.id = QStringLiteral("fire_sparks");
+            sparks.layer = QStringLiteral("FX");
+            sparks.brush.color = QColor(QStringLiteral("#ff5500"));
+            sparks.bounds = QRectF(0.20, 0.20, 0.60, 0.60);
+            sparks.particleCount = 26;
+            sparks.particleShape = QStringLiteral("sparkle");
+            program.operations.append(sparks);
+        }
+
+        return refineForRendering(program);
+    }
+    else if (spec.domain == KisAiPromptAnalyzer::DomainType::MangaFx) {
+        // 0. Background: Dynamic comic halftone backdrop
+        {
+            KisAiStrokeOperation bg;
+            bg.kind = KisAiStrokeOperation::Kind::GradientFill;
+            bg.id = QStringLiteral("manga_bg");
+            bg.layer = QStringLiteral("Background");
+            bg.polygon << QPointF(0.0, 0.0) << QPointF(1.0, 0.0) << QPointF(1.0, 1.0) << QPointF(0.0, 1.0);
+            bg.gradientColors << QColor(QStringLiteral("#ffffff")) << QColor(QStringLiteral("#d8d8d8"));
+            bg.isRadial = true;
+            bg.gradientCenter = QPointF(0.50, 0.50);
+            bg.gradientRadius = 0.85;
+            program.operations.append(bg);
+        }
+
+        // 1. Flats: Impact center silhouette
+        {
+            KisAiStrokeOperation impact;
+            impact.kind = KisAiStrokeOperation::Kind::Fill;
+            impact.id = QStringLiteral("impact_base");
+            impact.layer = QStringLiteral("Flats");
+            impact.brush.color = QColor(QStringLiteral("#181818"));
+            impact.polygon << QPointF(0.42, 0.44) << QPointF(0.50, 0.38) << QPointF(0.58, 0.44)
+                           << QPointF(0.56, 0.56) << QPointF(0.44, 0.56);
+            program.operations.append(impact);
+        }
+
+        // 2. Shading: Intense cross-hatch shading
+        {
+            KisAiStrokeOperation hatch;
+            hatch.kind = KisAiStrokeOperation::Kind::Hatch;
+            hatch.id = QStringLiteral("manga_shading");
+            hatch.layer = QStringLiteral("Shading");
+            hatch.brush.color = QColor(QStringLiteral("#0f0f0f"));
+            hatch.angleDeg = 45.0;
+            hatch.spacing = 0.008;
+            hatch.crossHatch = true;
+            hatch.polygon << QPointF(0.40, 0.42) << QPointF(0.60, 0.42) << QPointF(0.58, 0.58) << QPointF(0.42, 0.58);
+            program.operations.append(hatch);
+        }
+
+        // 3. Lineart: Bold dynamic G-pen action lines
+        {
+            KisAiStrokeOperation actionRibbon;
+            actionRibbon.kind = KisAiStrokeOperation::Kind::Ribbon;
+            actionRibbon.id = QStringLiteral("impact_ribbon");
+            actionRibbon.layer = QStringLiteral("Lineart");
+            actionRibbon.brush.color = QColor(QStringLiteral("#000000"));
+            actionRibbon.widthStart = 0.035;
+            actionRibbon.widthMid = 0.020;
+            actionRibbon.widthEnd = 0.003;
+            actionRibbon.spine << QPointF(0.15, 0.85) << QPointF(0.38, 0.62) << QPointF(0.50, 0.50);
+            program.operations.append(actionRibbon);
+
+            KisAiStrokeOperation slash;
+            slash.kind = KisAiStrokeOperation::Kind::Path;
+            slash.id = QStringLiteral("slash_contour");
+            slash.layer = QStringLiteral("Lineart");
+            slash.brush.profile = QStringLiteral("gpen");
+            slash.brush.color = QColor(QStringLiteral("#050505"));
+            slash.brush.size = 0.005;
+            slash.points << KisAiStrokePoint(0.20, 0.25, 0.9) << KisAiStrokePoint(0.50, 0.50, 1.0) << KisAiStrokePoint(0.80, 0.75, 0.9);
+            program.operations.append(slash);
+        }
+
+        // 4. Highlights: Pure white flash cut
+        {
+            KisAiStrokeOperation flash;
+            flash.kind = KisAiStrokeOperation::Kind::Path;
+            flash.id = QStringLiteral("impact_flash");
+            flash.layer = QStringLiteral("Highlights");
+            flash.brush.profile = QStringLiteral("gpen");
+            flash.brush.color = QColor(QStringLiteral("#ffffff"));
+            flash.brush.size = 0.006;
+            flash.points << KisAiStrokePoint(0.48, 0.50, 1.0) << KisAiStrokePoint(0.52, 0.50, 1.0);
+            program.operations.append(flash);
+        }
+
+        // 5. FX: Full radial Manga speed lines
+        {
+            KisAiStrokeOperation mangaLines;
+            mangaLines.kind = KisAiStrokeOperation::Kind::MangaLines;
+            mangaLines.id = QStringLiteral("radial_speed_lines");
+            mangaLines.layer = QStringLiteral("FX");
+            mangaLines.brush.profile = QStringLiteral("gpen");
+            mangaLines.brush.color = QColor(QStringLiteral("#111111"));
+            mangaLines.brush.size = 0.0025;
+            mangaLines.gradientCenter = QPointF(0.50, 0.50);
+            mangaLines.innerRadius = 0.15;
+            mangaLines.outerRadius = 0.85;
+            mangaLines.density = 64;
+            mangaLines.lineLengthJitter = 0.30;
+            program.operations.append(mangaLines);
+        }
+
+        return refineForRendering(program);
     }
 
     // =========================================================================
@@ -1700,7 +2224,7 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgram(const QSt
         KisAiStrokeOperation sky;
         sky.kind = KisAiStrokeOperation::Kind::GradientFill;
         sky.id = QStringLiteral("sky_gradient");
-        sky.layer = QStringLiteral("Flats");
+        sky.layer = QStringLiteral("Background");
         sky.polygon << QPointF(0.0, 0.0) << QPointF(1.0, 0.0) << QPointF(1.0, 0.65) << QPointF(0.0, 0.65);
         for (const QString &cStr : spec.skyGradientColors) {
             sky.gradientColors.append(parseColor(cStr));
@@ -1811,4 +2335,204 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgram(const QSt
     }
 
     return refineForRendering(program);
+}
+
+bool KisAiStrokeProgramCodec::isVisionModel(const QString &model)
+{
+    const QString m = model.toLower().trimmed();
+    if (m.isEmpty()) {
+        return false;
+    }
+    return m.contains(QStringLiteral("gpt-4o")) ||
+           m.contains(QStringLiteral("gpt-4-turbo")) ||
+           m.contains(QStringLiteral("vision")) ||
+           m.contains(QStringLiteral("claude-3")) ||
+           m.contains(QStringLiteral("gemini")) ||
+           (m.contains(QStringLiteral("qwen")) && m.contains(QStringLiteral("vl"))) ||
+           m.contains(QStringLiteral("pixtral")) ||
+           m.contains(QStringLiteral("llava"));
+}
+
+QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
+    const QString &model,
+    const QString &prompt,
+    const QSize &canvasSize,
+    int step,
+    int totalSteps,
+    const QString &imageBase64,
+    const QString &additionalInstruction,
+    int strokeBudget,
+    const QString &reasoningEffort)
+{
+    const bool reasoning = isReasoningModel(model);
+    const bool vision = isVisionModel(model);
+    const auto spec = KisAiPromptAnalyzer::analyze(prompt, canvasSize);
+    const QString phaseGuidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(step, spec, canvasSize);
+
+    QString combinedInstructions = phaseGuidance;
+    if (!additionalInstruction.trimmed().isEmpty()) {
+        combinedInstructions += QStringLiteral("\n\n[USER ADDITIONAL FEEDBACK]\n") + additionalInstruction.trimmed();
+    }
+
+    const QString systemText = buildSystemPrompt(canvasSize, prompt, combinedInstructions);
+
+    const int geometryBudget = qBound(20, strokeBudget, 2000);
+    const int operationTarget = qBound(12, geometryBudget / (totalSteps > 0 ? totalSteps * 3 : 12), 80);
+
+    QJsonObject userObj;
+    userObj[QStringLiteral("prompt")] = prompt;
+    userObj[QStringLiteral("canvas_width")] = canvasSize.width();
+    userObj[QStringLiteral("canvas_height")] = canvasSize.height();
+    userObj[QStringLiteral("current_step")] = step;
+    userObj[QStringLiteral("total_steps")] = totalSteps;
+    userObj[QStringLiteral("step_phase")] = (step == 1) ? QStringLiteral("Flats & Background") :
+                                           (step == 2) ? QStringLiteral("Shading & Ambient Occlusion") :
+                                           (step == 3) ? QStringLiteral("Lineart & Details") :
+                                                         QStringLiteral("Highlights & FX Polish");
+    userObj[QStringLiteral("operation_target")] = operationTarget;
+    userObj[QStringLiteral("directive")] = QStringLiteral(
+        "You are executing Step %1 of %2 in autonomous Goal Mode. "
+        "Review the canvas screenshot (if attached) and write a 1-2 sentence 'visual_critique' assessing progress and setting direction for this step. "
+        "Generate only the operations required for this phase. Set 'step_phase' to '%3', 'current_step' to %1, and 'goal_reached' to %4.")
+        .arg(step)
+        .arg(totalSteps)
+        .arg(userObj[QStringLiteral("step_phase")].toString())
+        .arg(step >= totalSteps ? QStringLiteral("true") : QStringLiteral("false"));
+
+    const QString userText = QString::fromUtf8(QJsonDocument(userObj).toJson(QJsonDocument::Compact));
+
+    QJsonArray messages;
+    messages.append(
+        QJsonObject{{QStringLiteral("role"), QStringLiteral("system")}, {QStringLiteral("content"), systemText}});
+
+    QJsonObject userMsg;
+    userMsg[QStringLiteral("role")] = QStringLiteral("user");
+    if (vision && !imageBase64.trimmed().isEmpty()) {
+        QJsonArray contentArray;
+        contentArray.append(QJsonObject{
+            {QStringLiteral("type"), QStringLiteral("text")},
+            {QStringLiteral("text"), userText}
+        });
+        QString imageUrl = imageBase64.trimmed();
+        if (!imageUrl.startsWith(QLatin1String("data:image/"))) {
+            imageUrl = QStringLiteral("data:image/jpeg;base64,") + imageUrl;
+        }
+        contentArray.append(QJsonObject{
+            {QStringLiteral("type"), QStringLiteral("image_url")},
+            {QStringLiteral("image_url"), QJsonObject{
+                {QStringLiteral("url"), imageUrl},
+                {QStringLiteral("detail"), QStringLiteral("low")}
+            }}
+        });
+        userMsg[QStringLiteral("content")] = contentArray;
+    } else {
+        userMsg[QStringLiteral("content")] = userText;
+    }
+    messages.append(userMsg);
+
+    QJsonObject payload;
+    payload[QStringLiteral("model")] = model.trimmed();
+    payload[QStringLiteral("messages")] = messages;
+
+    QJsonObject responseFormat;
+    responseFormat[QStringLiteral("type")] = QStringLiteral("json_object");
+    payload[QStringLiteral("response_format")] = responseFormat;
+
+    const int calculatedTokens = qBound(4096, operationTarget * 120 + (reasoning ? 8192 : 2048), 32768);
+    if (reasoning) {
+        payload[QStringLiteral("max_completion_tokens")] = calculatedTokens;
+        if (!reasoningEffort.isEmpty() && reasoningEffort.toLower() != QLatin1String("none")) {
+            payload[QStringLiteral("reasoning_effort")] = reasoningEffort.toLower();
+        }
+    } else {
+        payload[QStringLiteral("max_tokens")] = calculatedTokens;
+        payload[QStringLiteral("temperature")] = 0.7;
+    }
+
+    return payload;
+}
+
+KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgramStep(
+    const QString &prompt,
+    const QSize &canvasSize,
+    int step,
+    int totalSteps)
+{
+    const KisAiStrokeProgram full = createDeterministicProgram(prompt, canvasSize);
+    KisAiStrokeProgram stepProg;
+    stepProg.prompt = prompt;
+    stepProg.title = QStringLiteral("%1 [Step %2/%3]").arg(full.title).arg(step).arg(totalSteps);
+    stepProg.canvasSize = canvasSize;
+    stepProg.seed = full.seed;
+    stepProg.currentStep = step;
+    stepProg.totalSteps = totalSteps;
+    stepProg.goalReached = (step >= totalSteps);
+
+    for (const KisAiStrokeOperation &op : full.operations) {
+        const QString l = normalizeLayerName(op.layer);
+        bool match = false;
+        if (step == 1) {
+            match = (l == QLatin1String("Background") || l == QLatin1String("Flats"));
+        } else if (step == 2) {
+            match = (l == QLatin1String("Shading"));
+        } else if (step == 3) {
+            match = (l == QLatin1String("Lineart"));
+        } else {
+            match = (l == QLatin1String("Highlights") || l == QLatin1String("FX"));
+        }
+        if (match) {
+            stepProg.operations.append(op);
+        }
+    }
+
+    if (step == 1) {
+        stepProg.stepPhase = QStringLiteral("Flats & Background");
+        stepProg.visualCritique = QStringLiteral("Base silhouettes and background wash are established.");
+    } else if (step == 2) {
+        stepProg.stepPhase = QStringLiteral("Shading & Ambient Occlusion");
+        stepProg.visualCritique = QStringLiteral("Volumetric shading and cast shadows are rendered.");
+    } else if (step == 3) {
+        stepProg.stepPhase = QStringLiteral("Lineart & Details");
+        stepProg.visualCritique = QStringLiteral("Contour lineart and anatomical details are completed.");
+    } else {
+        stepProg.stepPhase = QStringLiteral("Highlights & FX Polish");
+        stepProg.visualCritique = QStringLiteral("Specular highlights and FX particles applied. Goal reached.");
+    }
+
+    if (stepProg.operations.isEmpty() && !full.operations.isEmpty()) {
+        stepProg.operations.append(full.operations.first());
+    }
+
+    KisAiStrokeQualityReport report;
+    return refineForRendering(stepProg, &report);
+}
+
+KisAiStrokeProgram KisAiStrokeProgramCodec::mergePrograms(
+    const KisAiStrokeProgram &base,
+    const KisAiStrokeProgram &extension)
+{
+    KisAiStrokeProgram merged = base;
+    if (merged.canvasSize.isEmpty() || !merged.canvasSize.isValid()) {
+        merged.canvasSize = extension.canvasSize;
+    }
+    if (merged.prompt.isEmpty()) {
+        merged.prompt = extension.prompt;
+    }
+    if (merged.title.isEmpty() || merged.title == QLatin1String("AI Artwork")) {
+        merged.title = extension.title;
+    }
+
+    merged.operations.append(extension.operations);
+    merged.currentStep = qMax(base.currentStep, extension.currentStep);
+    merged.totalSteps = qMax(base.totalSteps, extension.totalSteps);
+    if (!extension.stepPhase.isEmpty()) {
+        merged.stepPhase = extension.stepPhase;
+    }
+    if (!extension.visualCritique.isEmpty()) {
+        merged.visualCritique = extension.visualCritique;
+    }
+    merged.goalReached = extension.goalReached || (merged.currentStep >= merged.totalSteps);
+
+    KisAiStrokeQualityReport report;
+    return refineForRendering(merged, &report);
 }

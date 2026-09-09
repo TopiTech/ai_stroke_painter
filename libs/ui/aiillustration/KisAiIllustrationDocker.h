@@ -10,7 +10,9 @@
 #include <QDockWidget>
 #include <QPointer>
 
+class QCheckBox;
 class QComboBox;
+class QFrame;
 class QLabel;
 class QLineEdit;
 class QNetworkAccessManager;
@@ -58,6 +60,14 @@ private:
     void generateRemoteImage(const QString &prompt);
     void finishRemoteImageRequest();
     void cancelRemoteRequest();
+
+    // Goal Mode (autonomous multi-stage drawing with vision-in-the-loop)
+    void startGoalMode(const QString &prompt);
+    void executeGoalStep();
+    void finishGoalStepRequest();
+    void advanceGoalStep();
+    void finishGoalMode();
+
     bool appendReplyData(QNetworkReply *reply);
     QByteArray takeReplyData(QNetworkReply *reply);
     void updateModeUi();
@@ -76,6 +86,14 @@ private:
     QByteArray m_responseBuffer;
     GenerationMode m_currentMode {GenerationMode::LlmStrokes};
 
+    // Goal Mode State
+    bool m_goalModeActive {false};
+    int m_goalCurrentStep {1};
+    int m_goalTotalSteps {4};
+    QString m_goalPrompt;
+    QString m_goalApiKey;
+    bool m_waitingForUserStepAdvance {false};
+
     QComboBox *m_presetCombo {nullptr};
     QPlainTextEdit *m_promptEditor {nullptr};
     QComboBox *m_modeCombo {nullptr};
@@ -90,6 +108,18 @@ private:
     QLabel *m_remoteOptionsLabel {nullptr};
     QToolButton *m_detailsToggleBtn {nullptr};
     QWidget *m_detailsContainer {nullptr};
+
+    // Goal Mode UI Controls
+    QCheckBox *m_goalModeCheck {nullptr};
+    QCheckBox *m_pausePerStepCheck {nullptr};
+    QSpinBox *m_goalStepsSpin {nullptr};
+    QComboBox *m_artStyleCombo {nullptr};
+    QFrame *m_goalInspectorCard {nullptr};
+    QLabel *m_goalPhaseLabel {nullptr};
+    QLabel *m_critiqueLabel {nullptr};
+    QPushButton *m_nextStepButton {nullptr};
+    QPushButton *m_finishGoalButton {nullptr};
+
     QLabel *m_statusLabel {nullptr};
     QLabel *m_previewLabel {nullptr};
     QProgressBar *m_progressBar {nullptr};

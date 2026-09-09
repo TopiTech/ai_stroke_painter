@@ -439,11 +439,15 @@ void KisAiStrokeProgramTest::testProceduralCharacterGeneration()
 
 void KisAiStrokeProgramTest::testNormalizeLayerName()
 {
+    // Background aliases
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("background")), QStringLiteral("Background"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("bg")), QStringLiteral("Background"));
+    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("backdrop")), QStringLiteral("Background"));
+
     // Flats aliases
     QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("flat")), QStringLiteral("Flats"));
     QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("flats")), QStringLiteral("Flats"));
     QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("Base")), QStringLiteral("Flats"));
-    QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("background")), QStringLiteral("Flats"));
     QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("color")), QStringLiteral("Flats"));
     QCOMPARE(KisAiStrokeProgramCodec::normalizeLayerName(QStringLiteral("colors")), QStringLiteral("Flats"));
 
@@ -495,14 +499,15 @@ void KisAiStrokeProgramTest::testCountLayerOperationsAndFormatSummary()
     addOp(QStringLiteral("particles"));
 
     const QMap<QString, int> counts = KisAiStrokeProgramCodec::countLayerOperations(program);
-    QCOMPARE(counts.value(QStringLiteral("Flats")), 2);
+    QCOMPARE(counts.value(QStringLiteral("Background")), 1);
+    QCOMPARE(counts.value(QStringLiteral("Flats")), 1);
     QCOMPARE(counts.value(QStringLiteral("Shading")), 2);
     QCOMPARE(counts.value(QStringLiteral("Lineart")), 1);
     QCOMPARE(counts.value(QStringLiteral("Highlights")), 1);
     QCOMPARE(counts.value(QStringLiteral("FX")), 1);
 
     const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
-    QCOMPARE(summary, QStringLiteral("Flats: 2, Shading: 2, Lineart: 1, Highlights: 1, FX: 1"));
+    QCOMPARE(summary, QStringLiteral("Background: 1, Flats: 1, Shading: 2, Lineart: 1, Highlights: 1, FX: 1"));
 }
 
 void KisAiStrokeProgramTest::testRefineForRenderingRepairsModelGeometry()
@@ -632,6 +637,172 @@ void KisAiStrokeProgramTest::testGradientDirectionPointsParsing()
     QCOMPARE(program.operations.first().points.size(), 2);
     QCOMPARE(program.operations.first().points.first().pos, QPointF(0.1, 0.2));
     QCOMPARE(program.operations.first().points.last().pos, QPointF(0.9, 0.8));
+}
+
+void KisAiStrokeProgramTest::testMangaLinesParsingAndRefinement()
+{
+    const QJsonObject root {
+        {QStringLiteral("schema_version"), 2},
+        {QStringLiteral("operations"), QJsonArray {
+            QJsonObject {
+                {QStringLiteral("kind"), QStringLiteral("manga_lines")},
+                {QStringLiteral("id"), QStringLiteral("speed_burst")},
+                {QStringLiteral("layer"), QStringLiteral("FX")},
+                {QStringLiteral("center"), QJsonArray {0.5, 0.45}},
+                {QStringLiteral("inner_radius"), 0.12},
+                {QStringLiteral("outer_radius"), 0.85},
+                {QStringLiteral("density"), 56},
+                {QStringLiteral("line_length_jitter"), 0.25},
+                {QStringLiteral("brush"), QJsonObject {
+                    {QStringLiteral("profile"), QStringLiteral("gpen")},
+                    {QStringLiteral("color"), QStringLiteral("#111111")},
+                    {QStringLiteral("size"), 0.003},
+                    {QStringLiteral("is_eraser"), false},
+                }},
+            },
+        }},
+    };
+
+    KisAiStrokeProgram program;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(QJsonDocument(root).toJson(QJsonDocument::Compact), &program, &error), qPrintable(error));
+    QCOMPARE(program.operations.size(), 1);
+
+    const auto &op = program.operations.first();
+    QCOMPARE(static_cast<int>(op.kind), static_cast<int>(KisAiStrokeOperation::Kind::MangaLines));
+    QCOMPARE(op.layer, QStringLiteral("FX"));
+    QCOMPARE(op.gradientCenter, QPointF(0.5, 0.45));
+    QCOMPARE(op.innerRadius, 0.12);
+    QCOMPARE(op.outerRadius, 0.85);
+    QCOMPARE(op.density, 56);
+    QCOMPARE(op.lineLengthJitter, 0.25);
+    QVERIFY(program.completionScore > 0.0);
+}
+
+void KisAiStrokeProgramTest::testGoalModePayloadAndVisionModelDetection()
+{
+    // 1. Model vision capability detection
+    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gpt-4o")));
+    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gpt-4o-mini")));
+    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("claude-3-5-sonnet")));
+    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gemini-1.5-pro")));
+    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("qwen2.5-vl-72b")));
+    QVERIFY(!KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("deepseek-r1")));
+    QVERIFY(!KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("llama-3.3-70b")));
+
+    // 2. Goal Step Payload without image (non-vision model)
+    const QSize canvasSize(1024, 1024);
+    const QJsonObject textPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("deepseek-r1"),
+        QStringLiteral("cyberpunk samurai"),
+        canvasSize,
+        1,
+        4
+    );
+    QCOMPARE(textPayload.value(QStringLiteral("model")).toString(), QStringLiteral("deepseek-r1"));
+    const QJsonArray msgs1 = textPayload.value(QStringLiteral("messages")).toArray();
+    QCOMPARE(msgs1.size(), 2);
+    QVERIFY(msgs1.at(1).toObject().value(QStringLiteral("content")).isString());
+
+    // 3. Goal Step Payload with image (vision model)
+    const QString fakeB64 = QStringLiteral("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==");
+    const QJsonObject visionPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("cyberpunk samurai"),
+        canvasSize,
+        2,
+        4,
+        fakeB64,
+        QStringLiteral("Make shadows deeper under the jaw")
+    );
+    const QJsonArray msgs2 = visionPayload.value(QStringLiteral("messages")).toArray();
+    QCOMPARE(msgs2.size(), 2);
+    QVERIFY(msgs2.at(1).toObject().value(QStringLiteral("content")).isArray());
+    const QJsonArray contentParts = msgs2.at(1).toObject().value(QStringLiteral("content")).toArray();
+    QCOMPARE(contentParts.size(), 2);
+    QCOMPARE(contentParts.at(0).toObject().value(QStringLiteral("type")).toString(), QStringLiteral("text"));
+    QCOMPARE(contentParts.at(1).toObject().value(QStringLiteral("type")).toString(), QStringLiteral("image_url"));
+    const QString imgUrl = contentParts.at(1).toObject().value(QStringLiteral("image_url")).toObject().value(QStringLiteral("url")).toString();
+    QVERIFY(imgUrl.startsWith(QStringLiteral("data:image/jpeg;base64,")));
+}
+
+void KisAiStrokeProgramTest::testGoalModeProgramStepAndMerge()
+{
+    const QSize canvasSize(1024, 1024);
+    const QString prompt = QStringLiteral("anime girl portrait with blue eyes");
+
+    // Generate individual goal steps procedurally
+    const KisAiStrokeProgram step1 = KisAiStrokeProgramCodec::createDeterministicProgramStep(prompt, canvasSize, 1, 4);
+    const KisAiStrokeProgram step2 = KisAiStrokeProgramCodec::createDeterministicProgramStep(prompt, canvasSize, 2, 4);
+    const KisAiStrokeProgram step3 = KisAiStrokeProgramCodec::createDeterministicProgramStep(prompt, canvasSize, 3, 4);
+    const KisAiStrokeProgram step4 = KisAiStrokeProgramCodec::createDeterministicProgramStep(prompt, canvasSize, 4, 4);
+
+    QVERIFY(!step1.operations.isEmpty());
+    QVERIFY(!step2.operations.isEmpty());
+    QVERIFY(!step3.operations.isEmpty());
+    QVERIFY(!step4.operations.isEmpty());
+
+    QCOMPARE(step1.currentStep, 1);
+    QCOMPARE(step2.currentStep, 2);
+    QCOMPARE(step3.currentStep, 3);
+    QCOMPARE(step4.currentStep, 4);
+    QVERIFY(!step1.goalReached);
+    QVERIFY(step4.goalReached);
+
+    // Merge steps iteratively
+    KisAiStrokeProgram accumulated = step1;
+    QCOMPARE(accumulated.operations.size(), step1.operations.size());
+
+    accumulated = KisAiStrokeProgramCodec::mergePrograms(accumulated, step2);
+    QCOMPARE(accumulated.currentStep, 2);
+    QVERIFY(accumulated.operations.size() > step1.operations.size());
+
+    accumulated = KisAiStrokeProgramCodec::mergePrograms(accumulated, step3);
+    QCOMPARE(accumulated.currentStep, 3);
+
+    accumulated = KisAiStrokeProgramCodec::mergePrograms(accumulated, step4);
+    QCOMPARE(accumulated.currentStep, 4);
+    QVERIFY(accumulated.goalReached);
+    QVERIFY(accumulated.completionScore >= 0.6);
+}
+
+void KisAiStrokeProgramTest::testNewProceduralDomains()
+{
+    const QSize canvasSize(1024, 1024);
+
+    // 1. Cyberpunk
+    const KisAiStrokeProgram cyber = KisAiStrokeProgramCodec::createDeterministicProgram(
+        QStringLiteral("cyberpunk city street at night with neon lights and skyscrapers"), canvasSize);
+    QVERIFY(cyber.isValid());
+    QVERIFY(cyber.operations.size() >= 5);
+    bool hasNeon = false;
+    for (const auto &op : cyber.operations) {
+        if (op.brush.profile == QLatin1String("neon")) hasNeon = true;
+    }
+    QVERIFY(hasNeon);
+
+    // 2. Botanical
+    const KisAiStrokeProgram plant = KisAiStrokeProgramCodec::createDeterministicProgram(
+        QStringLiteral("beautiful red rose bouquet with watercolor leaves"), canvasSize);
+    QVERIFY(plant.isValid());
+    QVERIFY(plant.operations.size() >= 5);
+
+    // 3. Creature
+    const KisAiStrokeProgram beast = KisAiStrokeProgramCodec::createDeterministicProgram(
+        QStringLiteral("fierce red dragon with large wings and horns"), canvasSize);
+    QVERIFY(beast.isValid());
+    QVERIFY(beast.operations.size() >= 5);
+
+    // 4. MangaFx
+    const KisAiStrokeProgram manga = KisAiStrokeProgramCodec::createDeterministicProgram(
+        QStringLiteral("manga speed lines action impact comic fx"), canvasSize);
+    QVERIFY(manga.isValid());
+    QVERIFY(manga.operations.size() >= 5);
+    bool hasMangaLines = false;
+    for (const auto &op : manga.operations) {
+        if (op.kind == KisAiStrokeOperation::Kind::MangaLines) hasMangaLines = true;
+    }
+    QVERIFY(hasMangaLines);
 }
 
 KISTEST_MAIN(KisAiStrokeProgramTest)

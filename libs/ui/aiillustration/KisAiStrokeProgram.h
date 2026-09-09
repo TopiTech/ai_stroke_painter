@@ -36,7 +36,7 @@ struct KRITAUI_EXPORT KisAiStrokePoint
 
 struct KRITAUI_EXPORT KisAiStrokeBrush
 {
-    QString profile {QStringLiteral("auto")}; // auto, gpen, brush, watercolor, airbrush, eraser
+    QString profile {QStringLiteral("auto")}; // auto, gpen, brush, watercolor, airbrush, eraser, marker, crayon, neon, splatter
     QColor color {QColor(35, 35, 35)};
     qreal size {0.008};                       // ratio [0.0, 1.0] or px
     QString sizeMode {QStringLiteral("ratio")}; // ratio or px
@@ -54,6 +54,7 @@ struct KRITAUI_EXPORT KisAiStrokeOperation
         Ribbon,
         Particles,
         Hatch,
+        MangaLines,
         Unknown
     };
 
@@ -75,7 +76,7 @@ struct KRITAUI_EXPORT KisAiStrokeOperation
     qreal angleDeg {0.0};
     qreal spacing {0.5};
 
-    // GradientFill detailed properties
+    // GradientFill & MangaLines detailed properties
     bool isRadial {false};
     QPointF gradientCenter {0.5, 0.5};
     qreal gradientRadius {0.5};
@@ -93,6 +94,12 @@ struct KRITAUI_EXPORT KisAiStrokeOperation
     QRectF bounds;
     QString particleShape {QStringLiteral("petal")}; // petal, sparkle, star, bokeh, dot
     int particleCount {16};
+
+    // MangaLines (Speed / Focus Lines)
+    qreal innerRadius {0.15};
+    qreal outerRadius {0.70};
+    int density {48};
+    qreal lineLengthJitter {0.20};
 };
 
 struct KRITAUI_EXPORT KisAiStrokeProgram
@@ -102,6 +109,10 @@ struct KRITAUI_EXPORT KisAiStrokeProgram
     int seed {42};
     QString title;
     int iteration {1};
+    int currentStep {1};
+    int totalSteps {1};
+    QString stepPhase {QStringLiteral("complete")}; // blocking, shading, lineart, finishing, complete
+    QString visualCritique;
     bool goalReached {true};
     qreal completionScore {1.0};
     QSize canvasSize {1024, 1024};
@@ -214,6 +225,8 @@ public:
      */
     static QString repairTruncatedJson(const QString &jsonText);
 
+
+
     /**
      * Normalize layer name into one of the standard layers: Flats, Shading, Lineart, Highlights, FX.
      * Returns trimmed original name if no standard alias matched, or "Lineart" if empty.
@@ -229,6 +242,45 @@ public:
      * Format a summary of operations per standard layer (e.g. "Flats: 2, Shading: 3, Lineart: 4, Highlights: 1, FX: 0").
      */
     static QString formatLayerSummary(const KisAiStrokeProgram &program);
+
+    /**
+     * Build the Goal Mode Chat Completions request payload with vision feedback (image base64 data URL).
+     */
+    static QJsonObject buildGoalStepPayload(
+        const QString &model,
+        const QString &prompt,
+        const QSize &canvasSize,
+        int step,
+        int totalSteps = 4,
+        const QString &imageBase64 = QString(),
+        const QString &additionalInstruction = QString(),
+        int strokeBudget = 400,
+        const QString &reasoningEffort = QString()
+    );
+
+    /**
+     * Check if a model name is known or likely to support multimodal vision input.
+     */
+    static bool isVisionModel(const QString &model);
+
+    /**
+     * Offline deterministic procedural stroke generator for a specific Goal Mode step.
+     * Step 1: Background & Flats, Step 2: Shading, Step 3: Lineart, Step 4: Highlights & FX.
+     */
+    static KisAiStrokeProgram createDeterministicProgramStep(
+        const QString &prompt,
+        const QSize &canvasSize,
+        int step,
+        int totalSteps = 4
+    );
+
+    /**
+     * Merge operations from an extension program into a base program.
+     */
+    static KisAiStrokeProgram mergePrograms(
+        const KisAiStrokeProgram &base,
+        const KisAiStrokeProgram &extension
+    );
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_H

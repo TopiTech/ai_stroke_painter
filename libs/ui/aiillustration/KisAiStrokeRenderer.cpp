@@ -13,6 +13,7 @@
 #include "kis_image.h"
 #include "kis_node_commands_adapter.h"
 #include "kis_paint_layer.h"
+#include "kis_group_layer.h"
 #include <KoCompositeOpRegistry.h>
 #include <klocalizedstring.h>
 #include <kundo2magicstring.h>
@@ -20,6 +21,7 @@
 #define i18n(str, ...) QStringLiteral(str)
 #endif
 
+#include <QBuffer>
 #include <QColor>
 #include <QLinearGradient>
 #include <QMap>
@@ -156,7 +158,8 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
     compositeImage.fill(Qt::transparent);
 
     // Standard layer sequence for illustration rendering
-    const QStringList layerOrder = {QStringLiteral("Flats"),
+    const QStringList layerOrder = {QStringLiteral("Background"),
+                                    QStringLiteral("Flats"),
                                     QStringLiteral("Shading"),
                                     QStringLiteral("Lineart"),
                                     QStringLiteral("Highlights"),
@@ -245,7 +248,8 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
 
     const QSize canvasSize = bounds.size();
 
-    const QStringList layerOrder = {QStringLiteral("Flats"),
+    const QStringList layerOrder = {QStringLiteral("Background"),
+                                    QStringLiteral("Flats"),
                                     QStringLiteral("Shading"),
                                     QStringLiteral("Lineart"),
                                     QStringLiteral("Highlights"),
@@ -274,6 +278,12 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
     KisNodeCommandsAdapter adapter(viewManager);
     adapter.beginMacro(kundo2_i18n("AI Illustration"));
 
+    // Group layer for clean encapsulation
+    const QString groupTitle = QStringLiteral("🎨 AI: %1").arg(program.prompt.left(24).trimmed());
+    KisGroupLayerSP group = new KisGroupLayer(image.data(), groupTitle, OPACITY_OPAQUE_U8);
+    adapter.addNode(group, root, aboveNode);
+    KisNodeSP childAboveNode = nullptr;
+
     QImage flatsImage;
     bool hasFlats = false;
     int layersAdded = 0;
@@ -288,6 +298,7 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
         const bool isFlats = (layerKey.compare(QLatin1String("Flats"), Qt::CaseInsensitive) == 0);
         const bool isShading = (layerKey.compare(QLatin1String("Shading"), Qt::CaseInsensitive) == 0);
         const bool isHighlights = (layerKey.compare(QLatin1String("Highlights"), Qt::CaseInsensitive) == 0);
+        const bool isBackground = (layerKey.compare(QLatin1String("Background"), Qt::CaseInsensitive) == 0);
 
         if (isFlats) {
             flatsImage = layerImage;
@@ -306,15 +317,27 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
 
         if (isShading) {
             layer->setCompositeOpId(COMPOSITE_MULT);
+            layer->setColorLabelIndex(7); // Purple
         } else if (isHighlights) {
             layer->setCompositeOpId(COMPOSITE_SCREEN);
+            layer->setColorLabelIndex(3); // Yellow
+        } else if (isFlats) {
+            layer->setCompositeOpId(COMPOSITE_OVER);
+            layer->setColorLabelIndex(1); // Blue
+        } else if (isBackground) {
+            layer->setCompositeOpId(COMPOSITE_OVER);
+            layer->setColorLabelIndex(8); // Grey
+        } else if (layerKey.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) == 0) {
+            layer->setCompositeOpId(COMPOSITE_OVER);
+            layer->setColorLabelIndex(4); // Orange
         } else {
             layer->setCompositeOpId(COMPOSITE_OVER);
+            layer->setColorLabelIndex(2); // Green (FX)
         }
 
         layer->setDirty(bounds);
-        adapter.addNode(layer, root, aboveNode);
-        aboveNode = layer;
+        adapter.addNode(layer, group, childAboveNode);
+        childAboveNode = layer;
         ++layersAdded;
     }
 
@@ -393,6 +416,9 @@ void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter, const KisAiStrok
         break;
     case KisAiStrokeOperation::Kind::Hatch:
         drawHatchOperation(painter, op, canvasSize);
+        break;
+    case KisAiStrokeOperation::Kind::MangaLines:
+        drawMangaLinesOperation(painter, op, canvasSize);
         break;
     default:
         break;
@@ -658,6 +684,110 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
                 filamentPath.append(curveSamples.at(i).pos + unitNormal * (offset + jitter));
             }
             painter.drawPolyline(filamentPath);
+        }
+
+    } else if (profile == QLatin1String("marker")) {
+        // Semi-flat marker with overlapping accumulation and chisel-like stroke body
+        QColor markerColor = color;
+        markerColor.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.72, 1.0));
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(markerColor);
+        painter.drawPolygon(ribbonPoly);
+
+        // Chisel edge accent
+        QColor edgeColor = color;
+        edgeColor.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.40, 1.0));
+        QPen edgePen(edgeColor, qMax<qreal>(1.0, effectiveBrushWidth(op.brush, 0.5, canvasSize) * 0.25));
+        painter.setPen(edgePen);
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPolyline(leftEdge);
+
+    } else if (profile == QLatin1String("crayon")) {
+        // Grainy, waxy textured crayon with grain dabs along contour
+        QColor baseCrayon = color;
+        baseCrayon.setAlphaF(color.alphaF() * 0.65);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(baseCrayon);
+        painter.drawPolygon(ribbonPoly);
+
+        QRandomGenerator grain(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/crayon")));
+        painter.setPen(Qt::NoPen);
+        for (int i = 0; i < sampleCount; ++i) {
+            const QPointF &curr = curveSamples.at(i).pos;
+            const qreal w = curveSamples.at(i).width;
+            for (int d = 0; d < 3; ++d) {
+                const qreal rx = (grain.generateDouble() - 0.5) * w;
+                const qreal ry = (grain.generateDouble() - 0.5) * w;
+                const qreal dotR = qMax<qreal>(0.5, w * 0.15 * (0.5 + grain.generateDouble() * 0.5));
+                QColor dotColor = color;
+                dotColor.setAlphaF(qBound<qreal>(0.0, color.alphaF() * (0.3 + grain.generateDouble() * 0.5), 1.0));
+                painter.setBrush(dotColor);
+                painter.drawEllipse(curr + QPointF(rx, ry), dotR, dotR);
+            }
+        }
+
+    } else if (profile == QLatin1String("neon")) {
+        // Multi-pass neon tube: outer soft aura -> medium halo -> intense core -> bright white center
+        painter.setPen(Qt::NoPen);
+
+        // 1. Broad soft aura
+        QColor cAura = color;
+        cAura.setAlphaF(color.alphaF() * 0.18);
+        painter.setBrush(cAura);
+        for (const SampledStrokePoint &sample : curveSamples) {
+            painter.drawEllipse(sample.pos, sample.width * 1.6, sample.width * 1.6);
+        }
+
+        // 2. Medium glow
+        QColor cHalo = color;
+        cHalo.setAlphaF(color.alphaF() * 0.45);
+        painter.setBrush(cHalo);
+        for (const SampledStrokePoint &sample : curveSamples) {
+            painter.drawEllipse(sample.pos, sample.width * 0.9, sample.width * 0.9);
+        }
+
+        // 3. Colored core
+        painter.setBrush(color);
+        painter.drawPolygon(ribbonPoly);
+        drawRoundJoins(color, 0.9);
+
+        // 4. White hot filament center line
+        QColor whiteCore(255, 255, 255);
+        whiteCore.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.90, 1.0));
+        QPen whitePen(whiteCore, qMax<qreal>(1.0, effectiveBrushWidth(op.brush, 0.5, canvasSize) * 0.28),
+                      Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        painter.setPen(whitePen);
+        painter.setBrush(Qt::NoBrush);
+        QPolygonF spinePoly;
+        spinePoly.reserve(sampleCount);
+        for (const SampledStrokePoint &sample : curveSamples) {
+            spinePoly.append(sample.pos);
+        }
+        painter.drawPolyline(spinePoly);
+
+    } else if (profile == QLatin1String("splatter")) {
+        // Solid ink base path with fine ink splatters radiating outward
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(color);
+        painter.drawPolygon(ribbonPoly);
+        drawRoundJoins(color, 1.0);
+
+        QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/splatter")));
+        const int splatterCount = qBound(6, sampleCount * 2, 80);
+        for (int s = 0; s < splatterCount; ++s) {
+            const int sampleIdx = rng.bounded(sampleCount);
+            const QPointF origin = curveSamples.at(sampleIdx).pos;
+            const qreal w = curveSamples.at(sampleIdx).width;
+
+            const qreal dist = w * (0.8 + rng.generateDouble() * 2.2);
+            const qreal angle = rng.generateDouble() * 2.0 * PI;
+            const QPointF dropPos = origin + QPointF(std::cos(angle) * dist, std::sin(angle) * dist);
+            const qreal dropR = qMax<qreal>(0.6, w * (0.08 + rng.generateDouble() * 0.20));
+
+            QColor dropColor = color;
+            dropColor.setAlphaF(qBound<qreal>(0.0, color.alphaF() * (0.5 + rng.generateDouble() * 0.5), 1.0));
+            painter.setBrush(dropColor);
+            painter.drawEllipse(dropPos, dropR, dropR);
         }
 
     } else {
@@ -965,3 +1095,88 @@ void KisAiStrokeRenderer::drawHatchOperation(QPainter &painter, const KisAiStrok
 
     painter.restore();
 }
+
+void KisAiStrokeRenderer::drawMangaLinesOperation(QPainter &painter, const KisAiStrokeOperation &op, const QSize &canvasSize)
+{
+    const QPointF center = scalePoint(op.gradientCenter.isNull() ? QPointF(0.5, 0.5) : op.gradientCenter, canvasSize);
+    const qreal baseDim = qMin(canvasSize.width(), canvasSize.height());
+    const qreal rInner = qMax<qreal>(5.0, op.innerRadius * baseDim);
+    const qreal rOuter = qMax<qreal>(rInner + 10.0, op.outerRadius * baseDim);
+    const int count = qBound(4, op.density, 180);
+    const qreal jitter = qBound<qreal>(0.0, op.lineLengthJitter, 0.8);
+
+    QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/manga")));
+
+    QColor lineColor = op.brush.color;
+    lineColor.setAlphaF(qBound<qreal>(0.0, op.brush.opacity * lineColor.alphaF(), 1.0));
+
+    const qreal lineWidth = effectiveBrushWidth(op.brush, 0.8, canvasSize);
+
+    for (int i = 0; i < count; ++i) {
+        const qreal baseAngle = (2.0 * PI * i) / count;
+        const qreal angleJitter = (rng.generateDouble() - 0.5) * (2.0 * PI / count) * 0.4;
+        const qreal angle = baseAngle + angleJitter;
+
+        const qreal cosA = std::cos(angle);
+        const qreal sinA = std::sin(angle);
+
+        const qreal innerDist = rInner * (1.0 + (rng.generateDouble() - 0.5) * jitter * 0.8);
+        const qreal outerDist = rOuter * (1.0 + (rng.generateDouble() - 0.5) * jitter);
+
+        const QPointF pStart = center + QPointF(cosA * innerDist, sinA * innerDist);
+        const QPointF pEnd = center + QPointF(cosA * outerDist, sinA * outerDist);
+
+        const QPointF perp(-sinA, cosA);
+        const qreal halfW = lineWidth * (0.6 + rng.generateDouble() * 0.8);
+
+        QPolygonF wedge;
+        wedge << pStart
+              << (pEnd + perp * halfW)
+              << (pEnd - perp * halfW);
+
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(lineColor);
+        painter.drawPolygon(wedge);
+    }
+}
+
+QString KisAiStrokeRenderer::captureImageBase64(const QImage &image, int maxDimension, int quality)
+{
+    if (image.isNull()) {
+        return QString();
+    }
+
+    QImage scaled = image;
+    if (qMax(image.width(), image.height()) > maxDimension) {
+        scaled = image.scaled(maxDimension, maxDimension, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+
+    QImage rgb(scaled.size(), QImage::Format_RGB32);
+    rgb.fill(Qt::white);
+    QPainter p(&rgb);
+    p.drawImage(0, 0, scaled);
+    p.end();
+
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    rgb.save(&buffer, "JPEG", quality);
+
+    return QStringLiteral("data:image/jpeg;base64,") + QString::fromLatin1(bytes.toBase64());
+}
+
+#ifndef AI_STROKE_STANDALONE
+QString KisAiStrokeRenderer::captureCanvasBase64(KisImageWSP image, int maxDimension, int quality)
+{
+    if (!image) {
+        return QString();
+    }
+    const QRect bounds = image->bounds();
+    if (bounds.isEmpty()) {
+        return QString();
+    }
+    const QImage canvasImg = image->convertToQImage(bounds, nullptr);
+    return captureImageBase64(canvasImg, maxDimension, quality);
+}
+#endif
+

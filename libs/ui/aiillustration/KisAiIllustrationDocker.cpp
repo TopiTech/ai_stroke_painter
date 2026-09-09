@@ -6,6 +6,7 @@
 #include "KisAiIllustrationDocker.h"
 
 #include "KisAiIllustrationRenderer.h"
+#include "KisAiPromptAnalyzer.h"
 #include "KisAiStrokeProgram.h"
 #include "KisAiStrokeRenderer.h"
 #include "KisDocument.h"
@@ -23,6 +24,7 @@
 #include <KoColorSpaceRegistry.h>
 
 #include <QBuffer>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QFont>
 #include <QFormLayout>
@@ -147,6 +149,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         "QPlainTextEdit, QLineEdit, QSpinBox, QComboBox {"
         " background: #0d1117; border: 1px solid #273142; border-radius: 6px; padding: 5px 8px; color: #f1f5f9; font-size: 12px; }"
         "QPlainTextEdit:focus, QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border: 1px solid #3b82f6; background: #0f141d; }"
+        "QCheckBox { color: #cbd5e1; font-size: 12px; spacing: 6px; }"
+        "QCheckBox:hover { color: #f1f5f9; }"
         "QPushButton#aiGenerateButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563eb, stop:1 #4f46e5);"
         " color: #ffffff; border: none; border-radius: 6px; font-weight: 700; font-size: 13px; min-height: 36px; padding: 6px 14px; }"
         "QPushButton#aiGenerateButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #6366f1); }"
@@ -401,6 +405,100 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_endpointEditor->setText(savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/chat/completions") : savedEndpoint);
     m_modelEditor->setText(savedModel.isEmpty() ? QStringLiteral("gpt-4o") : savedModel);
 
+    // Card 3.5: Goal Mode Settings
+    CardWidget goalCard = createCard();
+    auto *goalHeader = new QLabel(i18n("🎯 自律多段階作画 (Goal Mode)"), goalCard.frame);
+    goalHeader->setProperty("class", "aiCardTitle");
+    goalCard.layout->addWidget(goalHeader);
+
+    m_goalModeCheck = new QCheckBox(i18n("Goalモード（自律多段階作画）を有効にする"), goalCard.frame);
+    m_goalModeCheck->setToolTip(i18n("下地・陰影・線画・ハイライト等を段階的に自律作画し、完成度を高めます。"));
+    m_goalModeCheck->setCursor(Qt::PointingHandCursor);
+    goalCard.layout->addWidget(m_goalModeCheck);
+
+    auto *goalOptionsWidget = new QWidget(goalCard.frame);
+    auto *goalOptionsLayout = new QFormLayout(goalOptionsWidget);
+    goalOptionsLayout->setContentsMargins(0, 4, 0, 0);
+    goalOptionsLayout->setSpacing(6);
+
+    m_goalStepsSpin = new QSpinBox(goalOptionsWidget);
+    m_goalStepsSpin->setRange(2, 6);
+    m_goalStepsSpin->setValue(4);
+    m_goalStepsSpin->setSuffix(i18n(" 段階"));
+    m_goalStepsSpin->setAccessibleName(i18n("Goal mode step count"));
+    goalOptionsLayout->addRow(i18n("作画ステップ数"), m_goalStepsSpin);
+
+    m_artStyleCombo = new QComboBox(goalOptionsWidget);
+    m_artStyleCombo->addItem(i18n("🎨 おまかせ (Auto)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::General));
+    m_artStyleCombo->addItem(i18n("✨ アニメセル画 (Anime Cel)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel));
+    m_artStyleCombo->addItem(i18n("💧 透明水彩 (Watercolor)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor));
+    m_artStyleCombo->addItem(i18n("🖌️ 厚塗り・油彩 (Impasto)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Impasto));
+    m_artStyleCombo->addItem(i18n("✒️ マンガ・インク (Ink Sketch)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::InkSketch));
+    m_artStyleCombo->addItem(i18n("⚡ サイバーネオン (Cyber Neon)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::CyberNeon));
+    m_artStyleCombo->setAccessibleName(i18n("Art style"));
+    goalOptionsLayout->addRow(i18n("画風スタイル"), m_artStyleCombo);
+
+    m_pausePerStepCheck = new QCheckBox(i18n("段階ごとに一時停止（手動加筆・確認を待つ）"), goalOptionsWidget);
+    m_pausePerStepCheck->setToolTip(i18n("各ステップ完了時に一時停止し、Kritaのブラシで自由に加筆してから次のステップへ進めます。"));
+    m_pausePerStepCheck->setCursor(Qt::PointingHandCursor);
+    goalOptionsLayout->addRow(QString(), m_pausePerStepCheck);
+
+    goalOptionsWidget->setVisible(false);
+    goalCard.layout->addWidget(goalOptionsWidget);
+
+    layout->addWidget(goalCard.frame);
+
+    // Goal Inspector Card
+    m_goalInspectorCard = new QFrame(panel);
+    m_goalInspectorCard->setProperty("class", "aiCard");
+    m_goalInspectorCard->setFrameShape(QFrame::StyledPanel);
+    auto *inspectorLayout = new QVBoxLayout(m_goalInspectorCard);
+    inspectorLayout->setContentsMargins(10, 10, 10, 10);
+    inspectorLayout->setSpacing(6);
+
+    auto *inspectorTitle = new QLabel(i18n("🎯 Goal作画インスペクター"), m_goalInspectorCard);
+    inspectorTitle->setProperty("class", "aiCardTitle");
+    inspectorLayout->addWidget(inspectorTitle);
+
+    m_goalPhaseLabel = new QLabel(i18n("待機中"), m_goalInspectorCard);
+    m_goalPhaseLabel->setStyleSheet(QStringLiteral("font-weight: 700; color: #38bdf8; font-size: 13px;"));
+    m_goalPhaseLabel->setWordWrap(true);
+    inspectorLayout->addWidget(m_goalPhaseLabel);
+
+    m_critiqueLabel = new QLabel(i18n("AIの視覚批評・自己分析がここに表示されます。"), m_goalInspectorCard);
+    m_critiqueLabel->setWordWrap(true);
+    m_critiqueLabel->setStyleSheet(QStringLiteral(
+        "background: #0d1117; color: #94a3b8; border: 1px solid #273142; border-left: 3px solid #38bdf8; border-radius: 4px; padding: 6px 8px; font-size: 11px;"));
+    inspectorLayout->addWidget(m_critiqueLabel);
+
+    auto *stepBtnRow = new QHBoxLayout();
+    stepBtnRow->setSpacing(6);
+    m_nextStepButton = new QPushButton(i18n("▶ 次のステップへ進む"), m_goalInspectorCard);
+    m_nextStepButton->setObjectName(QStringLiteral("aiGenerateButton"));
+    m_nextStepButton->setCursor(Qt::PointingHandCursor);
+    m_nextStepButton->setVisible(false);
+
+    m_finishGoalButton = new QPushButton(i18n("🏁 ここで完成"), m_goalInspectorCard);
+    m_finishGoalButton->setObjectName(QStringLiteral("aiSecondaryButton"));
+    m_finishGoalButton->setCursor(Qt::PointingHandCursor);
+    m_finishGoalButton->setVisible(false);
+
+    stepBtnRow->addWidget(m_nextStepButton, 1);
+    stepBtnRow->addWidget(m_finishGoalButton);
+    inspectorLayout->addLayout(stepBtnRow);
+
+    m_goalInspectorCard->setVisible(false);
+    layout->addWidget(m_goalInspectorCard);
+
+    connect(m_goalModeCheck, &QCheckBox::toggled, this, [this, goalOptionsWidget](bool checked) {
+        goalOptionsWidget->setVisible(checked);
+        if (m_generateButton) {
+            m_generateButton->setText(checked ? i18n("🎯 Goal作画を開始") : i18n("🎨 生成してレイヤーに追加"));
+        }
+    });
+    connect(m_nextStepButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::advanceGoalStep);
+    connect(m_finishGoalButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::finishGoalMode);
+
     // Card 4: Action & Preview
     CardWidget actionCard = createCard();
 
@@ -456,6 +554,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
 KisAiIllustrationDocker::~KisAiIllustrationDocker()
 {
+    m_goalApiKey.clear();
     if (m_reply) {
         m_reply->disconnect(this);
         m_reply->abort();
@@ -536,6 +635,12 @@ void KisAiIllustrationDocker::generateIllustration()
     }
 
     const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
+    if (m_goalModeCheck && m_goalModeCheck->isChecked() &&
+        (mode == GenerationMode::LlmStrokes || mode == GenerationMode::LocalStrokes)) {
+        startGoalMode(prompt);
+        return;
+    }
+
     switch (mode) {
     case GenerationMode::LlmStrokes:
         generateLlmStrokes(prompt);
@@ -868,11 +973,18 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
 void KisAiIllustrationDocker::cancelRemoteRequest()
 {
     if (!m_reply) {
+        if (m_goalModeActive) {
+            finishGoalMode();
+            setStatus(i18n("Goalモード作画を中止しました。"));
+        }
         return;
     }
 
     m_requestWasCancelled = true;
     m_reply->abort();
+    if (m_goalModeActive) {
+        finishGoalMode();
+    }
     setStatus(i18n("リクエストを中止しています…"));
 }
 
@@ -973,6 +1085,14 @@ void KisAiIllustrationDocker::updateModeUi()
         m_remoteForm->setRowVisible(2, needsRemote);
         m_remoteForm->setRowVisible(3, isLlm);
     }
+
+    const bool isGoalCompatible = (newMode == GenerationMode::LlmStrokes || newMode == GenerationMode::LocalStrokes);
+    if (m_goalModeCheck) {
+        m_goalModeCheck->setEnabled(isGoalCompatible);
+        if (!isGoalCompatible && m_goalModeCheck->isChecked()) {
+            m_goalModeCheck->setChecked(false);
+        }
+    }
 }
 
 
@@ -980,8 +1100,23 @@ void KisAiIllustrationDocker::setBusy(bool busy)
 {
     m_newCanvasButton->setEnabled(!busy);
     m_generateButton->setEnabled(!busy);
-    m_generateButton->setText(busy ? i18n("⏳ 生成中…") : i18n("🎨 生成してレイヤーに追加"));
+    if (m_goalModeActive) {
+        m_generateButton->setText(busy ? i18n("⏳ Goal作画中…") : i18n("🎯 Goal作画進行中"));
+    } else if (m_goalModeCheck && m_goalModeCheck->isChecked()) {
+        m_generateButton->setText(busy ? i18n("⏳ 作画中…") : i18n("🎯 Goal作画を開始"));
+    } else {
+        m_generateButton->setText(busy ? i18n("⏳ 生成中…") : i18n("🎨 生成してレイヤーに追加"));
+    }
     m_modeCombo->setEnabled(!busy);
+    if (m_goalModeCheck) {
+        m_goalModeCheck->setEnabled(!busy);
+    }
+    if (m_goalStepsSpin) {
+        m_goalStepsSpin->setEnabled(!busy);
+    }
+    if (m_artStyleCombo) {
+        m_artStyleCombo->setEnabled(!busy);
+    }
     m_cancelButton->setVisible(busy && !m_reply.isNull());
     m_progressBar->setVisible(busy);
 }
@@ -1063,4 +1198,382 @@ void KisAiIllustrationDocker::setStatus(const QString &message, bool isError)
     m_statusLabel->setProperty("error", isError);
     m_statusLabel->style()->unpolish(m_statusLabel);
     m_statusLabel->style()->polish(m_statusLabel);
+}
+
+void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
+{
+    if (m_reply || m_goalModeActive) {
+        return;
+    }
+
+    if (!ensureCanvas()) {
+        return;
+    }
+
+    m_goalModeActive = true;
+    m_goalPrompt = prompt;
+    m_goalCurrentStep = 1;
+    m_goalTotalSteps = m_goalStepsSpin ? m_goalStepsSpin->value() : 4;
+    m_waitingForUserStepAdvance = false;
+
+    const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
+    if (mode == GenerationMode::LlmStrokes) {
+        const QString endpoint = m_endpointEditor->text().trimmed();
+        const QString model = m_modelEditor->text().trimmed();
+        const QString apiKey = m_apiKeyEditor->text();
+
+        QString errorMessage;
+        if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
+            setStatus(errorMessage, true);
+            m_goalModeActive = false;
+            return;
+        }
+        if (model.isEmpty()) {
+            setStatus(i18n("LLM モデル名を入力してください。"), true);
+            m_goalModeActive = false;
+            return;
+        }
+        if (apiKey.isEmpty()) {
+            setStatus(i18n("このリクエストに使う API キーを入力してください。"), true);
+            m_goalModeActive = false;
+            return;
+        }
+
+        m_goalApiKey = apiKey;
+        m_apiKeyEditor->clear();
+
+        QSettings settings;
+        settings.setValue(QStringLiteral("AIIllustration/llmEndpoint"), endpoint);
+        settings.setValue(QStringLiteral("AIIllustration/llmModel"), model);
+        settings.setValue(QStringLiteral("AIIllustration/endpoint"), endpoint);
+        settings.setValue(QStringLiteral("AIIllustration/model"), model);
+    } else {
+        m_goalApiKey.clear();
+    }
+
+    if (m_goalInspectorCard) {
+        m_goalInspectorCard->setVisible(true);
+        if (m_goalPhaseLabel) {
+            m_goalPhaseLabel->setText(i18n("🎯 ステップ 1/%1 開始準備中…", m_goalTotalSteps));
+        }
+        if (m_critiqueLabel) {
+            m_critiqueLabel->setText(i18n("作画計画を策定中…"));
+        }
+        if (m_nextStepButton) {
+            m_nextStepButton->setVisible(false);
+            m_nextStepButton->setEnabled(false);
+        }
+        if (m_finishGoalButton) {
+            m_finishGoalButton->setVisible(false);
+            m_finishGoalButton->setEnabled(false);
+        }
+    }
+
+    executeGoalStep();
+}
+
+void KisAiIllustrationDocker::executeGoalStep()
+{
+    if (!m_goalModeActive) {
+        return;
+    }
+
+    const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
+    const QSize canvasSize(m_widthSpin->value(), m_heightSpin->value());
+    const auto artStyle = static_cast<KisAiPromptAnalyzer::ArtStyle>(
+        m_artStyleCombo ? m_artStyleCombo->currentData().toInt() : 0);
+
+    if (m_nextStepButton) {
+        m_nextStepButton->setVisible(false);
+        m_nextStepButton->setEnabled(false);
+    }
+    if (m_finishGoalButton) {
+        m_finishGoalButton->setVisible(false);
+        m_finishGoalButton->setEnabled(false);
+    }
+
+    if (mode == GenerationMode::LocalStrokes) {
+        setBusy(true);
+        if (m_goalPhaseLabel) {
+            m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2: ローカル作画実行中…", m_goalCurrentStep, m_goalTotalSteps));
+        }
+        setStatus(i18n("Goal ステップ %1/%2 のストロークを生成しています…", m_goalCurrentStep, m_goalTotalSteps));
+
+        const KisAiStrokeProgram program = KisAiStrokeProgramCodec::createDeterministicProgramStep(
+            m_goalPrompt, canvasSize, m_goalCurrentStep, m_goalTotalSteps);
+
+        const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
+        const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize);
+        if (!preview.isNull()) {
+            m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        }
+
+        KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
+        if (view && view->image()) {
+            QString statusMsg;
+            if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
+                const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
+                const int qualityPercent = qRound(qBound<qreal>(0.0, program.completionScore, 1.0) * 100.0);
+                setStatus(i18n("%1 (%2 / 構造品質 %3%)", statusMsg, summary, qualityPercent));
+            } else {
+                setStatus(statusMsg, true);
+            }
+        } else {
+            setStatus(i18n("キャンバスが利用できないため、ストロークを描画できませんでした。"), true);
+        }
+
+        if (m_goalPhaseLabel) {
+            m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
+        }
+        if (m_critiqueLabel) {
+            m_critiqueLabel->setText(program.visualCritique.isEmpty()
+                ? i18n("ローカルプロシージャル作画ステップを完了しました。")
+                : program.visualCritique);
+        }
+
+        setBusy(false);
+
+        if (m_goalCurrentStep >= m_goalTotalSteps || program.goalReached) {
+            finishGoalMode();
+        } else if (m_pausePerStepCheck && m_pausePerStepCheck->isChecked()) {
+            m_waitingForUserStepAdvance = true;
+            if (m_nextStepButton) {
+                m_nextStepButton->setVisible(true);
+                m_nextStepButton->setEnabled(true);
+            }
+            if (m_finishGoalButton) {
+                m_finishGoalButton->setVisible(true);
+                m_finishGoalButton->setEnabled(true);
+            }
+            setStatus(i18n("ステップ %1 完了。加筆や確認後、「次のステップへ進む」を押してください。", m_goalCurrentStep));
+        } else {
+            QTimer::singleShot(300, this, [this] {
+                advanceGoalStep();
+            });
+        }
+    } else if (mode == GenerationMode::LlmStrokes) {
+        const QString endpoint = m_endpointEditor->text().trimmed();
+        const QString model = m_modelEditor->text().trimmed();
+        const QString apiKey = m_goalApiKey;
+
+        if (apiKey.isEmpty()) {
+            setStatus(i18n("API キーが見つかりません。Goalモードを終了します。"), true);
+            finishGoalMode();
+            return;
+        }
+
+        QString imageBase64;
+        if (m_goalCurrentStep > 1) {
+            KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
+            if (view && view->image()) {
+#ifndef AI_STROKE_STANDALONE
+                imageBase64 = KisAiStrokeRenderer::captureCanvasBase64(view->image(), 768);
+#endif
+            }
+        }
+
+        KisAiPromptAnalyzer::SemanticSpec spec = KisAiPromptAnalyzer::analyze(m_goalPrompt, canvasSize);
+        if (artStyle != KisAiPromptAnalyzer::ArtStyle::General) {
+            spec.style = artStyle;
+        }
+        const QString guidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(
+            m_goalCurrentStep, spec, canvasSize);
+
+        const QJsonObject payload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+            model,
+            m_goalPrompt,
+            canvasSize,
+            m_goalCurrentStep,
+            m_goalTotalSteps,
+            imageBase64,
+            guidance,
+            m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 400
+        );
+
+        QNetworkRequest request{QUrl(endpoint)};
+        request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+        request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+        request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+
+        m_requestWasCancelled = false;
+        m_requestTimedOut = false;
+        m_responseTooLarge = false;
+        m_responseBuffer.clear();
+        m_reply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
+        m_reply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
+        setBusy(true);
+
+        const QString visionTag = !imageBase64.isEmpty() ? i18n(" (Vision画像付)") : QString();
+        setStatus(i18n("%1 に Goal ステップ %2/%3 を送信中%4…",
+            KisAiIllustrationRenderer::displayEndpoint(endpoint),
+            m_goalCurrentStep,
+            m_goalTotalSteps,
+            visionTag));
+        if (m_goalPhaseLabel) {
+            m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2: LLM 生成中%3…", m_goalCurrentStep, m_goalTotalSteps, visionTag));
+        }
+
+        connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] { appendReplyData(m_reply.data()); });
+        connect(m_reply.data(), &QNetworkReply::finished, this, [this] { finishGoalStepRequest(); });
+
+        const QPointer<QNetworkReply> pendingReply = m_reply;
+        QTimer::singleShot(REMOTE_REQUEST_TIMEOUT_MS, this, [this, pendingReply] {
+            if (m_reply && m_reply.data() == pendingReply.data()) {
+                m_requestTimedOut = true;
+                m_reply->abort();
+            }
+        });
+    }
+}
+
+void KisAiIllustrationDocker::finishGoalStepRequest()
+{
+    QPointer<QNetworkReply> reply = m_reply;
+    m_reply = nullptr;
+    const bool requestWasCancelled = m_requestWasCancelled;
+    const bool requestTimedOut = m_requestTimedOut;
+    m_requestWasCancelled = false;
+    m_requestTimedOut = false;
+    setBusy(false);
+
+    if (!reply) {
+        m_responseBuffer.clear();
+        finishGoalMode();
+        return;
+    }
+
+    const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const bool requestSucceeded = reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300;
+    const QByteArray response = takeReplyData(reply.data());
+    const bool responseTooLarge = m_responseTooLarge;
+    m_responseTooLarge = false;
+    reply->deleteLater();
+
+    if (requestWasCancelled) {
+        setStatus(i18n("Goal モードを中止しました。"));
+        finishGoalMode();
+        return;
+    }
+    if (requestTimedOut) {
+        setStatus(i18n("LLM の応答が 2 分以内に届かなかったため中止しました。"), true);
+        finishGoalMode();
+        return;
+    }
+    if (responseTooLarge) {
+        setStatus(i18n("LLM の応答が上限を超えています。"), true);
+        finishGoalMode();
+        return;
+    }
+    if (!requestSucceeded) {
+        QString detail;
+        QJsonParseError parseErr;
+        const QJsonDocument errDoc = QJsonDocument::fromJson(response, &parseErr);
+        if (!errDoc.isNull() && errDoc.isObject()) {
+            const QJsonObject errObj = errDoc.object().value(QStringLiteral("error")).toObject();
+            detail = errObj.value(QStringLiteral("message")).toString().trimmed();
+        }
+        if (!detail.isEmpty()) {
+            setStatus(i18n("LLM への接続または応答に失敗しました (HTTP %1): %2", httpStatus, detail), true);
+        } else {
+            setStatus(i18n("LLM への接続または応答に失敗しました (HTTP %1)。", httpStatus), true);
+        }
+        finishGoalMode();
+        return;
+    }
+
+    KisAiStrokeProgram program;
+    QString parseError;
+    if (!KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError)) {
+        setStatus(parseError, true);
+        finishGoalMode();
+        return;
+    }
+
+    const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
+    const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize);
+    if (!preview.isNull()) {
+        m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    }
+
+    KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
+    if (view && view->image()) {
+        QString statusMsg;
+        if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
+            const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
+            const int qualityPercent = qRound(qBound<qreal>(0.0, program.completionScore, 1.0) * 100.0);
+            const QString detailMsg = i18n("%1 (%2 / 構造品質 %3%)", statusMsg, summary, qualityPercent);
+            setStatus(detailMsg);
+        } else {
+            setStatus(statusMsg, true);
+        }
+    } else {
+        setStatus(i18n("キャンバスが利用できないため、ストロークを描画できませんでした。"), true);
+    }
+
+    if (m_goalPhaseLabel) {
+        m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
+    }
+    if (m_critiqueLabel) {
+        if (!program.visualCritique.isEmpty()) {
+            m_critiqueLabel->setText(i18n("👀 AI視覚批評: %1", program.visualCritique));
+        } else {
+            m_critiqueLabel->setText(i18n("ステップ %1 の作画が完了しました。", m_goalCurrentStep));
+        }
+    }
+
+    if (m_goalCurrentStep >= m_goalTotalSteps || program.goalReached) {
+        finishGoalMode();
+    } else if (m_pausePerStepCheck && m_pausePerStepCheck->isChecked()) {
+        m_waitingForUserStepAdvance = true;
+        if (m_nextStepButton) {
+            m_nextStepButton->setVisible(true);
+            m_nextStepButton->setEnabled(true);
+        }
+        if (m_finishGoalButton) {
+            m_finishGoalButton->setVisible(true);
+            m_finishGoalButton->setEnabled(true);
+        }
+        setStatus(i18n("ステップ %1 完了。キャンバスへの手動加筆・確認後、「次のステップへ進む」を押してください。", m_goalCurrentStep));
+    } else {
+        QTimer::singleShot(300, this, [this] {
+            advanceGoalStep();
+        });
+    }
+}
+
+void KisAiIllustrationDocker::advanceGoalStep()
+{
+    if (!m_goalModeActive) {
+        return;
+    }
+    m_waitingForUserStepAdvance = false;
+    m_goalCurrentStep++;
+    if (m_goalCurrentStep > m_goalTotalSteps) {
+        finishGoalMode();
+        return;
+    }
+    executeGoalStep();
+}
+
+void KisAiIllustrationDocker::finishGoalMode()
+{
+    m_goalModeActive = false;
+    m_waitingForUserStepAdvance = false;
+    m_goalApiKey.clear();
+
+    if (m_goalInspectorCard) {
+        if (m_nextStepButton) {
+            m_nextStepButton->setVisible(false);
+            m_nextStepButton->setEnabled(false);
+        }
+        if (m_finishGoalButton) {
+            m_finishGoalButton->setVisible(false);
+            m_finishGoalButton->setEnabled(false);
+        }
+        if (m_goalPhaseLabel) {
+            m_goalPhaseLabel->setText(i18n("🎯 Goal作画 完了 (全 %1 段階)", m_goalCurrentStep));
+        }
+    }
+    setStatus(i18n("🎯 Goal作画が完了しました。Kritaのレイヤードックで各層を確認・調整できます。"));
+    setBusy(false);
 }

@@ -48,10 +48,27 @@ public:
         BalancedStandard // 0.80 < Aspect < 1.25
     };
 
+    enum class ArtStyle {
+        General,
+        AnimeCel,    // Crisp cel-shading, anime linework, flat highlights
+        Watercolor,  // Soft washes, wet fringes, bleeding edges
+        Impasto,     // Rich textured paint, heavy shading, dramatic contrast
+        InkSketch,   // Hatching lines, manga ink, monochrome or subtle tint
+        CyberNeon    // High-contrast neon glows, dark backdrop, electric accents
+    };
+
+    struct ColorHarmony {
+        QColor keyLight {QColor(255, 250, 240)};
+        QColor ambientShadow {QColor(35, 40, 60)};
+        QColor accentColor {QColor(255, 100, 130)};
+    };
+
     struct SemanticSpec {
         DomainType domain {DomainType::General};
         TimeOfDay timeOfDay {TimeOfDay::Day};
         CompositionType composition {CompositionType::BalancedStandard};
+        ArtStyle style {ArtStyle::General};
+        ColorHarmony harmony;
         qreal aspectRatio {1.0};
         bool hasSakura {false};
         bool hasCharacter {false};
@@ -71,6 +88,16 @@ public:
      * Generate the complete artistic direction text for system prompt injection.
      */
     static QString generateArtDirection(const SemanticSpec &spec, const QSize &canvasSize);
+
+    /**
+     * Generate phase-specific guidance for Goal Mode (Phase 1: Blocking, Phase 2: Shading, Phase 3: Lineart, Phase 4: Finishing).
+     */
+    static QString generateGoalPhaseGuidance(int phase, const SemanticSpec &spec, const QSize &canvasSize);
+
+    /**
+     * Human-readable label for an ArtStyle.
+     */
+    static QString styleName(ArtStyle style);
 };
 
 #endif // KIS_AI_PROMPT_ANALYZER_H

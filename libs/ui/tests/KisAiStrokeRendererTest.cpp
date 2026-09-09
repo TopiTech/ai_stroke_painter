@@ -453,5 +453,120 @@ void KisAiStrokeRendererTest::testRepresentativeCompositionQualityMetrics()
     }
 }
 
+void KisAiStrokeRendererTest::testRenderBackgroundLayer()
+{
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(200, 200);
+
+    // Background operation: full red fill
+    KisAiStrokeOperation bg;
+    bg.kind = KisAiStrokeOperation::Kind::Fill;
+    bg.layer = QStringLiteral("Background");
+    bg.brush.color = QColor(255, 0, 0);
+    bg.polygon = {QPointF(0.0, 0.0), QPointF(1.0, 0.0), QPointF(1.0, 1.0), QPointF(0.0, 1.0)};
+    program.operations.append(bg);
+
+    // Flats operation: small green box in center (clipped to 0.4 - 0.6)
+    KisAiStrokeOperation flats;
+    flats.kind = KisAiStrokeOperation::Kind::Fill;
+    flats.layer = QStringLiteral("Flats");
+    flats.brush.color = QColor(0, 255, 0);
+    flats.polygon = {QPointF(0.4, 0.4), QPointF(0.6, 0.4), QPointF(0.6, 0.6), QPointF(0.4, 0.6)};
+    program.operations.append(flats);
+
+    const QImage rendered = KisAiStrokeRenderer::renderProgramToImage(program, QSize(200, 200), true);
+    QVERIFY(!rendered.isNull());
+
+    // Corner (0.1, 0.1) should show red Background, not be clipped by Flats
+    const QColor corner = rendered.pixelColor(20, 20);
+    QVERIFY(corner.red() > 200 && corner.green() < 50);
+
+    // Center (0.5, 0.5) should show green Flats on top of Background
+    const QColor center = rendered.pixelColor(100, 100);
+    QVERIFY(center.green() > 200 && center.red() < 50);
+}
+
+void KisAiStrokeRendererTest::testRenderMangaLinesOperation()
+{
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(200, 200);
+
+    KisAiStrokeOperation manga;
+    manga.kind = KisAiStrokeOperation::Kind::MangaLines;
+    manga.layer = QStringLiteral("FX");
+    manga.gradientCenter = QPointF(0.5, 0.5);
+    manga.innerRadius = 0.20; // 40px radius from center should be empty
+    manga.outerRadius = 0.80; // 160px radius
+    manga.density = 48;
+    manga.brush.color = QColor(0, 0, 0);
+    manga.brush.size = 0.02;
+    program.operations.append(manga);
+
+    const QImage rendered = KisAiStrokeRenderer::renderProgramToImage(program, QSize(200, 200), false);
+    QVERIFY(!rendered.isNull());
+
+    // Center (100, 100) should be transparent (inside innerRadius)
+    QCOMPARE(rendered.pixelColor(100, 100).alpha(), 0);
+
+    // Outside inner radius, pixels should be drawn
+    int drawnPixels = 0;
+    for (int y = 0; y < 200; ++y) {
+        for (int x = 0; x < 200; ++x) {
+            const qreal dist = std::hypot(x - 100, y - 100);
+            if (dist > 45.0 && dist < 150.0 && rendered.pixelColor(x, y).alpha() > 50) {
+                ++drawnPixels;
+            }
+        }
+    }
+    QVERIFY(drawnPixels > 50);
+}
+
+void KisAiStrokeRendererTest::testNewBrushProfilesRendering()
+{
+    for (const QString &profile : {QStringLiteral("marker"), QStringLiteral("crayon"), QStringLiteral("neon"), QStringLiteral("splatter")}) {
+        KisAiStrokeProgram program;
+        program.canvasSize = QSize(100, 100);
+
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Path;
+        op.layer = QStringLiteral("Lineart");
+        op.brush.profile = profile;
+        op.brush.color = QColor(0, 128, 255);
+        op.brush.size = 0.08;
+        op.points = {KisAiStrokePoint(0.2, 0.2, 0.8), KisAiStrokePoint(0.8, 0.8, 0.8)};
+        program.operations.append(op);
+
+        const QImage img = KisAiStrokeRenderer::renderProgramToImage(program, QSize(100, 100), false);
+        QVERIFY(!img.isNull());
+
+        int coloredCount = 0;
+        for (int y = 0; y < 100; ++y) {
+            for (int x = 0; x < 100; ++x) {
+                if (img.pixelColor(x, y).alpha() > 10) ++coloredCount;
+            }
+        }
+        QVERIFY2(coloredCount > 20, qPrintable(profile));
+    }
+}
+
+void KisAiStrokeRendererTest::testCaptureImageBase64()
+{
+    QImage testImg(1024, 768, QImage::Format_ARGB32_Premultiplied);
+    testImg.fill(Qt::blue);
+
+    const QString b64 = KisAiStrokeRenderer::captureImageBase64(testImg, 512, 75);
+    QVERIFY(!b64.isEmpty());
+    QVERIFY(b64.startsWith(QStringLiteral("data:image/jpeg;base64,")));
+
+    const QString data = b64.mid(QStringLiteral("data:image/jpeg;base64,").length());
+    const QByteArray decoded = QByteArray::fromBase64(data.toLatin1());
+    QVERIFY(!decoded.isEmpty());
+
+    QImage loaded;
+    QVERIFY(loaded.loadFromData(decoded, "JPEG"));
+    QVERIFY(loaded.width() <= 512);
+    QVERIFY(loaded.height() <= 512);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)
 

@@ -68,6 +68,26 @@ public:
         bool clipShadingToFlats = true
     );
 
+    /**
+     * Encode a QImage into a JPEG Base64 Data URL (scaled down if exceeding maxDimension).
+     */
+    static QString captureImageBase64(
+        const QImage &image,
+        int maxDimension = 768,
+        int quality = 80
+    );
+
+#ifndef AI_STROKE_STANDALONE
+    /**
+     * Capture the current state of a Krita image to a Base64 Data URL for Vision LLM input.
+     */
+    static QString captureCanvasBase64(
+        KisImageWSP image,
+        int maxDimension = 768,
+        int quality = 80
+    );
+#endif
+
 private:
     static QImage renderOperationsToImage(
         const QVector<KisAiStrokeOperation> &operations,
@@ -111,6 +131,12 @@ private:
     );
 
     static void drawHatchOperation(
+        QPainter &painter,
+        const KisAiStrokeOperation &op,
+        const QSize &canvasSize
+    );
+
+    static void drawMangaLinesOperation(
         QPainter &painter,
         const KisAiStrokeOperation &op,
         const QSize &canvasSize

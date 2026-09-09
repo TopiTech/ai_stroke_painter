@@ -26,6 +26,10 @@ private Q_SLOTS:
     void testCentripetalSplineAvoidsUnevenPointLoop();
     void testPressureStrokeHasAntialiasedTaper();
     void testRepresentativeCompositionQualityMetrics();
+    void testRenderBackgroundLayer();
+    void testRenderMangaLinesOperation();
+    void testNewBrushProfilesRendering();
+    void testCaptureImageBase64();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

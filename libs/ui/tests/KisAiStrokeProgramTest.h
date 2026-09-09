@@ -32,6 +32,10 @@ private Q_SLOTS:
     void testStructuralQualityScore();
     void testParseGeometrySafetyLimits();
     void testGradientDirectionPointsParsing();
+    void testMangaLinesParsingAndRefinement();
+    void testGoalModePayloadAndVisionModelDetection();
+    void testGoalModeProgramStepAndMerge();
+    void testNewProceduralDomains();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H
