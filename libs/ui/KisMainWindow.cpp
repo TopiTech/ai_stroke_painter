@@ -3438,24 +3438,40 @@ void KisMainWindow::applyAiIllustrationMode()
     if (aiDocker) {
         addDockWidget(Qt::RightDockWidgetArea, aiDocker);
         aiDocker->show();
-        aiDocker->raise();
     }
     if (layerDocker) {
         addDockWidget(Qt::RightDockWidgetArea, layerDocker);
         layerDocker->show();
+        if (aiDocker) {
+            tabifyDockWidget(aiDocker, layerDocker);
+        }
     }
     if (colorDocker) {
         addDockWidget(Qt::RightDockWidgetArea, colorDocker);
         colorDocker->show();
         if (layerDocker) {
             tabifyDockWidget(layerDocker, colorDocker);
-            layerDocker->raise();
         }
     }
-    if (presetDocker && colorDocker) {
+    if (presetDocker) {
         addDockWidget(Qt::RightDockWidgetArea, presetDocker);
-        tabifyDockWidget(colorDocker, presetDocker);
+        presetDocker->show();
+        if (colorDocker) {
+            tabifyDockWidget(colorDocker, presetDocker);
+        }
     }
+    if (aiDocker) {
+        aiDocker->raise();
+    }
+
+    setStyleSheet(QStringLiteral(
+        "QMainWindow::separator { width: 4px; height: 4px; background: #141924; }"
+        "QMainWindow::separator:hover { background: #3b82f6; }"
+        "QTabBar::tab { background: #151a24; color: #8fa1bc; padding: 6px 12px; border: 1px solid #212938; border-bottom: none; border-top-left-radius: 4px; border-top-right-radius: 4px; margin-right: 2px; font-size: 12px; font-weight: 500; }"
+        "QTabBar::tab:selected { background: #1e2636; color: #f1f5f9; border-bottom: 2px solid #3b82f6; font-weight: 600; }"
+        "QTabBar::tab:hover:!selected { background: #1a2130; color: #cbd5e1; }"
+        "QDockWidget::title { background: #131822; color: #cbd5e1; font-weight: 600; padding: 5px 8px; border-bottom: 1px solid #1f2736; }"
+    ));
 #endif
 
 }

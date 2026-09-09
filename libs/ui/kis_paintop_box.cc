@@ -239,10 +239,10 @@ KisPaintopBox::KisPaintopBox(KisViewManager *viewManager, QWidget *parent, const
     int sliderWidth;
 
     if (sliderLabels) {
-        sliderWidth = 150 * logicalDpiX() / 96;
+        sliderWidth = 175 * logicalDpiX() / 96;
     }
     else {
-        sliderWidth = 120 * logicalDpiX() / 96;
+        sliderWidth = 145 * logicalDpiX() / 96;
     }
 
     for (int i = 0; i < 5; ++i) {
@@ -321,7 +321,8 @@ KisPaintopBox::KisPaintopBox(KisViewManager *viewManager, QWidget *parent, const
         slPatternSize->setFixedHeight(buttonsize);
         slPatternSize->setBlockUpdateSignalOnDrag(true);
 
-        m_sliderChooser[i]->setMinimumWidth(qMax(sliderWidth, slPatternSize->sizeHint().width()));
+        const int chooserMinWidth = qMax(sliderWidth, qMax(slSize->sizeHint().width(), slPatternSize->sizeHint().width()));
+        m_sliderChooser[i]->setMinimumWidth(chooserMinWidth);
 
         m_sliderChooser[i]->chooseWidget(cfg.toolbarSlider(i + 1));
     }

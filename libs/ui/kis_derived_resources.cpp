@@ -83,13 +83,13 @@ KisCompositeOpResourceConverter::KisCompositeOpResourceConverter()
 QVariant KisCompositeOpResourceConverter::fromSource(const QVariant &value)
 {
     KisPaintOpPresetSP preset = value.value<KisPaintOpPresetSP>();
-    return preset ? preset->settings()->paintOpCompositeOp() : QVariant();
+    return (preset && preset->settings()) ? preset->settings()->paintOpCompositeOp() : QVariant();
 }
 
 QVariant KisCompositeOpResourceConverter::toSource(const QVariant &value, const QVariant &sourceValue)
 {
     KisPaintOpPresetSP preset = sourceValue.value<KisPaintOpPresetSP>();
-    if (!preset) return sourceValue;
+    if (!preset || !preset->settings()) return sourceValue;
 
     preset->settings()->setPaintOpCompositeOp(value.toString());
     return QVariant::fromValue(preset);
@@ -109,7 +109,7 @@ KisEffectiveCompositeOpResourceConverter::KisEffectiveCompositeOpResourceConvert
 QVariant KisEffectiveCompositeOpResourceConverter::fromSource(const QVariant &value)
 {
     KisPaintOpPresetSP preset = value.value<KisPaintOpPresetSP>();
-    return preset ? preset->settings()->effectivePaintOpCompositeOp() : QVariant();
+    return (preset && preset->settings()) ? preset->settings()->effectivePaintOpCompositeOp() : QVariant();
 }
 
 QVariant KisEffectiveCompositeOpResourceConverter::toSource(const QVariant &value, const QVariant &sourceValue)
@@ -136,13 +136,13 @@ KisOpacityToPresetOpacityResourceConverter::KisOpacityToPresetOpacityResourceCon
 QVariant KisOpacityToPresetOpacityResourceConverter::fromSource(const QVariant &value)
 {
     KisPaintOpPresetSP preset = value.value<KisPaintOpPresetSP>();
-    return preset ? preset->settings()->paintOpOpacity() : QVariant(1.0);
+    return (preset && preset->settings()) ? preset->settings()->paintOpOpacity() : QVariant(1.0);
 }
 
 QVariant KisOpacityToPresetOpacityResourceConverter::toSource(const QVariant &value, const QVariant &sourceValue)
 {
     KisPaintOpPresetSP preset = sourceValue.value<KisPaintOpPresetSP>();
-    if (!preset) return sourceValue;
+    if (!preset || !preset->settings()) return sourceValue;
 
     preset->settings()->setPaintOpOpacity(value.toReal());
     return QVariant::fromValue(preset);
@@ -161,13 +161,13 @@ KisFlowResourceConverter::KisFlowResourceConverter()
 QVariant KisFlowResourceConverter::fromSource(const QVariant &value)
 {
     KisPaintOpPresetSP preset = value.value<KisPaintOpPresetSP>();
-    return preset ? preset->settings()->paintOpFlow() : QVariant();
+    return (preset && preset->settings()) ? preset->settings()->paintOpFlow() : QVariant();
 }
 
 QVariant KisFlowResourceConverter::toSource(const QVariant &value, const QVariant &sourceValue)
 {
     KisPaintOpPresetSP preset = sourceValue.value<KisPaintOpPresetSP>();
-    if (!preset) return sourceValue;
+    if (!preset || !preset->settings()) return sourceValue;
 
     preset->settings()->setPaintOpFlow(value.toReal());
     return QVariant::fromValue(preset);
@@ -186,13 +186,13 @@ KisFadeResourceConverter::KisFadeResourceConverter()
 QVariant KisFadeResourceConverter::fromSource(const QVariant &value)
 {
     KisPaintOpPresetSP preset = value.value<KisPaintOpPresetSP>();
-    return preset ? preset->settings()->paintOpFade() : QVariant();
+    return (preset && preset->settings()) ? preset->settings()->paintOpFade() : QVariant();
 }
 
 QVariant KisFadeResourceConverter::toSource(const QVariant &value, const QVariant &sourceValue)
 {
     KisPaintOpPresetSP preset = sourceValue.value<KisPaintOpPresetSP>();
-    if (!preset) return sourceValue;
+    if (!preset || !preset->settings()) return sourceValue;
 
     preset->settings()->setPaintOpFade(value.toReal());
     return QVariant::fromValue(preset);
@@ -211,13 +211,13 @@ KisScatterResourceConverter::KisScatterResourceConverter()
 QVariant KisScatterResourceConverter::fromSource(const QVariant &value)
 {
     KisPaintOpPresetSP preset = value.value<KisPaintOpPresetSP>();
-    return preset ? preset->settings()->paintOpScatter() : QVariant();
+    return (preset && preset->settings()) ? preset->settings()->paintOpScatter() : QVariant();
 }
 
 QVariant KisScatterResourceConverter::toSource(const QVariant &value, const QVariant &sourceValue)
 {
     KisPaintOpPresetSP preset = sourceValue.value<KisPaintOpPresetSP>();
-    if (!preset) return sourceValue;
+    if (!preset || !preset->settings()) return sourceValue;
 
     preset->settings()->setPaintOpScatter(value.toReal());
     return QVariant::fromValue(preset);
@@ -242,7 +242,7 @@ QVariant KisSizeResourceConverter::fromSource(const QVariant &value)
 QVariant KisSizeResourceConverter::toSource(const QVariant &value, const QVariant &sourceValue)
 {
     KisPaintOpPresetSP preset = sourceValue.value<KisPaintOpPresetSP>();
-    if (!preset) return sourceValue;
+    if (!preset || !preset->settings()) return sourceValue;
 
     preset->settings()->setPaintOpSize(value.toReal());
     return QVariant::fromValue(preset);
@@ -267,7 +267,7 @@ QVariant KisBrushRotationResourceConverter::fromSource(const QVariant &value)
 QVariant KisBrushRotationResourceConverter::toSource(const QVariant &value, const QVariant &sourceValue)
 {
     KisPaintOpPresetSP preset = sourceValue.value<KisPaintOpPresetSP>();
-    if (!preset) return sourceValue;
+    if (!preset || !preset->settings()) return sourceValue;
 
     preset->settings()->setPaintOpAngle(value.toReal());
     return QVariant::fromValue(preset);
@@ -286,13 +286,13 @@ KisPatternSizeResourceConverter::KisPatternSizeResourceConverter()
 QVariant KisPatternSizeResourceConverter::fromSource(const QVariant& value)
 {
     KisPaintOpPresetSP preset = value.value<KisPaintOpPresetSP>();
-    return preset && preset->settings()->hasPatternSettings() ? preset->settings()->paintOpPatternSize() : QVariant::fromValue(1.0);
+    return (preset && preset->settings() && preset->settings()->hasPatternSettings()) ? preset->settings()->paintOpPatternSize() : QVariant::fromValue(1.0);
 }
 
 QVariant KisPatternSizeResourceConverter::toSource(const QVariant& value, const QVariant& sourceValue)
 {
     KisPaintOpPresetSP preset = sourceValue.value<KisPaintOpPresetSP>();
-    if (!preset) return sourceValue;
+    if (!preset || !preset->settings()) return sourceValue;
 
     if (preset->settings()->hasPatternSettings()) {
         preset->settings()->setProperty("Texture/Pattern/Scale", value.toReal());
@@ -314,13 +314,13 @@ KisLodAvailabilityResourceConverter::KisLodAvailabilityResourceConverter()
 QVariant KisLodAvailabilityResourceConverter::fromSource(const QVariant &value)
 {
     KisPaintOpPresetSP preset = value.value<KisPaintOpPresetSP>();
-    return preset ? KisPaintOpSettings::isLodUserAllowed(preset->settings()) : QVariant();
+    return (preset && preset->settings()) ? KisPaintOpSettings::isLodUserAllowed(preset->settings()) : QVariant();
 }
 
 QVariant KisLodAvailabilityResourceConverter::toSource(const QVariant &value, const QVariant &sourceValue)
 {
     KisPaintOpPresetSP preset = sourceValue.value<KisPaintOpPresetSP>();
-    if (!preset) return sourceValue;
+    if (!preset || !preset->settings()) return sourceValue;
 
     KisPaintOpSettings::setLodUserAllowed(preset->settings().data(), value.toBool());
     return QVariant::fromValue(preset);
@@ -339,13 +339,13 @@ KisLodSizeThresholdResourceConverter::KisLodSizeThresholdResourceConverter()
 QVariant KisLodSizeThresholdResourceConverter::fromSource(const QVariant &value)
 {
     KisPaintOpPresetSP preset = value.value<KisPaintOpPresetSP>();
-    return preset ? preset->settings()->lodSizeThreshold() : QVariant();
+    return (preset && preset->settings()) ? preset->settings()->lodSizeThreshold() : QVariant();
 }
 
 QVariant KisLodSizeThresholdResourceConverter::toSource(const QVariant &value, const QVariant &sourceValue)
 {
     KisPaintOpPresetSP preset = sourceValue.value<KisPaintOpPresetSP>();
-    if (!preset) return sourceValue;
+    if (!preset || !preset->settings()) return sourceValue;
 
     preset->settings()->setLodSizeThreshold(value.toDouble());
     return QVariant::fromValue(preset);
@@ -364,7 +364,7 @@ KisLodSizeThresholdSupportedResourceConverter::KisLodSizeThresholdSupportedResou
 QVariant KisLodSizeThresholdSupportedResourceConverter::fromSource(const QVariant &value)
 {
     KisPaintOpPresetSP preset = value.value<KisPaintOpPresetSP>();
-    return preset ? preset->settings()->lodSizeThresholdSupported() : QVariant();
+    return (preset && preset->settings()) ? preset->settings()->lodSizeThresholdSupported() : QVariant();
 }
 
 QVariant KisLodSizeThresholdSupportedResourceConverter::toSource(const QVariant &value, const QVariant &sourceValue)
@@ -389,13 +389,13 @@ KisEraserModeResourceConverter::KisEraserModeResourceConverter()
 QVariant KisEraserModeResourceConverter::fromSource(const QVariant &value)
 {
     KisPaintOpPresetSP preset = value.value<KisPaintOpPresetSP>();
-    return preset ? preset->settings()->eraserMode() : QVariant();
+    return (preset && preset->settings()) ? preset->settings()->eraserMode() : QVariant();
 }
 
 QVariant KisEraserModeResourceConverter::toSource(const QVariant &value, const QVariant &sourceValue)
 {
     KisPaintOpPresetSP preset = sourceValue.value<KisPaintOpPresetSP>();
-    if (!preset) return sourceValue;
+    if (!preset || !preset->settings()) return sourceValue;
 
     preset->settings()->setEraserMode(value.toBool());
     return QVariant::fromValue(preset);

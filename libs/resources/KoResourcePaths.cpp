@@ -472,6 +472,20 @@ QString KoResourcePaths::findResourceInternal(const QString &type, const QString
     }
 
     if (resource.isEmpty() || !QFile::exists(resource)) {
+        QString appDir = qApp->applicationDirPath();
+        Q_FOREACH (const QString &alias, aliases) {
+            resource = appDir + "/data/krita/" + alias + '/' + fileName;
+            if (QFile::exists(resource)) {
+                break;
+            }
+            resource = appDir + "/data/" + alias + '/' + fileName;
+            if (QFile::exists(resource)) {
+                break;
+            }
+        }
+    }
+
+    if (resource.isEmpty() || !QFile::exists(resource)) {
         QStringList extraResourceDirs = findExtraResourceDirs();
 
         if (!extraResourceDirs.isEmpty()) {
@@ -557,6 +571,8 @@ QStringList KoResourcePaths::findDirsInternal(const QString &type)
         QStringList fallbackPaths;
         fallbackPaths << getApplicationRoot() + "/share/" + alias;
         fallbackPaths << getApplicationRoot() + "/share/krita/" + alias;
+        fallbackPaths << qApp->applicationDirPath() + "/data/" + alias;
+        fallbackPaths << qApp->applicationDirPath() + "/data/krita/" + alias;
         appendResources(&dirs, fallbackPaths, true);
 
     }
@@ -629,7 +645,9 @@ QStringList KoResourcePaths::findAllResourcesInternal(const QString &type,
         } else {
             dirs << QStandardPaths::locateAll(d->mapTypeToQStandardPaths(type), alias, QStandardPaths::LocateDirectory)
                  << getInstallationPrefix() + "share/" + alias + "/"
-                 << getInstallationPrefix() + "share/krita/" + alias + "/";
+                 << getInstallationPrefix() + "share/krita/" + alias + "/"
+                 << qApp->applicationDirPath() + "/data/" + alias + "/"
+                 << qApp->applicationDirPath() + "/data/krita/" + alias + "/";
         }
 
         Q_FOREACH (const QString &dir, dirs) {
@@ -648,6 +666,8 @@ QStringList KoResourcePaths::findAllResourcesInternal(const QString &type,
     QStringList prefixResources;
     prefixResources << filesInDir(getInstallationPrefix() + "share/" + fi.path(), fi.fileName(), false);
     prefixResources << filesInDir(getInstallationPrefix() + "share/krita/" + fi.path(), fi.fileName(), false);
+    prefixResources << filesInDir(qApp->applicationDirPath() + "/data/" + fi.path(), fi.fileName(), false);
+    prefixResources << filesInDir(qApp->applicationDirPath() + "/data/krita/" + fi.path(), fi.fileName(), false);
     appendResources(&resources, prefixResources, true);
 
     dbgResources << "\tresources from installation:" << resources.size();

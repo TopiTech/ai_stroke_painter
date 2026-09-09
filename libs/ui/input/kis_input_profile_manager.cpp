@@ -328,8 +328,80 @@ void KisInputProfileManager::loadProfiles()
         }
     }
 
+    if (d->profiles.isEmpty()) {
+        KisInputProfile *defaultProfile = addProfile(QStringLiteral("Krita Default"));
+        const QMap<QString, QStringList> defaultShortcuts = {
+            {QStringLiteral("Tool Invocation"), {
+                QStringLiteral("{0;2;[];1;0;0}"),
+                QStringLiteral("{3;2;[56];1;0;0}"),
+                QStringLiteral("{1;1;[1000005];0;0;0}"),
+                QStringLiteral("{1;1;[1000004];0;0;0}"),
+                QStringLiteral("{2;1;[1000000];0;0;0}")
+            }},
+            {QStringLiteral("Alternate Invocation"), {
+                QStringLiteral("{1;2;[1000023,1000020];1;0;0}"),
+                QStringLiteral("{0;2;[1000021,1000020];1;0;0}"),
+                QStringLiteral("{5;2;[1000021];2;0;0}"),
+                QStringLiteral("{3;2;[1000021,1000023];2;0;0}"),
+                QStringLiteral("{2;2;[1000023,1000021];1;0;0}"),
+                QStringLiteral("{4;2;[1000021];1;0;0}"),
+                QStringLiteral("{4;4;[];0;0;b}")
+            }},
+            {QStringLiteral("Show Popup Widget"), {
+                QStringLiteral("{0;2;[];2;0;0}"),
+                QStringLiteral("{0;4;[];0;0;1}")
+            }},
+            {QStringLiteral("Pan Canvas"), {
+                QStringLiteral("{0;5;[];0;0;2}"),
+                QStringLiteral("{0;2;[20];1;0;0}"),
+                QStringLiteral("{0;2;[];4;0;0}"),
+                QStringLiteral("{1;1;[];0;0;0}"),
+                QStringLiteral("{2;1;[];0;0;0}"),
+                QStringLiteral("{3;1;[];0;0;0}"),
+                QStringLiteral("{4;1;[];0;0;0}"),
+                QStringLiteral("{0;3;[];0;5;0}"),
+                QStringLiteral("{0;4;[];0;0;6}")
+            }},
+            {QStringLiteral("Zoom Canvas"), {
+                QStringLiteral("{7;2;[1000021,20];1;0;0}"),
+                QStringLiteral("{7;2;[1000021];4;0;0}"),
+                QStringLiteral("{3;3;[];0;2;0}"),
+                QStringLiteral("{2;3;[];0;1;0}")
+            }},
+            {QStringLiteral("Change Primary Setting"), {
+                QStringLiteral("{0;2;[1000020];1;0;0}")
+            }},
+            {QStringLiteral("Rotate Canvas"), {
+                QStringLiteral("{0;2;[1000020,20];1;0;0}"),
+                QStringLiteral("{0;2;[1000020];4;0;0}")
+            }}
+        };
+
+        for (auto it = defaultShortcuts.constBegin(); it != defaultShortcuts.constEnd(); ++it) {
+            KisAbstractInputAction *action = nullptr;
+            for (KisAbstractInputAction *a : d->actions) {
+                if (a->id() == it.key()) {
+                    action = a;
+                    break;
+                }
+            }
+            if (action) {
+                for (const QString &s : it.value()) {
+                    KisShortcutConfiguration *sc = new KisShortcutConfiguration;
+                    sc->setAction(action);
+                    if (sc->unserialize(s)) {
+                        defaultProfile->addShortcut(sc);
+                    } else {
+                        delete sc;
+                    }
+                }
+            }
+        }
+        d->currentProfile = defaultProfile;
+    }
+
     QString currentProfile = cfg.currentInputProfile();
-    if (d->profiles.size() > 0) {
+    if (d->profiles.size() > 0 && !d->currentProfile) {
         if (currentProfile.isEmpty() || !d->profiles.contains(currentProfile)) {
             QString kritaDefault = QStringLiteral("Krita Default");
             if (d->profiles.contains(kritaDefault)) {

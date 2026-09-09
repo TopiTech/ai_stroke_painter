@@ -63,6 +63,9 @@ KisFloatingMessage::KisFloatingMessage(const QString &message, QWidget *parent, 
     setWindowFlags(Qt::FramelessWindowHint | Qt::ToolTip | Qt::WindowTransparentForInput);
     setFocusPolicy(Qt::NoFocus);
     setAttribute(Qt::WA_ShowWithoutActivating);
+    setAttribute(Qt::WA_TranslucentBackground);
+    setAttribute(Qt::WA_StyledBackground, true);
+    setStyleSheet(QStringLiteral("background: rgba(20, 26, 38, 0.88); border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px; color: #f0f4fc; font-weight: 500; font-size: 13px;"));
 
     m_messageLabel = new QLabel(message, this);
     m_messageLabel->setAttribute(Qt::WA_TranslucentBackground);
@@ -103,7 +106,10 @@ void KisFloatingMessage::tryOverrideMessage(const QString message,
 
 void KisFloatingMessage::showMessage()
 {
-    if (widgetQueuedForDeletion) return;
+    if (widgetQueuedForDeletion || m_message.trimmed().isEmpty()) {
+        hide();
+        return;
+    }
 
     m_messageLabel->setAlignment(flagsToAlignmentFlags(m_alignment));
     m_messageLabel->setWordWrap(m_alignment & Qt::TextWordWrap);
@@ -206,9 +212,9 @@ QRect KisFloatingMessage::determineMetrics( const int M )
     QPoint newPos(MARGIN, MARGIN);
 
     if (parentWidget() && m_showOverParent) {
-        screen = parentWidget()->geometry();
-        screen.setTopLeft(parentWidget()->mapToGlobal(QPoint(MARGIN, MARGIN + 50)));
-        newPos = screen.topLeft();
+        const int toastX = qMax(MARGIN, (parentWidget()->width() - rect.width()) / 2);
+        const int toastY = qMax(MARGIN, parentWidget()->height() - rect.height() - 36);
+        newPos = parentWidget()->mapToGlobal(QPoint(toastX, toastY));
     }
     else {
         // move to the right

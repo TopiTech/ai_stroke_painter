@@ -138,49 +138,104 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     panel->setObjectName(QStringLiteral("aiIllustrationPanel"));
     panel->setAccessibleName(i18n("AI illustration workspace"));
     panel->setStyleSheet(QStringLiteral(
-        "QWidget#aiIllustrationPanel { background: #151b28; color: #edf3ff; }"
-        "QWidget#aiIllustrationPanel QLabel { color: #dbe5f5; font-size: 13px; }"
-        "QLabel#aiTitle { color: #f3f7ff; font-size: 20px; font-weight: 700; }"
-        "QLabel#aiSubtitle { color: #95a8c5; font-size: 12px; }"
+        "QWidget#aiIllustrationPanel { background: #11151e; color: #e2e8f0; }"
+        "QWidget#aiIllustrationPanel QLabel { color: #cbd5e1; font-size: 12px; }"
+        "QLabel#aiTitle { color: #f8fafc; font-size: 17px; font-weight: 700; }"
+        "QLabel#aiSubtitle { color: #94a3b8; font-size: 11px; line-height: 1.4; }"
+        "QLabel[class=\"aiCardTitle\"] { color: #7c8ba1; font-size: 11px; font-weight: 700; }"
+        "QFrame[class=\"aiCard\"] { background: #171d29; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; }"
         "QPlainTextEdit, QLineEdit, QSpinBox, QComboBox {"
-        " background: #0f1521; border: 1px solid #314460; border-radius: 5px; padding: 6px 8px; color: #edf3ff; }"
-        "QPlainTextEdit:focus, QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border: 1px solid #6d9df2; }"
-        "QPushButton#aiGenerateButton { background: #4a88f7; color: #ffffff; border: none; border-radius: 5px;"
-        " font-weight: 700; font-size: 14px; min-height: 36px; padding: 6px 14px; }"
-        "QPushButton#aiGenerateButton:hover { background: #629aff; }"
-        "QPushButton#aiGenerateButton:pressed { background: #3572df; }"
-        "QPushButton#aiGenerateButton:disabled { background: #28374d; color: #6d809c; }"
-        "QPushButton#aiSecondaryButton { background: #1a2232; color: #c4d8f5; border: 1px solid #3b4f6e;"
-        " border-radius: 5px; min-height: 32px; padding: 5px 12px; }"
-        "QPushButton#aiSecondaryButton:hover { background: #243046; color: #ffffff; border-color: #526c95; }"
-        "QPushButton#aiSecondaryButton:pressed { background: #141b27; }"
-        "QLabel#aiStatus { color: #a4b8d6; padding: 4px 1px; font-size: 12px; }"
-        "QLabel#aiStatus[error=\"true\"] { color: #ff8e97; font-weight: 600; }"
-        "QFrame#aiRule { background: #314460; max-height: 1px; }"
-        "QToolButton#aiToggleDetails { color: #8ea5c8; background: transparent; border: none; font-size: 12px; text-align: left; padding: 4px 0px; font-weight: 500; }"
-        "QToolButton#aiToggleDetails:hover { color: #c8daf2; }"));
+        " background: #0d1117; border: 1px solid #273142; border-radius: 6px; padding: 5px 8px; color: #f1f5f9; font-size: 12px; }"
+        "QPlainTextEdit:focus, QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border: 1px solid #3b82f6; background: #0f141d; }"
+        "QPushButton#aiGenerateButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563eb, stop:1 #4f46e5);"
+        " color: #ffffff; border: none; border-radius: 6px; font-weight: 700; font-size: 13px; min-height: 36px; padding: 6px 14px; }"
+        "QPushButton#aiGenerateButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #6366f1); }"
+        "QPushButton#aiGenerateButton:pressed { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1d4ed8, stop:1 #4338ca); }"
+        "QPushButton#aiGenerateButton:disabled { background: #1f2736; color: #55657d; }"
+        "QPushButton#aiSecondaryButton { background: #1f2737; color: #cbd5e1; border: 1px solid #344258;"
+        " border-radius: 6px; min-height: 28px; padding: 4px 10px; font-size: 12px; }"
+        "QPushButton#aiSecondaryButton:hover { background: #283348; color: #ffffff; border-color: #4b6282; }"
+        "QPushButton#aiSecondaryButton:pressed { background: #151b27; }"
+        "QPushButton[class=\"aiChipButton\"] { background: #1b2230; color: #94a3b8; border: 1px solid #2e3b50;"
+        " border-radius: 11px; padding: 2px 8px; font-size: 11px; }"
+        "QPushButton[class=\"aiChipButton\"]:hover { background: #253044; color: #38bdf8; border-color: #38bdf8; }"
+        "QPushButton[class=\"aiChipButton\"]:pressed { background: #101520; }"
+        "QPushButton[class=\"aiRatioButton\"] { background: #1b2230; color: #94a3b8; border: 1px solid #2e3b50;"
+        " border-radius: 4px; padding: 2px 6px; font-size: 10px; font-weight: 600; min-width: 32px; }"
+        "QPushButton[class=\"aiRatioButton\"]:hover { background: #253044; color: #f1f5f9; border-color: #3b82f6; }"
+        "QLabel#aiStatus { color: #94a3b8; padding: 2px 0px; font-size: 11px; }"
+        "QLabel#aiStatus[error=\"true\"] { color: #f87171; font-weight: 600; }"
+        "QFrame#aiRule { background: #273142; max-height: 1px; }"
+        "QToolButton#aiToggleDetails { color: #7c8ba1; background: transparent; border: none; font-size: 11px; text-align: left; padding: 2px 0px; font-weight: 500; }"
+        "QToolButton#aiToggleDetails:hover { color: #cbd5e1; }"
+        "QProgressBar { background: #0d1117; border: 1px solid #273142; border-radius: 3px; max-height: 6px; }"
+        "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #06b6d4); border-radius: 2px; }"));
 
     auto *layout = new QVBoxLayout(panel);
-    layout->setContentsMargins(14, 14, 14, 14);
+    layout->setContentsMargins(12, 12, 12, 12);
     layout->setSpacing(8);
 
-    auto *title = new QLabel(i18n("AI Stroke Painter"), panel);
+    auto *title = new QLabel(i18n("🎨 AI Stroke Painter"), panel);
     title->setObjectName(QStringLiteral("aiTitle"));
     title->setAccessibleName(i18n("AI Stroke Painter workspace"));
     layout->addWidget(title);
+
+    auto *subtitle = new QLabel(i18n("描きたい情景を言葉で指定すると、AIが絵筆のストロークを生成してキャンバスを描画します。"), panel);
+    subtitle->setObjectName(QStringLiteral("aiSubtitle"));
+    subtitle->setWordWrap(true);
+    layout->addWidget(subtitle);
 
     auto *rule = new QFrame(panel);
     rule->setObjectName(QStringLiteral("aiRule"));
     rule->setFrameShape(QFrame::HLine);
     layout->addWidget(rule);
 
-    auto *subtitle = new QLabel(i18n("描きたい情景を言葉で指定すると、結果を新しいレイヤーとして追加します。"), panel);
-    subtitle->setObjectName(QStringLiteral("aiSubtitle"));
-    subtitle->setWordWrap(true);
-    auto *presetRow = new QHBoxLayout();
-    auto *presetLabel = new QLabel(i18n("クイック・プリセット:"), panel);
-    m_presetCombo = new QComboBox(panel);
-    m_presetCombo->addItem(i18n("プリセットを選択…"), QString());
+    struct CardWidget {
+        QFrame *frame;
+        QVBoxLayout *layout;
+    };
+    auto createCard = [panel]() -> CardWidget {
+        auto *card = new QFrame(panel);
+        card->setProperty("class", "aiCard");
+        card->setFrameShape(QFrame::StyledPanel);
+        auto *cardLayout = new QVBoxLayout(card);
+        cardLayout->setContentsMargins(10, 10, 10, 10);
+        cardLayout->setSpacing(6);
+        return {card, cardLayout};
+    };
+
+    // Card 1: Illustration Prompt
+    CardWidget promptCard = createCard();
+    auto *promptHeader = new QLabel(i18n("イラストの指示"), promptCard.frame);
+    promptHeader->setProperty("class", "aiCardTitle");
+    promptCard.layout->addWidget(promptHeader);
+
+    // Quick chip buttons
+    auto *chipRow = new QHBoxLayout();
+    chipRow->setSpacing(4);
+    const QList<QPair<QString, QString>> chips = {
+        {i18n("美少女"), QStringLiteral("アニメ美少女のクローズアップポートレート、大きな輝く青い瞳、二重まぶた、繊細なまつ毛、さらさらの銀髪、柔らかい頬の赤み、天使の輪")},
+        {i18n("桜風景"), QStringLiteral("壮大な富士山と満開の桜の木、夕暮れのグラデーション空、舞い散る花びら、伝統的な日本風景")},
+        {i18n("サイバー"), QStringLiteral("ネオン輝くサイバーパンク高層ビル群、夜の摩天楼、雨に反射する光、ホログラム広告、近未来都市")},
+        {i18n("浮世絵"), QStringLiteral("葛飾北斎風のダイナミックな大波、力強い水しぶき、伝統的な青と白のコントラスト、富士山")},
+        {i18n("黒猫"), QStringLiteral("月夜に佇む美しい黒猫、金色に輝く瞳、繊細なヒゲ、神秘的な夜空と星の光")},
+    };
+    for (const auto &chip : chips) {
+        auto *chipBtn = new QPushButton(chip.first, promptCard.frame);
+        chipBtn->setProperty("class", "aiChipButton");
+        chipBtn->setCursor(Qt::PointingHandCursor);
+        connect(chipBtn, &QPushButton::clicked, this, [this, prompt = chip.second] {
+            if (m_promptEditor) {
+                m_promptEditor->setPlainText(prompt);
+            }
+            focusPrompt();
+        });
+        chipRow->addWidget(chipBtn);
+    }
+    promptCard.layout->addLayout(chipRow);
+
+    m_presetCombo = new QComboBox(promptCard.frame);
+    m_presetCombo->addItem(i18n("プリセット一覧から選択…"), QString());
     m_presetCombo->addItem(i18n("👤 美少女アニメ顔 (Anime Girl)"), QStringLiteral("アニメ美少女のクローズアップポートレート、大きな輝く青い瞳、二重まぶた、繊細なまつ毛、さらさらの銀髪、柔らかい頬の赤み、天使の輪"));
     m_presetCombo->addItem(i18n("🌸 山と桜の風景 (Mountain & Sakura)"), QStringLiteral("壮大な富士山と満開の桜の木、夕暮れのグラデーション空、舞い散る花びら、伝統的な日本風景"));
     m_presetCombo->addItem(i18n("🏙️ サイバーパンク都市 (Cyberpunk City)"), QStringLiteral("ネオン輝くサイバーパンク高層ビル群、夜の摩天楼、雨に反射する光、ホログラム広告、近未来都市"));
@@ -189,9 +244,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_presetCombo->addItem(i18n("🐱 幻想的な黒猫 (Mystical Black Cat)"), QStringLiteral("月夜に佇む美しい黒猫、金色に輝く瞳、繊細なヒゲ、神秘的な夜空と星の光"));
     m_presetCombo->addItem(i18n("🌹 バラの花束 (Botanical Rose)"), QStringLiteral("咲き誇る深紅のバラの花束、重なり合う繊細な花びら、朝露のハイライト、瑞々しい緑の葉"));
     m_presetCombo->setAccessibleName(i18n("Quick illustration presets"));
-    presetRow->addWidget(presetLabel);
-    presetRow->addWidget(m_presetCombo, 1);
-    layout->addLayout(presetRow);
+    promptCard.layout->addWidget(m_presetCombo);
 
     connect(m_presetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int idx) {
         const QString text = m_presetCombo->itemData(idx).toString();
@@ -203,29 +256,56 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         }
     });
 
-    auto *promptLabel = new QLabel(i18n("イラストの指示"), panel);
-    layout->addWidget(promptLabel);
-
-    m_promptEditor = new QPlainTextEdit(panel);
+    m_promptEditor = new QPlainTextEdit(promptCard.frame);
     m_promptEditor->setPlaceholderText(i18n("例: 雨上がりの夜、青い光に包まれた猫と花のある静かな路地 (Ctrl+Enter で生成)"));
-    m_promptEditor->setMinimumHeight(80);
-    m_promptEditor->setMaximumHeight(140);
+    m_promptEditor->setMinimumHeight(75);
+    m_promptEditor->setMaximumHeight(130);
     m_promptEditor->setAccessibleName(i18n("Illustration prompt"));
     m_promptEditor->installEventFilter(this);
-    layout->addWidget(m_promptEditor);
+    promptCard.layout->addWidget(m_promptEditor);
 
-    auto *canvasLabel = new QLabel(i18n("新しいキャンバスの大きさ"), panel);
-    layout->addWidget(canvasLabel);
+    layout->addWidget(promptCard.frame);
+
+    // Card 2: Canvas Settings
+    CardWidget canvasCard = createCard();
+    auto *canvasHeaderRow = new QHBoxLayout();
+    auto *canvasHeader = new QLabel(i18n("キャンバスサイズ"), canvasCard.frame);
+    canvasHeader->setProperty("class", "aiCardTitle");
+    canvasHeaderRow->addWidget(canvasHeader);
+    canvasHeaderRow->addStretch(1);
+
+    // Aspect ratio buttons: 1:1, 16:9, 9:16, 4:3
+    const QList<QPair<QString, QPair<int, int>>> ratios = {
+        {QStringLiteral("1:1"), {1024, 1024}},
+        {QStringLiteral("16:9"), {1280, 720}},
+        {QStringLiteral("9:16"), {720, 1280}},
+        {QStringLiteral("4:3"), {1024, 768}},
+    };
+    for (const auto &ratio : ratios) {
+        auto *ratioBtn = new QPushButton(ratio.first, canvasCard.frame);
+        ratioBtn->setProperty("class", "aiRatioButton");
+        ratioBtn->setCursor(Qt::PointingHandCursor);
+        const int w = ratio.second.first;
+        const int h = ratio.second.second;
+        connect(ratioBtn, &QPushButton::clicked, this, [this, w, h] {
+            if (m_widthSpin && m_heightSpin) {
+                m_widthSpin->setValue(w);
+                m_heightSpin->setValue(h);
+            }
+        });
+        canvasHeaderRow->addWidget(ratioBtn);
+    }
+    canvasCard.layout->addLayout(canvasHeaderRow);
 
     auto *canvasRow = new QHBoxLayout();
-    m_widthSpin = new QSpinBox(panel);
+    m_widthSpin = new QSpinBox(canvasCard.frame);
     m_widthSpin->setRange(256, 4096);
     m_widthSpin->setSingleStep(64);
     m_widthSpin->setValue(1024);
     m_widthSpin->setPrefix(i18n("幅: "));
     m_widthSpin->setSuffix(QStringLiteral(" px"));
     m_widthSpin->setAccessibleName(i18n("Canvas width"));
-    m_heightSpin = new QSpinBox(panel);
+    m_heightSpin = new QSpinBox(canvasCard.frame);
     m_heightSpin->setRange(256, 4096);
     m_heightSpin->setSingleStep(64);
     m_heightSpin->setValue(1024);
@@ -234,26 +314,39 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_heightSpin->setAccessibleName(i18n("Canvas height"));
     canvasRow->addWidget(m_widthSpin);
     canvasRow->addWidget(m_heightSpin);
-    layout->addLayout(canvasRow);
+    canvasCard.layout->addLayout(canvasRow);
 
-    m_modeCombo = new QComboBox(panel);
+    m_newCanvasButton = new QPushButton(i18n("＋ 新しいキャンバスを作成"), canvasCard.frame);
+    m_newCanvasButton->setObjectName(QStringLiteral("aiSecondaryButton"));
+    m_newCanvasButton->setAccessibleDescription(i18n("指定した大きさの AI イラスト用キャンバスを作成します。"));
+    canvasCard.layout->addWidget(m_newCanvasButton);
+
+    layout->addWidget(canvasCard.frame);
+
+    // Card 3: Generation Engine
+    CardWidget engineCard = createCard();
+    auto *engineHeader = new QLabel(i18n("生成エンジン"), engineCard.frame);
+    engineHeader->setProperty("class", "aiCardTitle");
+    engineCard.layout->addWidget(engineHeader);
+
+    m_modeCombo = new QComboBox(engineCard.frame);
     m_modeCombo->addItem(i18n("LLM 座標ストローク描画 (Chat Completions)"), static_cast<int>(GenerationMode::LlmStrokes));
     m_modeCombo->addItem(i18n("ローカル座標ストローク描画"), static_cast<int>(GenerationMode::LocalStrokes));
     m_modeCombo->addItem(i18n("画像モデル API (DALL-E)"), static_cast<int>(GenerationMode::RemoteImage));
     m_modeCombo->addItem(i18n("ローカル・コンセプトスケッチ"), static_cast<int>(GenerationMode::LocalConcept));
     m_modeCombo->setAccessibleName(i18n("Generation source"));
-    layout->addWidget(m_modeCombo);
+    engineCard.layout->addWidget(m_modeCombo);
 
-    m_detailsToggleBtn = new QToolButton(panel);
+    m_detailsToggleBtn = new QToolButton(engineCard.frame);
     m_detailsToggleBtn->setObjectName(QStringLiteral("aiToggleDetails"));
     m_detailsToggleBtn->setCheckable(true);
     m_detailsToggleBtn->setText(i18n("▶ 詳細設定（エンドポイント / API キー）"));
     m_detailsToggleBtn->setCursor(Qt::PointingHandCursor);
-    layout->addWidget(m_detailsToggleBtn);
+    engineCard.layout->addWidget(m_detailsToggleBtn);
 
-    m_detailsContainer = new QWidget(panel);
+    m_detailsContainer = new QWidget(engineCard.frame);
     auto *detailsLayout = new QVBoxLayout(m_detailsContainer);
-    detailsLayout->setContentsMargins(0, 0, 0, 0);
+    detailsLayout->setContentsMargins(0, 4, 0, 0);
     detailsLayout->setSpacing(6);
 
     m_remoteOptionsLabel = new QLabel(i18n("OpenAI 互換の Chat Completions エンドポイントを指定します。API キーは保存しません。"), m_detailsContainer);
@@ -290,7 +383,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     detailsLayout->addLayout(remoteForm);
 
     m_detailsContainer->setVisible(false);
-    layout->addWidget(m_detailsContainer);
+    engineCard.layout->addWidget(m_detailsContainer);
+
+    layout->addWidget(engineCard.frame);
 
     connect(m_detailsToggleBtn, &QToolButton::toggled, this, [this](bool checked) {
         m_detailsContainer->setVisible(checked);
@@ -306,42 +401,43 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_endpointEditor->setText(savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/chat/completions") : savedEndpoint);
     m_modelEditor->setText(savedModel.isEmpty() ? QStringLiteral("gpt-4o") : savedModel);
 
-    m_previewLabel = new QLabel(i18n("生成結果のプレビューはここに表示されます。"), panel);
-    m_previewLabel->setAlignment(Qt::AlignCenter);
-    m_previewLabel->setWordWrap(true);
-    m_previewLabel->setMinimumHeight(64);
-    m_previewLabel->setStyleSheet(QStringLiteral("background: #0f1521; border: 1px solid #24344d; border-radius: 4px; color: #7f95b5; padding: 4px;"));
-    m_previewLabel->setAccessibleName(i18n("Generation preview"));
-    layout->addWidget(m_previewLabel);
+    // Card 4: Action & Preview
+    CardWidget actionCard = createCard();
 
-    m_progressBar = new QProgressBar(panel);
+    auto *buttonRow = new QHBoxLayout();
+    m_generateButton = new QPushButton(i18n("🎨 生成してレイヤーに追加"), actionCard.frame);
+    m_generateButton->setObjectName(QStringLiteral("aiGenerateButton"));
+    m_generateButton->setAccessibleDescription(i18n("プロンプトからイラストを生成し、現在のキャンバスに新しいレイヤーを追加します。"));
+    m_cancelButton = new QPushButton(i18n("中止"), actionCard.frame);
+    m_cancelButton->setObjectName(QStringLiteral("aiSecondaryButton"));
+    m_cancelButton->setVisible(false);
+    buttonRow->addWidget(m_generateButton, 1);
+    buttonRow->addWidget(m_cancelButton);
+    actionCard.layout->addLayout(buttonRow);
+
+    m_progressBar = new QProgressBar(actionCard.frame);
     m_progressBar->setRange(0, 0);
     m_progressBar->setTextVisible(false);
+    m_progressBar->setFixedHeight(6);
     m_progressBar->setVisible(false);
-    layout->addWidget(m_progressBar);
+    actionCard.layout->addWidget(m_progressBar);
 
-    m_statusLabel = new QLabel(i18n("キャンバスがない場合は、生成時に新しい AI キャンバスを作成します。"), panel);
+    m_statusLabel = new QLabel(i18n("キャンバスがない場合は、生成時に新しい AI キャンバスを作成します。"), actionCard.frame);
     m_statusLabel->setObjectName(QStringLiteral("aiStatus"));
     m_statusLabel->setWordWrap(true);
     m_statusLabel->setAccessibleName(i18n("Generation status"));
-    layout->addWidget(m_statusLabel);
+    actionCard.layout->addWidget(m_statusLabel);
 
-    auto *buttonRow = new QHBoxLayout();
-    m_newCanvasButton = new QPushButton(i18n("新しいキャンバス"), panel);
-    m_newCanvasButton->setObjectName(QStringLiteral("aiSecondaryButton"));
-    m_newCanvasButton->setAccessibleDescription(i18n("指定した大きさの AI イラスト用キャンバスを作成します。"));
-    m_generateButton = new QPushButton(i18n("生成してレイヤーに追加"), panel);
-    m_generateButton->setObjectName(QStringLiteral("aiGenerateButton"));
-    m_generateButton->setAccessibleDescription(i18n("プロンプトからイラストを生成し、現在のキャンバスに新しいレイヤーを追加します。"));
-    m_cancelButton = new QPushButton(i18n("中止"), panel);
-    m_cancelButton->setObjectName(QStringLiteral("aiSecondaryButton"));
-    m_cancelButton->setVisible(false);
-    buttonRow->addWidget(m_newCanvasButton);
-    buttonRow->addWidget(m_generateButton, 1);
-    buttonRow->addWidget(m_cancelButton);
-    layout->addLayout(buttonRow);
+    m_previewLabel = new QLabel(i18n("生成結果のプレビューはここに表示されます。"), actionCard.frame);
+    m_previewLabel->setAlignment(Qt::AlignCenter);
+    m_previewLabel->setWordWrap(true);
+    m_previewLabel->setMinimumHeight(60);
+    m_previewLabel->setStyleSheet(QStringLiteral("background: #0d1117; border: 1px solid #273142; border-radius: 6px; color: #7f95b5; padding: 6px; font-size: 11px;"));
+    m_previewLabel->setAccessibleName(i18n("Generation preview"));
+    actionCard.layout->addWidget(m_previewLabel);
+
+    layout->addWidget(actionCard.frame);
     layout->addStretch(1);
-
 
     auto *scrollArea = new QScrollArea(this);
     scrollArea->setWidget(panel);
@@ -884,6 +980,7 @@ void KisAiIllustrationDocker::setBusy(bool busy)
 {
     m_newCanvasButton->setEnabled(!busy);
     m_generateButton->setEnabled(!busy);
+    m_generateButton->setText(busy ? i18n("⏳ 生成中…") : i18n("🎨 生成してレイヤーに追加"));
     m_modeCombo->setEnabled(!busy);
     m_cancelButton->setVisible(busy && !m_reply.isNull());
     m_progressBar->setVisible(busy);
