@@ -268,6 +268,12 @@ public:
     static bool isVisionModel(const QString &model);
 
     /**
+     * Check if a model belongs to a reasoning/thinking family (e.g. o1, o3, deepseek-r1, qwq)
+     * requiring max_completion_tokens rather than max_tokens.
+     */
+    static bool isReasoningModel(const QString &model);
+
+    /**
      * Offline deterministic procedural stroke generator for a specific Goal Mode step.
      * Step 1: Background & Flats, Step 2: Shading, Step 3: Lineart, Step 4: Highlights & FX.
      */

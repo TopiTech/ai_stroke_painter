@@ -32,6 +32,7 @@ private Q_SLOTS:
     void testNewBrushProfilesRendering();
     void testCaptureImageBase64();
     void testRenderGoalModeProgression();
+    void testGoalModeCumulativeProgressionAndRibbon();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

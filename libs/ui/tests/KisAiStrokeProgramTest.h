@@ -40,6 +40,8 @@ private Q_SLOTS:
     void testGoalModeProgramStepDynamicTotalSteps();
     void testGoalModePayloadDynamicPhase();
     void testParsePointsNanAndInfProtection();
+    void testIsReasoningModel();
+    void testScalarCoordinateAutoNormalization();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

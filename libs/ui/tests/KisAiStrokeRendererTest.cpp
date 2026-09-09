@@ -654,5 +654,45 @@ void KisAiStrokeRendererTest::testRenderGoalModeProgression()
     QVERIFY(finalPainted >= step1Painted);
 }
 
+void KisAiStrokeRendererTest::testGoalModeCumulativeProgressionAndRibbon()
+{
+    const QSize canvasSize(256, 256);
+    KisAiStrokeProgram accumulated;
+
+    // Simulate Goal Mode accumulating across 4 steps
+    for (int step = 1; step <= 4; ++step) {
+        const KisAiStrokeProgram stepProg = KisAiStrokeProgramCodec::createDeterministicProgramStep(
+            QStringLiteral("anime girl portrait with vibrant eyes"), canvasSize, step, 4);
+        QVERIFY(!stepProg.operations.isEmpty());
+        accumulated = KisAiStrokeProgramCodec::mergePrograms(accumulated, stepProg);
+    }
+
+    QVERIFY(accumulated.operations.size() > 4);
+    QVERIFY(accumulated.completionScore >= 0.8);
+
+    const QImage finalPreview = KisAiStrokeRenderer::renderProgramToImage(accumulated, canvasSize);
+    QVERIFY(!finalPreview.isNull());
+
+    // Ribbon rendering test
+    KisAiStrokeProgram ribbonProg;
+    ribbonProg.canvasSize = canvasSize;
+    KisAiStrokeOperation ribbonOp;
+    ribbonOp.kind = KisAiStrokeOperation::Kind::Ribbon;
+    ribbonOp.layer = QStringLiteral("Lineart");
+    ribbonOp.points = {KisAiStrokePoint(0.1, 0.5), KisAiStrokePoint(0.9, 0.5)};
+    ribbonOp.widthStart = 0.08;
+    ribbonOp.widthEnd = 0.02;
+    ribbonOp.brush.color = QColor(255, 0, 0);
+    ribbonOp.brush.opacity = 1.0;
+    ribbonProg.operations.append(ribbonOp);
+
+    const QImage ribbonImg = KisAiStrokeRenderer::renderProgramToImage(ribbonProg, canvasSize);
+    QVERIFY(!ribbonImg.isNull());
+    const QColor centerCol = ribbonImg.pixelColor(128, 128);
+    QVERIFY(centerCol.alpha() > 50);
+    QVERIFY(centerCol.red() > 150);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)
+
 

@@ -1014,6 +1014,101 @@ void KisAiStrokeProgramTest::testParsePointsNanAndInfProtection()
     QCOMPARE(prog.operations[0].points[0].pos, QPointF(0.5, 0.5));
 }
 
+void KisAiStrokeProgramTest::testIsReasoningModel()
+{
+    // Reasoning models
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("o1")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("o1-preview")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("o1-mini")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("o3-mini")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("deepseek-reasoner")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("deepseek-r1")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("qwq-32b")));
+
+    // Standard non-reasoning models
+    QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("gpt-4o")));
+    QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("gpt-4o-mini")));
+    QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("claude-3-5-sonnet-20241022")));
+    QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("dall-e-3")));
+    QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("")));
+
+    // Verify Chat Completions payload max_completion_tokens vs max_tokens
+    const QSize canvasSize(1024, 1024);
+    const QJsonObject reasoningPayload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
+        QStringLiteral("o3-mini"), QStringLiteral("cat"), canvasSize, 400);
+    QVERIFY(reasoningPayload.contains(QStringLiteral("max_completion_tokens")));
+    QVERIFY(!reasoningPayload.contains(QStringLiteral("max_tokens")));
+
+    const QJsonObject regularPayload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
+        QStringLiteral("gpt-4o"), QStringLiteral("cat"), canvasSize, 400);
+    QVERIFY(regularPayload.contains(QStringLiteral("max_tokens")));
+    QVERIFY(!regularPayload.contains(QStringLiteral("max_completion_tokens")));
+}
+
+void KisAiStrokeProgramTest::testScalarCoordinateAutoNormalization()
+{
+    const QString jsonScalars = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"canvas_size\": [1000, 1000],\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"gradient_fill\",\n"
+        "      \"id\": \"grad_test\",\n"
+        "      \"layer\": \"Background\",\n"
+        "      \"gradient_type\": \"radial\",\n"
+        "      \"start_color\": \"#ffffff\",\n"
+        "      \"end_color\": \"#000000\",\n"
+        "      \"center\": [500, 500],\n"
+        "      \"radius\": 500\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"ribbon\",\n"
+        "      \"id\": \"ribbon_test\",\n"
+        "      \"layer\": \"Flats\",\n"
+        "      \"points\": [[100, 100], [900, 900]],\n"
+        "      \"start_width\": 50,\n"
+        "      \"end_width\": 10,\n"
+        "      \"brush\": {\"color\": \"#ff0000\", \"size\": 10}\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"manga_lines\",\n"
+        "      \"id\": \"manga_test\",\n"
+        "      \"layer\": \"FX\",\n"
+        "      \"line_type\": \"focus\",\n"
+        "      \"center\": [500, 500],\n"
+        "      \"inner_radius\": 100,\n"
+        "      \"outer_radius\": 800,\n"
+        "      \"line_count\": 12,\n"
+        "      \"brush\": {\"color\": \"#000000\", \"size\": 2}\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+
+    KisAiStrokeProgram prog;
+    QString error;
+    const QJsonObject root = QJsonDocument::fromJson(jsonScalars.toUtf8()).object();
+    QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(root, &prog, &error));
+    QCOMPARE(prog.operations.size(), 3);
+
+    // Gradient radius should be normalized (500 / 1000 = 0.5)
+    QCOMPARE(prog.operations[0].gradientRadius, 0.5);
+    QCOMPARE(prog.operations[0].gradientCenter, QPointF(0.5, 0.5));
+
+    // Ribbon widths should be normalized (50 / 1000 = 0.05, 10 / 1000 = 0.01)
+    QCOMPARE(prog.operations[1].widthStart, 0.05);
+    QCOMPARE(prog.operations[1].widthEnd, 0.01);
+    QCOMPARE(prog.operations[1].spine.first(), QPointF(0.1, 0.1));
+    QCOMPARE(prog.operations[1].spine.last(), QPointF(0.9, 0.9));
+
+    // MangaLines inner/outer radius should be normalized (100 / 1000 = 0.1, 800 / 1000 = 0.8)
+    QCOMPARE(prog.operations[2].innerRadius, 0.1);
+    QCOMPARE(prog.operations[2].outerRadius, 0.8);
+    QCOMPARE(prog.operations[2].gradientCenter, QPointF(0.5, 0.5));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
+
 
 

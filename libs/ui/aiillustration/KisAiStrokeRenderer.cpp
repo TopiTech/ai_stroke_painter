@@ -278,9 +278,14 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
     KisNodeCommandsAdapter adapter(viewManager);
     adapter.beginMacro(kundo2_i18n("AI Illustration"));
 
-    // Group layer for clean encapsulation
-    const QString groupTitle = QStringLiteral("🎨 AI: %1").arg(program.prompt.left(24).trimmed());
+    // Group layer for clean encapsulation with pass-through mode enabled
+    // so that child layers with non-normal composite modes (e.g. Shading with Multiply
+    // and Highlights with Screen) blend directly through to layers beneath the group.
+    const QString groupTitle = (program.totalSteps > 1)
+        ? QStringLiteral("🎨 AI [Step %1/%2]: %3").arg(program.currentStep).arg(program.totalSteps).arg(program.prompt.left(20).trimmed())
+        : QStringLiteral("🎨 AI: %1").arg(program.prompt.left(24).trimmed());
     KisGroupLayerSP group = new KisGroupLayer(image.data(), groupTitle, OPACITY_OPAQUE_U8);
+    group->setPassThroughMode(true);
     adapter.addNode(group, root, aboveNode);
     KisNodeSP childAboveNode = nullptr;
 
@@ -914,15 +919,22 @@ void KisAiStrokeRenderer::drawRibbonOperation(QPainter &painter,
                                               const KisAiStrokeOperation &op,
                                               const QSize &canvasSize)
 {
-    if (op.spine.size() < 2)
+    QVector<QPointF> rawSpine = op.spine;
+    if (rawSpine.isEmpty() && !op.points.isEmpty()) {
+        rawSpine.reserve(op.points.size());
+        for (const KisAiStrokePoint &pt : op.points) {
+            rawSpine.append(pt.pos);
+        }
+    }
+    if (rawSpine.size() < 2)
         return;
 
     const qreal baseDim = qMin(canvasSize.width(), canvasSize.height());
 
     // Scale spine and smooth
     QVector<QPointF> scaledSpine;
-    scaledSpine.reserve(op.spine.size());
-    for (const QPointF &pt : op.spine) {
+    scaledSpine.reserve(rawSpine.size());
+    for (const QPointF &pt : rawSpine) {
         scaledSpine.append(scalePoint(pt, canvasSize));
     }
 
@@ -1178,6 +1190,7 @@ QString KisAiStrokeRenderer::captureCanvasBase64(KisImageWSP image, int maxDimen
     if (bounds.isEmpty()) {
         return QString();
     }
+    image->waitForDone();
     const QImage canvasImg = image->convertToQImage(bounds, nullptr);
     return captureImageBase64(canvasImg, maxDimension, quality);
 }

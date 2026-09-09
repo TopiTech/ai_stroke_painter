@@ -83,8 +83,9 @@ void removeAdjacentDuplicates(int count, PointAccessor pointAt, QVector<int> *ke
         }
     }
 }
+} // namespace
 
-bool isReasoningModel(const QString &model)
+bool KisAiStrokeProgramCodec::isReasoningModel(const QString &model)
 {
     const QString lower = model.toLower().trimmed();
     return lower.contains(QLatin1String("o1")) || lower.contains(QLatin1String("o3"))
@@ -92,7 +93,6 @@ bool isReasoningModel(const QString &model)
         || lower.contains(QLatin1String("thinking")) || lower.contains(QLatin1String("reasoner"))
         || lower.contains(QLatin1String("qwq"));
 }
-} // namespace
 
 quint32 KisAiStrokeProgramCodec::stableSeed(const QString &text)
 {
@@ -801,11 +801,22 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
     outProgram->completionScore = rootObj.value(QStringLiteral("completion_score")).toDouble(1.0);
 
     if (rootObj.contains(QStringLiteral("canvas_size")) || rootObj.contains(QStringLiteral("canvas"))) {
-        const QJsonObject cObj = rootObj.contains(QStringLiteral("canvas_size"))
-            ? rootObj.value(QStringLiteral("canvas_size")).toObject()
-            : rootObj.value(QStringLiteral("canvas")).toObject();
-        const int cw = cObj.value(QStringLiteral("width")).toInt(cObj.value(QStringLiteral("w")).toInt(0));
-        const int ch = cObj.value(QStringLiteral("height")).toInt(cObj.value(QStringLiteral("h")).toInt(0));
+        const QJsonValue cVal = rootObj.contains(QStringLiteral("canvas_size"))
+            ? rootObj.value(QStringLiteral("canvas_size"))
+            : rootObj.value(QStringLiteral("canvas"));
+        int cw = 0;
+        int ch = 0;
+        if (cVal.isObject()) {
+            const QJsonObject cObj = cVal.toObject();
+            cw = cObj.value(QStringLiteral("width")).toInt(cObj.value(QStringLiteral("w")).toInt(0));
+            ch = cObj.value(QStringLiteral("height")).toInt(cObj.value(QStringLiteral("h")).toInt(0));
+        } else if (cVal.isArray()) {
+            const QJsonArray cArr = cVal.toArray();
+            if (cArr.size() >= 2) {
+                cw = cArr.at(0).toInt(0);
+                ch = cArr.at(1).toInt(0);
+            }
+        }
         if (cw > 0 && ch > 0) {
             outProgram->canvasSize = QSize(cw, ch);
         }
@@ -1020,6 +1031,9 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     }
                 }
                 op.gradientRadius = o.value(QStringLiteral("radius")).toDouble(0.5);
+                if (op.gradientRadius > kPixelCoordinateThreshold) {
+                    op.gradientRadius /= qMin(canvasW, canvasH);
+                }
                 const QJsonArray colors = o.value(QStringLiteral("colors")).toArray();
                 for (const QJsonValue &cv : colors) {
                     op.gradientColors.append(parseColor(cv.toString()));
@@ -1085,10 +1099,21 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     }
                 }
             } else if (op.kind == KisAiStrokeOperation::Kind::Ribbon) {
-                op.widthStart = o.value(QStringLiteral("width_start")).toDouble(0.02);
-                op.widthMid = o.value(QStringLiteral("width_mid")).toDouble(0.015);
-                op.widthEnd = o.value(QStringLiteral("width_end")).toDouble(0.005);
-                const QJsonArray spine = o.value(QStringLiteral("spine")).toArray();
+                op.widthStart = o.value(QStringLiteral("width_start")).toDouble(
+                    o.value(QStringLiteral("start_width")).toDouble(0.02));
+                op.widthMid = o.value(QStringLiteral("width_mid")).toDouble(
+                    o.value(QStringLiteral("mid_width")).toDouble(0.015));
+                op.widthEnd = o.value(QStringLiteral("width_end")).toDouble(
+                    o.value(QStringLiteral("end_width")).toDouble(0.005));
+                const qreal minCanvasDim = qMin(canvasW, canvasH);
+                if (qMax(qMax(op.widthStart, op.widthMid), op.widthEnd) > kPixelCoordinateThreshold) {
+                    op.widthStart /= minCanvasDim;
+                    op.widthMid /= minCanvasDim;
+                    op.widthEnd /= minCanvasDim;
+                }
+                const QJsonArray spine = o.contains(QStringLiteral("spine"))
+                    ? o.value(QStringLiteral("spine")).toArray()
+                    : o.value(QStringLiteral("points")).toArray();
                 if (!reserveControlPoints(spine))
                     return false;
                 const int spineCount = spine.size();
@@ -1116,13 +1141,17 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     qreal y1 = b.at(1).toDouble();
                     qreal x2 = b.at(2).toDouble();
                     qreal y2 = b.at(3).toDouble();
-                    if (qMax(qMax(x1, y1), qMax(x2, y2)) > kPixelCoordinateThreshold) {
-                        x1 /= canvasW;
-                        y1 /= canvasH;
-                        x2 /= canvasW;
-                        y2 /= canvasH;
+                    if (!std::isfinite(x1) || !std::isfinite(y1) || !std::isfinite(x2) || !std::isfinite(y2)) {
+                        op.bounds = QRectF(0.1, 0.1, 0.8, 0.8);
+                    } else {
+                        if (qMax(qMax(x1, y1), qMax(x2, y2)) > kPixelCoordinateThreshold) {
+                            x1 /= canvasW;
+                            y1 /= canvasH;
+                            x2 /= canvasW;
+                            y2 /= canvasH;
+                        }
+                        op.bounds = QRectF(QPointF(x1, y1), QPointF(x2, y2)).normalized();
                     }
-                    op.bounds = QRectF(QPointF(x1, y1), QPointF(x2, y2)).normalized();
                 } else {
                     op.bounds = QRectF(0.1, 0.1, 0.8, 0.8);
                 }
@@ -1138,6 +1167,11 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 }
                 op.innerRadius = o.value(QStringLiteral("inner_radius")).toDouble(0.15);
                 op.outerRadius = o.value(QStringLiteral("outer_radius")).toDouble(0.70);
+                const qreal minCanvasDim = qMin(canvasW, canvasH);
+                if (qMax(op.innerRadius, op.outerRadius) > kPixelCoordinateThreshold) {
+                    op.innerRadius /= minCanvasDim;
+                    op.outerRadius /= minCanvasDim;
+                }
                 op.density = qBound(4, o.value(QStringLiteral("density")).toInt(48), 120);
                 op.lineLengthJitter = o.value(QStringLiteral("line_length_jitter")).toDouble(0.20);
             }

@@ -6,6 +6,7 @@
 #ifndef KIS_AI_ILLUSTRATION_DOCKER_H
 #define KIS_AI_ILLUSTRATION_DOCKER_H
 
+#include "KisAiStrokeProgram.h"
 #include <QByteArray>
 #include <QDockWidget>
 #include <QPointer>
@@ -72,6 +73,7 @@ private:
     // Settings persistence
     void loadSettings();
     void saveSettings();
+    void saveSettingsForMode(GenerationMode mode);
 
     // LLM Connection Test
     void testLlmConnection();
@@ -113,6 +115,7 @@ private:
     bool m_waitingForUserStepAdvance {false};
     bool m_goalVisionFallbackActive {false};
     bool m_lastGoalRequestHadImage {false};
+    KisAiStrokeProgram m_goalAccumulatedProgram;
 
     QComboBox *m_presetCombo {nullptr};
     QPlainTextEdit *m_promptEditor {nullptr};
