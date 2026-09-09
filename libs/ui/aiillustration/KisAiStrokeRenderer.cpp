@@ -4,6 +4,7 @@
  */
 
 #include "KisAiStrokeRenderer.h"
+#include "KisAiStrokeQualityUtils.h"
 
 #ifndef AI_STROKE_STANDALONE
 #include "KisDocument.h"
@@ -550,24 +551,24 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
             // Global arc progress for tapering
             const qreal globalT = (qreal(i) + t) / qreal(segments);
 
-            // Natural stroke taper at start and end
-            qreal taper = 1.0;
-            if (!op.closed) {
-                constexpr qreal TAPER_LEN = 0.15;
-                if (globalT < TAPER_LEN) {
-                    taper = 0.08 + 0.92 * std::sin((globalT / TAPER_LEN) * (PI * 0.5));
-                } else if (globalT > (1.0 - TAPER_LEN)) {
-                    taper = 0.08 + 0.92 * std::sin(((1.0 - globalT) / TAPER_LEN) * (PI * 0.5));
-                }
+            // Natural stroke taper according to brush profile
+            const qreal taper = KisAiStrokeQualityUtils::calculateTaper(globalT, op.brush.profile, op.closed);
+
+            qreal strokeW = effectiveBrushWidth(op.brush, p * taper, canvasSize);
+
+            // If calligraphy profile, modulate width based on tangent vector
+            if (op.brush.profile.compare(QLatin1String("calligraphy"), Qt::CaseInsensitive) == 0) {
+                const QPointF tangent = (i < segments - 1) ? (scaledPts.at(i + 1) - scaledPts.at(i)) : (p2 - p1);
+                strokeW = KisAiStrokeQualityUtils::calculateCalligraphyWidth(tangent, strokeW, 45.0, 0.20);
             }
 
-            const qreal strokeW = effectiveBrushWidth(op.brush, p * taper, canvasSize);
             curveSamples.append({position, strokeW});
         }
     }
 
     if (!op.closed) {
-        curveSamples.append({scaledPts.last(), effectiveBrushWidth(op.brush, pressures.last() * 0.08, canvasSize)});
+        const qreal endTaper = KisAiStrokeQualityUtils::calculateTaper(1.0, op.brush.profile, false);
+        curveSamples.append({scaledPts.last(), effectiveBrushWidth(op.brush, pressures.last() * endTaper, canvasSize)});
     }
 
     const int sampleCount = curveSamples.size();
@@ -684,21 +685,93 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
         drawRoundJoins(color, 0.9);
 
     } else if (profile == QLatin1String("watercolor")) {
-        // Transparent wash with subtle water-fringe contour
+        // Transparent wash with subtle water-fringe contour (wet edge effect)
         painter.setPen(Qt::NoPen);
         QColor washColor = color;
-        washColor.setAlphaF(color.alphaF() * 0.75);
+        washColor.setAlphaF(color.alphaF() * 0.65);
         painter.setBrush(washColor);
         painter.drawPolygon(ribbonPoly);
 
-        // Darkened fringe boundary
+        // Darkened wet-edge fringe boundary along stroke contours
         QColor fringe = color;
-        fringe.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.95, 1.0));
-        QPen fringePen(fringe, 1.0);
+        fringe.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.92, 1.0));
+        QPen fringePen(fringe, qMax<qreal>(0.8, effectiveBrushWidth(op.brush, 0.5, canvasSize) * 0.12));
         painter.setPen(fringePen);
         painter.setBrush(Qt::NoBrush);
         painter.drawPolyline(leftEdge);
         painter.drawPolyline(rightEdge);
+        drawRoundJoins(fringe, 0.4);
+
+    } else if (profile == QLatin1String("brush")) {
+        // Rich artistic hair/oil brush mark with bristle strands and stroke direction
+        painter.setPen(Qt::NoPen);
+        QColor bodyColor = color;
+        bodyColor.setAlphaF(color.alphaF() * 0.72);
+        painter.setBrush(bodyColor);
+        painter.drawPolygon(ribbonPoly);
+        drawRoundJoins(bodyColor, 0.95);
+
+        // Bristle strands layering
+        QVector<KisAiStrokePoint> strokeSpine;
+        strokeSpine.reserve(sampleCount);
+        for (const SampledStrokePoint &sample : curveSamples) {
+            strokeSpine.append(KisAiStrokePoint(sample.pos.x(), sample.pos.y(), 0.8));
+        }
+
+        const qreal avgW = effectiveBrushWidth(op.brush, 0.7, canvasSize);
+        const quint32 brushSeed = KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/bristles"));
+        const auto strands = KisAiStrokeQualityUtils::generateBristleStrands(strokeSpine, 5, avgW * 0.40, brushSeed);
+
+        QColor strandColor = color;
+        strandColor.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.35, 1.0));
+        QPen strandPen(strandColor, qMax<qreal>(0.6, avgW * 0.15), Qt::SolidLine, Qt::RoundCap);
+        painter.setPen(strandPen);
+        painter.setBrush(Qt::NoBrush);
+
+        for (const QVector<QPointF> &strandPath : strands) {
+            if (strandPath.size() >= 2) {
+                painter.drawPolyline(strandPath);
+            }
+        }
+
+    } else if (profile == QLatin1String("calligraphy")) {
+        // Elegant flat chisel nib with angle-modulated variation
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(color);
+        painter.drawPolygon(ribbonPoly);
+
+        // Crisp chisel edge
+        QColor edgeColor = color;
+        edgeColor.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.50, 1.0));
+        QPen edgePen(edgeColor, qMax<qreal>(0.8, effectiveBrushWidth(op.brush, 0.4, canvasSize) * 0.20));
+        painter.setPen(edgePen);
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPolyline(leftEdge);
+
+    } else if (profile == QLatin1String("charcoal")) {
+        // Soft powdery charcoal with porous tooth texture and carbon flecks
+        QColor charcoalBase = color;
+        charcoalBase.setAlphaF(color.alphaF() * 0.60);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(charcoalBase);
+        painter.drawPolygon(ribbonPoly);
+
+        QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/charcoal")));
+        painter.setPen(Qt::NoPen);
+
+        for (int i = 0; i < sampleCount; ++i) {
+            const QPointF &curr = curveSamples.at(i).pos;
+            const qreal w = curveSamples.at(i).width;
+            for (int k = 0; k < 4; ++k) {
+                const qreal rx = (rng.generateDouble() - 0.5) * w * 1.1;
+                const qreal ry = (rng.generateDouble() - 0.5) * w * 1.1;
+                const qreal rDot = qMax<qreal>(0.4, w * 0.12 * (0.4 + rng.generateDouble() * 0.6));
+                QColor fleck = color;
+                fleck.setAlphaF(qBound<qreal>(0.0, color.alphaF() * (0.2 + rng.generateDouble() * 0.5), 1.0));
+                painter.setBrush(fleck);
+                painter.drawEllipse(curr + QPointF(rx, ry), rDot, rDot);
+            }
+        }
 
     } else if (profile == QLatin1String("pencil")) {
         // A translucent graphite body plus deterministic fine filaments gives
@@ -855,15 +928,42 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
 
     // Smooth jagged polygon vertices if smooth requested
     if (op.smooth && poly.size() >= 3) {
-        poly = generateCatmullRomSpline(poly, 4, true);
+        poly = KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(poly, 135.0, 4);
     }
 
     QColor color = op.brush.color;
     color.setAlphaF(qBound<qreal>(0.0, op.brush.opacity * color.alphaF(), 1.0));
 
-    painter.setPen(Qt::NoPen);
-    painter.setBrush(color);
-    painter.drawPolygon(poly);
+    if (op.fillStyle.compare(QLatin1String("scanline"), Qt::CaseInsensitive) == 0) {
+        // Comic halftone screen fill
+        KisAiStrokeQualityUtils::drawHalftonePattern(painter, poly, color, 8.0, 2.5, op.angleDeg != 0.0 ? op.angleDeg : 45.0, false);
+    } else if (op.fillStyle.compare(QLatin1String("wash"), Qt::CaseInsensitive) == 0) {
+        // Watercolor wash with subtle vertical illumination gradient and wet edge
+        const QRectF b = poly.boundingRect();
+        QLinearGradient washGrad(b.topLeft(), b.bottomLeft());
+        QColor colTop = color;
+        colTop.setAlphaF(color.alphaF() * 0.95);
+        QColor colBot = color;
+        colBot.setAlphaF(color.alphaF() * 0.70);
+        washGrad.setColorAt(0.0, colTop);
+        washGrad.setColorAt(1.0, colBot);
+
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(washGrad);
+        painter.drawPolygon(poly);
+
+        // Darkened fringe around the fill
+        QColor fringe = color;
+        fringe.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.92, 1.0));
+        QPen fringePen(fringe, 1.0);
+        painter.setPen(fringePen);
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPolygon(poly);
+    } else {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(color);
+        painter.drawPolygon(poly);
+    }
 }
 
 void KisAiStrokeRenderer::drawGradientFillOperation(QPainter &painter,
@@ -874,7 +974,7 @@ void KisAiStrokeRenderer::drawGradientFillOperation(QPainter &painter,
     if (op.polygon.size() >= 3) {
         poly = scalePolygon(op.polygon, canvasSize);
         if (op.smooth && poly.size() >= 3) {
-            poly = generateCatmullRomSpline(poly, 4, true);
+            poly = KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(poly, 135.0, 4);
         }
     } else {
         poly = QPolygonF(QRectF(0, 0, canvasSize.width(), canvasSize.height()));
@@ -1086,7 +1186,7 @@ void KisAiStrokeRenderer::drawParticlesOperation(QPainter &painter,
             QColor edge = partColor;
             edge.setAlpha(0);
             glow.setColorAt(0.0, core);
-            glow.setColorAt(0.55, core);
+        glow.setColorAt(0.55, core);
             glow.setColorAt(1.0, edge);
             painter.setBrush(glow);
             painter.drawEllipse(QPointF(x, y), r * 1.8, r * 1.8);
@@ -1104,7 +1204,7 @@ void KisAiStrokeRenderer::drawHatchOperation(QPainter &painter, const KisAiStrok
 
     QPolygonF poly = scalePolygon(op.polygon, canvasSize);
     if (op.smooth && poly.size() >= 3) {
-        poly = generateCatmullRomSpline(poly, 4, true);
+        poly = KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(poly, 135.0, 4);
     }
 
     const QRectF b = poly.boundingRect();
@@ -1127,6 +1227,7 @@ void KisAiStrokeRenderer::drawHatchOperation(QPainter &painter, const KisAiStrok
     const qreal spacing = qMax<qreal>(2.0, op.spacing * minDim);
     const QPointF center = b.center();
     const qreal radius = std::hypot(b.width(), b.height()) * 0.55;
+    QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/hatch")));
 
     auto drawPass = [&](qreal angleDeg) {
         const qreal rad = angleDeg * PI / 180.0;
@@ -1136,8 +1237,10 @@ void KisAiStrokeRenderer::drawHatchOperation(QPainter &painter, const KisAiStrok
         const int numLines = qRound(radius * 2.0 / spacing);
         for (int i = -numLines; i <= numLines; ++i) {
             const QPointF lineMid = center + norm * (i * spacing);
-            const QPointF p1 = lineMid - dir * radius;
-            const QPointF p2 = lineMid + dir * radius;
+            // Slight organic tremor/jitter to avoid sterile mechanical appearance
+            const qreal wobble = (rng.generateDouble() - 0.5) * spacing * 0.15;
+            const QPointF p1 = lineMid - dir * radius + norm * wobble;
+            const QPointF p2 = lineMid + dir * radius - norm * wobble;
             painter.drawLine(p1, p2);
         }
     };

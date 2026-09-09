@@ -441,6 +441,7 @@ set(kritaui_LIB_SRCS
     aiillustration/KisAiIllustrationRenderer.cpp
     aiillustration/KisAiPromptAnalyzer.cpp
     aiillustration/KisAiStrokeTypeChecker.cpp
+    aiillustration/KisAiStrokeQualityUtils.cpp
     aiillustration/KisAiStrokeProgram.cpp
     aiillustration/KisAiStrokeRenderer.cpp
     KisMainWindow.cpp

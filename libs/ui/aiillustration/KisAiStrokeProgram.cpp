@@ -2282,6 +2282,10 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             profile = QStringLiteral("neon");
         if (profile == QLatin1String("spatter") || profile == QLatin1String("blot") || profile == QLatin1String("fleck"))
             profile = QStringLiteral("splatter");
+        if (profile == QLatin1String("chisel") || profile == QLatin1String("flat_pen") || profile == QLatin1String("ribbon_pen"))
+            profile = QStringLiteral("calligraphy");
+        if (profile == QLatin1String("carbon") || profile == QLatin1String("conte"))
+            profile = QStringLiteral("charcoal");
         if (profile.isEmpty() || profile == QLatin1String("auto")) {
             if (op.kind == KisAiStrokeOperation::Kind::Hatch)
                 profile = QStringLiteral("pencil");

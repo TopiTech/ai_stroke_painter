@@ -23,6 +23,7 @@
 
 #include "aiillustration/KisAiStrokeProgram.h"
 #include "aiillustration/KisAiStrokeRenderer.h"
+#include "aiillustration/KisAiStrokeQualityUtils.h"
 
 void KisAiStrokeRendererTest::testCatmullRomSpline()
 {
@@ -721,6 +722,216 @@ void KisAiStrokeRendererTest::testGoalModeCumulativeProgressionAndRibbon()
     const QColor centerCol = ribbonImg.pixelColor(128, 128);
     QVERIFY(centerCol.alpha() > 50);
     QVERIFY(centerCol.red() > 150);
+}
+
+void KisAiStrokeRendererTest::testQualityUtilsResampling()
+{
+    QVector<KisAiStrokePoint> pts;
+    pts.append(KisAiStrokePoint(0.0, 0.0, 0.2));
+    pts.append(KisAiStrokePoint(100.0, 0.0, 0.8));
+
+    const auto resampled = KisAiStrokeQualityUtils::resampleEquidistant(pts, 10.0, false);
+    QVERIFY(resampled.size() >= 10);
+    QCOMPARE(resampled.first().pos, QPointF(0.0, 0.0));
+    QCOMPARE(resampled.last().pos, QPointF(100.0, 0.0));
+    // Pressure should smoothly interpolate from 0.2 to 0.8
+    QVERIFY(resampled.at(5).pressure > 0.4 && resampled.at(5).pressure < 0.6);
+}
+
+void KisAiStrokeRendererTest::testQualityUtilsRdpSimplification()
+{
+    QVector<QPointF> noisyLine;
+    for (int i = 0; i <= 20; ++i) {
+        // Line along x axis with tiny y jitter
+        const qreal jitter = (i > 0 && i < 20) ? 0.05 : 0.0;
+        noisyLine.append(QPointF(i * 5.0, jitter));
+    }
+
+    const auto simplified = KisAiStrokeQualityUtils::simplifyRDP(noisyLine, 0.5);
+    // Micro-jitter is removed, should collapse to 2 endpoints
+    QCOMPARE(simplified.size(), 2);
+    QCOMPARE(simplified.first(), QPointF(0.0, 0.0));
+    QCOMPARE(simplified.last(), QPointF(100.0, 0.0));
+
+    // Sharp turn should be preserved
+    QVector<QPointF> cornerPath = {QPointF(0, 0), QPointF(50, 50), QPointF(100, 0)};
+    const auto cornerSimplified = KisAiStrokeQualityUtils::simplifyRDP(cornerPath, 1.0);
+    QCOMPARE(cornerSimplified.size(), 3);
+    QCOMPARE(cornerSimplified.at(1), QPointF(50, 50));
+}
+
+void KisAiStrokeRendererTest::testQualityUtilsCornerPreservingSmoothing()
+{
+    // Triangle with a sharp 90 degree corner at (0, 100)
+    QPolygonF triangle;
+    triangle << QPointF(0, 0) << QPointF(0, 100) << QPointF(100, 0);
+
+    const QPolygonF smoothed = KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(triangle, 120.0, 4);
+    QVERIFY(smoothed.size() > triangle.size());
+
+    // The sharp corner (0, 100) must be retained
+    bool foundCorner = false;
+    for (const QPointF &pt : smoothed) {
+        if (std::hypot(pt.x() - 0.0, pt.y() - 100.0) < 1.0e-3) {
+            foundCorner = true;
+            break;
+        }
+    }
+    QVERIFY(foundCorner);
+}
+
+void KisAiStrokeRendererTest::testQualityUtilsPolygonOffsetAndTrapping()
+{
+    // Box from (10, 10) to (50, 50)
+    QPolygonF box;
+    box << QPointF(10, 10) << QPointF(50, 10) << QPointF(50, 50) << QPointF(10, 50);
+
+    const QPolygonF dilated = KisAiStrokeQualityUtils::offsetPolygon(box, 5.0);
+    const QRectF bOrig = box.boundingRect();
+    const QRectF bDilated = dilated.boundingRect();
+
+    QVERIFY(bDilated.left() < bOrig.left());
+    QVERIFY(bDilated.right() > bOrig.right());
+    QVERIFY(bDilated.top() < bOrig.top());
+    QVERIFY(bDilated.bottom() > bOrig.bottom());
+}
+
+void KisAiStrokeRendererTest::testQualityUtilsBrushTaperAndDynamics()
+{
+    // G-Pen taper
+    const qreal gpenStart = KisAiStrokeQualityUtils::calculateTaper(0.01, QStringLiteral("gpen"), false);
+    const qreal gpenMid = KisAiStrokeQualityUtils::calculateTaper(0.50, QStringLiteral("gpen"), false);
+    const qreal gpenEnd = KisAiStrokeQualityUtils::calculateTaper(0.99, QStringLiteral("gpen"), false);
+
+    QVERIFY(gpenStart < 0.5);
+    QCOMPARE(gpenMid, 1.0);
+    QVERIFY(gpenEnd < 0.2);
+
+    // Closed stroke has no taper
+    QCOMPARE(KisAiStrokeQualityUtils::calculateTaper(0.01, QStringLiteral("gpen"), true), 1.0);
+}
+
+void KisAiStrokeRendererTest::testQualityUtilsCalligraphyWidth()
+{
+    const qreal baseW = 20.0;
+    // Movement perpendicular to 45 deg nib (e.g. 135 deg)
+    const QPointF perpDir(-0.7071, 0.7071);
+    const qreal wideW = KisAiStrokeQualityUtils::calculateCalligraphyWidth(perpDir, baseW, 45.0, 0.20);
+
+    // Movement parallel to 45 deg nib
+    const QPointF parallelDir(0.7071, 0.7071);
+    const qreal thinW = KisAiStrokeQualityUtils::calculateCalligraphyWidth(parallelDir, baseW, 45.0, 0.20);
+
+    QVERIFY(wideW > thinW);
+    QVERIFY(wideW >= baseW * 0.9);
+    QVERIFY(thinW <= baseW * 0.35);
+}
+
+void KisAiStrokeRendererTest::testQualityUtilsHalftonePattern()
+{
+    QImage canvas(100, 100, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+
+    QPainter painter(&canvas);
+    QPolygonF poly;
+    poly << QPointF(10, 10) << QPointF(90, 10) << QPointF(90, 90) << QPointF(10, 90);
+
+    KisAiStrokeQualityUtils::drawHalftonePattern(painter, poly, QColor(0, 0, 0, 255), 10.0, 3.0, 45.0, false);
+    painter.end();
+
+    // Check that pattern rendered non-empty pixels inside and transparent outside
+    QVERIFY(canvas.pixelColor(5, 5).alpha() == 0); // Outside
+    bool hasDrawnPixel = false;
+    for (int y = 20; y < 80; ++y) {
+        for (int x = 20; x < 80; ++x) {
+            if (canvas.pixelColor(x, y).alpha() > 200) {
+                hasDrawnPixel = true;
+                break;
+            }
+        }
+        if (hasDrawnPixel) break;
+    }
+    QVERIFY(hasDrawnPixel);
+}
+
+void KisAiStrokeRendererTest::testQualityUtilsHueShiftedHarmonies()
+{
+    // Peach skin color: warm hue
+    const QColor skinColor(255, 205, 170);
+    const QColor shadow = KisAiStrokeQualityUtils::calculateHueShiftedShadow(skinColor);
+
+    QVERIFY(shadow.isValid());
+    // Shadow must be darker than base
+    QVERIFY(shadow.lightness() < skinColor.lightness());
+
+    const QColor highlight = KisAiStrokeQualityUtils::calculateHueShiftedHighlight(skinColor);
+    QVERIFY(highlight.isValid());
+    QVERIFY(highlight.lightness() > skinColor.lightness());
+}
+
+void KisAiStrokeRendererTest::testQualityUtilsProgramTrapping()
+{
+    KisAiStrokeProgram prog;
+    prog.canvasSize = QSize(200, 200);
+
+    KisAiStrokeOperation flatOp;
+    flatOp.kind = KisAiStrokeOperation::Kind::Fill;
+    flatOp.layer = QStringLiteral("Flats");
+    flatOp.polygon = {QPointF(0.2, 0.2), QPointF(0.8, 0.2), QPointF(0.8, 0.8), QPointF(0.2, 0.8)};
+    prog.operations.append(flatOp);
+
+    const KisAiStrokeProgram trappedProg = KisAiStrokeQualityUtils::applyTrapping(prog, 4.0);
+    QCOMPARE(trappedProg.operations.size(), 1);
+
+    const QRectF bOrig = prog.operations.at(0).polygon.boundingRect();
+    const QRectF bTrapped = trappedProg.operations.at(0).polygon.boundingRect();
+
+    QVERIFY(bTrapped.left() < bOrig.left());
+    QVERIFY(bTrapped.right() > bOrig.right());
+}
+
+void KisAiStrokeRendererTest::testRenderCalligraphyAndCharcoalBrush()
+{
+    KisAiStrokeProgram prog;
+    prog.canvasSize = QSize(200, 200);
+
+    // Calligraphy stroke
+    KisAiStrokeOperation calligOp;
+    calligOp.kind = KisAiStrokeOperation::Kind::Path;
+    calligOp.layer = QStringLiteral("Lineart");
+    calligOp.brush.profile = QStringLiteral("calligraphy");
+    calligOp.brush.color = QColor(20, 20, 40);
+    calligOp.brush.size = 0.05;
+    calligOp.points = {KisAiStrokePoint(0.1, 0.2), KisAiStrokePoint(0.9, 0.2)};
+    prog.operations.append(calligOp);
+
+    // Charcoal stroke
+    KisAiStrokeOperation charcoalOp;
+    charcoalOp.kind = KisAiStrokeOperation::Kind::Path;
+    charcoalOp.layer = QStringLiteral("Lineart");
+    charcoalOp.brush.profile = QStringLiteral("charcoal");
+    charcoalOp.brush.color = QColor(50, 40, 30);
+    charcoalOp.brush.size = 0.06;
+    charcoalOp.points = {KisAiStrokePoint(0.1, 0.5), KisAiStrokePoint(0.9, 0.5)};
+    prog.operations.append(charcoalOp);
+
+    // Bristle brush stroke
+    KisAiStrokeOperation bristleOp;
+    bristleOp.kind = KisAiStrokeOperation::Kind::Path;
+    bristleOp.layer = QStringLiteral("Lineart");
+    bristleOp.brush.profile = QStringLiteral("brush");
+    bristleOp.brush.color = QColor(180, 40, 40);
+    bristleOp.brush.size = 0.08;
+    bristleOp.points = {KisAiStrokePoint(0.1, 0.8), KisAiStrokePoint(0.9, 0.8)};
+    prog.operations.append(bristleOp);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, QSize(200, 200));
+    QVERIFY(!img.isNull());
+
+    // Check that each stroke line rendered
+    QVERIFY(img.pixelColor(100, 40).alpha() > 100);  // Calligraphy line
+    QVERIFY(img.pixelColor(100, 100).alpha() > 50);  // Charcoal line
+    QVERIFY(img.pixelColor(100, 160).alpha() > 100); // Bristle brush line
 }
 
 KISTEST_MAIN(KisAiStrokeRendererTest)

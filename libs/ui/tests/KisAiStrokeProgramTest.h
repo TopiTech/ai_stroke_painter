@@ -58,6 +58,7 @@ private Q_SLOTS:
     void testPythonLiteralsAndMissingCommasRepair();
     void testNestedEnvelopeUnwrapping();
     void testGoalModePayloadMaxTokensOverride();
+    void testNewBrushProfilesNormalization();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

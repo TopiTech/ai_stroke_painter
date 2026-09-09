@@ -1863,6 +1863,35 @@ void KisAiStrokeProgramTest::testGoalModePayloadMaxTokensOverride()
     QVERIFY(defaultPayload.value(QStringLiteral("max_tokens")).toInt() >= 3072);
 }
 
+void KisAiStrokeProgramTest::testNewBrushProfilesNormalization()
+{
+    KisAiStrokeProgram prog;
+    prog.canvasSize = QSize(512, 512);
+
+    auto makeOp = [](const QString &profile, const QString &id) {
+        KisAiStrokeOperation op;
+        op.id = id;
+        op.kind = KisAiStrokeOperation::Kind::Path;
+        op.layer = QStringLiteral("Lineart");
+        op.brush.profile = profile;
+        op.points = {KisAiStrokePoint(0.1, 0.1), KisAiStrokePoint(0.9, 0.9)};
+        return op;
+    };
+
+    prog.operations.append(makeOp(QStringLiteral("chisel"), QStringLiteral("op1")));
+    prog.operations.append(makeOp(QStringLiteral("flat_pen"), QStringLiteral("op2")));
+    prog.operations.append(makeOp(QStringLiteral("carbon"), QStringLiteral("op3")));
+    prog.operations.append(makeOp(QStringLiteral("conte"), QStringLiteral("op4")));
+
+    const KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(prog);
+    QCOMPARE(refined.operations.size(), 4);
+
+    QCOMPARE(refined.operations.at(0).brush.profile, QStringLiteral("calligraphy"));
+    QCOMPARE(refined.operations.at(1).brush.profile, QStringLiteral("calligraphy"));
+    QCOMPARE(refined.operations.at(2).brush.profile, QStringLiteral("charcoal"));
+    QCOMPARE(refined.operations.at(3).brush.profile, QStringLiteral("charcoal"));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

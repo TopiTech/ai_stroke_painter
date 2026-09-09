@@ -37,7 +37,7 @@ struct KRITAUI_EXPORT KisAiStrokePoint
 
 struct KRITAUI_EXPORT KisAiStrokeBrush
 {
-    QString profile {QStringLiteral("auto")}; // auto, gpen, brush, watercolor, airbrush, eraser, marker, crayon, neon, splatter
+    QString profile {QStringLiteral("auto")}; // auto, gpen, brush, watercolor, airbrush, eraser, marker, crayon, neon, splatter, calligraphy, charcoal
     QColor color {QColor(35, 35, 35)};
     qreal size {0.008};                       // ratio [0.0, 1.0] or px
     QString sizeMode {QStringLiteral("ratio")}; // ratio or px

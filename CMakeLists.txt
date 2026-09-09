@@ -13,6 +13,7 @@ if (AI_STROKE_STANDALONE_TESTS)
     add_library(ai_stroke_core STATIC
         libs/ui/aiillustration/KisAiPromptAnalyzer.cpp
         libs/ui/aiillustration/KisAiStrokeTypeChecker.cpp
+        libs/ui/aiillustration/KisAiStrokeQualityUtils.cpp
         libs/ui/aiillustration/KisAiStrokeProgram.cpp
         libs/ui/aiillustration/KisAiStrokeRenderer.cpp
         libs/ui/aiillustration/KisAiIllustrationRenderer.cpp

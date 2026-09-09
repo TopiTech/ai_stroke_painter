@@ -1,0 +1,200 @@
+/*
+ * SPDX-FileCopyrightText: 2026 AI Stroke Painter contributors
+ * SPDX-License-Identifier: GPL-2.0-or-later
+ */
+
+#ifndef KIS_AI_STROKE_QUALITY_UTILS_H
+#define KIS_AI_STROKE_QUALITY_UTILS_H
+
+#include <QColor>
+#include <QPainter>
+#include <QPointF>
+#include <QPolygonF>
+#include <QRectF>
+#include <QSize>
+#include <QString>
+#include <QVector>
+
+#ifdef AI_STROKE_STANDALONE
+#define KRITAUI_EXPORT
+#else
+#include "kritaui_export.h"
+#endif
+
+#include "KisAiStrokeProgram.h"
+
+/**
+ * Advanced geometric, artistic brush simulation, color harmony, and
+ * vector stroke quality enhancement utilities for AI Stroke Painter.
+ */
+class KRITAUI_EXPORT KisAiStrokeQualityUtils
+{
+public:
+    // =========================================================================
+    // 1. Geometry, Resampling & Smoothing Utilities
+    // =========================================================================
+
+    /**
+     * Resample stroke points with uniform arc-length intervals (stepPx).
+     * Eliminates density irregularities from LLM outputs while preserving
+     * pressure interpolation and shape fidelity.
+     */
+    static QVector<KisAiStrokePoint> resampleEquidistant(
+        const QVector<KisAiStrokePoint> &points,
+        qreal stepPx,
+        bool closed = false
+    );
+
+    /**
+     * Classic Ramer-Douglas-Peucker (RDP) polyline simplification.
+     * Removes colinear and jittery micro-noise below epsilonPx.
+     */
+    static QVector<QPointF> simplifyRDP(
+        const QVector<QPointF> &points,
+        qreal epsilonPx
+    );
+
+    /**
+     * Corner-preserving adaptive spline smoothing for polygons.
+     * Detects sharp corners (angle sharper than cornerAngleThresholdDeg)
+     * and keeps them crisp while smoothing gentle curves.
+     */
+    static QPolygonF smoothPolygonCornerPreserving(
+        const QPolygonF &polygon,
+        qreal cornerAngleThresholdDeg = 135.0,
+        int subdivisions = 4
+    );
+
+    /**
+     * Inset or outset a polygon by a distance in pixels.
+     * Positive distance expands outward (trapping), negative contracts inward.
+     * Miter limit is applied to prevent spike blowups on sharp vertices.
+     */
+    static QPolygonF offsetPolygon(
+        const QPolygonF &polygon,
+        qreal distancePx
+    );
+
+    /**
+     * Compute discrete curvature values (1/R) along a point sequence.
+     */
+    static QVector<qreal> computeCurvatures(const QVector<QPointF> &points);
+
+    // =========================================================================
+    // 2. Stroke Envelope & Quad Mesh Generation
+    // =========================================================================
+
+    struct StrokeEnvelopeSegment {
+        QPointF leftStart;
+        QPointF leftEnd;
+        QPointF rightStart;
+        QPointF rightEnd;
+        QPointF centerStart;
+        QPointF centerEnd;
+        qreal widthStart {1.0};
+        qreal widthEnd {1.0};
+
+        QPolygonF toQuad() const {
+            QPolygonF quad;
+            quad.reserve(4);
+            quad << leftStart << leftEnd << rightEnd << rightStart;
+            return quad;
+        }
+    };
+
+    /**
+     * Generate continuous quad segments along the stroke spine without
+     * self-intersection bowties or twist artifacts on sharp turns.
+     */
+    static QVector<StrokeEnvelopeSegment> generateStrokeEnvelope(
+        const QVector<KisAiStrokePoint> &points,
+        const KisAiStrokeBrush &brush,
+        const QSize &canvasSize,
+        bool closed = false
+    );
+
+    /**
+     * Calculate profile-specific taper multiplier for a given normalized progress [0.0, 1.0].
+     */
+    static qreal calculateTaper(
+        qreal globalT,
+        const QString &profile,
+        bool isClosed = false
+    );
+
+    // =========================================================================
+    // 3. Artistic Brush Dynamics & Procedural Textures
+    // =========================================================================
+
+    /**
+     * Generate multi-strand offset spine polylines for realistic bristle/oil brush marks.
+     */
+    static QVector<QVector<QPointF>> generateBristleStrands(
+        const QVector<KisAiStrokePoint> &spine,
+        int strandCount,
+        qreal maxSpreadPx,
+        quint32 seed
+    );
+
+    /**
+     * Modulate stroke width based on movement tangent vector relative to a fixed nib angle
+     * (e.g. 45 degrees for calligraphy / chisel pen).
+     */
+    static qreal calculateCalligraphyWidth(
+        const QPointF &tangent,
+        qreal baseWidthPx,
+        qreal nibAngleDeg = 45.0,
+        qreal thinRatio = 0.20
+    );
+
+    /**
+     * Render professional manga halftone screen (dot screen or line screen) inside a polygon.
+     */
+    static void drawHalftonePattern(
+        QPainter &painter,
+        const QPolygonF &polygon,
+        const QColor &color,
+        qreal dotSpacingPx = 8.0,
+        qreal dotRadiusPx = 2.5,
+        qreal angleDeg = 45.0,
+        bool lineScreen = false
+    );
+
+    // =========================================================================
+    // 4. Color & Lighting Harmonies
+    // =========================================================================
+
+    /**
+     * Calculate artist-grade hue-shifted shadow color.
+     * Warm key lights shift shadows toward cool purple/blue; cool lights shift toward warm amber.
+     */
+    static QColor calculateHueShiftedShadow(
+        const QColor &baseColor,
+        const QColor &ambientShadowTint = QColor(35, 40, 65),
+        qreal shadowDepth = 0.35
+    );
+
+    /**
+     * Calculate artist-grade hue-shifted highlight color.
+     */
+    static QColor calculateHueShiftedHighlight(
+        const QColor &baseColor,
+        const QColor &keyLightTint = QColor(255, 252, 240),
+        qreal intensity = 0.50
+    );
+
+    // =========================================================================
+    // 5. Stroke Program Optimization & Trapping
+    // =========================================================================
+
+    /**
+     * Apply trapping (slight dilation of Flats polygons) to tuck under Lineart strokes,
+     * permanently fixing unwanted white gaps and underfill seams.
+     */
+    static KisAiStrokeProgram applyTrapping(
+        const KisAiStrokeProgram &program,
+        qreal trappingPx = 1.5
+    );
+};
+
+#endif // KIS_AI_STROKE_QUALITY_UTILS_H

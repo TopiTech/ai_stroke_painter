@@ -34,6 +34,16 @@ private Q_SLOTS:
     void testCaptureImageBase64();
     void testRenderGoalModeProgression();
     void testGoalModeCumulativeProgressionAndRibbon();
+    void testQualityUtilsResampling();
+    void testQualityUtilsRdpSimplification();
+    void testQualityUtilsCornerPreservingSmoothing();
+    void testQualityUtilsPolygonOffsetAndTrapping();
+    void testQualityUtilsBrushTaperAndDynamics();
+    void testQualityUtilsCalligraphyWidth();
+    void testQualityUtilsHalftonePattern();
+    void testQualityUtilsHueShiftedHarmonies();
+    void testQualityUtilsProgramTrapping();
+    void testRenderCalligraphyAndCharcoalBrush();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H
