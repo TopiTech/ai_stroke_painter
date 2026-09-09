@@ -4,6 +4,7 @@
  */
 
 #include "KisAiStrokeTypeChecker.h"
+#include "KisAiStrokeProgram.h"
 
 #include <QColor>
 #include <QRegularExpression>
@@ -121,6 +122,15 @@ bool KisAiStrokeTypeChecker::isValidColorString(const QString &str)
     if (trimmed.isEmpty())
         return false;
 
+    if (trimmed.startsWith(QLatin1String("rgb"), Qt::CaseInsensitive)) {
+        static const QRegularExpression rgbRegex(
+            QStringLiteral(R"(rgba?\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)(?:\s*,\s*([\d.]+))?\s*\))"),
+            QRegularExpression::CaseInsensitiveOption);
+        if (rgbRegex.match(trimmed).hasMatch()) {
+            return true;
+        }
+    }
+
     if (!trimmed.startsWith(QLatin1Char('#'))) {
         const int len = trimmed.length();
         if (len == 3 || len == 6 || len == 8) {
@@ -139,7 +149,7 @@ bool KisAiStrokeTypeChecker::isValidColorString(const QString &str)
         }
     }
 
-    return QColor::isValidColorName(trimmed);
+    return QColor::isValidColorName(trimmed) || QColor::fromString(trimmed).isValid();
 }
 
 bool KisAiStrokeTypeChecker::checkBrushObject(QJsonObject *brushObj, QString *outError, int *coercedCount)
@@ -171,7 +181,10 @@ bool KisAiStrokeTypeChecker::checkBrushObject(QJsonObject *brushObj, QString *ou
         QString cStr;
         if (coerceToString(cVal, &cStr) && isValidColorString(cStr)) {
             QString normalized = cStr.trimmed();
-            if (!normalized.startsWith(QLatin1Char('#')) && (normalized.length() == 3 || normalized.length() == 6 || normalized.length() == 8)) {
+            if (normalized.startsWith(QLatin1String("rgb"), Qt::CaseInsensitive)) {
+                const QColor parsed = KisAiStrokeProgramCodec::parseColor(normalized);
+                normalized = parsed.name();
+            } else if (!normalized.startsWith(QLatin1Char('#')) && (normalized.length() == 3 || normalized.length() == 6 || normalized.length() == 8)) {
                 normalized = QLatin1Char('#') + normalized;
             }
             if (!cVal.isString() || normalized != cVal.toString()) {
@@ -399,7 +412,7 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
     }
 
     // Map common synonyms
-    if (kindStr == QLatin1String("stroke") || kindStr == QLatin1String("line") || kindStr == QLatin1String("curve")) {
+    if (kindStr == QLatin1String("stroke") || kindStr == QLatin1String("line") || kindStr == QLatin1String("curve") || kindStr == QLatin1String("contour")) {
         kindStr = QStringLiteral("path");
         (*opObj)[QStringLiteral("kind")] = kindStr;
         if (report) ++report->coercedValues;
@@ -407,12 +420,20 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
         kindStr = QStringLiteral("gradient_fill");
         (*opObj)[QStringLiteral("kind")] = kindStr;
         if (report) ++report->coercedValues;
-    } else if (kindStr == QLatin1String("mangalines") || kindStr == QLatin1String("speed_lines") || kindStr == QLatin1String("focus_lines")) {
+    } else if (kindStr == QLatin1String("mangalines") || kindStr == QLatin1String("speed_lines") || kindStr == QLatin1String("focus_lines") || kindStr == QLatin1String("speed") || kindStr == QLatin1String("focus")) {
         kindStr = QStringLiteral("manga_lines");
         (*opObj)[QStringLiteral("kind")] = kindStr;
         if (report) ++report->coercedValues;
-    } else if (kindStr == QLatin1String("particle")) {
+    } else if (kindStr == QLatin1String("particle") || kindStr == QLatin1String("scatter") || kindStr == QLatin1String("sparkle")) {
         kindStr = QStringLiteral("particles");
+        (*opObj)[QStringLiteral("kind")] = kindStr;
+        if (report) ++report->coercedValues;
+    } else if (kindStr == QLatin1String("band") || kindStr == QLatin1String("taper")) {
+        kindStr = QStringLiteral("ribbon");
+        (*opObj)[QStringLiteral("kind")] = kindStr;
+        if (report) ++report->coercedValues;
+    } else if (kindStr == QLatin1String("color_fill") || kindStr == QLatin1String("solid_fill") || kindStr == QLatin1String("polygon")) {
+        kindStr = QStringLiteral("fill");
         (*opObj)[QStringLiteral("kind")] = kindStr;
         if (report) ++report->coercedValues;
     }
@@ -425,6 +446,10 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
             kindStr = QStringLiteral("ribbon");
         } else if (opObj->contains(QStringLiteral("polygon"))) {
             kindStr = opObj->contains(QStringLiteral("colors")) ? QStringLiteral("gradient_fill") : QStringLiteral("fill");
+        } else if (opObj->contains(QStringLiteral("bounds")) || opObj->contains(QStringLiteral("particle_shape")) || opObj->contains(QStringLiteral("particle_count"))) {
+            kindStr = QStringLiteral("particles");
+        } else if (opObj->contains(QStringLiteral("inner_radius")) || opObj->contains(QStringLiteral("outer_radius")) || opObj->contains(QStringLiteral("density"))) {
+            kindStr = QStringLiteral("manga_lines");
         } else {
             kindStr = QStringLiteral("path");
         }
@@ -521,6 +546,65 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
         }
         (*opObj)[QStringLiteral("spine")] = spine;
         if (report) report->coercedValues += spineCoerced;
+    } else if (kindStr == QLatin1String("particles")) {
+        if (opObj->contains(QStringLiteral("bounds"))) {
+            const QJsonValue bVal = opObj->value(QStringLiteral("bounds"));
+            if (bVal.isArray()) {
+                QJsonArray bArr = bVal.toArray();
+                bool validBounds = (bArr.size() >= 4);
+                for (int i = 0; i < qMin(4, bArr.size()); ++i) {
+                    qreal n = 0.0;
+                    if (!coerceToNumber(bArr.at(i), &n)) {
+                        validBounds = false;
+                        break;
+                    }
+                    bArr[i] = n;
+                }
+                if (validBounds) {
+                    (*opObj)[QStringLiteral("bounds")] = bArr;
+                } else {
+                    (*opObj)[QStringLiteral("bounds")] = QJsonArray({0.1, 0.1, 0.9, 0.9});
+                    if (report) ++report->coercedValues;
+                }
+            } else {
+                (*opObj)[QStringLiteral("bounds")] = QJsonArray({0.1, 0.1, 0.9, 0.9});
+                if (report) ++report->coercedValues;
+            }
+        }
+        if (opObj->contains(QStringLiteral("count"))) {
+            qreal cnt = 16;
+            if (coerceToNumber(opObj->value(QStringLiteral("count")), &cnt)) {
+                (*opObj)[QStringLiteral("count")] = qBound(1, qRound(cnt), 256);
+            } else {
+                (*opObj)[QStringLiteral("count")] = 16;
+                if (report) ++report->coercedValues;
+            }
+        }
+    } else if (kindStr == QLatin1String("manga_lines")) {
+        if (opObj->contains(QStringLiteral("center"))) {
+            const QJsonValue cVal = opObj->value(QStringLiteral("center"));
+            if (cVal.isArray()) {
+                QJsonArray cArr = cVal.toArray();
+                if (cArr.size() >= 2) {
+                    qreal cx = 0.5, cy = 0.5;
+                    coerceToNumber(cArr.at(0), &cx);
+                    coerceToNumber(cArr.at(1), &cy);
+                    (*opObj)[QStringLiteral("center")] = QJsonArray({cx, cy});
+                }
+            }
+        }
+        if (opObj->contains(QStringLiteral("density"))) {
+            qreal dens = 48;
+            if (coerceToNumber(opObj->value(QStringLiteral("density")), &dens)) {
+                (*opObj)[QStringLiteral("density")] = qBound(4, qRound(dens), 120);
+            }
+        }
+    } else {
+        if (report) {
+            ++report->typeErrors;
+            report->errorMessages.append(QStringLiteral("Operation %1: unknown or unsupported kind '%2'").arg(opIndex).arg(kindStr));
+        }
+        return false;
     }
 
     return true;

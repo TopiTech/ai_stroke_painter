@@ -920,7 +920,7 @@ void KisAiIllustrationDocker::keyPressEvent(QKeyEvent *event)
         event->accept();
         return;
     }
-    if (event->key() == Qt::Key_Escape && (m_reply || m_goalModeActive || m_testReply)) {
+    if (event->key() == Qt::Key_Escape && (m_reply || m_goalModeActive || m_testReply || (m_retryTimer && m_retryTimer->isActive()))) {
         cancelRemoteRequest();
         event->accept();
         return;

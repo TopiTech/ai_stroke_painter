@@ -867,6 +867,26 @@ void KisAiStrokeRendererTest::testQualityUtilsHueShiftedHarmonies()
     const QColor highlight = KisAiStrokeQualityUtils::calculateHueShiftedHighlight(skinColor);
     QVERIFY(highlight.isValid());
     QVERIFY(highlight.lightness() > skinColor.lightness());
+
+    const QColor gray(128, 128, 128);
+    // With invalid ambient tint (no ambient tint), shadow and highlight remain purely achromatic (R == G == B)
+    const QColor pureGrayShadow = KisAiStrokeQualityUtils::calculateHueShiftedShadow(gray, QColor());
+    QVERIFY(pureGrayShadow.isValid());
+    QVERIFY(pureGrayShadow.lightness() < gray.lightness());
+    QCOMPARE(pureGrayShadow.red(), pureGrayShadow.green());
+    QCOMPARE(pureGrayShadow.green(), pureGrayShadow.blue());
+
+    const QColor pureGrayHighlight = KisAiStrokeQualityUtils::calculateHueShiftedHighlight(gray, QColor());
+    QVERIFY(pureGrayHighlight.isValid());
+    QVERIFY(pureGrayHighlight.lightness() > gray.lightness());
+    QCOMPARE(pureGrayHighlight.red(), pureGrayHighlight.green());
+    QCOMPARE(pureGrayHighlight.green(), pureGrayHighlight.blue());
+
+    // With default ambient shadow tint (cool indigo: QColor(35, 40, 65)),
+    // shadow deepens with cool tones (blue >= green >= red), avoiding red distortion
+    const QColor grayShadow = KisAiStrokeQualityUtils::calculateHueShiftedShadow(gray);
+    QVERIFY(grayShadow.blue() >= grayShadow.green());
+    QVERIFY(grayShadow.green() >= grayShadow.red());
 }
 
 void KisAiStrokeRendererTest::testQualityUtilsProgramTrapping()

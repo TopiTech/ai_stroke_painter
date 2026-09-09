@@ -786,15 +786,19 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
     text.replace(unquotedKey, QStringLiteral("\"\\1\":"));
 
     // 10. Non-standard numbers, units, and corruptions
-    // Leading period: .5 -> 0.5, +.5 -> 0.5, -.5 -> -0.5
-    static const QRegularExpression leadingDotSigned(QStringLiteral(R"((?<=[,\:\[\s])([+-])\.\d+)"));
-    text.replace(leadingDotSigned, QStringLiteral("\\10\\0"));
-    static const QRegularExpression leadingDot(QStringLiteral(R"((?<=[,\:\[\s])\.\d+)"));
-    text.replace(leadingDot, QStringLiteral("0\\0"));
+    // Leading plus before digits or period: +5 -> 5, +.5 -> .5
+    static const QRegularExpression leadingPlusNum(QStringLiteral(R"((?<=[,\:\[\s])\+(?=\.?\d))"));
+    text.replace(leadingPlusNum, QStringLiteral(""));
+
+    // Leading period: -.5 -> -0.5, .5 -> 0.5
+    static const QRegularExpression leadingDotNegative(QStringLiteral(R"((?<=[,\:\[\s])-(\.\d+))"));
+    text.replace(leadingDotNegative, QStringLiteral("-0\\1"));
+    static const QRegularExpression leadingDot(QStringLiteral(R"((?<=[,\:\[\s])(\.\d+))"));
+    text.replace(leadingDot, QStringLiteral("0\\1"));
 
     // Trailing period: 5. -> 5.0
-    static const QRegularExpression trailingDot(QStringLiteral(R"((?<=[,\:\[\s])-?\d+\.(?=[,\:\]\}\s]))"));
-    text.replace(trailingDot, QStringLiteral("\\00"));
+    static const QRegularExpression trailingDot(QStringLiteral(R"((?<=[,\:\[\s])(-?\d+\.)(?=[,\:\]\}\s]))"));
+    text.replace(trailingDot, QStringLiteral("\\10"));
 
     // Strip unit suffixes (px, deg, %) from numbers
     static const QRegularExpression numUnitPx(

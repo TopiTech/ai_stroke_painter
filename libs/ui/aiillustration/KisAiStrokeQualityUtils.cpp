@@ -682,25 +682,37 @@ QColor KisAiStrokeQualityUtils::calculateHueShiftedShadow(
     float h = 0.0f, s = 0.0f, l = 0.0f, a = 1.0f;
     baseColor.getHslF(&h, &s, &l, &a);
 
-    // Warm colors (red, orange, yellow, skin tones: H < 0.18 or H > 0.85) shift toward cool blue/violet
-    // Cool colors (blue, cyan: 0.45 < H < 0.75) deepen toward rich indigo/navy
+    const bool isAchromatic = (h < 0.0f || s < 0.02f);
     float targetHue = h;
-    if (h >= 0.0f && h < 0.18f) {
-        // Red-orange-yellow -> shift towards purple-blue (approx 0.70 - 0.78)
-        targetHue = h + 0.08f;
-    } else if (h >= 0.85f && h <= 1.0f) {
-        targetHue = h - 0.08f;
-    } else if (h >= 0.45f && h < 0.65f) {
-        // Cyan-blue -> shift deeper toward violet
-        targetHue = h + 0.05f;
-    }
 
-    if (targetHue < 0.0f) targetHue += 1.0f;
-    if (targetHue > 1.0f) targetHue -= 1.0f;
+    if (isAchromatic) {
+        if (ambientShadowTint.isValid()) {
+            float ah = 0.0f, as = 0.0f, al = 0.0f;
+            ambientShadowTint.getHslF(&ah, &as, &al);
+            targetHue = (ah >= 0.0f) ? ah : 0.65f;
+        } else {
+            targetHue = 0.65f;
+        }
+    } else {
+        // Warm colors (red, orange, yellow, skin tones: H < 0.18 or H > 0.85) shift toward cool blue/violet
+        // Cool colors (blue, cyan: 0.45 < H < 0.75) deepen toward rich indigo/navy
+        if (h >= 0.0f && h < 0.18f) {
+            // Red-orange-yellow -> shift towards purple-blue (approx 0.70 - 0.78)
+            targetHue = h + 0.08f;
+        } else if (h >= 0.85f && h <= 1.0f) {
+            targetHue = h - 0.08f;
+        } else if (h >= 0.45f && h < 0.65f) {
+            // Cyan-blue -> shift deeper toward violet
+            targetHue = h + 0.05f;
+        }
+
+        if (targetHue < 0.0f) targetHue += 1.0f;
+        if (targetHue > 1.0f) targetHue -= 1.0f;
+    }
 
     const float depth = static_cast<float>(qBound<qreal>(0.1, shadowDepth, 0.8));
     const float newL = qMax<float>(0.05f, l * (1.0f - depth * 0.65f));
-    const float newS = qBound<float>(0.1f, s * 1.15f, 1.0f); // Maintain rich chroma in shadows
+    const float newS = isAchromatic ? (ambientShadowTint.isValid() ? 0.04f : 0.0f) : qBound<float>(0.1f, s * 1.15f, 1.0f); // Maintain rich chroma in shadows, neutral for achromatic
 
     QColor shifted;
     shifted.setHslF(targetHue, newS, newL, a);
@@ -729,20 +741,32 @@ QColor KisAiStrokeQualityUtils::calculateHueShiftedHighlight(
     float h = 0.0f, s = 0.0f, l = 0.0f, a = 1.0f;
     baseColor.getHslF(&h, &s, &l, &a);
 
-    // Shift toward warm sunlight (yellow/cream: approx 0.12 - 0.15)
+    const bool isAchromatic = (h < 0.0f || s < 0.02f);
     float targetHue = h;
-    if (h > 0.15f && h < 0.50f) {
-        targetHue = h - 0.05f; // Greens shift toward warm yellow
-    } else if (h >= 0.50f && h < 0.80f) {
-        targetHue = h - 0.06f; // Blues shift toward turquoise highlight
-    }
 
-    if (targetHue < 0.0f) targetHue += 1.0f;
-    if (targetHue > 1.0f) targetHue -= 1.0f;
+    if (isAchromatic) {
+        if (keyLightTint.isValid()) {
+            float kh = 0.0f, ks = 0.0f, kl = 0.0f;
+            keyLightTint.getHslF(&kh, &ks, &kl);
+            targetHue = (kh >= 0.0f) ? kh : 0.12f;
+        } else {
+            targetHue = 0.12f;
+        }
+    } else {
+        // Shift toward warm sunlight (yellow/cream: approx 0.12 - 0.15)
+        if (h > 0.15f && h < 0.50f) {
+            targetHue = h - 0.05f; // Greens shift toward warm yellow
+        } else if (h >= 0.50f && h < 0.80f) {
+            targetHue = h - 0.06f; // Blues shift toward turquoise highlight
+        }
+
+        if (targetHue < 0.0f) targetHue += 1.0f;
+        if (targetHue > 1.0f) targetHue -= 1.0f;
+    }
 
     const float boost = static_cast<float>(qBound<qreal>(0.1, intensity, 0.9));
     const float newL = qMin<float>(0.98f, l + (1.0f - l) * boost);
-    const float newS = qMax<float>(0.15f, s * (1.0f - boost * 0.4f));
+    const float newS = isAchromatic ? (keyLightTint.isValid() ? 0.03f : 0.0f) : qMax<float>(0.15f, s * (1.0f - boost * 0.4f));
 
     QColor highlight;
     highlight.setHslF(targetHue, newS, newL, a);

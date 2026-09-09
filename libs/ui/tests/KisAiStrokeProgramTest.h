@@ -59,6 +59,7 @@ private Q_SLOTS:
     void testNestedEnvelopeUnwrapping();
     void testGoalModePayloadMaxTokensOverride();
     void testNewBrushProfilesNormalization();
+    void testSignedLeadingDotAndTypeCheckerEdgeCases();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

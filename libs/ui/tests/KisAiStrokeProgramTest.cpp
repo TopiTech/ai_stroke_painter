@@ -1892,6 +1892,92 @@ void KisAiStrokeProgramTest::testNewBrushProfilesNormalization()
     QCOMPARE(refined.operations.at(3).brush.profile, QStringLiteral("charcoal"));
 }
 
+void KisAiStrokeProgramTest::testSignedLeadingDotAndTypeCheckerEdgeCases()
+{
+    // 1. Direct syntax repair verification: signed leading dot, leading plus, and trailing dot
+    QCOMPARE(KisAiStrokeProgramCodec::repairJsonSyntax(QStringLiteral("[-.5, +.5, .5, 5.]")), QStringLiteral("[-0.5, 0.5, 0.5, 5.0]"));
+
+    // 2. Full program parsing with signed leading dots and leading plus
+    const QByteArray jsonWithSignedLeadingDots = QByteArrayLiteral(
+        "{\n"
+        "  \"schema_version\": +2,\n"
+        "  \"prompt\": \"Signed dot test\",\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"id\": \"line_signed\",\n"
+        "      \"layer\": \"Lineart\",\n"
+        "      \"points\": [[.15, .5, .8], [+.5, .25, +.9]],\n"
+        "      \"brush\": {\n"
+        "        \"profile\": \"pen\",\n"
+        "        \"color\": \"rgb(255, 68, 102)\",\n"
+        "        \"size\": +.02\n"
+        "      }\n"
+        "    }\n"
+        "  ]\n"
+        "}\n"
+    );
+
+    KisAiStrokeProgram prog;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(jsonWithSignedLeadingDots, &prog, &error), qPrintable(error));
+    QCOMPARE(prog.schemaVersion, 2);
+    QCOMPARE(prog.operations.size(), 1);
+    const auto &op = prog.operations.first();
+    QCOMPARE(op.points.size(), 2);
+    QCOMPARE(op.points.at(0).pos.x(), 0.15);
+    QCOMPARE(op.points.at(0).pos.y(), 0.5);
+    QCOMPARE(op.points.at(0).pressure, 0.8);
+    QCOMPARE(op.points.at(1).pos.x(), 0.5);
+    QCOMPARE(op.points.at(1).pos.y(), 0.25);
+    QCOMPARE(op.points.at(1).pressure, 0.9);
+    QCOMPARE(op.brush.size, 0.02);
+    // Verify rgb(...) was parsed
+    QCOMPARE(op.brush.color, QColor(255, 68, 102));
+
+    // 2. KisAiStrokeTypeChecker color validation & normalization
+    QVERIFY(KisAiStrokeTypeChecker::isValidColorString(QStringLiteral("rgb(10, 20, 30)")));
+    QVERIFY(KisAiStrokeTypeChecker::isValidColorString(QStringLiteral("rgba(10, 20, 30, 0.5)")));
+    QVERIFY(KisAiStrokeTypeChecker::isValidColorString(QStringLiteral("#ff00a0")));
+    QVERIFY(KisAiStrokeTypeChecker::isValidColorString(QStringLiteral("ff00a0")));
+    QVERIFY(!KisAiStrokeTypeChecker::isValidColorString(QStringLiteral("not-a-color-at-all")));
+
+    // 3. KisAiStrokeTypeChecker checkBrushObject normalization of rgb
+    QJsonObject brushObj;
+    brushObj[QStringLiteral("color")] = QStringLiteral("rgb(0, 128, 255)");
+    int coerced = 0;
+    QVERIFY(KisAiStrokeTypeChecker::checkBrushObject(&brushObj, nullptr, &coerced));
+    QCOMPARE(brushObj.value(QStringLiteral("color")).toString(), QStringLiteral("#0080ff"));
+    QVERIFY(coerced > 0);
+
+    // 4. KisAiStrokeTypeChecker particles and manga_lines validation
+    QJsonObject particlesOp;
+    particlesOp[QStringLiteral("kind")] = QStringLiteral("particle"); // synonym
+    particlesOp[QStringLiteral("bounds")] = QJsonArray({0.1, 0.2, 0.8, 0.9});
+    particlesOp[QStringLiteral("count")] = 32;
+    KisAiStrokeTypeCheckReport reportP;
+    QVERIFY(KisAiStrokeTypeChecker::checkAndCoerceOperation(&particlesOp, 0, &reportP));
+    QCOMPARE(particlesOp.value(QStringLiteral("kind")).toString(), QStringLiteral("particles"));
+    QCOMPARE(particlesOp.value(QStringLiteral("count")).toInt(), 32);
+
+    QJsonObject mangaOp;
+    mangaOp[QStringLiteral("kind")] = QStringLiteral("speed_lines"); // synonym
+    mangaOp[QStringLiteral("center")] = QJsonArray({0.5, 0.4});
+    mangaOp[QStringLiteral("density")] = 60;
+    KisAiStrokeTypeCheckReport reportM;
+    QVERIFY(KisAiStrokeTypeChecker::checkAndCoerceOperation(&mangaOp, 1, &reportM));
+    QCOMPARE(mangaOp.value(QStringLiteral("kind")).toString(), QStringLiteral("manga_lines"));
+    QCOMPARE(mangaOp.value(QStringLiteral("density")).toInt(), 60);
+
+    // 5. KisAiStrokeTypeChecker rejection of invalid kind
+    QJsonObject invalidOp;
+    invalidOp[QStringLiteral("kind")] = QStringLiteral("system_exec");
+    KisAiStrokeTypeCheckReport reportI;
+    const bool valid = KisAiStrokeTypeChecker::checkAndCoerceOperation(&invalidOp, 2, &reportI);
+    QVERIFY(!valid);
+    QVERIFY(reportI.typeErrors > 0);
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 
