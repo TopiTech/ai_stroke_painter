@@ -92,7 +92,7 @@ public:
     /**
      * Generate phase-specific guidance for Goal Mode (Phase 1: Blocking, Phase 2: Shading, Phase 3: Lineart, Phase 4: Finishing).
      */
-    static QString generateGoalPhaseGuidance(int phase, const SemanticSpec &spec, const QSize &canvasSize);
+    static QString generateGoalPhaseGuidance(int phase, const SemanticSpec &spec, const QSize &canvasSize, int totalSteps = 4);
 
     /**
      * Human-readable label for an ArtStyle.

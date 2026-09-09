@@ -444,18 +444,67 @@ QString KisAiPromptAnalyzer::styleName(ArtStyle style)
     }
 }
 
-QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const SemanticSpec &spec, const QSize &canvasSize)
+QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const SemanticSpec &spec, const QSize &canvasSize, int totalSteps)
 {
+    Q_UNUSED(canvasSize);
     QString out;
     const QString styleStr = styleName(spec.style);
-    out += QStringLiteral("=== GOAL MODE PHASE %1 EXECUTION ===\n").arg(phase);
+    out += QStringLiteral("=== GOAL MODE PHASE %1/%2 EXECUTION ===\n").arg(phase).arg(totalSteps);
     out += QStringLiteral("Active Art Style: %1\n").arg(styleStr);
     out += QStringLiteral("Key Light: %1 | Ambient Shadow: %2 | Accent: %3\n\n")
         .arg(spec.harmony.keyLight.name())
         .arg(spec.harmony.ambientShadow.name())
         .arg(spec.harmony.accentColor.name());
 
-    switch (phase) {
+    if (totalSteps <= 2) {
+        if (phase == 1) {
+            out += QStringLiteral(
+                "PHASE 1 MISSION: [FOUNDATION, SILHOUETTES & 3D VOLUMES]\n"
+                "- Target Layers: 'Background', 'Flats' and 'Shading'.\n"
+                "- Establish complete colored base shapes without white canvas gaps, then render volumetric shading.\n"
+                "- Form clear silhouette landmarks and key shadow volumes.\n"
+            );
+        } else {
+            out += QStringLiteral(
+                "PHASE 2 MISSION: [LINEART, HIGHLIGHTS & FINAL POLISH (COMPLETION)]\n"
+                "- Target Layers: 'Lineart', 'Highlights', and 'FX'.\n"
+                "- Review canvas image: draw crisp tapering contours, specular glints, eye catchlights, and dynamic particles.\n"
+                "- Final Goal Check: Bring illustration to complete presentation readiness.\n"
+            );
+        }
+        return out;
+    }
+
+    if (totalSteps == 3) {
+        if (phase == 1) {
+            out += QStringLiteral(
+                "PHASE 1 MISSION: [BACKGROUND & SILHOUETTE FLATS]\n"
+                "- Target Layers: 'Background' and 'Flats'.\n"
+                "- Establish complete seamless foundation masses with zero white gaps.\n"
+            );
+        } else if (phase == 2) {
+            out += QStringLiteral(
+                "PHASE 2 MISSION: [SHADING & STRUCTURAL LINEART]\n"
+                "- Target Layers: 'Shading' and 'Lineart'.\n"
+                "- Add volumetric shadow depths and crisp contour lines over the base silhouettes.\n"
+            );
+        } else {
+            out += QStringLiteral(
+                "PHASE 3 MISSION: [SPECULAR HIGHLIGHTS & FX POLISH (COMPLETION)]\n"
+                "- Target Layers: 'Highlights' and 'FX'.\n"
+                "- Specular glints, catchlights, blooming effects, and particles. Bring to 100% completion.\n"
+            );
+        }
+        return out;
+    }
+
+    // Default 4-step or extended 5/6-step mapping
+    const int effectivePhase = (totalSteps == 4) ? phase :
+                               (phase >= totalSteps) ? 4 :
+                               (phase == 1) ? 1 :
+                               (phase == 2) ? 2 : 3;
+
+    switch (effectivePhase) {
     case 1: // Phase 1: Background & Flats (Silhouette & Base Volumes)
         out += QStringLiteral(
             "PHASE 1 MISSION: [BACKGROUND & SILHOUETTE FLATS]\n"

@@ -497,7 +497,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         }
     });
     connect(m_nextStepButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::advanceGoalStep);
-    connect(m_finishGoalButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::finishGoalMode);
+    connect(m_finishGoalButton, &QPushButton::clicked, this, [this] { finishGoalMode(true); });
 
     // Card 4: Action & Preview
     CardWidget actionCard = createCard();
@@ -573,8 +573,22 @@ bool KisAiIllustrationDocker::eventFilter(QObject *watched, QEvent *event)
             generateIllustration();
             return true;
         }
+        if (keyEvent->key() == Qt::Key_Escape && (m_reply || m_goalModeActive)) {
+            cancelRemoteRequest();
+            return true;
+        }
     }
     return QDockWidget::eventFilter(watched, event);
+}
+
+void KisAiIllustrationDocker::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_Escape && (m_reply || m_goalModeActive)) {
+        cancelRemoteRequest();
+        event->accept();
+        return;
+    }
+    QDockWidget::keyPressEvent(event);
 }
 
 void KisAiIllustrationDocker::focusPrompt()
@@ -696,14 +710,32 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     const QString apiKey = m_apiKeyEditor->text();
 
     if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
+        if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
+            m_detailsToggleBtn->setChecked(true);
+        }
+        if (m_endpointEditor) {
+            m_endpointEditor->setFocus();
+        }
         setStatus(errorMessage, true);
         return;
     }
     if (model.isEmpty()) {
+        if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
+            m_detailsToggleBtn->setChecked(true);
+        }
+        if (m_modelEditor) {
+            m_modelEditor->setFocus();
+        }
         setStatus(i18n("LLM モデル名を入力してください。"), true);
         return;
     }
     if (apiKey.isEmpty()) {
+        if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
+            m_detailsToggleBtn->setChecked(true);
+        }
+        if (m_apiKeyEditor) {
+            m_apiKeyEditor->setFocus();
+        }
         setStatus(i18n("このリクエストに使う API キーを入力してください。"), true);
         return;
     }
@@ -852,14 +884,32 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
     const QString apiKey = m_apiKeyEditor->text();
 
     if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
+        if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
+            m_detailsToggleBtn->setChecked(true);
+        }
+        if (m_endpointEditor) {
+            m_endpointEditor->setFocus();
+        }
         setStatus(errorMessage, true);
         return;
     }
     if (model.isEmpty()) {
+        if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
+            m_detailsToggleBtn->setChecked(true);
+        }
+        if (m_modelEditor) {
+            m_modelEditor->setFocus();
+        }
         setStatus(i18n("画像モデル名を入力してください。"), true);
         return;
     }
     if (apiKey.isEmpty()) {
+        if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
+            m_detailsToggleBtn->setChecked(true);
+        }
+        if (m_apiKeyEditor) {
+            m_apiKeyEditor->setFocus();
+        }
         setStatus(i18n("このリクエストに使う API キーを入力してください。"), true);
         return;
     }
@@ -974,7 +1024,7 @@ void KisAiIllustrationDocker::cancelRemoteRequest()
 {
     if (!m_reply) {
         if (m_goalModeActive) {
-            finishGoalMode();
+            finishGoalMode(false);
             setStatus(i18n("Goalモード作画を中止しました。"));
         }
         return;
@@ -982,9 +1032,6 @@ void KisAiIllustrationDocker::cancelRemoteRequest()
 
     m_requestWasCancelled = true;
     m_reply->abort();
-    if (m_goalModeActive) {
-        finishGoalMode();
-    }
     setStatus(i18n("リクエストを中止しています…"));
 }
 
@@ -1098,8 +1145,9 @@ void KisAiIllustrationDocker::updateModeUi()
 
 void KisAiIllustrationDocker::setBusy(bool busy)
 {
-    m_newCanvasButton->setEnabled(!busy);
-    m_generateButton->setEnabled(!busy);
+    const bool allowGeneralInput = !busy && !m_goalModeActive;
+    m_newCanvasButton->setEnabled(allowGeneralInput);
+    m_generateButton->setEnabled(allowGeneralInput);
     if (m_goalModeActive) {
         m_generateButton->setText(busy ? i18n("⏳ Goal作画中…") : i18n("🎯 Goal作画進行中"));
     } else if (m_goalModeCheck && m_goalModeCheck->isChecked()) {
@@ -1107,17 +1155,17 @@ void KisAiIllustrationDocker::setBusy(bool busy)
     } else {
         m_generateButton->setText(busy ? i18n("⏳ 生成中…") : i18n("🎨 生成してレイヤーに追加"));
     }
-    m_modeCombo->setEnabled(!busy);
+    m_modeCombo->setEnabled(allowGeneralInput);
     if (m_goalModeCheck) {
-        m_goalModeCheck->setEnabled(!busy);
+        m_goalModeCheck->setEnabled(allowGeneralInput);
     }
     if (m_goalStepsSpin) {
-        m_goalStepsSpin->setEnabled(!busy);
+        m_goalStepsSpin->setEnabled(allowGeneralInput);
     }
     if (m_artStyleCombo) {
-        m_artStyleCombo->setEnabled(!busy);
+        m_artStyleCombo->setEnabled(allowGeneralInput);
     }
-    m_cancelButton->setVisible(busy && !m_reply.isNull());
+    m_cancelButton->setVisible((busy && !m_reply.isNull()) || m_goalModeActive);
     m_progressBar->setVisible(busy);
 }
 
@@ -1224,16 +1272,34 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
 
         QString errorMessage;
         if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
+            if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
+                m_detailsToggleBtn->setChecked(true);
+            }
+            if (m_endpointEditor) {
+                m_endpointEditor->setFocus();
+            }
             setStatus(errorMessage, true);
             m_goalModeActive = false;
             return;
         }
         if (model.isEmpty()) {
+            if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
+                m_detailsToggleBtn->setChecked(true);
+            }
+            if (m_modelEditor) {
+                m_modelEditor->setFocus();
+            }
             setStatus(i18n("LLM モデル名を入力してください。"), true);
             m_goalModeActive = false;
             return;
         }
         if (apiKey.isEmpty()) {
+            if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
+                m_detailsToggleBtn->setChecked(true);
+            }
+            if (m_apiKeyEditor) {
+                m_apiKeyEditor->setFocus();
+            }
             setStatus(i18n("このリクエストに使う API キーを入力してください。"), true);
             m_goalModeActive = false;
             return;
@@ -1320,6 +1386,8 @@ void KisAiIllustrationDocker::executeGoalStep()
             }
         } else {
             setStatus(i18n("キャンバスが利用できないため、ストロークを描画できませんでした。"), true);
+            finishGoalMode(false);
+            return;
         }
 
         if (m_goalPhaseLabel) {
@@ -1334,7 +1402,7 @@ void KisAiIllustrationDocker::executeGoalStep()
         setBusy(false);
 
         if (m_goalCurrentStep >= m_goalTotalSteps || program.goalReached) {
-            finishGoalMode();
+            finishGoalMode(true);
         } else if (m_pausePerStepCheck && m_pausePerStepCheck->isChecked()) {
             m_waitingForUserStepAdvance = true;
             if (m_nextStepButton) {
@@ -1358,7 +1426,7 @@ void KisAiIllustrationDocker::executeGoalStep()
 
         if (apiKey.isEmpty()) {
             setStatus(i18n("API キーが見つかりません。Goalモードを終了します。"), true);
-            finishGoalMode();
+            finishGoalMode(false);
             return;
         }
 
@@ -1377,7 +1445,7 @@ void KisAiIllustrationDocker::executeGoalStep()
             spec.style = artStyle;
         }
         const QString guidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(
-            m_goalCurrentStep, spec, canvasSize);
+            m_goalCurrentStep, spec, canvasSize, m_goalTotalSteps);
 
         const QJsonObject payload = KisAiStrokeProgramCodec::buildGoalStepPayload(
             model,
@@ -1438,7 +1506,7 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
 
     if (!reply) {
         m_responseBuffer.clear();
-        finishGoalMode();
+        finishGoalMode(false);
         return;
     }
 
@@ -1451,17 +1519,17 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
 
     if (requestWasCancelled) {
         setStatus(i18n("Goal モードを中止しました。"));
-        finishGoalMode();
+        finishGoalMode(false);
         return;
     }
     if (requestTimedOut) {
         setStatus(i18n("LLM の応答が 2 分以内に届かなかったため中止しました。"), true);
-        finishGoalMode();
+        finishGoalMode(false);
         return;
     }
     if (responseTooLarge) {
         setStatus(i18n("LLM の応答が上限を超えています。"), true);
-        finishGoalMode();
+        finishGoalMode(false);
         return;
     }
     if (!requestSucceeded) {
@@ -1477,7 +1545,7 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         } else {
             setStatus(i18n("LLM への接続または応答に失敗しました (HTTP %1)。", httpStatus), true);
         }
-        finishGoalMode();
+        finishGoalMode(false);
         return;
     }
 
@@ -1485,7 +1553,7 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     QString parseError;
     if (!KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError)) {
         setStatus(parseError, true);
-        finishGoalMode();
+        finishGoalMode(false);
         return;
     }
 
@@ -1508,6 +1576,8 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         }
     } else {
         setStatus(i18n("キャンバスが利用できないため、ストロークを描画できませんでした。"), true);
+        finishGoalMode(false);
+        return;
     }
 
     if (m_goalPhaseLabel) {
@@ -1522,7 +1592,7 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     }
 
     if (m_goalCurrentStep >= m_goalTotalSteps || program.goalReached) {
-        finishGoalMode();
+        finishGoalMode(true);
     } else if (m_pausePerStepCheck && m_pausePerStepCheck->isChecked()) {
         m_waitingForUserStepAdvance = true;
         if (m_nextStepButton) {
@@ -1549,13 +1619,13 @@ void KisAiIllustrationDocker::advanceGoalStep()
     m_waitingForUserStepAdvance = false;
     m_goalCurrentStep++;
     if (m_goalCurrentStep > m_goalTotalSteps) {
-        finishGoalMode();
+        finishGoalMode(true);
         return;
     }
     executeGoalStep();
 }
 
-void KisAiIllustrationDocker::finishGoalMode()
+void KisAiIllustrationDocker::finishGoalMode(bool success)
 {
     m_goalModeActive = false;
     m_waitingForUserStepAdvance = false;
@@ -1571,9 +1641,15 @@ void KisAiIllustrationDocker::finishGoalMode()
             m_finishGoalButton->setEnabled(false);
         }
         if (m_goalPhaseLabel) {
-            m_goalPhaseLabel->setText(i18n("🎯 Goal作画 完了 (全 %1 段階)", m_goalCurrentStep));
+            if (success) {
+                m_goalPhaseLabel->setText(i18n("🎯 Goal作画 完了 (全 %1 段階)", m_goalCurrentStep));
+            } else {
+                m_goalPhaseLabel->setText(i18n("🎯 Goal作画 中断 (ステップ %1/%2)", m_goalCurrentStep, m_goalTotalSteps));
+            }
         }
     }
-    setStatus(i18n("🎯 Goal作画が完了しました。Kritaのレイヤードックで各層を確認・調整できます。"));
+    if (success) {
+        setStatus(i18n("🎯 Goal作画が完了しました。Kritaのレイヤードックで各層を確認・調整できます。"));
+    }
     setBusy(false);
 }

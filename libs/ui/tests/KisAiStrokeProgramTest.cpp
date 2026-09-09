@@ -887,6 +887,118 @@ void KisAiStrokeProgramTest::testPixelCoordinateThresholdBoundary()
     }
 }
 
+void KisAiStrokeProgramTest::testGoalModeProgramStepDynamicTotalSteps()
+{
+    const QSize canvasSize(1024, 1024);
+    const QString prompt = QStringLiteral("fantasy landscape with dragon and glowing crystal");
+
+    for (int totalSteps : {2, 3, 4, 5, 6}) {
+        KisAiStrokeProgram accumulated;
+        QSet<QString> accumulatedLayers;
+
+        for (int step = 1; step <= totalSteps; ++step) {
+            const KisAiStrokeProgram stepProg = KisAiStrokeProgramCodec::createDeterministicProgramStep(
+                prompt, canvasSize, step, totalSteps);
+
+            QVERIFY2(!stepProg.operations.isEmpty(), qPrintable(QStringLiteral("totalSteps=%1 step=%2 has no operations").arg(totalSteps).arg(step)));
+            QCOMPARE(stepProg.currentStep, step);
+            QCOMPARE(stepProg.totalSteps, totalSteps);
+            QVERIFY(!stepProg.stepPhase.isEmpty());
+
+            if (step == totalSteps) {
+                QVERIFY2(stepProg.goalReached, qPrintable(QStringLiteral("final step in %1 totalSteps should reach goal").arg(totalSteps)));
+            } else {
+                QVERIFY2(!stepProg.goalReached, qPrintable(QStringLiteral("step %1 of %2 should not reach goal early").arg(step).arg(totalSteps)));
+            }
+
+            for (const KisAiStrokeOperation &op : stepProg.operations) {
+                accumulatedLayers.insert(op.layer);
+            }
+
+            if (step == 1) {
+                accumulated = stepProg;
+            } else {
+                accumulated = KisAiStrokeProgramCodec::mergePrograms(accumulated, stepProg);
+            }
+        }
+
+        // After all steps, the merged program must contain all essential layers
+        for (const QString &essentialLayer : {QStringLiteral("Flats"), QStringLiteral("Shading"), QStringLiteral("Lineart"), QStringLiteral("Highlights"), QStringLiteral("FX")}) {
+            QVERIFY2(accumulatedLayers.contains(essentialLayer),
+                qPrintable(QStringLiteral("totalSteps=%1 missing essential layer %2").arg(totalSteps).arg(essentialLayer)));
+        }
+        QVERIFY(accumulated.goalReached);
+        QCOMPARE(accumulated.currentStep, totalSteps);
+    }
+}
+
+void KisAiStrokeProgramTest::testGoalModePayloadDynamicPhase()
+{
+    const QSize canvasSize(800, 600);
+    KisAiPromptAnalyzer::SemanticSpec spec = KisAiPromptAnalyzer::analyze(QStringLiteral("cyberpunk city at dusk"), canvasSize);
+
+    // 1. Guidance reflects totalSteps
+    for (int totalSteps : {2, 3, 4, 5, 6}) {
+        for (int step = 1; step <= totalSteps; ++step) {
+            const QString guidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(step, spec, canvasSize, totalSteps);
+            QVERIFY2(guidance.contains(QStringLiteral("PHASE %1/%2").arg(step).arg(totalSteps)),
+                     qPrintable(QStringLiteral("Guidance missing PHASE %1/%2: %3").arg(step).arg(totalSteps).arg(guidance)));
+        }
+    }
+
+    // 2. Vision model detection includes frontier models
+    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("o1")));
+    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("o1-preview")));
+    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("o1-mini")));
+    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gpt-4.5")));
+    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gpt-4.5-preview")));
+    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gpt-4o")));
+    QVERIFY(!KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gpt-3.5-turbo")));
+    QVERIFY(!KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("deepseek-r1")));
+
+    // 3. Goal step payload passes dynamic step_phase and total_steps
+    const QJsonObject payload2Step = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("cyberpunk city"),
+        canvasSize,
+        1,
+        2
+    );
+    const QJsonArray msgs = payload2Step.value(QStringLiteral("messages")).toArray();
+    QCOMPARE(msgs.size(), 2);
+    const QString userContent = msgs.at(1).toObject().value(QStringLiteral("content")).toString();
+    const QJsonObject userJson = QJsonDocument::fromJson(userContent.toUtf8()).object();
+    QCOMPARE(userJson.value(QStringLiteral("current_step")).toInt(), 1);
+    QCOMPARE(userJson.value(QStringLiteral("total_steps")).toInt(), 2);
+    QCOMPARE(userJson.value(QStringLiteral("step_phase")).toString(), QStringLiteral("Flats & Shading Foundation"));
+}
+
+void KisAiStrokeProgramTest::testParsePointsNanAndInfProtection()
+{
+    const QString jsonNan = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"id\": \"invalid_pts\",\n"
+        "      \"layer\": \"Lineart\",\n"
+        "      \"points\": [[null, 0.5, 1.0], [0.5, 0.5, 1.0]],\n"
+        "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#000000\", \"size\": 0.01}\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+
+    KisAiStrokeProgram prog;
+    QString error;
+    const QJsonObject root = QJsonDocument::fromJson(jsonNan.toUtf8()).object();
+    QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(root, &prog, &error));
+    QCOMPARE(prog.operations.size(), 1);
+    QCOMPARE(prog.operations[0].points.size(), 1);
+    QCOMPARE(prog.operations[0].points[0].pos, QPointF(0.5, 0.5));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

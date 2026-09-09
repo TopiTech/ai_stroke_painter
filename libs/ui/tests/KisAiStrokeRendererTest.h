@@ -31,6 +31,7 @@ private Q_SLOTS:
     void testRenderMangaLinesWithOriginCenter();
     void testNewBrushProfilesRendering();
     void testCaptureImageBase64();
+    void testRenderGoalModeProgression();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

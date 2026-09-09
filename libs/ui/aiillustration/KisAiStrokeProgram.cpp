@@ -867,18 +867,32 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
         if (pv.isArray()) {
             const QJsonArray pa = pv.toArray();
             if (pa.size() >= 2) {
+                if (!pa.at(0).isDouble() || !pa.at(1).isDouble()) {
+                    return {QPointF(), -1.0};
+                }
                 const qreal x = pa.at(0).toDouble();
                 const qreal y = pa.at(1).toDouble();
-                const qreal p = pa.size() >= 3 ? pa.at(2).toDouble(defaultPressure) : defaultPressure;
+                const qreal p = (pa.size() >= 3 && pa.at(2).isDouble())
+                    ? pa.at(2).toDouble(defaultPressure)
+                    : defaultPressure;
+                if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(p)) {
+                    return {QPointF(), -1.0};
+                }
                 return {QPointF(x, y), p};
             }
         } else if (pv.isObject()) {
             const QJsonObject po = pv.toObject();
+            if (!po.value(QStringLiteral("x")).isDouble() || !po.value(QStringLiteral("y")).isDouble()) {
+                return {QPointF(), -1.0};
+            }
             const qreal x = po.value(QStringLiteral("x")).toDouble();
             const qreal y = po.value(QStringLiteral("y")).toDouble();
-            const qreal p = po.contains(QStringLiteral("pressure"))
+            const qreal p = (po.contains(QStringLiteral("pressure")) && po.value(QStringLiteral("pressure")).isDouble())
                 ? po.value(QStringLiteral("pressure")).toDouble(defaultPressure)
                 : defaultPressure;
+            if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(p)) {
+                return {QPointF(), -1.0};
+            }
             return {QPointF(x, y), p};
         }
         return {QPointF(), -1.0};
@@ -2390,6 +2404,8 @@ bool KisAiStrokeProgramCodec::isVisionModel(const QString &model)
     }
     return m.contains(QStringLiteral("gpt-4o")) ||
            m.contains(QStringLiteral("gpt-4-turbo")) ||
+           m.contains(QStringLiteral("gpt-4.5")) ||
+           m.contains(QStringLiteral("o1")) ||
            m.contains(QStringLiteral("vision")) ||
            m.contains(QStringLiteral("claude-3")) ||
            m.contains(QStringLiteral("gemini")) ||
@@ -2412,7 +2428,7 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     const bool reasoning = isReasoningModel(model);
     const bool vision = isVisionModel(model);
     const auto spec = KisAiPromptAnalyzer::analyze(prompt, canvasSize);
-    const QString phaseGuidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(step, spec, canvasSize);
+    const QString phaseGuidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(step, spec, canvasSize, totalSteps);
 
     QString combinedInstructions = phaseGuidance;
     if (!additionalInstruction.trimmed().isEmpty()) {
@@ -2424,16 +2440,41 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     const int geometryBudget = qBound(20, strokeBudget, 2000);
     const int operationTarget = qBound(12, geometryBudget / (totalSteps > 0 ? totalSteps * 3 : 12), 80);
 
+    QString phaseName;
+    if (totalSteps <= 2) {
+        phaseName = (step == 1) ? QStringLiteral("Flats & Shading Foundation")
+                                : QStringLiteral("Lineart, Highlights & Polish");
+    } else if (totalSteps == 3) {
+        phaseName = (step == 1) ? QStringLiteral("Flats & Background")
+                    : (step == 2) ? QStringLiteral("Shading & Lineart")
+                                  : QStringLiteral("Highlights & FX Polish");
+    } else if (totalSteps == 4) {
+        phaseName = (step == 1) ? QStringLiteral("Flats & Background")
+                    : (step == 2) ? QStringLiteral("Shading & Ambient Occlusion")
+                    : (step == 3) ? QStringLiteral("Lineart & Details")
+                                  : QStringLiteral("Highlights & FX Polish");
+    } else if (totalSteps == 5) {
+        phaseName = (step == 1) ? QStringLiteral("Flats & Background")
+                    : (step == 2) ? QStringLiteral("Shading & Ambient Occlusion")
+                    : (step == 3) ? QStringLiteral("Lineart & Details")
+                    : (step == 4) ? QStringLiteral("Specular Highlights")
+                                  : QStringLiteral("FX & Final Polish");
+    } else {
+        phaseName = (step == 1) ? QStringLiteral("Background Atmosphere")
+                    : (step == 2) ? QStringLiteral("Flats & Silhouettes")
+                    : (step == 3) ? QStringLiteral("Shading & Ambient Occlusion")
+                    : (step == 4) ? QStringLiteral("Lineart & Details")
+                    : (step == 5) ? QStringLiteral("Specular Highlights")
+                                  : QStringLiteral("FX & Final Polish");
+    }
+
     QJsonObject userObj;
     userObj[QStringLiteral("prompt")] = prompt;
     userObj[QStringLiteral("canvas_width")] = canvasSize.width();
     userObj[QStringLiteral("canvas_height")] = canvasSize.height();
     userObj[QStringLiteral("current_step")] = step;
     userObj[QStringLiteral("total_steps")] = totalSteps;
-    userObj[QStringLiteral("step_phase")] = (step == 1) ? QStringLiteral("Flats & Background") :
-                                           (step == 2) ? QStringLiteral("Shading & Ambient Occlusion") :
-                                           (step == 3) ? QStringLiteral("Lineart & Details") :
-                                                         QStringLiteral("Highlights & FX Polish");
+    userObj[QStringLiteral("step_phase")] = phaseName;
     userObj[QStringLiteral("operation_target")] = operationTarget;
     userObj[QStringLiteral("directive")] = QStringLiteral(
         "You are executing Step %1 of %2 in autonomous Goal Mode. "
@@ -2441,7 +2482,7 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
         "Generate only the operations required for this phase. Set 'step_phase' to '%3', 'current_step' to %1, and 'goal_reached' to %4.")
         .arg(step)
         .arg(totalSteps)
-        .arg(userObj[QStringLiteral("step_phase")].toString())
+        .arg(phaseName)
         .arg(step >= totalSteps ? QStringLiteral("true") : QStringLiteral("false"));
 
     const QString userText = QString::fromUtf8(QJsonDocument(userObj).toJson(QJsonDocument::Compact));
@@ -2516,32 +2557,132 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgramStep(
     for (const KisAiStrokeOperation &op : full.operations) {
         const QString l = normalizeLayerName(op.layer);
         bool match = false;
-        if (step == 1) {
-            match = (l == QLatin1String("Background") || l == QLatin1String("Flats"));
-        } else if (step == 2) {
-            match = (l == QLatin1String("Shading"));
-        } else if (step == 3) {
-            match = (l == QLatin1String("Lineart"));
-        } else {
-            match = (l == QLatin1String("Highlights") || l == QLatin1String("FX"));
+        if (totalSteps <= 2) {
+            if (step == 1) {
+                match = (l == QLatin1String("Background") || l == QLatin1String("Flats") || l == QLatin1String("Shading"));
+            } else {
+                match = (l == QLatin1String("Lineart") || l == QLatin1String("Highlights") || l == QLatin1String("FX"));
+            }
+        } else if (totalSteps == 3) {
+            if (step == 1) {
+                match = (l == QLatin1String("Background") || l == QLatin1String("Flats"));
+            } else if (step == 2) {
+                match = (l == QLatin1String("Shading") || l == QLatin1String("Lineart"));
+            } else {
+                match = (l == QLatin1String("Highlights") || l == QLatin1String("FX"));
+            }
+        } else if (totalSteps == 4) {
+            if (step == 1) {
+                match = (l == QLatin1String("Background") || l == QLatin1String("Flats"));
+            } else if (step == 2) {
+                match = (l == QLatin1String("Shading"));
+            } else if (step == 3) {
+                match = (l == QLatin1String("Lineart"));
+            } else {
+                match = (l == QLatin1String("Highlights") || l == QLatin1String("FX"));
+            }
+        } else if (totalSteps == 5) {
+            if (step == 1) {
+                match = (l == QLatin1String("Background") || l == QLatin1String("Flats"));
+            } else if (step == 2) {
+                match = (l == QLatin1String("Shading"));
+            } else if (step == 3) {
+                match = (l == QLatin1String("Lineart"));
+            } else if (step == 4) {
+                match = (l == QLatin1String("Highlights"));
+            } else {
+                match = (l == QLatin1String("FX"));
+            }
+        } else { // 6 or more
+            if (step == 1) {
+                match = (l == QLatin1String("Background"));
+            } else if (step == 2) {
+                match = (l == QLatin1String("Flats"));
+            } else if (step == 3) {
+                match = (l == QLatin1String("Shading"));
+            } else if (step == 4) {
+                match = (l == QLatin1String("Lineart"));
+            } else if (step == 5) {
+                match = (l == QLatin1String("Highlights"));
+            } else {
+                match = (l == QLatin1String("FX"));
+            }
         }
         if (match) {
             stepProg.operations.append(op);
         }
     }
 
-    if (step == 1) {
-        stepProg.stepPhase = QStringLiteral("Flats & Background");
-        stepProg.visualCritique = QStringLiteral("Base silhouettes and background wash are established.");
-    } else if (step == 2) {
-        stepProg.stepPhase = QStringLiteral("Shading & Ambient Occlusion");
-        stepProg.visualCritique = QStringLiteral("Volumetric shading and cast shadows are rendered.");
-    } else if (step == 3) {
-        stepProg.stepPhase = QStringLiteral("Lineart & Details");
-        stepProg.visualCritique = QStringLiteral("Contour lineart and anatomical details are completed.");
-    } else {
-        stepProg.stepPhase = QStringLiteral("Highlights & FX Polish");
-        stepProg.visualCritique = QStringLiteral("Specular highlights and FX particles applied. Goal reached.");
+    if (totalSteps <= 2) {
+        if (step == 1) {
+            stepProg.stepPhase = QStringLiteral("Flats & Shading Foundation");
+            stepProg.visualCritique = QStringLiteral("Base silhouettes, flats, and volume blocking are established.");
+        } else {
+            stepProg.stepPhase = QStringLiteral("Lineart, Highlights & Final FX");
+            stepProg.visualCritique = QStringLiteral("Contour lineart, highlights, and final FX polish completed. Goal reached.");
+        }
+    } else if (totalSteps == 3) {
+        if (step == 1) {
+            stepProg.stepPhase = QStringLiteral("Flats & Background");
+            stepProg.visualCritique = QStringLiteral("Base silhouettes and background wash are established.");
+        } else if (step == 2) {
+            stepProg.stepPhase = QStringLiteral("Shading & Lineart");
+            stepProg.visualCritique = QStringLiteral("Volumetric shading and contour lineart are rendered.");
+        } else {
+            stepProg.stepPhase = QStringLiteral("Highlights & FX Polish");
+            stepProg.visualCritique = QStringLiteral("Specular highlights and FX particles applied. Goal reached.");
+        }
+    } else if (totalSteps == 4) {
+        if (step == 1) {
+            stepProg.stepPhase = QStringLiteral("Flats & Background");
+            stepProg.visualCritique = QStringLiteral("Base silhouettes and background wash are established.");
+        } else if (step == 2) {
+            stepProg.stepPhase = QStringLiteral("Shading & Ambient Occlusion");
+            stepProg.visualCritique = QStringLiteral("Volumetric shading and cast shadows are rendered.");
+        } else if (step == 3) {
+            stepProg.stepPhase = QStringLiteral("Lineart & Details");
+            stepProg.visualCritique = QStringLiteral("Contour lineart and anatomical details are completed.");
+        } else {
+            stepProg.stepPhase = QStringLiteral("Highlights & FX Polish");
+            stepProg.visualCritique = QStringLiteral("Specular highlights and FX particles applied. Goal reached.");
+        }
+    } else if (totalSteps == 5) {
+        if (step == 1) {
+            stepProg.stepPhase = QStringLiteral("Flats & Background");
+            stepProg.visualCritique = QStringLiteral("Base silhouettes and background wash are established.");
+        } else if (step == 2) {
+            stepProg.stepPhase = QStringLiteral("Shading & Ambient Occlusion");
+            stepProg.visualCritique = QStringLiteral("Volumetric shading and cast shadows are rendered.");
+        } else if (step == 3) {
+            stepProg.stepPhase = QStringLiteral("Lineart & Details");
+            stepProg.visualCritique = QStringLiteral("Contour lineart and anatomical details are completed.");
+        } else if (step == 4) {
+            stepProg.stepPhase = QStringLiteral("Specular Highlights");
+            stepProg.visualCritique = QStringLiteral("Catchlights, rim lighting, and specular glints are rendered.");
+        } else {
+            stepProg.stepPhase = QStringLiteral("FX & Final Polish");
+            stepProg.visualCritique = QStringLiteral("Floating particles, atmospheric effects, and polish applied. Goal reached.");
+        }
+    } else { // 6 or more
+        if (step == 1) {
+            stepProg.stepPhase = QStringLiteral("Background Atmosphere");
+            stepProg.visualCritique = QStringLiteral("Atmospheric backdrop and sky gradient established.");
+        } else if (step == 2) {
+            stepProg.stepPhase = QStringLiteral("Flats & Silhouettes");
+            stepProg.visualCritique = QStringLiteral("Base color silhouettes established without white canvas gaps.");
+        } else if (step == 3) {
+            stepProg.stepPhase = QStringLiteral("Shading & Ambient Occlusion");
+            stepProg.visualCritique = QStringLiteral("Volumetric shading and cast shadows are rendered.");
+        } else if (step == 4) {
+            stepProg.stepPhase = QStringLiteral("Lineart & Details");
+            stepProg.visualCritique = QStringLiteral("Contour lineart and anatomical details are completed.");
+        } else if (step == 5) {
+            stepProg.stepPhase = QStringLiteral("Specular Highlights");
+            stepProg.visualCritique = QStringLiteral("Catchlights, rim lighting, and specular glints are rendered.");
+        } else {
+            stepProg.stepPhase = QStringLiteral("FX & Final Polish");
+            stepProg.visualCritique = QStringLiteral("Manga lines, particles, and polish applied. Goal reached.");
+        }
     }
 
     if (stepProg.operations.isEmpty() && !full.operations.isEmpty()) {

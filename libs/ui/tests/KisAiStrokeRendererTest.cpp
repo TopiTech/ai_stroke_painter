@@ -624,5 +624,35 @@ void KisAiStrokeRendererTest::testCaptureImageBase64()
     QVERIFY(loaded.height() <= 512);
 }
 
+void KisAiStrokeRendererTest::testRenderGoalModeProgression()
+{
+    const QSize canvasSize(512, 512);
+    const QString prompt = QStringLiteral("portrait of a cyberpunk warrior with glowing visor");
+
+    const KisAiStrokeProgram step1 = KisAiStrokeProgramCodec::createDeterministicProgramStep(prompt, canvasSize, 1, 2);
+    const KisAiStrokeProgram step2 = KisAiStrokeProgramCodec::createDeterministicProgramStep(prompt, canvasSize, 2, 2);
+
+    QVERIFY(!step1.operations.isEmpty());
+    QVERIFY(!step2.operations.isEmpty());
+
+    const QImage imgStep1 = KisAiStrokeRenderer::renderProgramToImage(step1, canvasSize);
+    QVERIFY(!imgStep1.isNull());
+
+    const KisAiStrokeProgram merged = KisAiStrokeProgramCodec::mergePrograms(step1, step2);
+    const QImage imgFinal = KisAiStrokeRenderer::renderProgramToImage(merged, canvasSize);
+    QVERIFY(!imgFinal.isNull());
+
+    int step1Painted = 0;
+    int finalPainted = 0;
+    for (int y = 0; y < canvasSize.height(); y += 4) {
+        for (int x = 0; x < canvasSize.width(); x += 4) {
+            if (imgStep1.pixelColor(x, y).alpha() > 16) ++step1Painted;
+            if (imgFinal.pixelColor(x, y).alpha() > 16) ++finalPainted;
+        }
+    }
+    QVERIFY(step1Painted > 100);
+    QVERIFY(finalPainted >= step1Painted);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)
 

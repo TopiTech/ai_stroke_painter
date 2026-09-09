@@ -42,6 +42,7 @@ public:
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
+    void keyPressEvent(QKeyEvent *event) override;
 
 private:
     enum class GenerationMode {
@@ -66,7 +67,7 @@ private:
     void executeGoalStep();
     void finishGoalStepRequest();
     void advanceGoalStep();
-    void finishGoalMode();
+    void finishGoalMode(bool success = true);
 
     bool appendReplyData(QNetworkReply *reply);
     QByteArray takeReplyData(QNetworkReply *reply);
