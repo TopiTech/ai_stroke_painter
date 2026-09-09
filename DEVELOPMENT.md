@@ -98,7 +98,8 @@ API リクエストは次の形式です。
 ## 5. 高速ビルドおよびクリーンビルド（Windows/Craft）
 
 以下はソースルートから実行する推奨配布ビルドです。
-Unity Build（`-DAI_ENABLE_UNITY_BUILD=ON`）を有効にすることでヘッダー解析をまとめ、コンパイル時間を大幅に短縮できます。また、システムの論理コア数に合わせて並列ジョブ数（`$env:NUMBER_OF_PROCESSORS`）を割り当てます。
+システムの論理コア数に合わせて並列ジョブ数（`--parallel`）を割り当てます。
+※注意: Unity Build（`-DAI_ENABLE_UNITY_BUILD=ON`）は既存モジュール（`libs/global` 等）でのシンボル衝突を引き起こすため、指定しないでください（デフォルトの `OFF` を使用します）。
 
 ```powershell
 $craftRoot = 'C:\CraftRoot'
@@ -109,20 +110,15 @@ cmake -S . -B build-ai -G Ninja `
   -DCMAKE_BUILD_TYPE=Release `
   -DBUILD_WITH_QT6=ON `
   -DALLOW_UNSTABLE=QT6 `
-  -DAI_ENABLE_UNITY_BUILD=ON `
   -DBUILD_TESTING=ON `
   -DAI_STROKE_PAINTER_BUILD_UPSTREAM_TESTS=OFF `
   -DCMAKE_C_COMPILER="$craftRoot\mingw64\bin\gcc.exe" `
   -DCMAKE_CXX_COMPILER="$craftRoot\mingw64\bin\g++.exe" `
-  -DCMAKE_PREFIX_PATH="$craftRoot" `
-  -DCMAKE_INCLUDE_PATH="$craftRoot\include" `
-  -DCMAKE_LIBRARY_PATH="$craftRoot\lib" `
-  -DZLIB_ROOT="$craftRoot" `
-  -DPNG_ROOT="$craftRoot"
+  -DCMAKE_PREFIX_PATH="$craftRoot"
 
 # アプリケーション本体と AI Stroke Painter の検証テストを並列ビルド
 # 実行ファイル名は ai-stroke-painter だが、CMake のアプリケーションターゲット名は krita。
-cmake --build build-ai --target krita KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest --parallel $env:NUMBER_OF_PROCESSORS
+cmake --build build-ai --target krita KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest --parallel
 cmake --install build-ai --prefix "$craftRoot\ai-stroke-painter"
 ```
 
@@ -139,7 +135,9 @@ ctest --test-dir build-ai --output-on-failure --no-tests=error
 ctest --test-dir build-ai -L AIStroke --output-on-failure --no-tests=error
 
 # Qt6 のみを用いた高速スタンドアロンテスト（CI / 軽量環境向け・約1秒で完了）
-cmake -B build-test -G Ninja -DAI_STROKE_STANDALONE_TESTS=ON
+$craftRoot = 'C:\CraftRoot'
+$env:PATH = "$craftRoot\bin;$craftRoot\mingw64\bin;$craftRoot\dev-utils\bin;" + $env:PATH
+cmake -B build-test -G Ninja -DAI_STROKE_STANDALONE_TESTS=ON -DCMAKE_PREFIX_PATH="$craftRoot" -DCMAKE_CXX_COMPILER="$craftRoot\mingw64\bin\g++.exe"
 cmake --build build-test
 ctest --test-dir build-test --output-on-failure --no-tests=error
 ```

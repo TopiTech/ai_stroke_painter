@@ -84,7 +84,6 @@ bool isJsonContentType(const QByteArray &contentType)
     const QByteArray primary = contentType.split(';').front().trimmed().toLower();
     return primary == "application/json" || primary == "application/x-json" || primary == "text/json";
 }
-}
 
 QString imageSizeText(const QSpinBox *widthSpin, const QSpinBox *heightSpin)
 {
