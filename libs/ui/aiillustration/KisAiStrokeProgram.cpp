@@ -877,11 +877,23 @@ QString KisAiStrokeProgramCodec::formatLayerSummary(const KisAiStrokeProgram &pr
 }
 
 bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
-                                               KisAiStrokeProgram *outProgram,
-                                               QString *errorMessage)
+                                                KisAiStrokeProgram *outProgram,
+                                                QString *errorMessage)
 {
     if (!outProgram) {
         return false;
+    }
+
+    // Validate schema version: v1 (strokes array) and v2 (operations array) are supported.
+    // Reject clearly unsupported future versions to avoid misinterpretation.
+    if (rootObj.contains(QStringLiteral("schema_version"))) {
+        const int version = rootObj.value(QStringLiteral("schema_version")).toInt();
+        if (version < 1 || version > 2) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("サポートされていないスキーマバージョンです (v%1)。v1 または v2 が必要です。").arg(version);
+            }
+            return false;
+        }
     }
 
     outProgram->schemaVersion = rootObj.value(QStringLiteral("schema_version")).toInt(2);

@@ -1132,6 +1132,115 @@ void KisAiStrokeProgramTest::testParseSseStreamChunk()
     QVERIFY(unprocessed.isEmpty());
 }
 
+void KisAiStrokeProgramTest::testSchemaVersionValidation()
+{
+    // 1. Valid v2 schema (explicit)
+    {
+        const QJsonObject root {
+            {QStringLiteral("schema_version"), 2},
+            {QStringLiteral("operations"), QJsonArray {
+                QJsonObject {
+                    {QStringLiteral("kind"), QStringLiteral("path")},
+                    {QStringLiteral("id"), QStringLiteral("test")},
+                    {QStringLiteral("layer"), QStringLiteral("Lineart")},
+                    {QStringLiteral("points"), QJsonArray {QJsonArray {0.1, 0.1, 1.0}, QJsonArray {0.9, 0.9, 1.0}}},
+                    {QStringLiteral("brush"), QJsonObject {
+                        {QStringLiteral("profile"), QStringLiteral("gpen")},
+                        {QStringLiteral("color"), QStringLiteral("#000000")},
+                        {QStringLiteral("size"), 0.01},
+                        {QStringLiteral("is_eraser"), false},
+                    }},
+                },
+            }},
+        };
+        KisAiStrokeProgram program;
+        QString error;
+        QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error));
+        QCOMPARE(program.schemaVersion, 2);
+    }
+
+    // 2. Valid v1 schema (no schema_version field defaults to v2 parsing but accepts v1 strokes array)
+    {
+        const QJsonObject root {
+            {QStringLiteral("strokes"), QJsonArray {
+                QJsonObject {
+                    {QStringLiteral("id"), QStringLiteral("v1_stroke")},
+                    {QStringLiteral("layer_name"), QStringLiteral("Lineart")},
+                    {QStringLiteral("color"), QStringLiteral("#000000")},
+                    {QStringLiteral("size_px"), 5.0},
+                    {QStringLiteral("points"), QJsonArray {QJsonArray {0.1, 0.1, 1.0}, QJsonArray {0.9, 0.9, 1.0}}},
+                },
+            }},
+        };
+        KisAiStrokeProgram program;
+        QString error;
+        QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error));
+        QCOMPARE(program.operations.size(), 1);
+    }
+
+    // 3. Unsupported schema version (v0) must be rejected
+    {
+        const QJsonObject root {
+            {QStringLiteral("schema_version"), 0},
+            {QStringLiteral("operations"), QJsonArray {
+                QJsonObject {
+                    {QStringLiteral("kind"), QStringLiteral("path")},
+                    {QStringLiteral("id"), QStringLiteral("test")},
+                    {QStringLiteral("layer"), QStringLiteral("Lineart")},
+                    {QStringLiteral("points"), QJsonArray {QJsonArray {0.1, 0.1, 1.0}, QJsonArray {0.9, 0.9, 1.0}}},
+                    {QStringLiteral("brush"), QJsonObject {
+                        {QStringLiteral("profile"), QStringLiteral("gpen")},
+                        {QStringLiteral("color"), QStringLiteral("#000000")},
+                        {QStringLiteral("size"), 0.01},
+                        {QStringLiteral("is_eraser"), false},
+                    }},
+                },
+            }},
+        };
+        KisAiStrokeProgram program;
+        QString error;
+        QVERIFY(!KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error));
+        QVERIFY(error.contains(QStringLiteral("スキーマバージョン")));
+    }
+
+    // 4. Unsupported future schema version (v3) must be rejected
+    {
+        const QJsonObject root {
+            {QStringLiteral("schema_version"), 3},
+            {QStringLiteral("operations"), QJsonArray {
+                QJsonObject {
+                    {QStringLiteral("kind"), QStringLiteral("path")},
+                    {QStringLiteral("id"), QStringLiteral("test")},
+                    {QStringLiteral("layer"), QStringLiteral("Lineart")},
+                    {QStringLiteral("points"), QJsonArray {QJsonArray {0.1, 0.1, 1.0}, QJsonArray {0.9, 0.9, 1.0}}},
+                    {QStringLiteral("brush"), QJsonObject {
+                        {QStringLiteral("profile"), QStringLiteral("gpen")},
+                        {QStringLiteral("color"), QStringLiteral("#000000")},
+                        {QStringLiteral("size"), 0.01},
+                        {QStringLiteral("is_eraser"), false},
+                    }},
+                },
+            }},
+        };
+        KisAiStrokeProgram program;
+        QString error;
+        QVERIFY(!KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error));
+        QVERIFY(error.contains(QStringLiteral("v3")));
+    }
+
+    // 5. Negative schema version must be rejected
+    {
+        const QJsonObject root {
+            {QStringLiteral("schema_version"), -1},
+            {QStringLiteral("operations"), QJsonArray {}},
+        };
+        KisAiStrokeProgram program;
+        QString error;
+        QVERIFY(!KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error));
+        QVERIFY(!error.isEmpty());
+    }
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

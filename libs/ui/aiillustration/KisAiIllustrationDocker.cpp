@@ -72,6 +72,20 @@ constexpr int ACTIVITY_TIMEOUT_MS = 60'000;
 constexpr int MAX_REQUEST_TIMEOUT_MS = 600'000;
 constexpr int REMOTE_IMAGE_TIMEOUT_MS = 180'000;
 
+// Validate that the response content-type indicates JSON.  Returns true if the
+// header is a JSON media type or if the header is absent (some misconfigured
+// servers omit it), so we only reject clearly non-JSON responses.
+bool isJsonContentType(const QByteArray &contentType)
+{
+    if (contentType.isEmpty()) {
+        return true;
+    }
+    // Content-Type may include parameters (e.g. "application/json; charset=utf-8").
+    const QByteArray primary = contentType.split(';').front().trimmed().toLower();
+    return primary == "application/json" || primary == "application/x-json" || primary == "text/json";
+}
+}
+
 QString imageSizeText(const QSpinBox *widthSpin, const QSpinBox *heightSpin)
 {
     return QString::number(widthSpin->value()) + QLatin1Char('x') + QString::number(heightSpin->value());
@@ -949,6 +963,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
 
     const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const bool requestSucceeded = reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300;
+    const QByteArray responseContentType = reply->rawHeader("Content-Type");
     const QByteArray rawResponse = takeReplyData(reply.data());
     const bool responseTooLarge = m_responseTooLarge;
     m_responseTooLarge = false;
@@ -976,6 +991,15 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     if (responseTooLarge) {
         logDebug(QStringLiteral("LLM_OVERFLOW"), QStringLiteral("レスポンスが上限サイズを超えました。"));
         setStatus(i18n("LLM の応答が上限を超えています。"), true);
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
+        return;
+    }
+    // Content-type validation: reject clearly non-JSON responses before parsing.
+    if (!isJsonContentType(responseContentType)) {
+        logDebug(QStringLiteral("LLM_CONTENT_TYPE"), QStringLiteral("予期しないContent-Type: %1").arg(QString::fromUtf8(responseContentType)));
+        setStatus(i18n("LLM の応答が JSON 形式ではありません (Content-Type: %1)。",
+            QString::fromUtf8(responseContentType.isEmpty() ? QByteArray("unknown") : responseContentType)), true);
         m_streamedContent.clear();
         m_sseBuffer.clear();
         return;
@@ -1181,6 +1205,7 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
 
     const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const bool requestSucceeded = reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300;
+    const QByteArray responseContentType = reply->rawHeader("Content-Type");
     const QByteArray response = takeReplyData(reply.data());
     const bool responseTooLarge = m_responseTooLarge;
     m_responseTooLarge = false;
@@ -1199,6 +1224,13 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
     if (responseTooLarge) {
         logDebug(QStringLiteral("IMG_OVERFLOW"), QStringLiteral("画像モデルの応答が上限を超えています。"));
         setStatus(i18n("画像モデルの応答が上限を超えています。"), true);
+        return;
+    }
+    // Content-type validation: reject clearly non-JSON responses before parsing.
+    if (!isJsonContentType(responseContentType)) {
+        logDebug(QStringLiteral("IMG_CONTENT_TYPE"), QStringLiteral("予期しないContent-Type: %1").arg(QString::fromUtf8(responseContentType)));
+        setStatus(i18n("画像モデルの応答が JSON 形式ではありません (Content-Type: %1)。",
+            QString::fromUtf8(responseContentType.isEmpty() ? QByteArray("unknown") : responseContentType)), true);
         return;
     }
     if (!requestSucceeded) {
@@ -1881,6 +1913,7 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
 
     const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const bool requestSucceeded = reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300;
+    const QByteArray responseContentType = reply->rawHeader("Content-Type");
     const QByteArray rawResponse = takeReplyData(reply.data());
     const bool responseTooLarge = m_responseTooLarge;
     m_responseTooLarge = false;
@@ -1910,6 +1943,16 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     if (responseTooLarge) {
         logDebug(QStringLiteral("GOAL_OVERFLOW"), QStringLiteral("ステップ %1 の応答が上限を超えました。").arg(m_goalCurrentStep));
         setStatus(i18n("LLM の応答が上限を超えています。"), true);
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
+        finishGoalMode(false);
+        return;
+    }
+    // Content-type validation: reject clearly non-JSON responses before parsing.
+    if (!isJsonContentType(responseContentType)) {
+        logDebug(QStringLiteral("GOAL_CONTENT_TYPE"), QStringLiteral("予期しないContent-Type: %1").arg(QString::fromUtf8(responseContentType)));
+        setStatus(i18n("LLM の応答が JSON 形式ではありません (Content-Type: %1)。",
+            QString::fromUtf8(responseContentType.isEmpty() ? QByteArray("unknown") : responseContentType)), true);
         m_streamedContent.clear();
         m_sseBuffer.clear();
         finishGoalMode(false);
