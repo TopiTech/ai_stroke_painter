@@ -681,25 +681,25 @@ void KisAiStrokeProgramTest::testMangaLinesParsingAndRefinement()
 
 void KisAiStrokeProgramTest::testGoalModePayloadAndVisionModelDetection()
 {
-    // 1. Model vision capability detection
+    // 1. Model vision capability: hardcoded whitelist is removed, non-empty model names
+    // are assumed vision-capable (as Vision capability is a requirement for Goal mode),
+    // with automatic fallback to text-only when requested.
     QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gpt-4o")));
-    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gpt-4o-mini")));
     QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("claude-3-5-sonnet")));
-    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gemini-1.5-pro")));
-    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("qwen2.5-vl-72b")));
-    QVERIFY(!KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("deepseek-r1")));
-    QVERIFY(!KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("llama-3.3-70b")));
+    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("my-future-llm-v5")));
+    QVERIFY(!KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("")));
+    QVERIFY(!KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("   ")));
 
-    // 2. Goal Step Payload without image (non-vision model)
+    // 2. Goal Step Payload without image (step 1 or when image is empty)
     const QSize canvasSize(1024, 1024);
     const QJsonObject textPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
-        QStringLiteral("deepseek-r1"),
+        QStringLiteral("any-model"),
         QStringLiteral("cyberpunk samurai"),
         canvasSize,
         1,
         4
     );
-    QCOMPARE(textPayload.value(QStringLiteral("model")).toString(), QStringLiteral("deepseek-r1"));
+    QCOMPARE(textPayload.value(QStringLiteral("model")).toString(), QStringLiteral("any-model"));
     const QJsonArray msgs1 = textPayload.value(QStringLiteral("messages")).toArray();
     QCOMPARE(msgs1.size(), 2);
     QVERIFY(msgs1.at(1).toObject().value(QStringLiteral("content")).isString());
@@ -724,6 +724,23 @@ void KisAiStrokeProgramTest::testGoalModePayloadAndVisionModelDetection()
     QCOMPARE(contentParts.at(1).toObject().value(QStringLiteral("type")).toString(), QStringLiteral("image_url"));
     const QString imgUrl = contentParts.at(1).toObject().value(QStringLiteral("image_url")).toObject().value(QStringLiteral("url")).toString();
     QVERIFY(imgUrl.startsWith(QStringLiteral("data:image/jpeg;base64,")));
+
+    // 4. Fallback: when includeVision is false, even if imageBase64 is provided, payload falls back to text-only
+    const QJsonObject fallbackPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("cyberpunk samurai"),
+        canvasSize,
+        2,
+        4,
+        fakeB64,
+        QStringLiteral("Text fallback"),
+        400,
+        QString(),
+        false // includeVision = false
+    );
+    const QJsonArray msgsFallback = fallbackPayload.value(QStringLiteral("messages")).toArray();
+    QCOMPARE(msgsFallback.size(), 2);
+    QVERIFY(msgsFallback.at(1).toObject().value(QStringLiteral("content")).isString());
 }
 
 void KisAiStrokeProgramTest::testGoalModeProgramStepAndMerge()
@@ -946,15 +963,13 @@ void KisAiStrokeProgramTest::testGoalModePayloadDynamicPhase()
         }
     }
 
-    // 2. Vision model detection includes frontier models
+    // 2. Vision model detection: all valid model names are accepted (vision requirement)
     QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("o1")));
     QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("o1-preview")));
-    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("o1-mini")));
     QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gpt-4.5")));
-    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gpt-4.5-preview")));
     QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gpt-4o")));
-    QVERIFY(!KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("gpt-3.5-turbo")));
-    QVERIFY(!KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("deepseek-r1")));
+    QVERIFY(KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("deepseek-r1")));
+    QVERIFY(!KisAiStrokeProgramCodec::isVisionModel(QStringLiteral("")));
 
     // 3. Goal step payload passes dynamic step_phase and total_steps
     const QJsonObject payload2Step = KisAiStrokeProgramCodec::buildGoalStepPayload(

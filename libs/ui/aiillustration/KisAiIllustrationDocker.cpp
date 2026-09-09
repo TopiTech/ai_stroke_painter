@@ -25,10 +25,13 @@
 
 #include <QBuffer>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
+#include <QDateTime>
 #include <QFont>
 #include <QFormLayout>
 #include <QFrame>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QImageReader>
 #include <QJsonArray>
@@ -173,7 +176,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         "QToolButton#aiToggleDetails { color: #7c8ba1; background: transparent; border: none; font-size: 11px; text-align: left; padding: 2px 0px; font-weight: 500; }"
         "QToolButton#aiToggleDetails:hover { color: #cbd5e1; }"
         "QProgressBar { background: #0d1117; border: 1px solid #273142; border-radius: 3px; max-height: 6px; }"
-        "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #06b6d4); border-radius: 2px; }"));
+        "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #06b6d4); border-radius: 2px; }"
+        "QPlainTextEdit#aiDebugLog { background: #080b10; border: 1px solid #1e293b; border-radius: 4px; font-family: Consolas, 'Courier New', monospace; font-size: 11px; color: #94a3b8; }"
+        "QLabel#aiTestStatus { font-size: 11px; padding: 2px 0px; }"));
 
     auto *layout = new QVBoxLayout(panel);
     layout->setContentsMargins(12, 12, 12, 12);
@@ -353,7 +358,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     detailsLayout->setContentsMargins(0, 4, 0, 0);
     detailsLayout->setSpacing(6);
 
-    m_remoteOptionsLabel = new QLabel(i18n("OpenAI 互換の Chat Completions エンドポイントを指定します。API キーは保存しません。"), m_detailsContainer);
+    m_remoteOptionsLabel = new QLabel(i18n("OpenAI 互換の Chat Completions エンドポイントを指定します。Vision対応モデルを推奨します（画像非対応時はテキストにフォールバック）。"), m_detailsContainer);
     m_remoteOptionsLabel->setObjectName(QStringLiteral("aiSubtitle"));
     m_remoteOptionsLabel->setWordWrap(true);
     detailsLayout->addWidget(m_remoteOptionsLabel);
@@ -369,8 +374,12 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_modelEditor->setAccessibleName(i18n("LLM model name"));
     m_apiKeyEditor = new QLineEdit(m_detailsContainer);
     m_apiKeyEditor->setEchoMode(QLineEdit::Password);
-    m_apiKeyEditor->setPlaceholderText(i18n("このリクエストだけに使用"));
+    m_apiKeyEditor->setPlaceholderText(i18n("API キー (sk-...)"));
     m_apiKeyEditor->setAccessibleName(i18n("API key"));
+
+    m_saveApiKeyCheck = new QCheckBox(i18n("🔑 API キーをこの端末に保存する"), m_detailsContainer);
+    m_saveApiKeyCheck->setChecked(true);
+    m_saveApiKeyCheck->setToolTip(i18n("チェックを入れると API キーが次回以降も保持・自動入力されます。"));
 
     m_strokeBudgetLabel = new QLabel(i18n("ストローク予算"), m_detailsContainer);
     m_strokeBudgetSpin = new QSpinBox(m_detailsContainer);
@@ -383,11 +392,39 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     remoteForm->addRow(i18n("エンドポイント"), m_endpointEditor);
     remoteForm->addRow(i18n("モデル"), m_modelEditor);
     remoteForm->addRow(i18n("API キー"), m_apiKeyEditor);
+    remoteForm->addRow(QString(), m_saveApiKeyCheck);
     remoteForm->addRow(m_strokeBudgetLabel, m_strokeBudgetSpin);
     detailsLayout->addLayout(remoteForm);
 
+    auto *settingsBtnRow = new QHBoxLayout();
+    settingsBtnRow->setSpacing(6);
+    m_testConnectionButton = new QPushButton(i18n("🔌 接続テスト"), m_detailsContainer);
+    m_testConnectionButton->setObjectName(QStringLiteral("aiSecondaryButton"));
+    m_testConnectionButton->setCursor(Qt::PointingHandCursor);
+    m_testConnectionButton->setToolTip(i18n("入力されたエンドポイント・モデル・APIキーで導通テストを行います。"));
+
+    m_saveSettingsButton = new QPushButton(i18n("💾 設定を保存"), m_detailsContainer);
+    m_saveSettingsButton->setObjectName(QStringLiteral("aiSecondaryButton"));
+    m_saveSettingsButton->setCursor(Qt::PointingHandCursor);
+    m_saveSettingsButton->setToolTip(i18n("現在のエンドポイント、モデル名、APIキー、各生成設定を保存します。"));
+
+    settingsBtnRow->addWidget(m_testConnectionButton);
+    settingsBtnRow->addWidget(m_saveSettingsButton);
+    detailsLayout->addLayout(settingsBtnRow);
+
+    m_testConnectionStatusLabel = new QLabel(m_detailsContainer);
+    m_testConnectionStatusLabel->setObjectName(QStringLiteral("aiTestStatus"));
+    m_testConnectionStatusLabel->setWordWrap(true);
+    m_testConnectionStatusLabel->setVisible(false);
+    detailsLayout->addWidget(m_testConnectionStatusLabel);
+
     m_detailsContainer->setVisible(false);
     engineCard.layout->addWidget(m_detailsContainer);
+
+    m_debugModeCheck = new QCheckBox(i18n("🐛 デバッグモード（LLM送受信ログを表示）"), engineCard.frame);
+    m_debugModeCheck->setToolTip(i18n("LLMへのリクエスト・レスポンス・エラー・パース等の詳細ログを表示します。"));
+    m_debugModeCheck->setCursor(Qt::PointingHandCursor);
+    engineCard.layout->addWidget(m_debugModeCheck);
 
     layout->addWidget(engineCard.frame);
 
@@ -396,14 +433,6 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         m_detailsToggleBtn->setText(checked ? i18n("▼ 詳細設定（エンドポイント / API キー）")
                                             : i18n("▶ 詳細設定（エンドポイント / API キー）"));
     });
-
-    QSettings settings;
-    const QString savedEndpoint = settings.value(QStringLiteral("AIIllustration/llmEndpoint"),
-        settings.value(QStringLiteral("AIIllustration/endpoint"))).toString();
-    const QString savedModel = settings.value(QStringLiteral("AIIllustration/llmModel"),
-        settings.value(QStringLiteral("AIIllustration/model"))).toString();
-    m_endpointEditor->setText(savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/chat/completions") : savedEndpoint);
-    m_modelEditor->setText(savedModel.isEmpty() ? QStringLiteral("gpt-4o") : savedModel);
 
     // Card 3.5: Goal Mode Settings
     CardWidget goalCard = createCard();
@@ -535,6 +564,41 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     actionCard.layout->addWidget(m_previewLabel);
 
     layout->addWidget(actionCard.frame);
+
+    // Card 5: Debug Log Card
+    CardWidget debugCardWidget = createCard();
+    m_debugCard = debugCardWidget.frame;
+    m_debugCard->setObjectName(QStringLiteral("aiDebugCard"));
+
+    auto *debugHeaderRow = new QHBoxLayout();
+    auto *debugTitle = new QLabel(i18n("🐛 デバッグログ"), m_debugCard);
+    debugTitle->setProperty("class", "aiCardTitle");
+    debugHeaderRow->addWidget(debugTitle);
+    debugHeaderRow->addStretch(1);
+
+    m_copyLogButton = new QPushButton(i18n("📋 コピー"), m_debugCard);
+    m_copyLogButton->setProperty("class", "aiChipButton");
+    m_copyLogButton->setCursor(Qt::PointingHandCursor);
+
+    m_clearLogButton = new QPushButton(i18n("🗑️ クリア"), m_debugCard);
+    m_clearLogButton->setProperty("class", "aiChipButton");
+    m_clearLogButton->setCursor(Qt::PointingHandCursor);
+
+    debugHeaderRow->addWidget(m_copyLogButton);
+    debugHeaderRow->addWidget(m_clearLogButton);
+    debugCardWidget.layout->addLayout(debugHeaderRow);
+
+    m_debugLogText = new QPlainTextEdit(m_debugCard);
+    m_debugLogText->setObjectName(QStringLiteral("aiDebugLog"));
+    m_debugLogText->setReadOnly(true);
+    m_debugLogText->setMinimumHeight(140);
+    m_debugLogText->setMaximumHeight(260);
+    m_debugLogText->setLineWrapMode(QPlainTextEdit::NoWrap);
+    debugCardWidget.layout->addWidget(m_debugLogText);
+
+    m_debugCard->setVisible(false);
+    layout->addWidget(m_debugCard);
+
     layout->addStretch(1);
 
     auto *scrollArea = new QScrollArea(this);
@@ -547,14 +611,48 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     connect(m_newCanvasButton, &QPushButton::clicked, this, [this] { createCanvas(); });
     connect(m_generateButton, &QPushButton::clicked, this, [this] { generateIllustration(); });
     connect(m_cancelButton, &QPushButton::clicked, this, [this] { cancelRemoteRequest(); });
-    connect(m_modeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { updateModeUi(); });
+    connect(m_modeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        updateModeUi();
+        saveSettings();
+    });
 
+    connect(m_testConnectionButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::testLlmConnection);
+    connect(m_saveSettingsButton, &QPushButton::clicked, this, [this] {
+        saveSettings();
+        setStatus(i18n("設定を保存しました。"));
+    });
+    connect(m_debugModeCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        if (m_debugCard) {
+            m_debugCard->setVisible(checked);
+        }
+        saveSettings();
+    });
+    connect(m_copyLogButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::copyDebugLog);
+    connect(m_clearLogButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::clearDebugLog);
+
+    connect(m_saveApiKeyCheck, &QCheckBox::toggled, this, [this] { saveSettings(); });
+    connect(m_widthSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
+    connect(m_heightSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
+    connect(m_strokeBudgetSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
+    connect(m_goalModeCheck, &QCheckBox::toggled, this, [this] { saveSettings(); });
+    connect(m_goalStepsSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
+    connect(m_artStyleCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
+    connect(m_pausePerStepCheck, &QCheckBox::toggled, this, [this] { saveSettings(); });
+
+    loadSettings();
     updateModeUi();
 }
 
 KisAiIllustrationDocker::~KisAiIllustrationDocker()
 {
+    saveSettings();
     m_goalApiKey.clear();
+    if (m_testReply) {
+        m_testReply->disconnect(this);
+        m_testReply->abort();
+        m_testReply->deleteLater();
+        m_testReply = nullptr;
+    }
     if (m_reply) {
         m_reply->disconnect(this);
         m_reply->abort();
@@ -740,24 +838,24 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         return;
     }
 
-    QSettings settings;
-    settings.setValue(QStringLiteral("AIIllustration/llmEndpoint"), endpoint);
-    settings.setValue(QStringLiteral("AIIllustration/llmModel"), model);
-    settings.setValue(QStringLiteral("AIIllustration/endpoint"), endpoint);
-    settings.setValue(QStringLiteral("AIIllustration/model"), model);
+    saveSettings();
 
     QNetworkRequest request{QUrl(endpoint)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
+    const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
     const QSize canvasSize(m_widthSpin->value(), m_heightSpin->value());
     const QJsonObject payload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
         model,
         prompt,
         canvasSize,
-        m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500
+        strokeBudget
     );
+
+    logDebug(QStringLiteral("LLM_REQ"), QStringLiteral("POST %1 (model=%2, prompt=\"%3\", budget=%4)")
+        .arg(endpoint, model, prompt.left(60), QString::number(strokeBudget)));
 
     m_requestWasCancelled = false;
     m_requestTimedOut = false;
@@ -765,7 +863,11 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     m_responseBuffer.clear();
     m_reply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
     m_reply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
-    m_apiKeyEditor->clear();
+
+    if (m_saveApiKeyCheck && !m_saveApiKeyCheck->isChecked()) {
+        m_apiKeyEditor->clear();
+    }
+
     setBusy(true);
     setStatus(i18n("%1 に LLM 座標ストローク生成を依頼しています…", KisAiIllustrationRenderer::displayEndpoint(endpoint)));
 
@@ -804,14 +906,17 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     reply->deleteLater();
 
     if (requestWasCancelled) {
+        logDebug(QStringLiteral("LLM_CANCEL"), QStringLiteral("ユーザーにより生成が中止されました。"));
         setStatus(i18n("LLM ストローク生成を中止しました。"));
         return;
     }
     if (requestTimedOut) {
+        logDebug(QStringLiteral("LLM_TIMEOUT"), QStringLiteral("リクエストがタイムアウトしました (2分)。"));
         setStatus(i18n("LLM の応答が 2 分以内に届かなかったため中止しました。"), true);
         return;
     }
     if (responseTooLarge) {
+        logDebug(QStringLiteral("LLM_OVERFLOW"), QStringLiteral("レスポンスが上限サイズを超えました。"));
         setStatus(i18n("LLM の応答が上限を超えています。"), true);
         return;
     }
@@ -823,6 +928,8 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
             const QJsonObject errObj = errDoc.object().value(QStringLiteral("error")).toObject();
             detail = errObj.value(QStringLiteral("message")).toString().trimmed();
         }
+        logDebug(QStringLiteral("LLM_ERROR"), QStringLiteral("HTTP %1: %2\nRaw: %3")
+            .arg(httpStatus).arg(detail, QString::fromUtf8(response.left(500))));
         if (!detail.isEmpty()) {
             setStatus(i18n("LLM への接続または応答に失敗しました (HTTP %1): %2", httpStatus, detail), true);
         } else {
@@ -831,12 +938,19 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         return;
     }
 
+    logDebug(QStringLiteral("LLM_RESP"), QStringLiteral("HTTP %1 (%2 bytes) 受信\nRaw: %3")
+        .arg(httpStatus).arg(response.size()).arg(QString::fromUtf8(response.left(1000))));
+
     KisAiStrokeProgram program;
     QString parseError;
     if (!KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError)) {
+        logDebug(QStringLiteral("LLM_PARSE_ERR"), parseError);
         setStatus(parseError, true);
         return;
     }
+
+    logDebug(QStringLiteral("LLM_PARSE_OK"), QStringLiteral("解析成功: %1 operations, completionScore=%2")
+        .arg(program.operations.size()).arg(program.completionScore));
 
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
     const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize);
@@ -914,21 +1028,23 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
         return;
     }
 
-    QSettings settings;
-    settings.setValue(QStringLiteral("AIIllustration/imageEndpoint"), endpoint);
-    settings.setValue(QStringLiteral("AIIllustration/imageModel"), model);
+    saveSettings();
 
     QNetworkRequest request {QUrl(endpoint)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
+    const QString sizeStr = imageSizeText(m_widthSpin, m_heightSpin);
     const QJsonObject payload {
         {QStringLiteral("model"), model},
         {QStringLiteral("prompt"), prompt},
-        {QStringLiteral("size"), imageSizeText(m_widthSpin, m_heightSpin)},
+        {QStringLiteral("size"), sizeStr},
         {QStringLiteral("response_format"), QStringLiteral("b64_json")},
     };
+
+    logDebug(QStringLiteral("IMG_REQ"), QStringLiteral("POST %1 (model=%2, size=%3, prompt=\"%4\")")
+        .arg(endpoint, model, sizeStr, prompt.left(60)));
 
     m_requestWasCancelled = false;
     m_requestTimedOut = false;
@@ -936,7 +1052,11 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
     m_responseBuffer.clear();
     m_reply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
     m_reply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
-    m_apiKeyEditor->clear();
+
+    if (m_saveApiKeyCheck && !m_saveApiKeyCheck->isChecked()) {
+        m_apiKeyEditor->clear();
+    }
+
     setBusy(true);
     setStatus(i18n("%1 に画像生成を依頼しています…", KisAiIllustrationRenderer::displayEndpoint(endpoint)));
 
@@ -975,14 +1095,17 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
     reply->deleteLater();
 
     if (requestWasCancelled) {
+        logDebug(QStringLiteral("IMG_CANCEL"), QStringLiteral("ユーザーにより画像生成が中止されました。"));
         setStatus(i18n("画像生成を中止しました。"));
         return;
     }
     if (requestTimedOut) {
+        logDebug(QStringLiteral("IMG_TIMEOUT"), QStringLiteral("画像モデルの応答がタイムアウトしました (2分)。"));
         setStatus(i18n("画像モデルの応答が 2 分以内に届かなかったため中止しました。"), true);
         return;
     }
     if (responseTooLarge) {
+        logDebug(QStringLiteral("IMG_OVERFLOW"), QStringLiteral("画像モデルの応答が上限を超えています。"));
         setStatus(i18n("画像モデルの応答が上限を超えています。"), true);
         return;
     }
@@ -994,6 +1117,8 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
             const QJsonObject errObj = errDoc.object().value(QStringLiteral("error")).toObject();
             detail = errObj.value(QStringLiteral("message")).toString().trimmed();
         }
+        logDebug(QStringLiteral("IMG_ERROR"), QStringLiteral("HTTP %1: %2\nRaw: %3")
+            .arg(httpStatus).arg(detail, QString::fromUtf8(response.left(500))));
         if (!detail.isEmpty()) {
             setStatus(i18n("画像モデルへの接続または応答に失敗しました (HTTP %1): %2", httpStatus, detail), true);
         } else {
@@ -1002,16 +1127,22 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
         return;
     }
     if (response.size() > MAX_REMOTE_RESPONSE_BYTES) {
+        logDebug(QStringLiteral("IMG_OVERFLOW"), QStringLiteral("画像モデルの応答サイズが上限を超えています。"));
         setStatus(i18n("画像モデルの応答が上限を超えています。"), true);
         return;
     }
 
+    logDebug(QStringLiteral("IMG_RESP"), QStringLiteral("HTTP %1 (%2 bytes) 受信").arg(httpStatus).arg(response.size()));
+
     QString errorMessage;
     const QImage image = decodeModelImage(response, &errorMessage);
     if (image.isNull()) {
+        logDebug(QStringLiteral("IMG_DECODE_ERR"), errorMessage);
         setStatus(errorMessage, true);
         return;
     }
+
+    logDebug(QStringLiteral("IMG_DECODE_OK"), QStringLiteral("画像デコード成功: %1x%2").arg(image.width()).arg(image.height()));
 
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
     m_previewLabel->setPixmap(QPixmap::fromImage(image).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
@@ -1066,26 +1197,7 @@ void KisAiIllustrationDocker::updateModeUi()
     const auto newMode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
 
     // Save current values before switching modes
-    QSettings settings;
-    if (m_currentMode == GenerationMode::LlmStrokes) {
-        const QString ep = m_endpointEditor->text().trimmed();
-        const QString mdl = m_modelEditor->text().trimmed();
-        if (!ep.isEmpty()) {
-            settings.setValue(QStringLiteral("AIIllustration/llmEndpoint"), ep);
-        }
-        if (!mdl.isEmpty()) {
-            settings.setValue(QStringLiteral("AIIllustration/llmModel"), mdl);
-        }
-    } else if (m_currentMode == GenerationMode::RemoteImage) {
-        const QString ep = m_endpointEditor->text().trimmed();
-        const QString mdl = m_modelEditor->text().trimmed();
-        if (!ep.isEmpty()) {
-            settings.setValue(QStringLiteral("AIIllustration/imageEndpoint"), ep);
-        }
-        if (!mdl.isEmpty()) {
-            settings.setValue(QStringLiteral("AIIllustration/imageModel"), mdl);
-        }
-    }
+    saveSettings();
 
     m_currentMode = newMode;
     const bool isLlm = (newMode == GenerationMode::LlmStrokes);
@@ -1093,8 +1205,9 @@ void KisAiIllustrationDocker::updateModeUi()
     const bool needsRemote = isLlm || isRemoteImage;
 
     m_remoteOptionsLabel->setVisible(needsRemote);
+    QSettings settings;
     if (isLlm) {
-        m_remoteOptionsLabel->setText(i18n("OpenAI 互換の Chat Completions エンドポイント (/v1/chat/completions) を指定します。API キーは保存しません。"));
+        m_remoteOptionsLabel->setText(i18n("OpenAI 互換の Chat Completions エンドポイント (/v1/chat/completions) を指定します。Vision対応モデルを推奨します（画像非対応時はテキストに自動フォールバック）。"));
         m_endpointEditor->setPlaceholderText(QStringLiteral("https://api.openai.com/v1/chat/completions"));
         m_modelEditor->setPlaceholderText(i18n("モデル名 (例: gpt-4o, o3-mini, deepseek-chat)"));
 
@@ -1105,7 +1218,7 @@ void KisAiIllustrationDocker::updateModeUi()
         m_endpointEditor->setText(savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/chat/completions") : savedEndpoint);
         m_modelEditor->setText(savedModel.isEmpty() ? QStringLiteral("gpt-4o") : savedModel);
     } else if (isRemoteImage) {
-        m_remoteOptionsLabel->setText(i18n("OpenAI 互換の画像生成エンドポイント (/v1/images/generations) を指定します。API キーは保存しません。"));
+        m_remoteOptionsLabel->setText(i18n("OpenAI 互換の画像生成エンドポイント (/v1/images/generations) を指定します。"));
         m_endpointEditor->setPlaceholderText(QStringLiteral("https://provider.example/v1/images/generations"));
         m_modelEditor->setPlaceholderText(i18n("画像モデル名 (例: dall-e-3)"));
 
@@ -1130,7 +1243,15 @@ void KisAiIllustrationDocker::updateModeUi()
         m_remoteForm->setRowVisible(0, needsRemote);
         m_remoteForm->setRowVisible(1, needsRemote);
         m_remoteForm->setRowVisible(2, needsRemote);
-        m_remoteForm->setRowVisible(3, isLlm);
+        m_remoteForm->setRowVisible(3, needsRemote); // Save API Key checkbox
+        m_remoteForm->setRowVisible(4, isLlm);       // Stroke Budget
+    }
+
+    if (m_testConnectionButton) {
+        m_testConnectionButton->setEnabled(needsRemote);
+    }
+    if (m_testConnectionStatusLabel) {
+        m_testConnectionStatusLabel->setVisible(false);
     }
 
     const bool isGoalCompatible = (newMode == GenerationMode::LlmStrokes || newMode == GenerationMode::LocalStrokes);
@@ -1263,6 +1384,10 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
     m_goalCurrentStep = 1;
     m_goalTotalSteps = m_goalStepsSpin ? m_goalStepsSpin->value() : 4;
     m_waitingForUserStepAdvance = false;
+    m_goalVisionFallbackActive = false;
+    m_lastGoalRequestHadImage = false;
+
+    saveSettings();
 
     const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
     if (mode == GenerationMode::LlmStrokes) {
@@ -1306,16 +1431,15 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
         }
 
         m_goalApiKey = apiKey;
-        m_apiKeyEditor->clear();
-
-        QSettings settings;
-        settings.setValue(QStringLiteral("AIIllustration/llmEndpoint"), endpoint);
-        settings.setValue(QStringLiteral("AIIllustration/llmModel"), model);
-        settings.setValue(QStringLiteral("AIIllustration/endpoint"), endpoint);
-        settings.setValue(QStringLiteral("AIIllustration/model"), model);
+        if (m_saveApiKeyCheck && !m_saveApiKeyCheck->isChecked()) {
+            m_apiKeyEditor->clear();
+        }
     } else {
         m_goalApiKey.clear();
     }
+
+    logDebug(QStringLiteral("GOAL_START"), QStringLiteral("Goalモード開始 (全 %1 段階, prompt=\"%2\")")
+        .arg(m_goalTotalSteps).arg(prompt.left(60)));
 
     if (m_goalInspectorCard) {
         m_goalInspectorCard->setVisible(true);
@@ -1431,7 +1555,7 @@ void KisAiIllustrationDocker::executeGoalStep()
         }
 
         QString imageBase64;
-        if (m_goalCurrentStep > 1) {
+        if (m_goalCurrentStep > 1 && !m_goalVisionFallbackActive) {
             KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
             if (view && view->image()) {
 #ifndef AI_STROKE_STANDALONE
@@ -1440,6 +1564,8 @@ void KisAiIllustrationDocker::executeGoalStep()
             }
         }
 
+        m_lastGoalRequestHadImage = (!imageBase64.isEmpty() && !m_goalVisionFallbackActive);
+
         KisAiPromptAnalyzer::SemanticSpec spec = KisAiPromptAnalyzer::analyze(m_goalPrompt, canvasSize);
         if (artStyle != KisAiPromptAnalyzer::ArtStyle::General) {
             spec.style = artStyle;
@@ -1447,6 +1573,7 @@ void KisAiIllustrationDocker::executeGoalStep()
         const QString guidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(
             m_goalCurrentStep, spec, canvasSize, m_goalTotalSteps);
 
+        const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 400;
         const QJsonObject payload = KisAiStrokeProgramCodec::buildGoalStepPayload(
             model,
             m_goalPrompt,
@@ -1455,8 +1582,16 @@ void KisAiIllustrationDocker::executeGoalStep()
             m_goalTotalSteps,
             imageBase64,
             guidance,
-            m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 400
+            strokeBudget,
+            QString(),
+            !m_goalVisionFallbackActive
         );
+
+        logDebug(QStringLiteral("GOAL_REQ"), QStringLiteral(
+            "Step %1/%2 POST (model=%3, withImage=%4, fallbackActive=%5)")
+            .arg(m_goalCurrentStep).arg(m_goalTotalSteps).arg(model)
+            .arg(m_lastGoalRequestHadImage ? QStringLiteral("Yes") : QStringLiteral("No"))
+            .arg(m_goalVisionFallbackActive ? QStringLiteral("Yes") : QStringLiteral("No")));
 
         QNetworkRequest request{QUrl(endpoint)};
         request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
@@ -1471,7 +1606,9 @@ void KisAiIllustrationDocker::executeGoalStep()
         m_reply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
         setBusy(true);
 
-        const QString visionTag = !imageBase64.isEmpty() ? i18n(" (Vision画像付)") : QString();
+        const QString visionTag = m_lastGoalRequestHadImage
+            ? i18n(" (Vision画像付)")
+            : (m_goalVisionFallbackActive ? i18n(" (テキストフォールバック)") : QString());
         setStatus(i18n("%1 に Goal ステップ %2/%3 を送信中%4…",
             KisAiIllustrationRenderer::displayEndpoint(endpoint),
             m_goalCurrentStep,
@@ -1518,16 +1655,19 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     reply->deleteLater();
 
     if (requestWasCancelled) {
+        logDebug(QStringLiteral("GOAL_CANCEL"), QStringLiteral("Goalモードが中止されました。"));
         setStatus(i18n("Goal モードを中止しました。"));
         finishGoalMode(false);
         return;
     }
     if (requestTimedOut) {
+        logDebug(QStringLiteral("GOAL_TIMEOUT"), QStringLiteral("ステップ %1 の応答がタイムアウトしました。").arg(m_goalCurrentStep));
         setStatus(i18n("LLM の応答が 2 分以内に届かなかったため中止しました。"), true);
         finishGoalMode(false);
         return;
     }
     if (responseTooLarge) {
+        logDebug(QStringLiteral("GOAL_OVERFLOW"), QStringLiteral("ステップ %1 の応答が上限を超えました。").arg(m_goalCurrentStep));
         setStatus(i18n("LLM の応答が上限を超えています。"), true);
         finishGoalMode(false);
         return;
@@ -1540,6 +1680,28 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
             const QJsonObject errObj = errDoc.object().value(QStringLiteral("error")).toObject();
             detail = errObj.value(QStringLiteral("message")).toString().trimmed();
         }
+
+        logDebug(QStringLiteral("GOAL_ERROR"), QStringLiteral("Step %1 HTTP %2: %3\nRaw: %4")
+            .arg(m_goalCurrentStep).arg(httpStatus).arg(detail, QString::fromUtf8(response.left(500))));
+
+        // Vision フォールバック（保険機構）:
+        // 画像付きリクエストが失敗した場合、テキストのみの指示にフォールバックして再試行
+        if (m_lastGoalRequestHadImage && !m_goalVisionFallbackActive) {
+            m_goalVisionFallbackActive = true;
+            m_lastGoalRequestHadImage = false;
+            logDebug(QStringLiteral("GOAL_FALLBACK"), QStringLiteral(
+                "⚠️ 画像付きリクエストが失敗したため (HTTP %1: %2)、テキストのみの指示にフォールバックしてステップ %3 を再試行します…")
+                .arg(httpStatus).arg(detail).arg(m_goalCurrentStep));
+            setStatus(i18n("⚠️ Vision画像エラーのため、テキストのみの指示にフォールバックして再試行します (HTTP %1)…", httpStatus), true);
+            if (m_goalPhaseLabel) {
+                m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2: テキストフォールバック再試行中…", m_goalCurrentStep, m_goalTotalSteps));
+            }
+            QTimer::singleShot(600, this, [this] {
+                executeGoalStep();
+            });
+            return;
+        }
+
         if (!detail.isEmpty()) {
             setStatus(i18n("LLM への接続または応答に失敗しました (HTTP %1): %2", httpStatus, detail), true);
         } else {
@@ -1549,9 +1711,13 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         return;
     }
 
+    logDebug(QStringLiteral("GOAL_RESP"), QStringLiteral("Step %1 HTTP %2 (%3 bytes) 受信\nRaw: %4")
+        .arg(m_goalCurrentStep).arg(httpStatus).arg(response.size()).arg(QString::fromUtf8(response.left(1000))));
+
     KisAiStrokeProgram program;
     QString parseError;
     if (!KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError)) {
+        logDebug(QStringLiteral("GOAL_PARSE_ERR"), parseError);
         setStatus(parseError, true);
         finishGoalMode(false);
         return;
@@ -1630,6 +1796,11 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
     m_goalModeActive = false;
     m_waitingForUserStepAdvance = false;
     m_goalApiKey.clear();
+    m_goalVisionFallbackActive = false;
+    m_lastGoalRequestHadImage = false;
+
+    logDebug(QStringLiteral("GOAL_FINISH"), QStringLiteral("Goalモード終了 (success=%1, step=%2/%3)")
+        .arg(success ? QStringLiteral("true") : QStringLiteral("false")).arg(m_goalCurrentStep).arg(m_goalTotalSteps));
 
     if (m_goalInspectorCard) {
         if (m_nextStepButton) {
@@ -1652,4 +1823,289 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
         setStatus(i18n("🎯 Goal作画が完了しました。Kritaのレイヤードックで各層を確認・調整できます。"));
     }
     setBusy(false);
+}
+
+void KisAiIllustrationDocker::loadSettings()
+{
+    QSettings settings;
+    // エンドポイント & モデル
+    const QString savedLlmEp = settings.value(QStringLiteral("AIIllustration/llmEndpoint"),
+        settings.value(QStringLiteral("AIIllustration/endpoint"))).toString();
+    const QString savedLlmModel = settings.value(QStringLiteral("AIIllustration/llmModel"),
+        settings.value(QStringLiteral("AIIllustration/model"))).toString();
+    if (m_endpointEditor) {
+        m_endpointEditor->setText(savedLlmEp.isEmpty() ? QStringLiteral("https://api.openai.com/v1/chat/completions") : savedLlmEp);
+    }
+    if (m_modelEditor) {
+        m_modelEditor->setText(savedLlmModel.isEmpty() ? QStringLiteral("gpt-4o") : savedLlmModel);
+    }
+
+    // API キー
+    const bool saveKey = settings.value(QStringLiteral("AIIllustration/saveApiKey"), true).toBool();
+    if (m_saveApiKeyCheck) {
+        m_saveApiKeyCheck->setChecked(saveKey);
+    }
+    if (saveKey && m_apiKeyEditor) {
+        const QString savedKey = settings.value(QStringLiteral("AIIllustration/apiKey")).toString();
+        m_apiKeyEditor->setText(savedKey);
+    }
+
+    // キャンバスサイズ
+    const int savedW = settings.value(QStringLiteral("AIIllustration/canvasWidth"), 1024).toInt();
+    const int savedH = settings.value(QStringLiteral("AIIllustration/canvasHeight"), 1024).toInt();
+    if (m_widthSpin) m_widthSpin->setValue(savedW);
+    if (m_heightSpin) m_heightSpin->setValue(savedH);
+
+    // ストローク予算
+    const int savedBudget = settings.value(QStringLiteral("AIIllustration/strokeBudget"), 500).toInt();
+    if (m_strokeBudgetSpin) m_strokeBudgetSpin->setValue(savedBudget);
+
+    // Goal モード
+    const bool goalEnabled = settings.value(QStringLiteral("AIIllustration/goalModeEnabled"), false).toBool();
+    if (m_goalModeCheck) m_goalModeCheck->setChecked(goalEnabled);
+    const int goalSteps = settings.value(QStringLiteral("AIIllustration/goalSteps"), 4).toInt();
+    if (m_goalStepsSpin) m_goalStepsSpin->setValue(goalSteps);
+    const int artStyle = settings.value(QStringLiteral("AIIllustration/artStyle"), 0).toInt();
+    if (m_artStyleCombo) {
+        int idx = m_artStyleCombo->findData(artStyle);
+        if (idx >= 0) m_artStyleCombo->setCurrentIndex(idx);
+    }
+    const bool pauseStep = settings.value(QStringLiteral("AIIllustration/pausePerStep"), false).toBool();
+    if (m_pausePerStepCheck) m_pausePerStepCheck->setChecked(pauseStep);
+
+    // デバッグモード
+    const bool debugEnabled = settings.value(QStringLiteral("AIIllustration/debugModeEnabled"), false).toBool();
+    if (m_debugModeCheck) {
+        m_debugModeCheck->setChecked(debugEnabled);
+        if (m_debugCard) m_debugCard->setVisible(debugEnabled);
+    }
+
+    // 生成モード
+    const int genMode = settings.value(QStringLiteral("AIIllustration/generationMode"), 0).toInt();
+    if (m_modeCombo) {
+        int idx = m_modeCombo->findData(genMode);
+        if (idx >= 0) m_modeCombo->setCurrentIndex(idx);
+    }
+}
+
+void KisAiIllustrationDocker::saveSettings()
+{
+    QSettings settings;
+    const auto mode = static_cast<GenerationMode>(m_modeCombo ? m_modeCombo->currentData().toInt() : 0);
+    settings.setValue(QStringLiteral("AIIllustration/generationMode"), static_cast<int>(mode));
+
+    if (m_endpointEditor && m_modelEditor) {
+        const QString ep = m_endpointEditor->text().trimmed();
+        const QString mdl = m_modelEditor->text().trimmed();
+        if (mode == GenerationMode::RemoteImage) {
+            settings.setValue(QStringLiteral("AIIllustration/imageEndpoint"), ep);
+            settings.setValue(QStringLiteral("AIIllustration/imageModel"), mdl);
+        } else {
+            settings.setValue(QStringLiteral("AIIllustration/llmEndpoint"), ep);
+            settings.setValue(QStringLiteral("AIIllustration/llmModel"), mdl);
+            settings.setValue(QStringLiteral("AIIllustration/endpoint"), ep);
+            settings.setValue(QStringLiteral("AIIllustration/model"), mdl);
+        }
+    }
+
+    if (m_saveApiKeyCheck && m_apiKeyEditor) {
+        const bool saveKey = m_saveApiKeyCheck->isChecked();
+        settings.setValue(QStringLiteral("AIIllustration/saveApiKey"), saveKey);
+        if (saveKey) {
+            settings.setValue(QStringLiteral("AIIllustration/apiKey"), m_apiKeyEditor->text());
+        } else {
+            settings.remove(QStringLiteral("AIIllustration/apiKey"));
+        }
+    }
+
+    if (m_widthSpin) settings.setValue(QStringLiteral("AIIllustration/canvasWidth"), m_widthSpin->value());
+    if (m_heightSpin) settings.setValue(QStringLiteral("AIIllustration/canvasHeight"), m_heightSpin->value());
+    if (m_strokeBudgetSpin) settings.setValue(QStringLiteral("AIIllustration/strokeBudget"), m_strokeBudgetSpin->value());
+
+    if (m_goalModeCheck) settings.setValue(QStringLiteral("AIIllustration/goalModeEnabled"), m_goalModeCheck->isChecked());
+    if (m_goalStepsSpin) settings.setValue(QStringLiteral("AIIllustration/goalSteps"), m_goalStepsSpin->value());
+    if (m_artStyleCombo) settings.setValue(QStringLiteral("AIIllustration/artStyle"), m_artStyleCombo->currentData().toInt());
+    if (m_pausePerStepCheck) settings.setValue(QStringLiteral("AIIllustration/pausePerStep"), m_pausePerStepCheck->isChecked());
+    if (m_debugModeCheck) settings.setValue(QStringLiteral("AIIllustration/debugModeEnabled"), m_debugModeCheck->isChecked());
+}
+
+void KisAiIllustrationDocker::testLlmConnection()
+{
+    if (m_testReply) {
+        return;
+    }
+
+    const QString endpoint = m_endpointEditor ? m_endpointEditor->text().trimmed() : QString();
+    const QString model = m_modelEditor ? m_modelEditor->text().trimmed() : QString();
+    const QString apiKey = m_apiKeyEditor ? m_apiKeyEditor->text() : QString();
+
+    QString errorMessage;
+    if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
+        if (m_testConnectionStatusLabel) {
+            m_testConnectionStatusLabel->setStyleSheet(QStringLiteral("color: #f87171;"));
+            m_testConnectionStatusLabel->setText(i18n("❌ エンドポイントエラー: %1", errorMessage));
+            m_testConnectionStatusLabel->setVisible(true);
+        }
+        return;
+    }
+    if (model.isEmpty()) {
+        if (m_testConnectionStatusLabel) {
+            m_testConnectionStatusLabel->setStyleSheet(QStringLiteral("color: #f87171;"));
+            m_testConnectionStatusLabel->setText(i18n("❌ モデル名が入力されていません。"));
+            m_testConnectionStatusLabel->setVisible(true);
+        }
+        return;
+    }
+    if (apiKey.isEmpty()) {
+        if (m_testConnectionStatusLabel) {
+            m_testConnectionStatusLabel->setStyleSheet(QStringLiteral("color: #f87171;"));
+            m_testConnectionStatusLabel->setText(i18n("❌ API キーが入力されていません。"));
+            m_testConnectionStatusLabel->setVisible(true);
+        }
+        return;
+    }
+
+    saveSettings();
+
+    if (m_testConnectionButton) {
+        m_testConnectionButton->setEnabled(false);
+        m_testConnectionButton->setText(i18n("テスト中…"));
+    }
+    if (m_testConnectionStatusLabel) {
+        m_testConnectionStatusLabel->setStyleSheet(QStringLiteral("color: #38bdf8;"));
+        m_testConnectionStatusLabel->setText(i18n("⏳ %1 に接続テスト中…", KisAiIllustrationRenderer::displayEndpoint(endpoint)));
+        m_testConnectionStatusLabel->setVisible(true);
+    }
+
+    logDebug(QStringLiteral("TEST_REQ"), QStringLiteral("接続テスト開始: Endpoint=%1, Model=%2").arg(endpoint, model));
+
+    QNetworkRequest request{QUrl(endpoint)};
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+
+    const auto mode = static_cast<GenerationMode>(m_modeCombo ? m_modeCombo->currentData().toInt() : 0);
+    QJsonObject payload;
+    if (mode == GenerationMode::RemoteImage) {
+        payload[QStringLiteral("model")] = model;
+        payload[QStringLiteral("prompt")] = QStringLiteral("ping test");
+        payload[QStringLiteral("size")] = QStringLiteral("256x256");
+    } else {
+        payload[QStringLiteral("model")] = model;
+        QJsonArray messages;
+        messages.append(QJsonObject{
+            {QStringLiteral("role"), QStringLiteral("user")},
+            {QStringLiteral("content"), QStringLiteral("Hi")}
+        });
+        payload[QStringLiteral("messages")] = messages;
+        payload[QStringLiteral("max_tokens")] = 5;
+    }
+
+    m_testStartTimeMs = QDateTime::currentMSecsSinceEpoch();
+    m_testReply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
+
+    connect(m_testReply.data(), &QNetworkReply::finished, this, &KisAiIllustrationDocker::finishTestConnectionRequest);
+
+    const QPointer<QNetworkReply> pendingReply = m_testReply;
+    QTimer::singleShot(20000, this, [this, pendingReply] {
+        if (m_testReply && m_testReply.data() == pendingReply.data()) {
+            m_testReply->abort();
+        }
+    });
+}
+
+void KisAiIllustrationDocker::finishTestConnectionRequest()
+{
+    QPointer<QNetworkReply> reply = m_testReply;
+    m_testReply = nullptr;
+
+    if (m_testConnectionButton) {
+        m_testConnectionButton->setEnabled(true);
+        m_testConnectionButton->setText(i18n("🔌 接続テスト"));
+    }
+
+    if (!reply) {
+        return;
+    }
+
+    const qint64 elapsedMs = QDateTime::currentMSecsSinceEpoch() - m_testStartTimeMs;
+    const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const bool success = reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300;
+    const QByteArray response = reply->readAll();
+    reply->deleteLater();
+
+    if (success) {
+        QString modelResponseText;
+        const QJsonDocument doc = QJsonDocument::fromJson(response);
+        if (doc.isObject()) {
+            const QJsonArray choices = doc.object().value(QStringLiteral("choices")).toArray();
+            if (!choices.isEmpty()) {
+                const QJsonObject msg = choices.at(0).toObject().value(QStringLiteral("message")).toObject();
+                modelResponseText = msg.value(QStringLiteral("content")).toString().trimmed();
+            }
+        }
+        if (modelResponseText.length() > 50) {
+            modelResponseText.truncate(47);
+            modelResponseText += QStringLiteral("…");
+        }
+
+        const QString successMsg = modelResponseText.isEmpty()
+            ? i18n("✅ 接続成功 (%1ms): HTTP %2 応答を受信しました。", elapsedMs, httpStatus)
+            : i18n("✅ 接続成功 (%1ms): \"%2\"", elapsedMs, modelResponseText);
+
+        if (m_testConnectionStatusLabel) {
+            m_testConnectionStatusLabel->setStyleSheet(QStringLiteral("color: #4ade80; font-weight: 600;"));
+            m_testConnectionStatusLabel->setText(successMsg);
+            m_testConnectionStatusLabel->setVisible(true);
+        }
+        logDebug(QStringLiteral("TEST_SUCCESS"), QStringLiteral("HTTP %1 (%2ms): %3").arg(httpStatus).arg(elapsedMs).arg(QString::fromUtf8(response.left(500))));
+    } else {
+        QString errorDetail;
+        const QJsonDocument doc = QJsonDocument::fromJson(response);
+        if (doc.isObject()) {
+            const QJsonObject err = doc.object().value(QStringLiteral("error")).toObject();
+            errorDetail = err.value(QStringLiteral("message")).toString().trimmed();
+        }
+        if (errorDetail.isEmpty()) {
+            errorDetail = reply->errorString();
+        }
+
+        const QString failMsg = i18n("❌ 接続失敗 (HTTP %1, %2ms): %3", httpStatus, elapsedMs, errorDetail);
+        if (m_testConnectionStatusLabel) {
+            m_testConnectionStatusLabel->setStyleSheet(QStringLiteral("color: #f87171; font-weight: 600;"));
+            m_testConnectionStatusLabel->setText(failMsg);
+            m_testConnectionStatusLabel->setVisible(true);
+        }
+        logDebug(QStringLiteral("TEST_FAILED"), QStringLiteral("HTTP %1 (%2ms): %3\nRaw: %4")
+            .arg(httpStatus).arg(elapsedMs).arg(errorDetail, QString::fromUtf8(response.left(500))));
+    }
+}
+
+void KisAiIllustrationDocker::logDebug(const QString &category, const QString &message)
+{
+    if (!m_debugLogText) {
+        return;
+    }
+    const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));
+    const QString formatted = QStringLiteral("[%1] [%2] %3").arg(timestamp, category, message);
+    m_debugLogText->appendPlainText(formatted);
+    m_debugLogText->ensureCursorVisible();
+}
+
+void KisAiIllustrationDocker::clearDebugLog()
+{
+    if (m_debugLogText) {
+        m_debugLogText->clear();
+    }
+}
+
+void KisAiIllustrationDocker::copyDebugLog()
+{
+    if (m_debugLogText) {
+        QClipboard *clipboard = QGuiApplication::clipboard();
+        if (clipboard) {
+            clipboard->setText(m_debugLogText->toPlainText());
+            setStatus(i18n("デバッグログをクリップボードにコピーしました。"));
+        }
+    }
 }

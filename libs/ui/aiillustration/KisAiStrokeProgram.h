@@ -257,11 +257,13 @@ public:
         const QString &imageBase64 = QString(),
         const QString &additionalInstruction = QString(),
         int strokeBudget = 400,
-        const QString &reasoningEffort = QString()
+        const QString &reasoningEffort = QString(),
+        bool includeVision = true
     );
 
     /**
-     * Check if a model name is known or likely to support multimodal vision input.
+     * Check if a model is treated as vision-capable. The hardcoded whitelist is deprecated;
+     * modern LLMs are assumed vision-capable by default with automatic text-only fallback.
      */
     static bool isVisionModel(const QString &model);
 

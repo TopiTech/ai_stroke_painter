@@ -69,6 +69,19 @@ private:
     void advanceGoalStep();
     void finishGoalMode(bool success = true);
 
+    // Settings persistence
+    void loadSettings();
+    void saveSettings();
+
+    // LLM Connection Test
+    void testLlmConnection();
+    void finishTestConnectionRequest();
+
+    // Debug Mode & Logging
+    void logDebug(const QString &category, const QString &message);
+    void clearDebugLog();
+    void copyDebugLog();
+
     bool appendReplyData(QNetworkReply *reply);
     QByteArray takeReplyData(QNetworkReply *reply);
     void updateModeUi();
@@ -87,6 +100,10 @@ private:
     QByteArray m_responseBuffer;
     GenerationMode m_currentMode {GenerationMode::LlmStrokes};
 
+    // Connection test state
+    QPointer<QNetworkReply> m_testReply;
+    qint64 m_testStartTimeMs {0};
+
     // Goal Mode State
     bool m_goalModeActive {false};
     int m_goalCurrentStep {1};
@@ -94,6 +111,8 @@ private:
     QString m_goalPrompt;
     QString m_goalApiKey;
     bool m_waitingForUserStepAdvance {false};
+    bool m_goalVisionFallbackActive {false};
+    bool m_lastGoalRequestHadImage {false};
 
     QComboBox *m_presetCombo {nullptr};
     QPlainTextEdit *m_promptEditor {nullptr};
@@ -102,6 +121,10 @@ private:
     QLineEdit *m_endpointEditor {nullptr};
     QLineEdit *m_modelEditor {nullptr};
     QLineEdit *m_apiKeyEditor {nullptr};
+    QCheckBox *m_saveApiKeyCheck {nullptr};
+    QPushButton *m_testConnectionButton {nullptr};
+    QLabel *m_testConnectionStatusLabel {nullptr};
+    QPushButton *m_saveSettingsButton {nullptr};
     QSpinBox *m_widthSpin {nullptr};
     QSpinBox *m_heightSpin {nullptr};
     QSpinBox *m_strokeBudgetSpin {nullptr};
@@ -120,6 +143,13 @@ private:
     QLabel *m_critiqueLabel {nullptr};
     QPushButton *m_nextStepButton {nullptr};
     QPushButton *m_finishGoalButton {nullptr};
+
+    // Debug Mode UI Controls
+    QCheckBox *m_debugModeCheck {nullptr};
+    QFrame *m_debugCard {nullptr};
+    QPlainTextEdit *m_debugLogText {nullptr};
+    QPushButton *m_copyLogButton {nullptr};
+    QPushButton *m_clearLogButton {nullptr};
 
     QLabel *m_statusLabel {nullptr};
     QLabel *m_previewLabel {nullptr};

@@ -2398,20 +2398,11 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgram(const QSt
 
 bool KisAiStrokeProgramCodec::isVisionModel(const QString &model)
 {
-    const QString m = model.toLower().trimmed();
-    if (m.isEmpty()) {
-        return false;
-    }
-    return m.contains(QStringLiteral("gpt-4o")) ||
-           m.contains(QStringLiteral("gpt-4-turbo")) ||
-           m.contains(QStringLiteral("gpt-4.5")) ||
-           m.contains(QStringLiteral("o1")) ||
-           m.contains(QStringLiteral("vision")) ||
-           m.contains(QStringLiteral("claude-3")) ||
-           m.contains(QStringLiteral("gemini")) ||
-           (m.contains(QStringLiteral("qwen")) && m.contains(QStringLiteral("vl"))) ||
-           m.contains(QStringLiteral("pixtral")) ||
-           m.contains(QStringLiteral("llava"));
+    // ハードコードされたVision対応モデル名リストは廃止。
+    // 最新モデルへの追従のため、Vision機能付きLLMであることを必須条件（前提）とし、
+    // 空でないモデル名はすべてVision対応として扱います。
+    // 万が一非対応だった場合はリクエスト送信側でテキストのみにフォールバックします。
+    return !model.trimmed().isEmpty();
 }
 
 QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
@@ -2423,10 +2414,11 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     const QString &imageBase64,
     const QString &additionalInstruction,
     int strokeBudget,
-    const QString &reasoningEffort)
+    const QString &reasoningEffort,
+    bool includeVision)
 {
     const bool reasoning = isReasoningModel(model);
-    const bool vision = isVisionModel(model);
+    const bool vision = includeVision && isVisionModel(model) && !imageBase64.trimmed().isEmpty();
     const auto spec = KisAiPromptAnalyzer::analyze(prompt, canvasSize);
     const QString phaseGuidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(step, spec, canvasSize, totalSteps);
 
