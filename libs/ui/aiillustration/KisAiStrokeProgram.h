@@ -226,9 +226,30 @@ public:
     static quint32 stableSeed(const QString &text);
 
     /**
+     * Attempt to repair common JSON syntax errors (comments, trailing commas, single quotes,
+     * unquoted keys, dirty numbers, dirty booleans, stray tokens).
+     */
+    static QString repairJsonSyntax(const QString &text);
+
+    /**
      * Attempt to repair truncated JSON containing an operations or strokes array.
      */
     static QString repairTruncatedJson(const QString &jsonText);
+
+    /**
+     * Extract individual stroke operations from arbitrary or severely mangled text when
+     * document-level JSON parsing fails completely.
+     */
+    static bool extractOperationsFromRawText(
+        const QString &rawText,
+        KisAiStrokeProgram *outProgram,
+        QString *errorMessage = nullptr
+    );
+
+    /**
+     * Check if an API endpoint is known to support structured JSON mode (response_format: {"type": "json_object"}).
+     */
+    static bool supportsJsonFormat(const QString &endpoint);
 
 
 

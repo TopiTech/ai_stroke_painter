@@ -149,7 +149,27 @@ QColor KisAiStrokeProgramCodec::parseColor(const QString &colorStr, const QColor
         }
     }
 
-    if (s.startsWith(QLatin1Char('#'))) {
+    if (s.contains(QLatin1Char('#'))) {
+        const int hashPos = s.indexOf(QLatin1Char('#'));
+        const QString hexPart = s.mid(hashPos + 1);
+        QString cleanHex;
+        cleanHex.reserve(hexPart.size());
+        for (const QChar &ch : hexPart) {
+            const ushort u = ch.unicode();
+            if ((u >= '0' && u <= '9') || (u >= 'a' && u <= 'f') || (u >= 'A' && u <= 'F')) {
+                cleanHex.append(ch);
+            }
+        }
+        if (cleanHex.length() == 3 || cleanHex.length() == 4 || cleanHex.length() == 6 || cleanHex.length() == 8) {
+            s = cleanHex;
+        } else if (cleanHex.length() == 7 || cleanHex.length() > 8) {
+            s = cleanHex.left(cleanHex.length() >= 8 ? 8 : 6);
+        } else if (cleanHex.length() == 5) {
+            s = cleanHex.left(4);
+        } else {
+            s = cleanHex;
+        }
+    } else if (s.startsWith(QLatin1Char('#'))) {
         s = s.mid(1);
     }
 
@@ -510,7 +530,7 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
         payload[QStringLiteral("response_format")] = responseFormat;
     }
 
-    const int calculatedTokens = qBound(2048, operationTarget * 60 + (reasoning ? 4096 : 1536), 8192);
+    const int calculatedTokens = qBound(4096, operationTarget * 120 + (reasoning ? 8192 : 2048), reasoning ? 16384 : 12288);
     if (reasoning) {
         payload[QStringLiteral("max_completion_tokens")] = calculatedTokens;
         if (!reasoningEffort.isEmpty() && reasoningEffort.toLower() != QLatin1String("none")) {
@@ -522,6 +542,189 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
     }
 
     return payload;
+}
+
+QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText)
+{
+    QString text = jsonText.trimmed();
+    if (text.isEmpty()) {
+        return text;
+    }
+
+    // 1. Remove comments outside strings (// ... and /* ... */)
+    {
+        QString noComments;
+        noComments.reserve(text.size());
+        bool inStr = false;
+        bool esc = false;
+        for (int i = 0; i < text.size(); ++i) {
+            const QChar ch = text.at(i);
+            if (esc) {
+                esc = false;
+                noComments.append(ch);
+                continue;
+            }
+            if (ch == QLatin1Char('\\') && inStr) {
+                esc = true;
+                noComments.append(ch);
+                continue;
+            }
+            if (ch == QLatin1Char('"')) {
+                inStr = !inStr;
+                noComments.append(ch);
+                continue;
+            }
+            if (!inStr) {
+                if (ch == QLatin1Char('/') && i + 1 < text.size()) {
+                    if (text.at(i + 1) == QLatin1Char('/')) {
+                        const int nextNl = text.indexOf(QLatin1Char('\n'), i + 2);
+                        if (nextNl < 0) {
+                            break;
+                        }
+                        i = nextNl - 1;
+                        continue;
+                    } else if (text.at(i + 1) == QLatin1Char('*')) {
+                        const int nextEnd = text.indexOf(QStringLiteral("*/"), i + 2);
+                        if (nextEnd < 0) {
+                            break;
+                        }
+                        i = nextEnd + 1;
+                        continue;
+                    }
+                }
+            }
+            noComments.append(ch);
+        }
+        text = noComments;
+    }
+
+    // 2. Normalize smart quotes to standard quotes
+    text.replace(QChar(0x201C), QLatin1Char('"')); // “
+    text.replace(QChar(0x201D), QLatin1Char('"')); // ”
+    text.replace(QChar(0x2018), QLatin1Char('\'')); // ‘
+    text.replace(QChar(0x2019), QLatin1Char('\'')); // ’
+
+    // 3. Single quotes to double quotes when outside double-quoted strings
+    {
+        QString quoteFixed;
+        quoteFixed.reserve(text.size());
+        bool inDouble = false;
+        bool inSingle = false;
+        bool esc = false;
+        for (int i = 0; i < text.size(); ++i) {
+            const QChar ch = text.at(i);
+            if (esc) {
+                esc = false;
+                quoteFixed.append(ch);
+                continue;
+            }
+            if (ch == QLatin1Char('\\')) {
+                esc = true;
+                quoteFixed.append(ch);
+                continue;
+            }
+            if (ch == QLatin1Char('"') && !inSingle) {
+                inDouble = !inDouble;
+                quoteFixed.append(ch);
+                continue;
+            }
+            if (ch == QLatin1Char('\'') && !inDouble) {
+                inSingle = !inSingle;
+                quoteFixed.append(QLatin1Char('"'));
+                continue;
+            }
+            quoteFixed.append(ch);
+        }
+        text = quoteFixed;
+    }
+
+    // 4. Stray identifiers before quotes or opening structural braces (e.g. `t "layer":`, `t {`)
+    static const QRegularExpression strayTokenBeforeQuote(
+        QStringLiteral(R"((?<=[,\{\[\s])([a-zA-Z_]{1,3})\s+(?="))"));
+    text.replace(strayTokenBeforeQuote, QStringLiteral(""));
+
+    static const QRegularExpression strayTokenBeforeOpen(
+        QStringLiteral(R"((?<=[,\{\[\s])([a-zA-Z_]{1,3})\s+(?=[\{\[]))"));
+    text.replace(strayTokenBeforeOpen, QStringLiteral(""));
+
+    // Quote unquoted object keys: e.g. `is_eraser: false` -> `"is_eraser": false`
+    static const QRegularExpression unquotedKey(
+        QStringLiteral(R"((?<=[,\{\s])([a-zA-Z_]\w*)\s*:)"));
+    text.replace(unquotedKey, QStringLiteral("\"\\1\":"));
+
+    // 5. Corrupted / noisy numbers in coordinates or values (e.g. 0t.05, 0.t3, t0, 1t, 0.08t)
+    static const QRegularExpression numLetterBeforeDot(
+        QStringLiteral(R"((?<=[,\:\[\s])-?(\d+)[a-zA-Z]+(\.\d+))"));
+    text.replace(numLetterBeforeDot, QStringLiteral("\\1\\2"));
+
+    static const QRegularExpression numLetterAfterDot(
+        QStringLiteral(R"((?<=[,\:\[\s])-?(\d+\.)[a-zA-Z]+(\d+))"));
+    text.replace(numLetterAfterDot, QStringLiteral("\\1\\2"));
+
+    static const QRegularExpression numLetterPrefix(
+        QStringLiteral(R"((?<=[,\:\[\s])-?[a-zA-Z]+(\d+(?:\.\d+)?)(?=[,\:\]\}\s]))"));
+    text.replace(numLetterPrefix, QStringLiteral("\\1"));
+
+    static const QRegularExpression numLetterSuffix(
+        QStringLiteral(R"((?<=[,\:\[\s])-?(\d+(?:\.\d+)?)[a-zA-Z]+(?=[,\:\]\}\s]))"));
+    text.replace(numLetterSuffix, QStringLiteral("\\1"));
+
+    // 6. Corrupted booleans and null (e.g. falset -> false, truet -> true, nullt -> null)
+    static const QRegularExpression boolFalse(
+        QStringLiteral(R"((?<=[,\:\[\s])false[a-zA-Z]+(?=[,\:\]\}\s]))"));
+    text.replace(boolFalse, QStringLiteral("false"));
+
+    static const QRegularExpression boolTrue(
+        QStringLiteral(R"((?<=[,\:\[\s])true[a-zA-Z]+(?=[,\:\]\}\s]))"));
+    text.replace(boolTrue, QStringLiteral("true"));
+
+    static const QRegularExpression valNull(
+        QStringLiteral(R"((?<=[,\:\[\s])null[a-zA-Z]+(?=[,\:\]\}\s]))"));
+    text.replace(valNull, QStringLiteral("null"));
+
+    // 7. Normalize key names with typos/affixes inside quotes
+    struct KeyReplacement {
+        const char *pattern;
+        const char *replacement;
+    };
+    static const KeyReplacement keyReplacements[] = {
+        {"\"(?:operations[a-z]*|ops)\"\\s*:", "\"operations\":"},
+        {"\"(?:[a-z]*title[a-z]*)\"\\s*:", "\"title\":"},
+        {"\"(?:[a-z]*id[a-z]*)\"\\s*:", "\"id\":"},
+        {"\"(?:[a-z]*kind[a-z]*)\"\\s*:", "\"kind\":"},
+        {"\"(?:[a-z]*layer[a-z]*)\"\\s*:", "\"layer\":"},
+        {"\"(?:[a-z]*brush[a-z]*)\"\\s*:", "\"brush\":"},
+        {"\"(?:[a-z]*profile[a-z]*)\"\\s*:", "\"profile\":"},
+        {"\"(?:[a-z]*colors[a-z]*)\"\\s*:", "\"colors\":"},
+        {"\"(?:[a-z]*color[a-z]*)\"\\s*:", "\"color\":"},
+        {"\"(?:[a-z]*size[a-z]*)\"\\s*:", "\"size\":"},
+        {"\"(?:[a-z]*polygon[a-z]*)\"\\s*:", "\"polygon\":"},
+        {"\"(?:[a-z]*points[a-z]*)\"\\s*:", "\"points\":"},
+        {"\"(?:[a-z]*angle_deg[a-z]*)\"\\s*:", "\"angle_deg\":"},
+        {"\"(?:is_eraser|is_eraster|is_erase[a-z]*)\"\\s*:", "\"is_eraser\":"},
+        {"\"(?:gradient_fill|gradient_ftill|gradientfill)\"\\s*:", "\"gradient_fill\":"},
+        // Also string value fixes:
+        {"\"(?:gradient_fill|gradient_ftill|gradientfill)\"", "\"gradient_fill\""},
+        {"\"(?:watertcolor|watercolor[a-z]*)\"", "\"watercolor\""},
+        {"\"(?:airtbrush|airbrush[a-z]*)\"", "\"airbrush\""},
+        {"\"(?:Background[a-z]+)\"", "\"Background\""},
+    };
+    for (const auto &rep : keyReplacements) {
+        text.replace(QRegularExpression(QString::fromUtf8(rep.pattern)), QString::fromUtf8(rep.replacement));
+    }
+
+    // 8. Fix missing commas between elements (} {, ] [)
+    static const QRegularExpression missingCommaBraces(QStringLiteral(R"(\}\s*\{)"));
+    text.replace(missingCommaBraces, QStringLiteral("}, {"));
+
+    static const QRegularExpression missingCommaBrackets(QStringLiteral(R"(\]\s*\[)"));
+    text.replace(missingCommaBrackets, QStringLiteral("], ["));
+
+    // 9. Remove trailing commas before } or ]
+    static const QRegularExpression trailingComma(QStringLiteral(R"(,\s*([\}\]]))"));
+    text.replace(trailingComma, QStringLiteral("\\1"));
+
+    return text;
 }
 
 QString KisAiStrokeProgramCodec::repairTruncatedJson(const QString &jsonText)
@@ -536,9 +739,28 @@ QString KisAiStrokeProgramCodec::repairTruncatedJson(const QString &jsonText)
         return text;
     }
 
-    const int opsIdx = text.indexOf(QStringLiteral("\"operations\""));
-    const int strokesIdx = text.indexOf(QStringLiteral("\"strokes\""));
-    const int targetIdx = opsIdx >= 0 ? opsIdx : strokesIdx;
+    // Run syntax repair first
+    text = repairJsonSyntax(text);
+    QJsonDocument::fromJson(text.toUtf8(), &testErr);
+    if (testErr.error == QJsonParseError::NoError) {
+        return text;
+    }
+
+    // Check if there is an operations or strokes array
+    static const QStringList arrayKeys = {
+        QStringLiteral("\"operations\""),
+        QStringLiteral("\"operationst\""),
+        QStringLiteral("\"strokes\""),
+        QStringLiteral("\"ops\""),
+        QStringLiteral("\"layers\""),
+        QStringLiteral("\"data\"")
+    };
+
+    int targetIdx = -1;
+    for (const auto &k : arrayKeys) {
+        targetIdx = text.indexOf(k, 0, Qt::CaseInsensitive);
+        if (targetIdx >= 0) break;
+    }
 
     if (targetIdx >= 0) {
         const int bracketIdx = text.indexOf(QLatin1Char('['), targetIdx);
@@ -573,14 +795,16 @@ QString KisAiStrokeProgramCodec::repairTruncatedJson(const QString &jsonText)
                         lastCloseBrace = i;
                     }
                 } else if (ch == QLatin1Char(']')) {
-                    lastCloseBrace = -1;
-                    break;
+                    if (depth == 0) {
+                        break;
+                    }
                 }
             }
 
             if (lastCloseBrace > bracketIdx) {
                 QString repaired = text.left(lastCloseBrace + 1);
                 repaired.append(QStringLiteral("\n  ]\n}"));
+                repaired = repairJsonSyntax(repaired);
                 QJsonParseError repErr;
                 const QJsonDocument testDoc = QJsonDocument::fromJson(repaired.toUtf8(), &repErr);
                 if (!testDoc.isNull() && testDoc.isObject()) {
@@ -590,18 +814,80 @@ QString KisAiStrokeProgramCodec::repairTruncatedJson(const QString &jsonText)
         }
     }
 
-    int openBraces = text.count(QLatin1Char('{')) - text.count(QLatin1Char('}'));
-    int openBrackets = text.count(QLatin1Char('[')) - text.count(QLatin1Char(']'));
-    QString fallback = text;
-    while (openBrackets > 0) {
-        fallback.append(QLatin1Char(']'));
-        openBrackets--;
+    // General stack-based closure:
+    // Discard any trailing partial string
+    QString result = text;
+    bool inString = false;
+    bool escape = false;
+    for (int i = 0; i < result.length(); ++i) {
+        const QChar ch = result.at(i);
+        if (escape) { escape = false; continue; }
+        if (ch == QLatin1Char('\\')) { escape = true; continue; }
+        if (ch == QLatin1Char('"')) { inString = !inString; continue; }
     }
-    while (openBraces > 0) {
-        fallback.append(QLatin1Char('}'));
-        openBraces--;
+
+    if (inString) {
+        const int lastQuote = result.lastIndexOf(QLatin1Char('"'));
+        if (lastQuote >= 0) {
+            result = result.left(lastQuote).trimmed();
+        }
     }
-    return fallback;
+
+    // Strip trailing comma or dangling colon
+    result = result.trimmed();
+    while (result.endsWith(QLatin1Char(',')) || result.endsWith(QLatin1Char(':'))) {
+        result.chop(1);
+        result = result.trimmed();
+    }
+
+    // If it ends with an unclosed key e.g. `"key"`:
+    if (result.endsWith(QLatin1Char('"'))) {
+        const int prevQuote = result.lastIndexOf(QLatin1Char('"'), result.length() - 2);
+        if (prevQuote >= 0) {
+            const QString beforeKey = result.left(prevQuote).trimmed();
+            if (beforeKey.endsWith(QLatin1Char(',')) || beforeKey.endsWith(QLatin1Char('{'))) {
+                result = beforeKey;
+                if (result.endsWith(QLatin1Char(','))) {
+                    result.chop(1);
+                    result = result.trimmed();
+                }
+            }
+        }
+    }
+
+    // Recompute stack on trimmed result to close exactly what's open
+    QVector<QChar> stack;
+    inString = false;
+    escape = false;
+    for (int i = 0; i < result.length(); ++i) {
+        const QChar ch = result.at(i);
+        if (escape) { escape = false; continue; }
+        if (ch == QLatin1Char('\\')) { escape = true; continue; }
+        if (ch == QLatin1Char('"')) { inString = !inString; continue; }
+        if (inString) continue;
+        if (ch == QLatin1Char('{') || ch == QLatin1Char('[')) {
+            stack.append(ch);
+        } else if (ch == QLatin1Char('}') || ch == QLatin1Char(']')) {
+            if (!stack.isEmpty()) {
+                const QChar expected = (ch == QLatin1Char('}')) ? QLatin1Char('{') : QLatin1Char('[');
+                if (stack.last() == expected) {
+                    stack.removeLast();
+                }
+            }
+        }
+    }
+
+    while (!stack.isEmpty()) {
+        const QChar open = stack.takeLast();
+        if (open == QLatin1Char('{')) {
+            result.append(QLatin1Char('}'));
+        } else if (open == QLatin1Char('[')) {
+            result.append(QLatin1Char(']'));
+        }
+    }
+
+    result = repairJsonSyntax(result);
+    return result;
 }
 
 QString KisAiStrokeProgramCodec::sanitizeAndExtractJson(const QString &rawText)
@@ -613,6 +899,8 @@ QString KisAiStrokeProgramCodec::sanitizeAndExtractJson(const QString &rawText)
     text.remove(thinkRe);
     static const QRegularExpression thoughtRe(QStringLiteral("(?s)<thought>.*?(?:</thought>|$)"));
     text.remove(thoughtRe);
+    static const QRegularExpression detailsRe(QStringLiteral("(?s)<details>.*?(?:</details>|$)"));
+    text.remove(detailsRe);
 
     // 2. Extract ```json ... ``` codeblock if present (tolerant of missing closing fence)
     static const QRegularExpression codeBlockRe(QStringLiteral("```(?:json)?\\s*([\\s\\S]*?)(?:```|$)"));
@@ -629,13 +917,23 @@ QString KisAiStrokeProgramCodec::sanitizeAndExtractJson(const QString &rawText)
     if (firstBrace >= 0) {
         const int lastBrace = text.lastIndexOf(QLatin1Char('}'));
         if (lastBrace > firstBrace) {
-            text = text.mid(firstBrace, lastBrace - firstBrace + 1).trimmed();
+            const QString candidate = text.mid(firstBrace, lastBrace - firstBrace + 1).trimmed();
+            QJsonParseError cErr;
+            QJsonDocument::fromJson(candidate.toUtf8(), &cErr);
+            if (cErr.error == QJsonParseError::NoError) {
+                text = candidate;
+            } else {
+                text = text.mid(firstBrace).trimmed();
+            }
         } else {
             text = text.mid(firstBrace).trimmed();
         }
     }
 
-    // 4. If invalid or truncated, attempt recovery
+    // 4. Run syntax repair first
+    text = repairJsonSyntax(text);
+
+    // 5. If invalid or truncated, attempt recovery
     QJsonParseError pErr;
     QJsonDocument::fromJson(text.toUtf8(), &pErr);
     if (pErr.error != QJsonParseError::NoError) {
@@ -723,6 +1021,148 @@ bool KisAiStrokeProgramCodec::parseSseStreamChunk(
     return anyDeltaExtracted;
 }
 
+bool KisAiStrokeProgramCodec::extractOperationsFromRawText(const QString &rawText,
+                                                           KisAiStrokeProgram *outProgram,
+                                                           QString *errorMessage)
+{
+    if (!outProgram) {
+        return false;
+    }
+
+    outProgram->operations.clear();
+
+    // Try to extract schema_version, title, prompt if present
+    static const QRegularExpression schemaVerRe(QStringLiteral(R"("schema_version"\s*:\s*(\d+))"));
+    const auto svMatch = schemaVerRe.match(rawText);
+    if (svMatch.hasMatch()) {
+        outProgram->schemaVersion = svMatch.captured(1).toInt();
+    } else {
+        outProgram->schemaVersion = 2;
+    }
+
+    static const QRegularExpression titleRe(QStringLiteral(R"re("[a-z]*title[a-z]*"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)")re"));
+    const auto tMatch = titleRe.match(rawText);
+    if (tMatch.hasMatch()) {
+        outProgram->title = tMatch.captured(1);
+    } else {
+        outProgram->title = QStringLiteral("AI Artwork");
+    }
+
+    static const QRegularExpression promptRe(QStringLiteral(R"re("prompt"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)")re"));
+    const auto pMatch = promptRe.match(rawText);
+    if (pMatch.hasMatch()) {
+        outProgram->prompt = pMatch.captured(1);
+    }
+
+    // Heuristically find operation blocks: look for '{' followed by kind/polygon/points
+    int searchIdx = 0;
+    while (searchIdx < rawText.length()) {
+        const int openBrace = rawText.indexOf(QLatin1Char('{'), searchIdx);
+        if (openBrace < 0) {
+            break;
+        }
+
+        // Find matching closing brace using balanced counter
+        int depth = 0;
+        bool inStr = false;
+        bool esc = false;
+        int closeBrace = -1;
+
+        for (int i = openBrace; i < rawText.length(); ++i) {
+            const QChar ch = rawText.at(i);
+            if (esc) {
+                esc = false;
+                continue;
+            }
+            if (ch == QLatin1Char('\\')) {
+                esc = true;
+                continue;
+            }
+            if (ch == QLatin1Char('"')) {
+                inStr = !inStr;
+                continue;
+            }
+            if (inStr) {
+                continue;
+            }
+            if (ch == QLatin1Char('{')) {
+                depth++;
+            } else if (ch == QLatin1Char('}')) {
+                depth--;
+                if (depth == 0) {
+                    closeBrace = i;
+                    break;
+                }
+            }
+        }
+
+        if (closeBrace < 0) {
+            // Cut off / incomplete object at the end of text
+            break;
+        }
+
+        const QString blockText = rawText.mid(openBrace, closeBrace - openBrace + 1);
+        searchIdx = closeBrace + 1;
+
+        // Check if this block looks like a stroke operation
+        if (!blockText.contains(QLatin1String("kind"), Qt::CaseInsensitive) &&
+            !blockText.contains(QLatin1String("polygon"), Qt::CaseInsensitive) &&
+            !blockText.contains(QLatin1String("points"), Qt::CaseInsensitive)) {
+            continue;
+        }
+
+        // Clean syntax on this block
+        const QString cleanedBlock = repairJsonSyntax(blockText);
+        QJsonParseError bErr;
+        const QJsonDocument bDoc = QJsonDocument::fromJson(cleanedBlock.toUtf8(), &bErr);
+        if (!bDoc.isObject()) {
+            continue;
+        }
+
+        QJsonObject syntheticRoot;
+        syntheticRoot[QStringLiteral("schema_version")] = outProgram->schemaVersion;
+        syntheticRoot[QStringLiteral("operations")] = QJsonArray{bDoc.object()};
+
+        KisAiStrokeProgram singleProg;
+        QString singleErr;
+        if (KisAiStrokeProgramCodec::parseProgramJson(syntheticRoot, &singleProg, &singleErr)) {
+            if (!singleProg.operations.isEmpty()) {
+                outProgram->operations.append(singleProg.operations.first());
+            }
+        }
+    }
+
+    if (outProgram->operations.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("LLM応答から有効なストローク操作を救出できませんでした。");
+        }
+        return false;
+    }
+
+    KisAiStrokeQualityReport qualityReport;
+    *outProgram = KisAiStrokeProgramCodec::refineForRendering(*outProgram, &qualityReport);
+    return !outProgram->operations.isEmpty();
+}
+
+bool KisAiStrokeProgramCodec::supportsJsonFormat(const QString &endpoint)
+{
+    const QString ep = endpoint.trimmed().toLower();
+    if (ep.isEmpty()) {
+        return false;
+    }
+    return ep.contains(QLatin1String("api.openai.com"))
+        || ep.contains(QLatin1String("openrouter.ai"))
+        || ep.contains(QLatin1String("deepseek.com"))
+        || ep.contains(QLatin1String("groq.com"))
+        || ep.contains(QLatin1String("googleapis.com"))
+        || ep.contains(QLatin1String("mistral.ai"))
+        || ep.contains(QLatin1String("together.xyz"))
+        || ep.contains(QLatin1String("fireworks.ai"))
+        || ep.contains(QLatin1String("perplexity.ai"))
+        || ep.contains(QLatin1String("11434"))  // Ollama default port
+        || ep.contains(QLatin1String("1234"));  // LM Studio default port
+}
+
 bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
                                             KisAiStrokeProgram *outProgram,
                                             QString *errorMessage)
@@ -735,10 +1175,6 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
         return false;
     }
 
-    // Keep JSON parsing and rendering-safety repairs as separate stages. This
-    // preserves the parser's coordinate-unit decision (including its exact
-    // threshold) while ensuring untrusted model responses are canonicalized
-    // before they reach the renderer.
     const auto parseAndRefine = [outProgram, errorMessage](const QJsonObject &programObject) {
         if (!KisAiStrokeProgramCodec::parseProgramJson(programObject, outProgram, errorMessage)) {
             return false;
@@ -755,67 +1191,123 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
         return true;
     };
 
+    const QString rawText = QString::fromUtf8(responseBytes).trimmed();
+
+    // 1. Try direct parsing as JSON
     const QJsonDocument doc = QJsonDocument::fromJson(responseBytes);
-    if (!doc.isObject()) {
-        // Streamed response or raw model output might not be wrapped in an API JSON response object.
-        // Attempt extracting and repairing JSON from the text directly.
-        const QString rawText = QString::fromUtf8(responseBytes).trimmed();
-        const QString extractedJson = sanitizeAndExtractJson(rawText);
-        const QJsonDocument extractedDoc = QJsonDocument::fromJson(extractedJson.toUtf8());
-        if (extractedDoc.isObject()) {
-            return parseAndRefine(extractedDoc.object());
+    if (doc.isObject()) {
+        const QJsonObject root = doc.object();
+        if (root.contains(QStringLiteral("error"))) {
+            const QString err = root.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString();
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("APIエラー: ") + (err.isEmpty() ? QStringLiteral("不明なエラー") : err);
+            }
+            return false;
         }
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("LLM応答がJSONオブジェクトではありません。");
+
+        // Direct StrokeProgram check
+        if (root.contains(QStringLiteral("operations")) || root.contains(QStringLiteral("strokes")) || root.contains(QStringLiteral("schema_version"))) {
+            return parseAndRefine(root);
         }
-        return false;
+
+        // Check any candidate array in root
+        for (auto it = root.constBegin(); it != root.constEnd(); ++it) {
+            const QString k = it.key().trimmed().toLower();
+            if (it.value().isArray() && (k.contains(QLatin1String("operation")) || k.contains(QLatin1String("stroke")))) {
+                if (parseAndRefine(root)) {
+                    return true;
+                }
+                break;
+            }
+        }
+
+        // OpenAI Chat Completions choices[0].message.content
+        const QJsonArray choices = root.value(QStringLiteral("choices")).toArray();
+        if (!choices.isEmpty()) {
+            const QJsonObject firstChoice = choices.at(0).toObject();
+            const QJsonObject messageObj = firstChoice.value(QStringLiteral("message")).toObject();
+            const QString content = messageObj.value(QStringLiteral("content")).toString();
+
+            if (!content.isEmpty()) {
+                const QString cleanJson = sanitizeAndExtractJson(content);
+                QJsonParseError parseErr;
+                const QJsonDocument programDoc = QJsonDocument::fromJson(cleanJson.toUtf8(), &parseErr);
+                if (!programDoc.isNull() && programDoc.isObject()) {
+                    if (parseAndRefine(programDoc.object())) {
+                        return true;
+                    }
+                }
+                // Fallback extraction on choices content
+                if (extractOperationsFromRawText(content, outProgram, errorMessage)) {
+                    return true;
+                }
+            }
+        }
+
+        // Gemini native format: candidates[0].content.parts[0].text
+        const QJsonArray candidates = root.value(QStringLiteral("candidates")).toArray();
+        if (!candidates.isEmpty()) {
+            const QJsonObject cand0 = candidates.at(0).toObject();
+            const QJsonObject contentObj = cand0.value(QStringLiteral("content")).toObject();
+            const QJsonArray parts = contentObj.value(QStringLiteral("parts")).toArray();
+            if (!parts.isEmpty()) {
+                const QString partText = parts.at(0).toObject().value(QStringLiteral("text")).toString();
+                if (!partText.isEmpty()) {
+                    const QString cleanJson = sanitizeAndExtractJson(partText);
+                    const QJsonDocument programDoc = QJsonDocument::fromJson(cleanJson.toUtf8());
+                    if (programDoc.isObject() && parseAndRefine(programDoc.object())) {
+                        return true;
+                    }
+                    if (extractOperationsFromRawText(partText, outProgram, errorMessage)) {
+                        return true;
+                    }
+                }
+            }
+        }
     }
 
-    const QJsonObject root = doc.object();
-    if (root.contains(QStringLiteral("error"))) {
-        const QString err = root.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString();
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("APIエラー: ") + (err.isEmpty() ? QStringLiteral("不明なエラー") : err);
+    // 2. Streamed response or raw model output: run sanitizeAndExtractJson
+    const QString extractedJson = sanitizeAndExtractJson(rawText);
+    const QJsonDocument extractedDoc = QJsonDocument::fromJson(extractedJson.toUtf8());
+    if (extractedDoc.isObject()) {
+        const QJsonObject root = extractedDoc.object();
+        if (root.contains(QStringLiteral("operations")) || root.contains(QStringLiteral("strokes")) || root.contains(QStringLiteral("schema_version"))) {
+            if (parseAndRefine(root)) {
+                return true;
+            }
         }
-        return false;
-    }
-
-    // Direct StrokeProgram check
-    if (root.contains(QStringLiteral("operations")) || root.contains(QStringLiteral("strokes"))) {
-        return parseAndRefine(root);
-    }
-
-    // OpenAI Chat Completions choices[0].message.content
-    const QJsonArray choices = root.value(QStringLiteral("choices")).toArray();
-    if (choices.isEmpty()) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("LLM応答にchoices配列が存在しません。");
+        for (auto it = root.constBegin(); it != root.constEnd(); ++it) {
+            const QString k = it.key().trimmed().toLower();
+            if (it.value().isArray() && (k.contains(QLatin1String("operation")) || k.contains(QLatin1String("stroke")))) {
+                if (parseAndRefine(root)) {
+                    return true;
+                }
+                break;
+            }
         }
-        return false;
-    }
-
-    const QJsonObject firstChoice = choices.at(0).toObject();
-    const QJsonObject messageObj = firstChoice.value(QStringLiteral("message")).toObject();
-    const QString content = messageObj.value(QStringLiteral("content")).toString();
-
-    if (content.isEmpty()) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("LLMモデルの生成テキストが空でした。");
+        // If choices present in extracted JSON
+        const QJsonArray choices = root.value(QStringLiteral("choices")).toArray();
+        if (!choices.isEmpty()) {
+            const QString content = choices.at(0).toObject().value(QStringLiteral("message")).toObject().value(QStringLiteral("content")).toString();
+            if (!content.isEmpty()) {
+                const QString cleanContent = sanitizeAndExtractJson(content);
+                const QJsonDocument cDoc = QJsonDocument::fromJson(cleanContent.toUtf8());
+                if (cDoc.isObject() && parseAndRefine(cDoc.object())) {
+                    return true;
+                }
+            }
         }
-        return false;
     }
 
-    const QString cleanJson = sanitizeAndExtractJson(content);
-    QJsonParseError parseErr;
-    const QJsonDocument programDoc = QJsonDocument::fromJson(cleanJson.toUtf8(), &parseErr);
-    if (programDoc.isNull() || !programDoc.isObject()) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("生成結果のJSON抽出またはパースに失敗しました: ") + parseErr.errorString();
-        }
-        return false;
+    // 3. Ultimate Fallback: operation-by-operation extraction from raw text
+    if (extractOperationsFromRawText(rawText, outProgram, errorMessage)) {
+        return true;
     }
 
-    return parseAndRefine(programDoc.object());
+    if (errorMessage && errorMessage->isEmpty()) {
+        *errorMessage = QStringLiteral("LLM応答がJSONオブジェクトではありません。修復にも失敗しました。");
+    }
+    return false;
 }
 
 QString KisAiStrokeProgramCodec::normalizeLayerName(const QString &name)
@@ -867,6 +1359,13 @@ QString KisAiStrokeProgramCodec::normalizeLayerName(const QString &name)
         return it.value();
     }
 
+    if (lower.contains(QLatin1String("back")) || lower.contains(QLatin1String("bg"))) return QStringLiteral("Background");
+    if (lower.contains(QLatin1String("flat")) || lower.contains(QLatin1String("base"))) return QStringLiteral("Flats");
+    if (lower.contains(QLatin1String("shad")) || lower.contains(QLatin1String("dark"))) return QStringLiteral("Shading");
+    if (lower.contains(QLatin1String("line")) || lower.contains(QLatin1String("ink"))) return QStringLiteral("Lineart");
+    if (lower.contains(QLatin1String("light")) || lower.contains(QLatin1String("specular"))) return QStringLiteral("Highlights");
+    if (lower.contains(QLatin1String("fx")) || lower.contains(QLatin1String("effect")) || lower.contains(QLatin1String("particle"))) return QStringLiteral("FX");
+
     return name.trimmed();
 }
 
@@ -905,8 +1404,77 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
 
     // Validate schema version: v1 (strokes array) and v2 (operations array) are supported.
     // Reject clearly unsupported future versions to avoid misinterpretation.
-    if (rootObj.contains(QStringLiteral("schema_version"))) {
-        const int version = rootObj.value(QStringLiteral("schema_version")).toInt();
+    const auto findField = [](const QJsonObject &o, const QStringList &names, const QJsonValue &defaultVal = QJsonValue()) -> QJsonValue {
+        for (const auto &name : names) {
+            if (o.contains(name)) {
+                return o.value(name);
+            }
+        }
+        for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
+            const QString k = it.key().trimmed().toLower();
+            for (const auto &name : names) {
+                const QString n = name.toLower();
+                if (k == n || k.contains(n) || n.contains(k)) {
+                    return it.value();
+                }
+            }
+        }
+        return defaultVal;
+    };
+
+    const auto toDoubleField = [](const QJsonValue &val, qreal defaultVal) -> qreal {
+        if (val.isDouble()) return val.toDouble(defaultVal);
+        if (val.isString()) {
+            bool ok = false;
+            QString s = val.toString().trimmed();
+            QString clean;
+            for (const QChar &ch : s) {
+                if (ch.isDigit() || ch == QLatin1Char('.') || ch == QLatin1Char('-') || ch == QLatin1Char('+')) {
+                    clean.append(ch);
+                }
+            }
+            const qreal v = clean.toDouble(&ok);
+            if (ok) return v;
+        }
+        bool ok = false;
+        const qreal v = val.toVariant().toDouble(&ok);
+        return ok ? v : defaultVal;
+    };
+
+    const auto toIntField = [](const QJsonValue &val, int defaultVal) -> int {
+        if (val.isDouble()) return val.toInt(defaultVal);
+        if (val.isString()) {
+            bool ok = false;
+            QString s = val.toString().trimmed();
+            QString clean;
+            for (const QChar &ch : s) {
+                if (ch.isDigit() || ch == QLatin1Char('-') || ch == QLatin1Char('+')) {
+                    clean.append(ch);
+                }
+            }
+            const int v = clean.toInt(&ok);
+            if (ok) return v;
+        }
+        bool ok = false;
+        const int v = val.toVariant().toInt(&ok);
+        return ok ? v : defaultVal;
+    };
+
+    const auto toBoolField = [](const QJsonValue &val, bool defaultVal) -> bool {
+        if (val.isBool()) return val.toBool(defaultVal);
+        if (val.isString()) {
+            const QString s = val.toString().trimmed().toLower();
+            if (s.startsWith(QLatin1String("t")) || s == QLatin1String("1") || s == QLatin1String("yes")) return true;
+            if (s.startsWith(QLatin1String("f")) || s == QLatin1String("0") || s == QLatin1String("no")) return false;
+        }
+        if (val.isDouble()) {
+            return val.toDouble() != 0.0;
+        }
+        return defaultVal;
+    };
+
+    if (rootObj.contains(QStringLiteral("schema_version")) || !findField(rootObj, {QStringLiteral("schema_version")}).isUndefined()) {
+        const int version = toIntField(findField(rootObj, {QStringLiteral("schema_version")}), 2);
         if (version < 1 || version > 2) {
             if (errorMessage) {
                 *errorMessage = QStringLiteral("サポートされていないスキーマバージョンです (v%1)。v1 または v2 が必要です。").arg(version);
@@ -915,32 +1483,30 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
         }
     }
 
-    outProgram->schemaVersion = rootObj.value(QStringLiteral("schema_version")).toInt(2);
-    outProgram->prompt = rootObj.value(QStringLiteral("prompt")).toString();
-    outProgram->title = rootObj.value(QStringLiteral("title")).toString(QStringLiteral("AI Artwork"));
-    outProgram->seed = rootObj.value(QStringLiteral("seed")).toInt(42);
-    outProgram->visualCritique = rootObj.value(QStringLiteral("visual_critique")).toString();
-    outProgram->stepPhase = rootObj.value(QStringLiteral("step_phase")).toString(QStringLiteral("complete"));
-    outProgram->currentStep = rootObj.value(QStringLiteral("current_step")).toInt(1);
-    outProgram->totalSteps = rootObj.value(QStringLiteral("total_steps")).toInt(1);
-    outProgram->goalReached = rootObj.value(QStringLiteral("goal_reached")).toBool(true);
-    outProgram->completionScore = rootObj.value(QStringLiteral("completion_score")).toDouble(1.0);
+    outProgram->schemaVersion = toIntField(findField(rootObj, {QStringLiteral("schema_version")}), 2);
+    outProgram->prompt = findField(rootObj, {QStringLiteral("prompt")}).toString();
+    outProgram->title = findField(rootObj, {QStringLiteral("title")}, QStringLiteral("AI Artwork")).toString(QStringLiteral("AI Artwork"));
+    outProgram->seed = toIntField(findField(rootObj, {QStringLiteral("seed")}), 42);
+    outProgram->visualCritique = findField(rootObj, {QStringLiteral("visual_critique")}).toString();
+    outProgram->stepPhase = findField(rootObj, {QStringLiteral("step_phase")}, QStringLiteral("complete")).toString(QStringLiteral("complete"));
+    outProgram->currentStep = toIntField(findField(rootObj, {QStringLiteral("current_step")}), 1);
+    outProgram->totalSteps = toIntField(findField(rootObj, {QStringLiteral("total_steps")}), 1);
+    outProgram->goalReached = toBoolField(findField(rootObj, {QStringLiteral("goal_reached")}), true);
+    outProgram->completionScore = toDoubleField(findField(rootObj, {QStringLiteral("completion_score")}), 1.0);
 
-    if (rootObj.contains(QStringLiteral("canvas_size")) || rootObj.contains(QStringLiteral("canvas"))) {
-        const QJsonValue cVal = rootObj.contains(QStringLiteral("canvas_size"))
-            ? rootObj.value(QStringLiteral("canvas_size"))
-            : rootObj.value(QStringLiteral("canvas"));
+    const QJsonValue cVal = findField(rootObj, {QStringLiteral("canvas_size"), QStringLiteral("canvas")});
+    if (!cVal.isUndefined()) {
         int cw = 0;
         int ch = 0;
         if (cVal.isObject()) {
             const QJsonObject cObj = cVal.toObject();
-            cw = cObj.value(QStringLiteral("width")).toInt(cObj.value(QStringLiteral("w")).toInt(0));
-            ch = cObj.value(QStringLiteral("height")).toInt(cObj.value(QStringLiteral("h")).toInt(0));
+            cw = toIntField(findField(cObj, {QStringLiteral("width"), QStringLiteral("w")}), 0);
+            ch = toIntField(findField(cObj, {QStringLiteral("height"), QStringLiteral("h")}), 0);
         } else if (cVal.isArray()) {
             const QJsonArray cArr = cVal.toArray();
             if (cArr.size() >= 2) {
-                cw = cArr.at(0).toInt(0);
-                ch = cArr.at(1).toInt(0);
+                cw = toIntField(cArr.at(0), 0);
+                ch = toIntField(cArr.at(1), 0);
             }
         }
         if (cw > 0 && ch > 0) {
@@ -950,15 +1516,15 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
 
     outProgram->operations.clear();
 
-    const auto parseBrush = [](const QJsonObject &bObj) -> KisAiStrokeBrush {
+    const auto parseBrush = [&findField, &toDoubleField, &toBoolField](const QJsonObject &bObj) -> KisAiStrokeBrush {
         KisAiStrokeBrush b;
-        b.profile = bObj.value(QStringLiteral("profile")).toString(QStringLiteral("auto"));
-        b.color = parseColor(bObj.value(QStringLiteral("color")).toString(QStringLiteral("#232323")));
-        b.size = bObj.value(QStringLiteral("size")).toDouble(0.008);
-        b.sizeMode = bObj.value(QStringLiteral("size_mode")).toString(QStringLiteral("ratio"));
-        b.opacity = clamp01(bObj.value(QStringLiteral("opacity")).toDouble(1.0));
-        b.isEraser = bObj.value(QStringLiteral("is_eraser")).toBool(false);
-        b.presetHint = bObj.value(QStringLiteral("preset_hint")).toString();
+        b.profile = findField(bObj, {QStringLiteral("profile")}, QStringLiteral("auto")).toString(QStringLiteral("auto"));
+        b.color = parseColor(findField(bObj, {QStringLiteral("color")}, QStringLiteral("#232323")).toString(QStringLiteral("#232323")));
+        b.size = toDoubleField(findField(bObj, {QStringLiteral("size")}), 0.008);
+        b.sizeMode = findField(bObj, {QStringLiteral("size_mode")}, QStringLiteral("ratio")).toString(QStringLiteral("ratio"));
+        b.opacity = clamp01(toDoubleField(findField(bObj, {QStringLiteral("opacity")}), 1.0));
+        b.isEraser = toBoolField(findField(bObj, {QStringLiteral("is_eraser"), QStringLiteral("is_eraster")}), false);
+        b.presetHint = findField(bObj, {QStringLiteral("preset_hint")}).toString();
 
         // Safety: a ratio size >= 1.0 would cover 100%+ of the canvas; treat as pixels
         if (b.sizeMode.compare(QLatin1String("ratio"), Qt::CaseInsensitive) == 0 && b.size >= 1.0) {
@@ -969,68 +1535,85 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
 
     const auto normalizeKind = [](const QString &rawKind) -> KisAiStrokeOperation::Kind {
         const QString k = rawKind.trimmed().toLower();
-        if (k == QLatin1String("path") || k == QLatin1String("stroke") || k == QLatin1String("line")
-            || k == QLatin1String("contour")) {
-            return KisAiStrokeOperation::Kind::Path;
-        }
-        if (k == QLatin1String("fill") || k == QLatin1String("polygon") || k == QLatin1String("color_fill")
-            || k == QLatin1String("solid_fill")) {
-            return KisAiStrokeOperation::Kind::Fill;
-        }
-        if (k == QLatin1String("gradient_fill") || k == QLatin1String("gradient") || k == QLatin1String("gradientfill")
-            || k == QLatin1String("gradient-fill")) {
+        if (k.contains(QLatin1String("gradient"))) {
             return KisAiStrokeOperation::Kind::GradientFill;
         }
-        if (k == QLatin1String("ribbon") || k == QLatin1String("band") || k == QLatin1String("tapered_path")
-            || k == QLatin1String("taper")) {
+        if (k.contains(QLatin1String("manga")) || k.contains(QLatin1String("speed")) || k.contains(QLatin1String("focus"))) {
+            return KisAiStrokeOperation::Kind::MangaLines;
+        }
+        if (k.contains(QLatin1String("ribbon")) || k.contains(QLatin1String("band")) || k.contains(QLatin1String("taper"))) {
             return KisAiStrokeOperation::Kind::Ribbon;
         }
-        if (k == QLatin1String("particles") || k == QLatin1String("particle") || k == QLatin1String("scatter")
-            || k == QLatin1String("sparkles")) {
+        if (k.contains(QLatin1String("particle")) || k.contains(QLatin1String("scatter")) || k.contains(QLatin1String("sparkle"))) {
             return KisAiStrokeOperation::Kind::Particles;
         }
-        if (k == QLatin1String("hatch") || k == QLatin1String("cross_hatch") || k == QLatin1String("crosshatch")
-            || k == QLatin1String("shading_hatch")) {
+        if (k.contains(QLatin1String("hatch"))) {
             return KisAiStrokeOperation::Kind::Hatch;
         }
-        if (k == QLatin1String("manga_lines") || k == QLatin1String("mangalines") || k == QLatin1String("speed_lines")
-            || k == QLatin1String("focus_lines") || k == QLatin1String("radial_lines")) {
-            return KisAiStrokeOperation::Kind::MangaLines;
+        if (k.contains(QLatin1String("fill")) || k.contains(QLatin1String("polygon")) || k.contains(QLatin1String("color_fill"))
+            || k.contains(QLatin1String("solid_fill"))) {
+            return KisAiStrokeOperation::Kind::Fill;
+        }
+        if (k.contains(QLatin1String("path")) || k.contains(QLatin1String("stroke")) || k.contains(QLatin1String("line"))
+            || k.contains(QLatin1String("contour"))) {
+            return KisAiStrokeOperation::Kind::Path;
         }
         return KisAiStrokeOperation::Kind::Unknown;
     };
 
     const auto parsePoint = [](const QJsonValue &pv, qreal defaultPressure = 0.8) -> QPair<QPointF, qreal> {
+        const auto toDoubleVal = [](const QJsonValue &val, bool *ok) -> qreal {
+            if (val.isDouble()) {
+                if (ok) *ok = true;
+                return val.toDouble();
+            }
+            if (val.isString()) {
+                QString s = val.toString().trimmed();
+                QString clean;
+                for (const QChar &ch : s) {
+                    if (ch.isDigit() || ch == QLatin1Char('.') || ch == QLatin1Char('-') || ch == QLatin1Char('+')) {
+                        clean.append(ch);
+                    }
+                }
+                return clean.toDouble(ok);
+            }
+            return val.toVariant().toDouble(ok);
+        };
+
         if (pv.isArray()) {
             const QJsonArray pa = pv.toArray();
             if (pa.size() >= 2) {
-                if (!pa.at(0).isDouble() || !pa.at(1).isDouble()) {
+                bool okX = false, okY = false;
+                const qreal x = toDoubleVal(pa.at(0), &okX);
+                const qreal y = toDoubleVal(pa.at(1), &okY);
+                if (!okX || !okY || !std::isfinite(x) || !std::isfinite(y)) {
                     return {QPointF(), -1.0};
                 }
-                const qreal x = pa.at(0).toDouble();
-                const qreal y = pa.at(1).toDouble();
-                const qreal p = (pa.size() >= 3 && pa.at(2).isDouble())
-                    ? pa.at(2).toDouble(defaultPressure)
+                bool okP = false;
+                const qreal p = (pa.size() >= 3)
+                    ? toDoubleVal(pa.at(2), &okP)
                     : defaultPressure;
-                if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(p)) {
+                if (!std::isfinite(p)) {
                     return {QPointF(), -1.0};
                 }
-                return {QPointF(x, y), p};
+                return {QPointF(x, y), okP ? p : defaultPressure};
             }
         } else if (pv.isObject()) {
             const QJsonObject po = pv.toObject();
-            if (!po.value(QStringLiteral("x")).isDouble() || !po.value(QStringLiteral("y")).isDouble()) {
+            bool okX = false, okY = false;
+            const qreal x = toDoubleVal(po.value(QStringLiteral("x")), &okX);
+            const qreal y = toDoubleVal(po.value(QStringLiteral("y")), &okY);
+            if (!okX || !okY || !std::isfinite(x) || !std::isfinite(y)) {
                 return {QPointF(), -1.0};
             }
-            const qreal x = po.value(QStringLiteral("x")).toDouble();
-            const qreal y = po.value(QStringLiteral("y")).toDouble();
-            const qreal p = (po.contains(QStringLiteral("pressure")) && po.value(QStringLiteral("pressure")).isDouble())
-                ? po.value(QStringLiteral("pressure")).toDouble(defaultPressure)
+            bool okP = false;
+            const qreal p = po.contains(QStringLiteral("pressure"))
+                ? toDoubleVal(po.value(QStringLiteral("pressure")), &okP)
                 : defaultPressure;
-            if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(p)) {
+            if (!std::isfinite(p)) {
                 return {QPointF(), -1.0};
             }
-            return {QPointF(x, y), p};
+            return {QPointF(x, y), okP ? p : defaultPressure};
         }
         return {QPointF(), -1.0};
     };
@@ -1075,8 +1658,26 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
     const qreal canvasH = outProgram->canvasSize.height() > 0 ? outProgram->canvasSize.height() : 1024.0;
 
     // v2: operations array
+    QJsonArray opArray;
     if (rootObj.contains(QStringLiteral("operations"))) {
-        const QJsonArray opArray = rootObj.value(QStringLiteral("operations")).toArray();
+        opArray = rootObj.value(QStringLiteral("operations")).toArray();
+    } else {
+        // Tolerant candidate key search (e.g. "operationst", "strokes", "ops", "layers", "data")
+        for (auto it = rootObj.constBegin(); it != rootObj.constEnd(); ++it) {
+            const QString k = it.key().trimmed().toLower();
+            if (it.value().isArray() && (k.contains(QLatin1String("operation")) ||
+                                         k.contains(QLatin1String("stroke")) ||
+                                         k == QLatin1String("ops") ||
+                                         k == QLatin1String("layers") ||
+                                         k == QLatin1String("data") ||
+                                         k == QLatin1String("items"))) {
+                opArray = it.value().toArray();
+                break;
+            }
+        }
+    }
+
+    if (!opArray.isEmpty()) {
         if (opArray.size() > MAX_OPERATIONS) {
             if (errorMessage) {
                 *errorMessage = QStringLiteral("ストローク操作数が上限を超えています。");
@@ -1090,16 +1691,16 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 continue;
             const QJsonObject o = v.toObject();
             KisAiStrokeOperation op;
-            op.kind = normalizeKind(o.value(QStringLiteral("kind")).toString());
-            op.id = o.value(QStringLiteral("id")).toString();
-            op.layer = normalizeLayerName(o.value(QStringLiteral("layer")).toString(QStringLiteral("Lineart")));
-            op.brush = parseBrush(o.value(QStringLiteral("brush")).toObject());
+            op.kind = normalizeKind(findField(o, {QStringLiteral("kind"), QStringLiteral("type")}).toString());
+            op.id = findField(o, {QStringLiteral("id"), QStringLiteral("name")}).toString();
+            op.layer = normalizeLayerName(findField(o, {QStringLiteral("layer"), QStringLiteral("layer_name")}, QStringLiteral("Lineart")).toString(QStringLiteral("Lineart")));
+            op.brush = parseBrush(findField(o, {QStringLiteral("brush")}).toObject());
 
             if (op.kind == KisAiStrokeOperation::Kind::Path) {
-                op.closed = o.value(QStringLiteral("closed")).toBool(false);
-                op.smooth = o.value(QStringLiteral("smooth")).toBool(true);
-                op.role = o.value(QStringLiteral("role")).toString(QStringLiteral("auto"));
-                const QJsonArray pts = o.value(QStringLiteral("points")).toArray();
+                op.closed = toBoolField(findField(o, {QStringLiteral("closed")}), false);
+                op.smooth = toBoolField(findField(o, {QStringLiteral("smooth")}), true);
+                op.role = findField(o, {QStringLiteral("role")}, QStringLiteral("auto")).toString(QStringLiteral("auto"));
+                const QJsonArray pts = findField(o, {QStringLiteral("points"), QStringLiteral("pts")}).toArray();
                 if (!reserveControlPoints(pts))
                     return false;
                 const int ptCount = pts.size();
@@ -1118,12 +1719,11 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     }
                 }
             } else if (op.kind == KisAiStrokeOperation::Kind::Fill) {
-                op.fillStyle = o.value(QStringLiteral("style")).toString(QStringLiteral("wash"));
-                op.smooth = o.value(QStringLiteral("smooth"))
-                                .toBool(op.fillStyle.compare(QLatin1String("contour"), Qt::CaseInsensitive) == 0);
-                op.angleDeg = o.value(QStringLiteral("angle_deg")).toDouble(0.0);
-                op.spacing = o.value(QStringLiteral("spacing")).toDouble(0.5);
-                const QJsonArray poly = o.value(QStringLiteral("polygon")).toArray();
+                op.fillStyle = findField(o, {QStringLiteral("style"), QStringLiteral("fill_style")}, QStringLiteral("wash")).toString(QStringLiteral("wash"));
+                op.smooth = toBoolField(findField(o, {QStringLiteral("smooth")}), op.fillStyle.compare(QLatin1String("contour"), Qt::CaseInsensitive) == 0);
+                op.angleDeg = toDoubleField(findField(o, {QStringLiteral("angle_deg"), QStringLiteral("angle")}), 0.0);
+                op.spacing = toDoubleField(findField(o, {QStringLiteral("spacing")}), 0.5);
+                const QJsonArray poly = findField(o, {QStringLiteral("polygon"), QStringLiteral("poly"), QStringLiteral("points")}).toArray();
                 if (!reserveControlPoints(poly))
                     return false;
                 const int polyCount = poly.size();
@@ -1141,13 +1741,13 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     }
                 }
             } else if (op.kind == KisAiStrokeOperation::Kind::GradientFill) {
-                op.fillStyle = o.value(QStringLiteral("style")).toString(QStringLiteral("linear"));
-                op.smooth = o.value(QStringLiteral("smooth")).toBool(false);
-                op.angleDeg = o.value(QStringLiteral("angle_deg")).toDouble(90.0);
-                op.isRadial = o.value(QStringLiteral("is_radial"))
-                                  .toBool(op.fillStyle.compare(QLatin1String("radial"), Qt::CaseInsensitive) == 0);
-                if (o.contains(QStringLiteral("center"))) {
-                    const auto cp = parsePoint(o.value(QStringLiteral("center")));
+                op.fillStyle = findField(o, {QStringLiteral("style"), QStringLiteral("fill_style")}, QStringLiteral("linear")).toString(QStringLiteral("linear"));
+                op.smooth = toBoolField(findField(o, {QStringLiteral("smooth")}), false);
+                op.angleDeg = toDoubleField(findField(o, {QStringLiteral("angle_deg"), QStringLiteral("angle")}), 90.0);
+                op.isRadial = toBoolField(findField(o, {QStringLiteral("is_radial"), QStringLiteral("radial")}), op.fillStyle.compare(QLatin1String("radial"), Qt::CaseInsensitive) == 0);
+                const QJsonValue centerVal = findField(o, {QStringLiteral("center"), QStringLiteral("center_pt")});
+                if (!centerVal.isUndefined() && !centerVal.isNull()) {
+                    const auto cp = parsePoint(centerVal);
                     if (cp.second >= 0.0) {
                         op.gradientCenter = cp.first;
                         if (qMax(op.gradientCenter.x(), op.gradientCenter.y()) > kPixelCoordinateThreshold) {
@@ -1156,58 +1756,61 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                         }
                     }
                 }
-                op.gradientRadius = o.value(QStringLiteral("radius")).toDouble(0.5);
+                op.gradientRadius = toDoubleField(findField(o, {QStringLiteral("radius"), QStringLiteral("gradient_radius")}), 0.5);
                 if (op.gradientRadius > kPixelCoordinateThreshold) {
                     op.gradientRadius /= qMin(canvasW, canvasH);
                 }
-                const QJsonArray colors = o.value(QStringLiteral("colors")).toArray();
+                const QJsonArray colors = findField(o, {QStringLiteral("colors"), QStringLiteral("gradient_colors")}).toArray();
                 for (const QJsonValue &cv : colors) {
                     op.gradientColors.append(parseColor(cv.toString()));
                 }
-                const QJsonArray pts = o.value(QStringLiteral("points")).toArray();
-                if (!reserveControlPoints(pts))
-                    return false;
-                for (const QJsonValue &pv : pts) {
-                    const auto pt = parsePoint(pv);
-                    if (pt.second >= 0.0) {
-                        op.points.append(KisAiStrokePoint(pt.first.x(), pt.first.y(), pt.second));
+                const QJsonArray pts = findField(o, {QStringLiteral("points"), QStringLiteral("pts")}).toArray();
+                if (!pts.isEmpty()) {
+                    if (!reserveControlPoints(pts))
+                        return false;
+                    for (const QJsonValue &pv : pts) {
+                        const auto pt = parsePoint(pv);
+                        if (pt.second >= 0.0) {
+                            op.points.append(KisAiStrokePoint(pt.first.x(), pt.first.y(), pt.second));
+                        }
                     }
-                }
-                if (!op.points.isEmpty()) {
-                    qreal maxCoord = 0.0;
-                    for (const KisAiStrokePoint &point : op.points) {
-                        maxCoord = qMax(maxCoord, qMax(qAbs(point.pos.x()), qAbs(point.pos.y())));
-                    }
-                    if (maxCoord > kPixelCoordinateThreshold) {
-                        for (KisAiStrokePoint &point : op.points) {
-                            point.pos = QPointF(point.pos.x() / canvasW, point.pos.y() / canvasH);
+                    if (!op.points.isEmpty()) {
+                        qreal maxCoord = 0.0;
+                        for (const KisAiStrokePoint &point : op.points) {
+                            maxCoord = qMax(maxCoord, qMax(qAbs(point.pos.x()), qAbs(point.pos.y())));
+                        }
+                        if (maxCoord > kPixelCoordinateThreshold) {
+                            for (KisAiStrokePoint &point : op.points) {
+                                point.pos = QPointF(point.pos.x() / canvasW, point.pos.y() / canvasH);
+                            }
                         }
                     }
                 }
-                const QJsonArray poly = o.value(QStringLiteral("polygon")).toArray();
-                if (!reserveControlPoints(poly))
-                    return false;
-                const int polyCount = poly.size();
-                qreal maxCoord = 0.0;
-                for (int pi = 0; pi < polyCount; ++pi) {
-                    const auto pt = parsePoint(poly.at(pi));
-                    if (pt.second >= 0.0) {
-                        op.polygon.append(pt.first);
-                        maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
+                const QJsonArray poly = findField(o, {QStringLiteral("polygon"), QStringLiteral("poly")}).toArray();
+                if (!poly.isEmpty()) {
+                    if (!reserveControlPoints(poly))
+                        return false;
+                    const int polyCount = poly.size();
+                    qreal maxCoord = 0.0;
+                    for (int pi = 0; pi < polyCount; ++pi) {
+                        const auto pt = parsePoint(poly.at(pi));
+                        if (pt.second >= 0.0) {
+                            op.polygon.append(pt.first);
+                            maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
+                        }
                     }
-                }
-                if (maxCoord > kPixelCoordinateThreshold) {
-                    for (QPointF &p : op.polygon) {
-                        p = QPointF(p.x() / canvasW, p.y() / canvasH);
+                    if (maxCoord > kPixelCoordinateThreshold) {
+                        for (QPointF &p : op.polygon) {
+                            p = QPointF(p.x() / canvasW, p.y() / canvasH);
+                        }
                     }
                 }
             } else if (op.kind == KisAiStrokeOperation::Kind::Hatch) {
-                op.smooth = o.value(QStringLiteral("smooth")).toBool(false);
-                op.angleDeg = o.value(QStringLiteral("angle_deg")).toDouble(45.0);
-                op.spacing = o.value(QStringLiteral("spacing")).toDouble(0.015);
-                op.crossHatch =
-                    o.value(QStringLiteral("cross_hatch")).toBool(o.value(QStringLiteral("crosshatch")).toBool(false));
-                const QJsonArray poly = o.value(QStringLiteral("polygon")).toArray();
+                op.smooth = toBoolField(findField(o, {QStringLiteral("smooth")}), false);
+                op.angleDeg = toDoubleField(findField(o, {QStringLiteral("angle_deg"), QStringLiteral("angle")}), 45.0);
+                op.spacing = toDoubleField(findField(o, {QStringLiteral("spacing")}), 0.015);
+                op.crossHatch = toBoolField(findField(o, {QStringLiteral("cross_hatch"), QStringLiteral("crosshatch")}), false);
+                const QJsonArray poly = findField(o, {QStringLiteral("polygon"), QStringLiteral("poly"), QStringLiteral("points")}).toArray();
                 if (!reserveControlPoints(poly))
                     return false;
                 const int polyCount = poly.size();
@@ -1225,21 +1828,16 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     }
                 }
             } else if (op.kind == KisAiStrokeOperation::Kind::Ribbon) {
-                op.widthStart = o.value(QStringLiteral("width_start")).toDouble(
-                    o.value(QStringLiteral("start_width")).toDouble(0.02));
-                op.widthMid = o.value(QStringLiteral("width_mid")).toDouble(
-                    o.value(QStringLiteral("mid_width")).toDouble(0.015));
-                op.widthEnd = o.value(QStringLiteral("width_end")).toDouble(
-                    o.value(QStringLiteral("end_width")).toDouble(0.005));
+                op.widthStart = toDoubleField(findField(o, {QStringLiteral("width_start"), QStringLiteral("start_width")}), 0.02);
+                op.widthMid = toDoubleField(findField(o, {QStringLiteral("width_mid"), QStringLiteral("mid_width")}), 0.015);
+                op.widthEnd = toDoubleField(findField(o, {QStringLiteral("width_end"), QStringLiteral("end_width")}), 0.005);
                 const qreal minCanvasDim = qMin(canvasW, canvasH);
                 if (qMax(qMax(op.widthStart, op.widthMid), op.widthEnd) > kPixelCoordinateThreshold) {
                     op.widthStart /= minCanvasDim;
                     op.widthMid /= minCanvasDim;
                     op.widthEnd /= minCanvasDim;
                 }
-                const QJsonArray spine = o.contains(QStringLiteral("spine"))
-                    ? o.value(QStringLiteral("spine")).toArray()
-                    : o.value(QStringLiteral("points")).toArray();
+                const QJsonArray spine = findField(o, {QStringLiteral("spine"), QStringLiteral("points"), QStringLiteral("pts")}).toArray();
                 if (!reserveControlPoints(spine))
                     return false;
                 const int spineCount = spine.size();
@@ -1257,16 +1855,16 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     }
                 }
             } else if (op.kind == KisAiStrokeOperation::Kind::Particles) {
-                op.particleShape = o.value(QStringLiteral("shape")).toString(QStringLiteral("petal"));
-                op.particleCount = o.value(QStringLiteral("count")).toInt(16);
+                op.particleShape = findField(o, {QStringLiteral("shape"), QStringLiteral("particle_shape")}, QStringLiteral("petal")).toString(QStringLiteral("petal"));
+                op.particleCount = toIntField(findField(o, {QStringLiteral("count"), QStringLiteral("particle_count")}), 16);
                 if (!reserveParticles(op.particleCount))
                     return false;
-                const QJsonArray b = o.value(QStringLiteral("bounds")).toArray();
+                const QJsonArray b = findField(o, {QStringLiteral("bounds"), QStringLiteral("rect"), QStringLiteral("box")}).toArray();
                 if (b.size() >= 4) {
-                    qreal x1 = b.at(0).toDouble();
-                    qreal y1 = b.at(1).toDouble();
-                    qreal x2 = b.at(2).toDouble();
-                    qreal y2 = b.at(3).toDouble();
+                    qreal x1 = toDoubleField(b.at(0), 0.1);
+                    qreal y1 = toDoubleField(b.at(1), 0.1);
+                    qreal x2 = toDoubleField(b.at(2), 0.9);
+                    qreal y2 = toDoubleField(b.at(3), 0.9);
                     if (!std::isfinite(x1) || !std::isfinite(y1) || !std::isfinite(x2) || !std::isfinite(y2)) {
                         op.bounds = QRectF(0.1, 0.1, 0.8, 0.8);
                     } else {
@@ -1282,8 +1880,9 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     op.bounds = QRectF(0.1, 0.1, 0.8, 0.8);
                 }
             } else if (op.kind == KisAiStrokeOperation::Kind::MangaLines) {
-                if (o.contains(QStringLiteral("center"))) {
-                    const auto cp = parsePoint(o.value(QStringLiteral("center")));
+                const QJsonValue centerVal = findField(o, {QStringLiteral("center"), QStringLiteral("center_pt")});
+                if (!centerVal.isUndefined() && !centerVal.isNull()) {
+                    const auto cp = parsePoint(centerVal);
                     if (cp.second >= 0.0) {
                         op.gradientCenter = cp.first;
                         if (qMax(op.gradientCenter.x(), op.gradientCenter.y()) > kPixelCoordinateThreshold) {
@@ -1291,15 +1890,15 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                         }
                     }
                 }
-                op.innerRadius = o.value(QStringLiteral("inner_radius")).toDouble(0.15);
-                op.outerRadius = o.value(QStringLiteral("outer_radius")).toDouble(0.70);
+                op.innerRadius = toDoubleField(findField(o, {QStringLiteral("inner_radius"), QStringLiteral("inner")}), 0.15);
+                op.outerRadius = toDoubleField(findField(o, {QStringLiteral("outer_radius"), QStringLiteral("outer")}), 0.70);
                 const qreal minCanvasDim = qMin(canvasW, canvasH);
                 if (qMax(op.innerRadius, op.outerRadius) > kPixelCoordinateThreshold) {
                     op.innerRadius /= minCanvasDim;
                     op.outerRadius /= minCanvasDim;
                 }
-                op.density = qBound(4, o.value(QStringLiteral("density")).toInt(48), 120);
-                op.lineLengthJitter = o.value(QStringLiteral("line_length_jitter")).toDouble(0.20);
+                op.density = qBound(4, toIntField(findField(o, {QStringLiteral("density")}), 48), 120);
+                op.lineLengthJitter = toDoubleField(findField(o, {QStringLiteral("line_length_jitter"), QStringLiteral("jitter")}), 0.20);
             }
 
             if (op.kind != KisAiStrokeOperation::Kind::Unknown) {
@@ -2687,7 +3286,7 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
         payload[QStringLiteral("response_format")] = responseFormat;
     }
 
-    const int calculatedTokens = qBound(2048, operationTarget * 60 + (reasoning ? 4096 : 1536), 8192);
+    const int calculatedTokens = qBound(4096, operationTarget * 120 + (reasoning ? 8192 : 2048), reasoning ? 16384 : 12288);
     if (reasoning) {
         payload[QStringLiteral("max_completion_tokens")] = calculatedTokens;
         if (!reasoningEffort.isEmpty() && reasoningEffort.toLower() != QLatin1String("none")) {

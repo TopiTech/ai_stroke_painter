@@ -1296,6 +1296,152 @@ void KisAiStrokeProgramTest::testSchemaVersionValidation()
     }
 }
 
+void KisAiStrokeProgramTest::testUserCorruptedJsonRepair()
+{
+    // The exact corrupted snippet from the user's prompt report with stray 't's, truncated at the end
+    const QByteArray corruptedJson = QByteArrayLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"prompt\": \"アニメ美t少女のクローズアップtポートレート、大きな輝tく青い瞳t、二重まぶtた、繊細なtまつ毛、さらtさらの銀髪、t柔らかい頬のt赤み、天使の輪t\",\n"
+        "  \"titlet\": \"Silver Htalo Portrait\",\n"
+        "  \"operationst\": [\n"
+        "    {\n"
+        "      \"tkind\": \"gradient_ftill\",\n"
+        "      \"id\": \"tbg_sky\",\n"
+        "t      \"layer\": \"Backgroundt\",\n"
+        "      \"polygon\": [[t0,0],[t1,0],[1t,1],[0,1t]],\n"
+        "      \"colors\": [\"t#2a354ta\", \"#4at658a\", \"#t8ba7d4t\"],\n"
+        "      \"angle_degt\": 90,\n"
+        "      \"tbrush\": {\n"
+        "        \"tprofile\": \"watertcolor\",\n"
+        "        \"tcolor\": \"#8tba7d4\",\n"
+        "t        \"size\": 0t.05,\n"
+        "       t \"is_eraser\": falset\n"
+        "      }\n"
+        "    },\n"
+        "t    {\n"
+        "      \"kindt\": \"fill\",\n"
+        "      \"tid\": \"bgt_halo_tglow\",\n"
+        "      \"layert\": \"Background\",\n"
+        "t      \"polygont\": [[0.2t,0.15t],[0.8,t0.15],[t0.7,0t.35],[0.t3,0.35]],\n"
+        "     t \"brush\": {\n"
+        "t        \"profile\": \"airtbrush\",\n"
+        "        \"tcolor\": \"#fffbet0\",\n"
+        "        \"tsi\n"
+    );
+
+    KisAiStrokeProgram program;
+    QString error;
+    const bool ok = KisAiStrokeProgramCodec::parseResponse(corruptedJson, &program, &error);
+    QVERIFY2(ok, qPrintable(error));
+    QVERIFY(!program.operations.isEmpty());
+
+    // First operation was gradient_fill
+    const KisAiStrokeOperation &op1 = program.operations.first();
+    QCOMPARE(op1.kind, KisAiStrokeOperation::Kind::GradientFill);
+    QCOMPARE(op1.layer, QStringLiteral("Background"));
+    QCOMPARE(op1.polygon.size(), 4);
+    QCOMPARE(op1.polygon.at(0), QPointF(0.0, 0.0));
+    QCOMPARE(op1.polygon.at(1), QPointF(1.0, 0.0));
+    QCOMPARE(op1.polygon.at(2), QPointF(1.0, 1.0));
+    QCOMPARE(op1.polygon.at(3), QPointF(0.0, 1.0));
+    QCOMPARE(op1.brush.size, 0.05);
+    QCOMPARE(op1.brush.isEraser, false);
+    QCOMPARE(op1.gradientColors.size(), 3);
+    QCOMPARE(op1.gradientColors.at(0), QColor(QStringLiteral("#2a354a")));
+}
+
+void KisAiStrokeProgramTest::testJsonSyntaxRepairVariousCases()
+{
+    // 1. Comments and trailing commas
+    const QByteArray withComments = QByteArrayLiteral(
+        "// Generator output\n"
+        "{\n"
+        "  /* schema version 2 */\n"
+        "  \"schema_version\": 2,\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"id\": \"line_1\",\n"
+        "      \"layer\": \"Lineart\",\n"
+        "      \"points\": [[0.1, 0.1, 0.8], [0.9, 0.9, 0.8],],\n"
+        "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#112233\", \"size\": 0.01,},\n"
+        "    },\n"
+        "  ],\n"
+        "}\n"
+    );
+    KisAiStrokeProgram prog1;
+    QString err1;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(withComments, &prog1, &err1), qPrintable(err1));
+    QCOMPARE(prog1.operations.size(), 1);
+    QCOMPARE(prog1.operations.first().points.size(), 2);
+
+    // 2. Single quotes and unquoted keys
+    const QByteArray singleQuotesAndUnquoted = QByteArrayLiteral(
+        "{\n"
+        "  schema_version: 2,\n"
+        "  operations: [\n"
+        "    {\n"
+        "      kind: 'fill',\n"
+        "      id: 'poly_1',\n"
+        "      layer: 'BaseColor',\n"
+        "      polygon: [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]],\n"
+        "      brush: {profile: 'flat', color: '#ff0000', size: 0.02}\n"
+        "    }\n"
+        "  ]\n"
+        "}\n"
+    );
+    KisAiStrokeProgram prog2;
+    QString err2;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(singleQuotesAndUnquoted, &prog2, &err2), qPrintable(err2));
+    QCOMPARE(prog2.operations.size(), 1);
+    QCOMPARE(prog2.operations.first().kind, KisAiStrokeOperation::Kind::Fill);
+
+    // 3. Dirty numbers and dirty booleans
+    const QByteArray dirtyNumbersAndBools = QByteArrayLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"id\": \"stroke_dirty\",\n"
+        "      \"layer\": \"Lineart\",\n"
+        "      \"points\": [[t0.1, 0t.2, 0.5t], [0.8t, 0.9t, 1t]],\n"
+        "      \"brush\": {\n"
+        "        \"profile\": \"gpen\",\n"
+        "        \"color\": \"#000000\",\n"
+        "        \"size\": 0t.015,\n"
+        "        \"is_eraser\": falset\n"
+        "      }\n"
+        "    }\n"
+        "  ]\n"
+        "}\n"
+    );
+    KisAiStrokeProgram prog3;
+    QString err3;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(dirtyNumbersAndBools, &prog3, &err3), qPrintable(err3));
+    QCOMPARE(prog3.operations.size(), 1);
+    QCOMPARE(prog3.operations.first().points.size(), 2);
+    QCOMPARE(prog3.operations.first().brush.size, 0.015);
+    QCOMPARE(prog3.operations.first().brush.isEraser, false);
+}
+
+void KisAiStrokeProgramTest::testSupportsJsonFormat()
+{
+    // Supported providers
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonFormat(QStringLiteral("https://api.openai.com/v1/chat/completions")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonFormat(QStringLiteral("https://openrouter.ai/api/v1/chat/completions")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonFormat(QStringLiteral("https://api.deepseek.com/v1/chat/completions")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonFormat(QStringLiteral("https://api.groq.com/openai/v1/chat/completions")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonFormat(QStringLiteral("http://localhost:11434/v1/chat/completions")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonFormat(QStringLiteral("http://127.0.0.1:1234/v1/chat/completions")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonFormat(QStringLiteral("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")));
+
+    // Unsupported / custom endpoints
+    QVERIFY(!KisAiStrokeProgramCodec::supportsJsonFormat(QStringLiteral("https://my-custom-proxy.internal/v1/chat/completions")));
+    QVERIFY(!KisAiStrokeProgramCodec::supportsJsonFormat(QStringLiteral("")));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

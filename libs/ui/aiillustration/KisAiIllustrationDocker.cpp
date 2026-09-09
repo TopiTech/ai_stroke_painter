@@ -957,7 +957,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         request.setRawHeader("X-Title", "AI Stroke Painter");
     }
 
-    const bool isNativeOpenAi = endpoint.contains(QLatin1String("api.openai.com"), Qt::CaseInsensitive);
+    const bool enforceJson = KisAiStrokeProgramCodec::supportsJsonFormat(endpoint);
     const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
     const QSize canvasSize(m_widthSpin->value(), m_heightSpin->value());
     const QJsonObject payload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
@@ -968,7 +968,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         QString(),
         QString(),
         true, // enableStreaming
-        isNativeOpenAi // enforceJsonFormat
+        enforceJson // enforceJsonFormat
     );
 
     logDebug(QStringLiteral("LLM_REQ"), QStringLiteral("POST %1 (model=%2, stream=true, budget=%3, prompt=\"%4\")")
@@ -1105,6 +1105,11 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         m_streamedContent.clear();
         m_sseBuffer.clear();
         return;
+    }
+
+    if (m_isStreamingRequest && !m_sseBuffer.isEmpty()) {
+        bool isDone = false;
+        KisAiStrokeProgramCodec::parseSseStreamChunk(QByteArrayLiteral("\n\n"), &m_sseBuffer, &m_streamedContent, &isDone);
     }
 
     const QByteArray response = !m_streamedContent.trimmed().isEmpty()
@@ -1916,7 +1921,7 @@ void KisAiIllustrationDocker::executeGoalStep()
         const QString guidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(
             m_goalCurrentStep, spec, canvasSize, m_goalTotalSteps);
 
-        const bool isNativeOpenAi = endpoint.contains(QLatin1String("api.openai.com"), Qt::CaseInsensitive);
+        const bool enforceJson = KisAiStrokeProgramCodec::supportsJsonFormat(endpoint);
         const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 400;
         const QJsonObject payload = KisAiStrokeProgramCodec::buildGoalStepPayload(
             model,
@@ -1930,7 +1935,7 @@ void KisAiIllustrationDocker::executeGoalStep()
             QString(),
             !m_goalVisionFallbackActive,
             true, // enableStreaming
-            isNativeOpenAi // enforceJsonFormat
+            enforceJson // enforceJsonFormat
         );
 
         logDebug(QStringLiteral("GOAL_REQ"), QStringLiteral(
@@ -2113,6 +2118,11 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         }
         finishGoalMode(false);
         return;
+    }
+
+    if (m_isStreamingRequest && !m_sseBuffer.isEmpty()) {
+        bool isDone = false;
+        KisAiStrokeProgramCodec::parseSseStreamChunk(QByteArrayLiteral("\n\n"), &m_sseBuffer, &m_streamedContent, &isDone);
     }
 
     const QByteArray response = !m_streamedContent.trimmed().isEmpty()

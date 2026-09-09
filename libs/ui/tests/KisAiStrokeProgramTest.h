@@ -46,6 +46,9 @@ private Q_SLOTS:
     void testAcceptedResponseContentType();
     void testGoalModeCompletionInvariant();
     void testSchemaVersionValidation();
+    void testUserCorruptedJsonRepair();
+    void testJsonSyntaxRepairVariousCases();
+    void testSupportsJsonFormat();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H
