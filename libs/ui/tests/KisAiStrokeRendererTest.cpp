@@ -116,6 +116,36 @@ void KisAiStrokeRendererTest::testClippingMaskToFlats()
     QVERIFY(qAlpha(insidePixel) > 0);
 }
 
+void KisAiStrokeRendererTest::testClippingMaskFromPreviousGoalStep()
+{
+    KisAiStrokeProgram previousStep;
+    previousStep.canvasSize = QSize(200, 200);
+
+    KisAiStrokeOperation flatOp;
+    flatOp.kind = KisAiStrokeOperation::Kind::Fill;
+    flatOp.id = QStringLiteral("flat_previous_step");
+    flatOp.layer = QStringLiteral("Flats");
+    flatOp.polygon = QPolygonF{QPointF(0.4, 0.4), QPointF(0.6, 0.4), QPointF(0.6, 0.6), QPointF(0.4, 0.6)};
+    flatOp.brush.color = QColor(200, 200, 200);
+    previousStep.operations.append(flatOp);
+
+    KisAiStrokeProgram shadingStep;
+    shadingStep.canvasSize = QSize(200, 200);
+    KisAiStrokeOperation shadeOp;
+    shadeOp.kind = KisAiStrokeOperation::Kind::Fill;
+    shadeOp.id = QStringLiteral("shade_current_step");
+    shadeOp.layer = QStringLiteral("Shading");
+    shadeOp.polygon = QPolygonF{QPointF(0.0, 0.0), QPointF(1.0, 0.0), QPointF(1.0, 1.0), QPointF(0.0, 1.0)};
+    shadeOp.brush.color = QColor(50, 50, 100);
+    shadingStep.operations.append(shadeOp);
+
+    const QImage rendered =
+        KisAiStrokeRenderer::renderProgramToImage(shadingStep, QSize(200, 200), true, &previousStep);
+    QVERIFY(!rendered.isNull());
+    QCOMPARE(qAlpha(rendered.pixel(20, 20)), 0);
+    QVERIFY(qAlpha(rendered.pixel(100, 100)) > 0);
+}
+
 void KisAiStrokeRendererTest::testRenderGradientOpacity()
 {
     KisAiStrokeProgram program;
@@ -694,5 +724,3 @@ void KisAiStrokeRendererTest::testGoalModeCumulativeProgressionAndRibbon()
 }
 
 KISTEST_MAIN(KisAiStrokeRendererTest)
-
-

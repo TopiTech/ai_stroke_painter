@@ -1,55 +1,55 @@
 {
   "version": 1,
-  "id": "goal-20260909-project-review",
-  "status": "complete",
-  "objective": "AI Stroke Painter プロジェクト全体をレビューし、重大な問題を必要最小限で修正して検証する。",
+  "id": "goal-20260909-project-review-current",
+  "status": "completed",
+  "objective": "AI Stroke Painter プロジェクト全体をコードレビューし、既存仕様・設定・主要処理経路を確認したうえで、重大な問題を必要最小限で修正し、再発防止テストと既定の検証を完了する。",
   "completion_criteria": [
-    "仕様・設定・主要処理・UIを確認し、問題を重要度付きで評価する",
-    "発見した重大な問題を修正し、可能な限り回帰テストを追加する",
-    "既定の検証コマンドを実行し、未実行項目を区別して報告する"
+    "AI Stroke Painter 固有の仕様、設定、主要な生成・解析・描画・UI経路を確認し、問題を重要度・影響範囲・修正リスク付きで評価する",
+    "確認できた重大・主要な問題を最小限に修正し、可能な限り振る舞いベースの回帰テストを追加する",
+    "変更に関係する既定のビルド、テスト、静的解析、書式検証を実行し、未実行・既存失敗を区別して記録する"
   ],
   "constraints": [
     "既存のユーザー変更を上書き・破棄しない",
-    "無関係な変更を避け、公開・デプロイは行わない"
+    "無関係な変更、公開、デプロイ、外部サービスへの実リクエストを行わない",
+    "既存の公開動作とデータ互換性を合理的な範囲で維持する"
   ],
   "non_goals": [
-    "製品要件がない機能追加",
-    "外部サービスへの公開や本番変更"
+    "要件に根拠のない機能追加",
+    "外部LLMまたは画像サービスに対する実データを用いた通信"
   ],
   "verification": [
-    "既定の lint、型検査、テスト、ビルド、フォーマット検証"
+    "CMake/Ninja の対象ビルド",
+    "CTest の AI Stroke Painter 対象テスト",
+    "利用可能な静的解析・フォーマット・差分検証",
+    "実行可能な範囲のUI起動・操作確認"
   ],
   "budget": {
     "max_iterations": 20,
     "max_elapsed_minutes": null
   },
   "progress": {
-    "iteration": 5,
+    "iteration": 2,
     "completed": [
-      "現行HEADがクリーンであること、README/DEVELOPMENT.md と既存の検証構成を確認",
-      "AI生成、SSE処理、Goal Mode、レンダリング、ネットワーク応答上限、設定保存、UI主要経路をレビュー",
-      "ストリーミング応答、Goal Mode完了判定、APIキー保存、接続テストの応答上限、デバッグログと操作ガードを修正",
-      "SSE Content-Type とGoal Mode完了判定の回帰テストを追加",
-      "全体ビルド、両ビルド構成のCTest、変更範囲のclang-format、差分検証を実行"
+      "クリーンなGit作業ツリー、README.md、DEVELOPMENT.md、既存ビルド構成と最新コミットを確認",
+      "AI固有の生成・Goal Mode・応答解析・描画・設定保存・ネットワーク検証・UIコードをレビュー",
+      "URL上の秘密情報の保存・ログ出力、Goal Modeのクリッピング不整合、既存キャンバス寸法不整合、切断応答の操作救出失敗を修正し、回帰テストを追加",
+      "build-ai/build-test のビルドとAI対象CTest、差分書式検証、git diff --checkを実行"
     ],
-    "remaining": [],
-    "last_action": "修正後の全体ビルド、CTest、書式・差分検証を完了",
-    "last_result": "build-ai/build-test のAI Strokeテストは各3/3成功。変更範囲はclang-format差分なし。"
+    "remaining": [
+    ],
+    "last_action": "最終差分・書式・ゴール記録を確認",
+    "last_result": "修正対象のビルド、AI対象CTest、差分書式、git diff --checkが成功し、最終報告の準備が完了。"
   },
   "evidence": [
-    "cmake --build build-ai --parallel 4: 成功",
-    "ctest --test-dir build-ai --output-on-failure --no-tests=error: 3/3 成功",
-    "cmake --build build-test --parallel 4: 成功",
-    "ctest --test-dir build-test --output-on-failure --no-tests=error: 3/3 成功",
-    "C:/CraftRoot/bin/clang-format.exe: 変更範囲の出力差分なし",
-    "git diff --check: 成功",
-    "ai-stroke-painter.exe --version: 終了コード0"
+    "git status --short: 出力なし",
+    "README.md と DEVELOPMENT.md を確認",
+    "git log --oneline --decorate -25 を確認",
+    "cmake --build build-ai --parallel 4 と ctest --test-dir build-ai --output-on-failure --no-tests=error: 3/3成功",
+    "cmake --build build-test --parallel 4 と ctest --test-dir build-test --output-on-failure --no-tests=error: 3/3成功",
+    "clang-format-diff.py による変更行検証: 成功",
+    "git diff --check: 成功"
   ],
   "blockers": [],
-  "limitations": [
-    "clang-tidy は Craft LLVM 20 と既存の .clang-tidy / MinGW compile_commands.json の非互換により実行不能（AnalyzeTemporaryDtors とGCC専用フラグ）。",
-    "実API資格情報を使う外部LLM/画像サービスの通信、および表示環境での目視UI操作は実施していない。"
-  ],
-  "created_at": "2026-09-09T00:00:00+09:00",
-  "updated_at": "2026-09-09T17:28:29+09:00"
+  "created_at": "2026-09-09T17:30:00+09:00",
+  "updated_at": "2026-09-09T19:34:33+09:00"
 }

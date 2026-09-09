@@ -156,6 +156,26 @@ QString imageSizeText(const QSpinBox *widthSpin, const QSpinBox *heightSpin)
     return QString::number(widthSpin->value()) + QLatin1Char('x') + QString::number(heightSpin->value());
 }
 
+QString readSafeStoredEndpoint(QSettings &settings, const QString &primaryKey, const QString &legacyKey = QString())
+{
+    const QVariant fallbackValue = legacyKey.isEmpty() ? QVariant() : settings.value(legacyKey);
+    const QString endpoint = settings.value(primaryKey, fallbackValue).toString().trimmed();
+    if (endpoint.isEmpty()) {
+        return endpoint;
+    }
+
+    QString validationError;
+    if (KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &validationError)) {
+        return endpoint;
+    }
+
+    settings.remove(primaryKey);
+    if (!legacyKey.isEmpty()) {
+        settings.remove(legacyKey);
+    }
+    return QString();
+}
+
 QImage decodeModelImage(const QByteArray &response, QString *errorMessage)
 {
     const QJsonDocument document = QJsonDocument::fromJson(response);
@@ -881,7 +901,7 @@ void KisAiIllustrationDocker::generateLocalStrokes(const QString &prompt)
     setBusy(true);
     setStatus(i18n("ローカルの座標ストロークを生成しています…"));
 
-    const QSize canvasSize(m_widthSpin->value(), m_heightSpin->value());
+    const QSize canvasSize = effectiveCanvasSize();
     const KisAiStrokeProgram program = KisAiStrokeProgramCodec::createDeterministicProgram(prompt, canvasSize);
 
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
@@ -959,7 +979,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
 
     const bool enforceJson = KisAiStrokeProgramCodec::supportsJsonFormat(endpoint);
     const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
-    const QSize canvasSize(m_widthSpin->value(), m_heightSpin->value());
+    const QSize canvasSize = effectiveCanvasSize();
     const QJsonObject payload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
         model,
         prompt,
@@ -971,8 +991,12 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         enforceJson // enforceJsonFormat
     );
 
-    logDebug(QStringLiteral("LLM_REQ"), QStringLiteral("POST %1 (model=%2, stream=true, budget=%3, prompt=\"%4\")")
-        .arg(endpoint, model, QString::number(strokeBudget), prompt.left(60)));
+    logDebug(QStringLiteral("LLM_REQ"),
+             QStringLiteral("POST %1 (model=%2, stream=true, budget=%3, prompt=\"%4\")")
+                 .arg(KisAiIllustrationRenderer::displayEndpoint(endpoint),
+                      model,
+                      QString::number(strokeBudget),
+                      prompt.left(60)));
 
     m_activeRequestEndpoint = endpoint;
     m_isStreamingRequest = true;
@@ -1159,7 +1183,7 @@ void KisAiIllustrationDocker::generateLocalConcept(const QString &prompt)
     setBusy(true);
     setStatus(i18n("ローカルのコンセプトスケッチを構成しています…"));
 
-    const QSize canvasSize(m_widthSpin->value(), m_heightSpin->value());
+    const QSize canvasSize = effectiveCanvasSize();
     const QImage result = KisAiIllustrationRenderer::createConceptImage(prompt, canvasSize);
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
     m_previewLabel->setPixmap(QPixmap::fromImage(result).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
@@ -1223,8 +1247,9 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
         {QStringLiteral("response_format"), QStringLiteral("b64_json")},
     };
 
-    logDebug(QStringLiteral("IMG_REQ"), QStringLiteral("POST %1 (model=%2, size=%3, prompt=\"%4\")")
-        .arg(endpoint, model, sizeStr, prompt.left(60)));
+    logDebug(QStringLiteral("IMG_REQ"),
+             QStringLiteral("POST %1 (model=%2, size=%3, prompt=\"%4\")")
+                 .arg(KisAiIllustrationRenderer::displayEndpoint(endpoint), model, sizeStr, prompt.left(60)));
 
     m_activeRequestEndpoint = endpoint;
     m_isStreamingRequest = false;
@@ -1474,8 +1499,9 @@ void KisAiIllustrationDocker::updateModeUi()
         m_endpointEditor->setPlaceholderText(QStringLiteral("https://api.openai.com/v1/chat/completions"));
         m_modelEditor->setPlaceholderText(i18n("モデル名 (例: gpt-4o, o3-mini, deepseek-chat)"));
 
-        const QString savedEndpoint = settings.value(QStringLiteral("AIIllustration/llmEndpoint"),
-            settings.value(QStringLiteral("AIIllustration/endpoint"))).toString();
+        const QString savedEndpoint = readSafeStoredEndpoint(settings,
+                                                             QStringLiteral("AIIllustration/llmEndpoint"),
+                                                             QStringLiteral("AIIllustration/endpoint"));
         const QString savedModel = settings.value(QStringLiteral("AIIllustration/llmModel"),
             settings.value(QStringLiteral("AIIllustration/model"))).toString();
         m_endpointEditor->setText(savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/chat/completions") : savedEndpoint);
@@ -1485,7 +1511,7 @@ void KisAiIllustrationDocker::updateModeUi()
         m_endpointEditor->setPlaceholderText(QStringLiteral("https://provider.example/v1/images/generations"));
         m_modelEditor->setPlaceholderText(i18n("画像モデル名 (例: dall-e-3)"));
 
-        const QString savedEndpoint = settings.value(QStringLiteral("AIIllustration/imageEndpoint")).toString();
+        const QString savedEndpoint = readSafeStoredEndpoint(settings, QStringLiteral("AIIllustration/imageEndpoint"));
         const QString savedModel = settings.value(QStringLiteral("AIIllustration/imageModel")).toString();
         m_endpointEditor->setText(savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/images/generations") : savedEndpoint);
         m_modelEditor->setText(savedModel.isEmpty() ? QStringLiteral("dall-e-3") : savedModel);
@@ -1580,6 +1606,21 @@ bool KisAiIllustrationDocker::ensureCanvas()
 
     createCanvas();
     return m_mainWindow->activeView() != nullptr;
+}
+
+QSize KisAiIllustrationDocker::effectiveCanvasSize() const
+{
+    if (m_mainWindow) {
+        KisView *view = m_mainWindow->activeView();
+        if (view && view->image()) {
+            const QSize size = view->image()->bounds().size();
+            if (size.isValid() && !size.isEmpty()) {
+                return size;
+            }
+        }
+    }
+
+    return QSize(m_widthSpin ? m_widthSpin->value() : 1024, m_heightSpin ? m_heightSpin->value() : 1024);
 }
 
 bool KisAiIllustrationDocker::addImageAsLayer(const QImage &sourceImage, const QString &layerName)
@@ -1816,7 +1857,7 @@ void KisAiIllustrationDocker::executeGoalStep()
     }
 
     const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
-    const QSize canvasSize(m_widthSpin->value(), m_heightSpin->value());
+    const QSize canvasSize = effectiveCanvasSize();
     const auto artStyle = static_cast<KisAiPromptAnalyzer::ArtStyle>(
         m_artStyleCombo ? m_artStyleCombo->currentData().toInt() : 0);
 
@@ -1849,7 +1890,12 @@ void KisAiIllustrationDocker::executeGoalStep()
         KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
         if (view && view->image()) {
             QString statusMsg;
-            if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
+            if (KisAiStrokeRenderer::renderProgramToLayers(view->image(),
+                                                           m_mainWindow->viewManager(),
+                                                           program,
+                                                           &statusMsg,
+                                                           true,
+                                                           &m_goalAccumulatedProgram)) {
                 const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
                 const int qualityPercent = qRound(qBound<qreal>(0.0, program.completionScore, 1.0) * 100.0);
                 setStatus(i18n("%1 (%2 / 構造品質 %3%)", statusMsg, summary, qualityPercent));
@@ -2143,6 +2189,14 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         return;
     }
 
+    // Step state is controlled by the local Goal Mode controller, not by an
+    // untrusted model response. It also keeps the generated undo-group title
+    // and the cumulative preview in sync.
+    program.canvasSize = effectiveCanvasSize();
+    program.currentStep = m_goalCurrentStep;
+    program.totalSteps = m_goalTotalSteps;
+    program.goalReached = m_goalCurrentStep >= m_goalTotalSteps;
+
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
     m_goalAccumulatedProgram = KisAiStrokeProgramCodec::mergePrograms(m_goalAccumulatedProgram, program);
     const QImage preview = KisAiStrokeRenderer::renderProgramToImage(m_goalAccumulatedProgram, previewTargetSize);
@@ -2153,7 +2207,12 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
     if (view && view->image()) {
         QString statusMsg;
-        if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
+        if (KisAiStrokeRenderer::renderProgramToLayers(view->image(),
+                                                       m_mainWindow->viewManager(),
+                                                       program,
+                                                       &statusMsg,
+                                                       true,
+                                                       &m_goalAccumulatedProgram)) {
             const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
             const int qualityPercent = qRound(qBound<qreal>(0.0, program.completionScore, 1.0) * 100.0);
             const QString detailMsg = i18n("%1 (%2 / 構造品質 %3%)", statusMsg, summary, qualityPercent);
@@ -2251,8 +2310,10 @@ void KisAiIllustrationDocker::loadSettings()
 {
     QSettings settings;
     // エンドポイント & モデル
-    const QString savedLlmEp = settings.value(QStringLiteral("AIIllustration/llmEndpoint"),
-        settings.value(QStringLiteral("AIIllustration/endpoint"))).toString();
+    const QString savedLlmEp = readSafeStoredEndpoint(settings,
+                                                      QStringLiteral("AIIllustration/llmEndpoint"),
+                                                      QStringLiteral("AIIllustration/endpoint"));
+    readSafeStoredEndpoint(settings, QStringLiteral("AIIllustration/imageEndpoint"));
     const QString savedLlmModel = settings.value(QStringLiteral("AIIllustration/llmModel"),
         settings.value(QStringLiteral("AIIllustration/model"))).toString();
     if (m_endpointEditor) {
@@ -2347,10 +2408,22 @@ void KisAiIllustrationDocker::saveSettingsForMode(GenerationMode mode)
     if (m_endpointEditor && m_modelEditor) {
         const QString ep = m_endpointEditor->text().trimmed();
         const QString mdl = m_modelEditor->text().trimmed();
+        QString validationError;
+        const bool safeEndpoint =
+            ep.isEmpty() || KisAiIllustrationRenderer::validateImageEndpoint(ep, &validationError);
         if (mode == GenerationMode::RemoteImage) {
+            if (!safeEndpoint) {
+                settings.remove(QStringLiteral("AIIllustration/imageEndpoint"));
+                return;
+            }
             settings.setValue(QStringLiteral("AIIllustration/imageEndpoint"), ep);
             settings.setValue(QStringLiteral("AIIllustration/imageModel"), mdl);
         } else if (mode == GenerationMode::LlmStrokes) {
+            if (!safeEndpoint) {
+                settings.remove(QStringLiteral("AIIllustration/llmEndpoint"));
+                settings.remove(QStringLiteral("AIIllustration/endpoint"));
+                return;
+            }
             settings.setValue(QStringLiteral("AIIllustration/llmEndpoint"), ep);
             settings.setValue(QStringLiteral("AIIllustration/llmModel"), mdl);
             settings.setValue(QStringLiteral("AIIllustration/endpoint"), ep);
@@ -2449,7 +2522,9 @@ void KisAiIllustrationDocker::testLlmConnection()
         m_testConnectionStatusLabel->setVisible(true);
     }
 
-    logDebug(QStringLiteral("TEST_REQ"), QStringLiteral("接続テスト開始: Endpoint=%1, Model=%2").arg(endpoint, model));
+    logDebug(QStringLiteral("TEST_REQ"),
+             QStringLiteral("接続テスト開始: Endpoint=%1, Model=%2")
+                 .arg(KisAiIllustrationRenderer::displayEndpoint(endpoint), model));
 
     QNetworkRequest request{QUrl(endpoint)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));

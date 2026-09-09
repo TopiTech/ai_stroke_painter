@@ -56,6 +56,17 @@ public:
         QString *statusMessage = nullptr,
         bool clipShadingToFlats = true
     );
+
+    /**
+     * Render one program step while using Flats operations from an earlier step
+     * as a clipping mask for Shading and Highlights.
+     */
+    static bool renderProgramToLayers(KisImageWSP image,
+                                      KisViewManager *viewManager,
+                                      const KisAiStrokeProgram &program,
+                                      QString *statusMessage,
+                                      bool clipShadingToFlats,
+                                      const KisAiStrokeProgram *inheritedFlatsProgram);
 #endif
 
     /**
@@ -67,6 +78,12 @@ public:
         const QSize &targetSize,
         bool clipShadingToFlats = true
     );
+
+    /** Render a program while using Flats operations from an earlier program as a clipping mask. */
+    static QImage renderProgramToImage(const KisAiStrokeProgram &program,
+                                       const QSize &targetSize,
+                                       bool clipShadingToFlats,
+                                       const KisAiStrokeProgram *inheritedFlatsProgram);
 
     /**
      * Encode a QImage into a JPEG Base64 Data URL (scaled down if exceeding maxDimension).

@@ -1426,6 +1426,26 @@ void KisAiStrokeProgramTest::testJsonSyntaxRepairVariousCases()
     QCOMPARE(prog3.operations.first().brush.isEraser, false);
 }
 
+void KisAiStrokeProgramTest::testExtractOperationsFromTruncatedEnvelope()
+{
+    const QString truncatedResponse = QStringLiteral(
+        "{\"schema_version\":2,\"operations\":["
+        "{\"kind\":\"fill\",\"id\":\"flat_1\",\"layer\":\"Flats\","
+        "\"polygon\":[[0.1,0.1],[0.9,0.1],[0.5,0.9]],"
+        "\"brush\":{\"profile\":\"flat\",\"color\":\"#ff0000\",\"size\":0.01}},"
+        "{\"kind\":\"path\",\"id\":\"line_1\",\"layer\":\"Lineart\","
+        "\"points\":[[0.1,0.1,0.8],[0.9,0.9,0.8]],"
+        "\"brush\":{\"profile\":\"gpen\",\"color\":\"#000000\",\"size\":0.01}}");
+
+    KisAiStrokeProgram recovered;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::extractOperationsFromRawText(truncatedResponse, &recovered, &error),
+             qPrintable(error));
+    QCOMPARE(recovered.operations.size(), 2);
+    QCOMPARE(recovered.operations.at(0).id, QStringLiteral("flat_1"));
+    QCOMPARE(recovered.operations.at(1).id, QStringLiteral("line_1"));
+}
+
 void KisAiStrokeProgramTest::testSupportsJsonFormat()
 {
     // Supported providers

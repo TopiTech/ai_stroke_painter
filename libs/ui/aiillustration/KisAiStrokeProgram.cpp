@@ -11,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QPair>
 #include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSet>
@@ -1054,64 +1055,58 @@ bool KisAiStrokeProgramCodec::extractOperationsFromRawText(const QString &rawTex
         outProgram->prompt = pMatch.captured(1);
     }
 
-    // Heuristically find operation blocks: look for '{' followed by kind/polygon/points
-    int searchIdx = 0;
-    while (searchIdx < rawText.length()) {
-        const int openBrace = rawText.indexOf(QLatin1Char('{'), searchIdx);
-        if (openBrace < 0) {
+    // Collect completed objects in a single pass.  A truncated outer response
+    // must not prevent us from reaching complete operation objects nested in it.
+    // The caps keep this last-resort recovery path bounded for a hostile response.
+    constexpr int MAX_RECOVERED_OPERATIONS = 160;
+    constexpr int MAX_OBJECT_RANGES = 512;
+    constexpr int MAX_OPERATION_OBJECT_LENGTH = 64 * 1024;
+    QVector<int> openBraces;
+    QVector<QPair<int, int>> objectRanges;
+    bool inString = false;
+    bool escaped = false;
+
+    for (int i = 0; i < rawText.length(); ++i) {
+        const QChar ch = rawText.at(i);
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            } else if (ch == QLatin1Char('\\')) {
+                escaped = true;
+            } else if (ch == QLatin1Char('"')) {
+                inString = false;
+            }
+            continue;
+        }
+        if (ch == QLatin1Char('"')) {
+            inString = true;
+        } else if (ch == QLatin1Char('{')) {
+            openBraces.append(i);
+        } else if (ch == QLatin1Char('}') && !openBraces.isEmpty()) {
+            const int openBrace = openBraces.takeLast();
+            if (objectRanges.size() < MAX_OBJECT_RANGES) {
+                objectRanges.append(qMakePair(openBrace, i));
+            }
+        }
+    }
+
+    for (const QPair<int, int> &range : objectRanges) {
+        if (outProgram->operations.size() >= MAX_RECOVERED_OPERATIONS) {
             break;
         }
 
-        // Find matching closing brace using balanced counter
-        int depth = 0;
-        bool inStr = false;
-        bool esc = false;
-        int closeBrace = -1;
-
-        for (int i = openBrace; i < rawText.length(); ++i) {
-            const QChar ch = rawText.at(i);
-            if (esc) {
-                esc = false;
-                continue;
-            }
-            if (ch == QLatin1Char('\\')) {
-                esc = true;
-                continue;
-            }
-            if (ch == QLatin1Char('"')) {
-                inStr = !inStr;
-                continue;
-            }
-            if (inStr) {
-                continue;
-            }
-            if (ch == QLatin1Char('{')) {
-                depth++;
-            } else if (ch == QLatin1Char('}')) {
-                depth--;
-                if (depth == 0) {
-                    closeBrace = i;
-                    break;
-                }
-            }
+        const int blockLength = range.second - range.first + 1;
+        if (blockLength <= 0 || blockLength > MAX_OPERATION_OBJECT_LENGTH) {
+            continue;
         }
-
-        if (closeBrace < 0) {
-            // Cut off / incomplete object at the end of text
-            break;
-        }
-
-        const QString blockText = rawText.mid(openBrace, closeBrace - openBrace + 1);
-        searchIdx = closeBrace + 1;
-
-        // Check if this block looks like a stroke operation
-        if (!blockText.contains(QLatin1String("kind"), Qt::CaseInsensitive) &&
-            !blockText.contains(QLatin1String("polygon"), Qt::CaseInsensitive) &&
-            !blockText.contains(QLatin1String("points"), Qt::CaseInsensitive)) {
+        const QString blockText = rawText.mid(range.first, blockLength);
+        if (!blockText.contains(QLatin1String("kind"), Qt::CaseInsensitive)
+            && !blockText.contains(QLatin1String("type"), Qt::CaseInsensitive)
+            && !blockText.contains(QLatin1String("polygon"), Qt::CaseInsensitive)
+            && !blockText.contains(QLatin1String("points"), Qt::CaseInsensitive)) {
             continue;
         }
 
-        // Clean syntax on this block
         const QString cleanedBlock = repairJsonSyntax(blockText);
         QJsonParseError bErr;
         const QJsonDocument bDoc = QJsonDocument::fromJson(cleanedBlock.toUtf8(), &bErr);
@@ -1119,16 +1114,22 @@ bool KisAiStrokeProgramCodec::extractOperationsFromRawText(const QString &rawTex
             continue;
         }
 
+        const QJsonObject operationObject = bDoc.object();
+        if (!operationObject.contains(QStringLiteral("kind")) && !operationObject.contains(QStringLiteral("type"))
+            && !operationObject.contains(QStringLiteral("polygon"))
+            && !operationObject.contains(QStringLiteral("points"))) {
+            continue;
+        }
+
         QJsonObject syntheticRoot;
         syntheticRoot[QStringLiteral("schema_version")] = outProgram->schemaVersion;
-        syntheticRoot[QStringLiteral("operations")] = QJsonArray{bDoc.object()};
+        syntheticRoot[QStringLiteral("operations")] = QJsonArray{operationObject};
 
         KisAiStrokeProgram singleProg;
         QString singleErr;
-        if (KisAiStrokeProgramCodec::parseProgramJson(syntheticRoot, &singleProg, &singleErr)) {
-            if (!singleProg.operations.isEmpty()) {
-                outProgram->operations.append(singleProg.operations.first());
-            }
+        if (KisAiStrokeProgramCodec::parseProgramJson(syntheticRoot, &singleProg, &singleErr)
+            && !singleProg.operations.isEmpty()) {
+            outProgram->operations.append(singleProg.operations.first());
         }
     }
 

@@ -48,6 +48,7 @@ private Q_SLOTS:
     void testSchemaVersionValidation();
     void testUserCorruptedJsonRepair();
     void testJsonSyntaxRepairVariousCases();
+    void testExtractOperationsFromTruncatedEnvelope();
     void testSupportsJsonFormat();
 };
 

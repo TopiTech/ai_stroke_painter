@@ -148,6 +148,14 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
                                                  const QSize &targetSize,
                                                  bool clipShadingToFlats)
 {
+    return renderProgramToImage(program, targetSize, clipShadingToFlats, nullptr);
+}
+
+QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &program,
+                                                 const QSize &targetSize,
+                                                 bool clipShadingToFlats,
+                                                 const KisAiStrokeProgram *inheritedFlatsProgram)
+{
     QSize size = (!targetSize.isEmpty() && targetSize.width() >= 64 && targetSize.height() >= 64) ? targetSize
                                                                                                   : program.canvasSize;
     if (size.width() < 64 || size.height() < 64) {
@@ -185,6 +193,18 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
 
     QImage flatsImage;
     bool hasFlats = false;
+    if (clipShadingToFlats && inheritedFlatsProgram) {
+        QVector<KisAiStrokeOperation> inheritedFlats;
+        for (const KisAiStrokeOperation &op : inheritedFlatsProgram->operations) {
+            if (KisAiStrokeProgramCodec::normalizeLayerName(op.layer) == QLatin1String("Flats")) {
+                inheritedFlats.append(op);
+            }
+        }
+        if (!inheritedFlats.isEmpty()) {
+            flatsImage = renderOperationsToImage(inheritedFlats, size);
+            hasFlats = true;
+        }
+    }
 
     QPainter compPainter(&compositeImage);
     compPainter.setRenderHint(QPainter::Antialiasing, true);
@@ -230,6 +250,16 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
                                                 const KisAiStrokeProgram &program,
                                                 QString *statusMessage,
                                                 bool clipShadingToFlats)
+{
+    return renderProgramToLayers(image, viewManager, program, statusMessage, clipShadingToFlats, nullptr);
+}
+
+bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
+                                                KisViewManager *viewManager,
+                                                const KisAiStrokeProgram &program,
+                                                QString *statusMessage,
+                                                bool clipShadingToFlats,
+                                                const KisAiStrokeProgram *inheritedFlatsProgram)
 {
     if (!image || !viewManager || program.operations.isEmpty()) {
         if (statusMessage) {
@@ -291,6 +321,18 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
 
     QImage flatsImage;
     bool hasFlats = false;
+    if (clipShadingToFlats && inheritedFlatsProgram) {
+        QVector<KisAiStrokeOperation> inheritedFlats;
+        for (const KisAiStrokeOperation &op : inheritedFlatsProgram->operations) {
+            if (KisAiStrokeProgramCodec::normalizeLayerName(op.layer) == QLatin1String("Flats")) {
+                inheritedFlats.append(op);
+            }
+        }
+        if (!inheritedFlats.isEmpty()) {
+            flatsImage = renderOperationsToImage(inheritedFlats, canvasSize);
+            hasFlats = true;
+        }
+    }
     int layersAdded = 0;
 
     for (const QString &layerKey : orderedLayers) {

@@ -16,6 +16,7 @@ private Q_SLOTS:
     void testCatmullRomSpline();
     void testRenderProgramToImage();
     void testClippingMaskToFlats();
+    void testClippingMaskFromPreviousGoalStep();
     void testRenderGradientOpacity();
     void testRenderParticleBrush();
     void testRenderAirbrushDynamics();

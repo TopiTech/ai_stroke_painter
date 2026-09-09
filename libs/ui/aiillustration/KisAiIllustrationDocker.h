@@ -93,6 +93,7 @@ private:
     void updateModeUi();
     void setBusy(bool busy);
     bool ensureCanvas();
+    QSize effectiveCanvasSize() const;
     bool addImageAsLayer(const QImage &image, const QString &layerName);
     QString promptForLayerName(const QString &prompt) const;
     void setStatus(const QString &message, bool isError = false);

@@ -13,7 +13,9 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QRandomGenerator>
+#include <QStringList>
 #include <QUrl>
+#include <QUrlQuery>
 
 namespace
 {
@@ -43,6 +45,46 @@ bool isLoopbackHost(const QString &host)
 
     QHostAddress address;
     return address.setAddress(normalized) && address.isLoopback();
+}
+
+bool hasSensitiveUrlComponent(const QUrl &url)
+{
+    if (!url.fragment(QUrl::FullyDecoded).trimmed().isEmpty()) {
+        return true;
+    }
+
+    static const QStringList sensitiveKeys = {
+        QStringLiteral("apikey"),
+        QStringLiteral("key"),
+        QStringLiteral("token"),
+        QStringLiteral("accesstoken"),
+        QStringLiteral("auth"),
+        QStringLiteral("authorization"),
+        QStringLiteral("password"),
+        QStringLiteral("passwd"),
+        QStringLiteral("secret"),
+        QStringLiteral("clientsecret"),
+        QStringLiteral("signature"),
+        QStringLiteral("sig"),
+        QStringLiteral("subscriptionkey"),
+        QStringLiteral("credential"),
+        QStringLiteral("credentials"),
+    };
+
+    const QUrlQuery query(url);
+    for (const auto &item : query.queryItems(QUrl::FullyDecoded)) {
+        QString normalizedKey;
+        for (const QChar character : item.first.trimmed().toLower()) {
+            if (character.isLetterOrNumber()) {
+                normalizedKey.append(character);
+            }
+        }
+        if (sensitiveKeys.contains(normalizedKey)) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 QColor hueColor(int hue, int saturation, int lightness, int alpha = 255)
@@ -171,6 +213,10 @@ bool KisAiIllustrationRenderer::validateImageEndpoint(const QString &endpoint, Q
     }
     if (!url.userName().isEmpty() || !url.password().isEmpty()) {
         return fail(QStringLiteral("エンドポイントの URL に認証情報を含めることはできません。"));
+    }
+    if (hasSensitiveUrlComponent(url)) {
+        return fail(QStringLiteral(
+            "エンドポイントの URL に API キーなどの認証情報を含めることはできません。API キー欄を使用してください。"));
     }
     if (scheme == QLatin1String("http") && !isLoopbackHost(url.host())) {
         return fail(QStringLiteral("外部のエンドポイントには HTTPS を使用してください。"));

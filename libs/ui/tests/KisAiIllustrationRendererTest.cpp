@@ -34,6 +34,33 @@ void KisAiIllustrationRendererTest::testValidateImageEndpoint()
     // Valid loopback IPv6 HTTP endpoint
     QVERIFY(KisAiIllustrationRenderer::validateImageEndpoint(QStringLiteral("http://[::1]:8080/v1/images/generations"), &errorMsg));
 
+    // Provider-specific, non-secret query parameters remain supported.
+    QVERIFY(KisAiIllustrationRenderer::validateImageEndpoint(
+        QStringLiteral("https://example.invalid/v1/chat?api-version=2026-01-01"),
+        &errorMsg));
+
+    // Secrets in a URL would be persisted in settings and debug logs.
+    errorMsg.clear();
+    QVERIFY(!KisAiIllustrationRenderer::validateImageEndpoint(
+        QStringLiteral("https://example.invalid/v1/chat?api_key=secret"),
+        &errorMsg));
+    QVERIFY(!errorMsg.isEmpty());
+    errorMsg.clear();
+    QVERIFY(!KisAiIllustrationRenderer::validateImageEndpoint(
+        QStringLiteral("https://example.invalid/v1/chat?access%5Ftoken=secret"),
+        &errorMsg));
+    QVERIFY(!errorMsg.isEmpty());
+    errorMsg.clear();
+    QVERIFY(!KisAiIllustrationRenderer::validateImageEndpoint(
+        QStringLiteral("https://example.invalid/v1/chat?accessToken=secret"),
+        &errorMsg));
+    QVERIFY(!errorMsg.isEmpty());
+    errorMsg.clear();
+    QVERIFY(!KisAiIllustrationRenderer::validateImageEndpoint(
+        QStringLiteral("https://example.invalid/v1/chat#token=secret"),
+        &errorMsg));
+    QVERIFY(!errorMsg.isEmpty());
+
     // Insecure non-loopback HTTP endpoint must fail
     errorMsg.clear();
     QVERIFY(!KisAiIllustrationRenderer::validateImageEndpoint(QStringLiteral("http://api.openai.com/v1/images/generations"), &errorMsg));
