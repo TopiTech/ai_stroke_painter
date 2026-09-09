@@ -59,8 +59,10 @@ private:
 
 private:
     // TODO: disabled for now
+#ifdef HAVE_OPENEXR
     void testF16Modes();
     void testF16Modes_data();
+#endif
 
     /// just a simple test case to test exactly one color
     /// during debugging

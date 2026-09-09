@@ -570,6 +570,70 @@ void KisAiStrokeProgramTest::testStructuralQualityScore()
     QCOMPARE(rich.completionScore, richScore);
 }
 
+void KisAiStrokeProgramTest::testParseGeometrySafetyLimits()
+{
+    QJsonArray points;
+    for (int i = 0; i < 257; ++i) {
+        points.append(QJsonArray{qreal(i) / 256.0, 0.5, 0.8});
+    }
+
+    const QJsonObject root {
+        {QStringLiteral("schema_version"), 2},
+        {QStringLiteral("operations"), QJsonArray {
+            QJsonObject {
+                {QStringLiteral("kind"), QStringLiteral("path")},
+                {QStringLiteral("id"), QStringLiteral("too_many_points")},
+                {QStringLiteral("layer"), QStringLiteral("Lineart")},
+                {QStringLiteral("points"), points},
+                {QStringLiteral("brush"), QJsonObject {
+                    {QStringLiteral("profile"), QStringLiteral("gpen")},
+                    {QStringLiteral("color"), QStringLiteral("#222222")},
+                    {QStringLiteral("size"), 0.01},
+                    {QStringLiteral("is_eraser"), false},
+                }},
+            },
+        }},
+    };
+
+    KisAiStrokeProgram program;
+    QString error;
+    QVERIFY(!KisAiStrokeProgramCodec::parseResponse(QJsonDocument(root).toJson(QJsonDocument::Compact), &program, &error));
+    QVERIFY(error.contains(QStringLiteral("上限")));
+}
+
+void KisAiStrokeProgramTest::testGradientDirectionPointsParsing()
+{
+    const QJsonObject root {
+        {QStringLiteral("schema_version"), 2},
+        {QStringLiteral("operations"), QJsonArray {
+            QJsonObject {
+                {QStringLiteral("kind"), QStringLiteral("gradient_fill")},
+                {QStringLiteral("id"), QStringLiteral("directed_gradient")},
+                {QStringLiteral("layer"), QStringLiteral("Flats")},
+                {QStringLiteral("points"), QJsonArray {
+                    QJsonArray {0.1, 0.2},
+                    QJsonArray {0.9, 0.8},
+                }},
+                {QStringLiteral("colors"), QJsonArray {QStringLiteral("#001122"), QStringLiteral("#ddeeff")}},
+                {QStringLiteral("brush"), QJsonObject {
+                    {QStringLiteral("profile"), QStringLiteral("brush")},
+                    {QStringLiteral("color"), QStringLiteral("#001122")},
+                    {QStringLiteral("size"), 0.02},
+                    {QStringLiteral("is_eraser"), false},
+                }},
+            },
+        }},
+    };
+
+    KisAiStrokeProgram program;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(QJsonDocument(root).toJson(QJsonDocument::Compact), &program, &error), qPrintable(error));
+    QCOMPARE(program.operations.size(), 1);
+    QCOMPARE(program.operations.first().points.size(), 2);
+    QCOMPARE(program.operations.first().points.first().pos, QPointF(0.1, 0.2));
+    QCOMPARE(program.operations.first().points.last().pos, QPointF(0.9, 0.8));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

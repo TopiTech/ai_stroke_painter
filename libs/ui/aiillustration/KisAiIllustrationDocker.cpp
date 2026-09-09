@@ -366,6 +366,7 @@ KisAiIllustrationDocker::~KisAiIllustrationDocker()
         m_reply->deleteLater();
         m_reply = nullptr;
     }
+    m_responseBuffer.clear();
 }
 
 bool KisAiIllustrationDocker::eventFilter(QObject *watched, QEvent *event)
@@ -528,19 +529,14 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     m_requestWasCancelled = false;
     m_requestTimedOut = false;
     m_responseTooLarge = false;
+    m_responseBuffer.clear();
     m_reply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
     m_reply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
     m_apiKeyEditor->clear();
     setBusy(true);
     setStatus(i18n("%1 に LLM 座標ストローク生成を依頼しています…", KisAiIllustrationRenderer::displayEndpoint(endpoint)));
 
-    connect(m_reply.data(), &QNetworkReply::downloadProgress, this, [this](qint64 received, qint64) {
-        if (m_reply && received > MAX_REMOTE_RESPONSE_BYTES) {
-            m_responseTooLarge = true;
-            setStatus(i18n("LLM の応答が上限を超えたため中止しました。"), true);
-            m_reply->abort();
-        }
-    });
+    connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] { appendReplyData(m_reply.data()); });
     connect(m_reply.data(), &QNetworkReply::finished, this, [this] { finishLlmStrokesRequest(); });
 
     const QPointer<QNetworkReply> pendingReply = m_reply;
@@ -558,19 +554,20 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     m_reply = nullptr;
     const bool requestWasCancelled = m_requestWasCancelled;
     const bool requestTimedOut = m_requestTimedOut;
-    const bool responseTooLarge = m_responseTooLarge;
     m_requestWasCancelled = false;
     m_requestTimedOut = false;
-    m_responseTooLarge = false;
     setBusy(false);
 
     if (!reply) {
+        m_responseBuffer.clear();
         return;
     }
 
     const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const bool requestSucceeded = reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300;
-    const QByteArray response = reply->readAll();
+    const QByteArray response = takeReplyData(reply.data());
+    const bool responseTooLarge = m_responseTooLarge;
+    m_responseTooLarge = false;
     reply->deleteLater();
 
     if (requestWasCancelled) {
@@ -685,19 +682,14 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
     m_requestWasCancelled = false;
     m_requestTimedOut = false;
     m_responseTooLarge = false;
+    m_responseBuffer.clear();
     m_reply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
     m_reply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
     m_apiKeyEditor->clear();
     setBusy(true);
     setStatus(i18n("%1 に画像生成を依頼しています…", KisAiIllustrationRenderer::displayEndpoint(endpoint)));
 
-    connect(m_reply.data(), &QNetworkReply::downloadProgress, this, [this](qint64 received, qint64) {
-        if (m_reply && received > MAX_REMOTE_RESPONSE_BYTES) {
-            m_responseTooLarge = true;
-            setStatus(i18n("画像モデルの応答が上限を超えたため中止しました。"), true);
-            m_reply->abort();
-        }
-    });
+    connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] { appendReplyData(m_reply.data()); });
     connect(m_reply.data(), &QNetworkReply::finished, this, [this] { finishRemoteImageRequest(); });
 
     const QPointer<QNetworkReply> pendingReply = m_reply;
@@ -715,19 +707,20 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
     m_reply = nullptr;
     const bool requestWasCancelled = m_requestWasCancelled;
     const bool requestTimedOut = m_requestTimedOut;
-    const bool responseTooLarge = m_responseTooLarge;
     m_requestWasCancelled = false;
     m_requestTimedOut = false;
-    m_responseTooLarge = false;
     setBusy(false);
 
     if (!reply) {
+        m_responseBuffer.clear();
         return;
     }
 
     const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const bool requestSucceeded = reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300;
-    const QByteArray response = reply->readAll();
+    const QByteArray response = takeReplyData(reply.data());
+    const bool responseTooLarge = m_responseTooLarge;
+    m_responseTooLarge = false;
     reply->deleteLater();
 
     if (requestWasCancelled) {
@@ -785,6 +778,32 @@ void KisAiIllustrationDocker::cancelRemoteRequest()
     m_requestWasCancelled = true;
     m_reply->abort();
     setStatus(i18n("リクエストを中止しています…"));
+}
+
+bool KisAiIllustrationDocker::appendReplyData(QNetworkReply *reply)
+{
+    if (!reply || m_responseTooLarge) {
+        return false;
+    }
+
+    const QByteArray chunk = reply->readAll();
+    if (chunk.size() > MAX_REMOTE_RESPONSE_BYTES - m_responseBuffer.size()) {
+        m_responseBuffer.clear();
+        m_responseTooLarge = true;
+        reply->abort();
+        return false;
+    }
+
+    m_responseBuffer.append(chunk);
+    return true;
+}
+
+QByteArray KisAiIllustrationDocker::takeReplyData(QNetworkReply *reply)
+{
+    appendReplyData(reply);
+    QByteArray response = m_responseBuffer;
+    m_responseBuffer.clear();
+    return response;
 }
 
 void KisAiIllustrationDocker::updateModeUi()

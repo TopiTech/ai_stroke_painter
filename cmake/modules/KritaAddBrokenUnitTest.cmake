@@ -76,6 +76,15 @@ function(KRITA_ADD_UNIT_TEST)
   # do not add it as test, so make test skips it unless asked for it
   if(NOT ARG_BROKEN OR KRITA_ENABLE_BROKEN_TESTS)
     add_test(NAME ${_testname} COMMAND ${_targetname})
+    if(WIN32)
+      # The build tree contains Krita DLLs, while the Qt and MinGW runtime
+      # DLLs are provided by the configured toolchain. Make CTest use both
+      # locations so an unmodified `ctest --test-dir <build>` can launch tests.
+      get_filename_component(_krita_test_compiler_runtime_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+      set(_krita_test_runtime_path
+          "$<TARGET_FILE_DIR:${_targetname}>\\;$<TARGET_FILE_DIR:Qt${QT_MAJOR_VERSION}::Core>\\;${_krita_test_compiler_runtime_dir}\\;$ENV{PATH}")
+      set_tests_properties(${_testname} PROPERTIES ENVIRONMENT "PATH=${_krita_test_runtime_path}")
+    endif()
   endif()
 
   target_link_libraries(${_targetname} ${ARG_LINK_LIBRARIES})

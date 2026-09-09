@@ -283,9 +283,11 @@ QDebug operator<<(QDebug debug, const Wrapper &w) {
     if (c.colorSpace()->colorDepthId() == Float32BitsColorDepthID) {
         const float *ptr = reinterpret_cast<const float*>(c.data());
         debug.nospace() << "(" << ptr[w.index] << ", " << ptr[3] << ")";
+#ifdef HAVE_OPENEXR
     } else if (c.colorSpace()->colorDepthId() == Float16BitsColorDepthID) {
         const half *ptr = reinterpret_cast<const half*>(c.data());
         debug.nospace() << "(" << ptr[w.index] << ", " << ptr[3] << ")";
+#endif
     } else if (c.colorSpace()->colorDepthId() == Integer16BitsColorDepthID) {
         using namespace Arithmetic;
         const quint16 *ptr = reinterpret_cast<const quint16*>(c.data());
@@ -307,9 +309,11 @@ float getColorValue(const KoColor &c, int channelIndex = 0) {
     if (c.colorSpace()->colorDepthId() == Float32BitsColorDepthID) {
         const float *ptr = reinterpret_cast<const float*>(c.data());
         result = ptr[channelIndex];
+#ifdef HAVE_OPENEXR
     } else if (c.colorSpace()->colorDepthId() == Float16BitsColorDepthID) {
         const half *ptr = reinterpret_cast<const half*>(c.data());
         result = ptr[channelIndex];
+#endif
     } else if (c.colorSpace()->colorDepthId() == Integer16BitsColorDepthID) {
         using namespace Arithmetic;
         const quint16 *ptr = reinterpret_cast<const quint16*>(c.data());
@@ -1374,6 +1378,7 @@ void TestCompositeOpInversion::dumpOpCategories()
     printCategory("Does NOT preserve positive range", PositivePreserveStable | PositivePreserveUnstable, false);
 }
 
+#ifdef HAVE_OPENEXR
 void TestCompositeOpInversion::testF16Modes_data()
 {
     addAllOps(generateCompositeOpIdSet());
@@ -1437,6 +1442,7 @@ void TestCompositeOpInversion::testF16Modes()
 
     }
 }
+#endif
 
 QString csShortName(const KoID &depthId)
 {
@@ -1518,12 +1524,14 @@ void TestCompositeOpInversion::generateSampleSheetsLong()
             ptr[1] = KoColorSpaceMaths<quint16, float>::scaleToA(value.green());
             ptr[2] = KoColorSpaceMaths<quint16, float>::scaleToA(value.blue());
             ptr[3] = KoColorSpaceMaths<quint16, float>::scaleToA(value.alpha());
+#ifdef HAVE_OPENEXR
         } else if (cs->colorDepthId() == Float16BitsColorDepthID) {
             half *ptr = reinterpret_cast<half*>(c.data());
             ptr[0] = KoColorSpaceMaths<quint16, half>::scaleToA(value.red());
             ptr[1] = KoColorSpaceMaths<quint16, half>::scaleToA(value.green());
             ptr[2] = KoColorSpaceMaths<quint16, half>::scaleToA(value.blue());
             ptr[3] = KoColorSpaceMaths<quint16, half>::scaleToA(value.alpha());
+#endif
         } else if (cs->colorDepthId() == Integer16BitsColorDepthID) {
             quint16 *ptr = reinterpret_cast<quint16*>(c.data());
             ptr[2] = value.red();
@@ -1547,6 +1555,7 @@ void TestCompositeOpInversion::generateSampleSheetsLong()
                 KoColorSpaceMaths<float, quint16>::scaleToA(ptr[1]),
                 KoColorSpaceMaths<float, quint16>::scaleToA(ptr[2]),
                 KoColorSpaceMaths<float, quint16>::scaleToA(ptr[3]));
+#ifdef HAVE_OPENEXR
         } else if (cs->colorDepthId() == Float16BitsColorDepthID) {
             const half *ptr = reinterpret_cast<const half*>(c.data());
             result = qRgba64(
@@ -1554,6 +1563,7 @@ void TestCompositeOpInversion::generateSampleSheetsLong()
                 KoColorSpaceMaths<half, quint16>::scaleToA(ptr[1]),
                 KoColorSpaceMaths<half, quint16>::scaleToA(ptr[2]),
                 KoColorSpaceMaths<half, quint16>::scaleToA(ptr[3]));
+#endif
         } else if (cs->colorDepthId() == Integer16BitsColorDepthID) {
             const quint16 *ptr = reinterpret_cast<const quint16*>(c.data());
             result = qRgba64(

@@ -183,6 +183,11 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
     pointSchema[QStringLiteral("minItems")] = 2;
     pointSchema[QStringLiteral("maxItems")] = 3;
 
+    QJsonObject controlPointListSchema;
+    controlPointListSchema[QStringLiteral("type")] = QStringLiteral("array");
+    controlPointListSchema[QStringLiteral("items")] = pointSchema;
+    controlPointListSchema[QStringLiteral("maxItems")] = 256;
+
     QJsonObject brushSchema;
     brushSchema[QStringLiteral("type")] = QStringLiteral("object");
     QJsonObject brushProps;
@@ -217,12 +222,9 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
     opProps[QStringLiteral("id")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("layer")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("brush")] = brushSchema;
-    opProps[QStringLiteral("points")] =
-        QJsonObject{{QStringLiteral("type"), QStringLiteral("array")}, {QStringLiteral("items"), pointSchema}};
-    opProps[QStringLiteral("polygon")] =
-        QJsonObject{{QStringLiteral("type"), QStringLiteral("array")}, {QStringLiteral("items"), pointSchema}};
-    opProps[QStringLiteral("spine")] =
-        QJsonObject{{QStringLiteral("type"), QStringLiteral("array")}, {QStringLiteral("items"), pointSchema}};
+    opProps[QStringLiteral("points")] = controlPointListSchema;
+    opProps[QStringLiteral("polygon")] = controlPointListSchema;
+    opProps[QStringLiteral("spine")] = controlPointListSchema;
     opProps[QStringLiteral("colors")] =
         QJsonObject{{QStringLiteral("type"), QStringLiteral("array")},
                     {QStringLiteral("items"), QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}}}};
@@ -247,7 +249,9 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
                                                     {QStringLiteral("items"), pointItem},
                                                     {QStringLiteral("minItems"), 4},
                                                     {QStringLiteral("maxItems"), 4}};
-    opProps[QStringLiteral("count")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")}};
+    opProps[QStringLiteral("count")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")},
+                                                     {QStringLiteral("minimum"), 1},
+                                                     {QStringLiteral("maximum"), 200}};
     opProps[QStringLiteral("shape")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opItem[QStringLiteral("properties")] = opProps;
     opItem[QStringLiteral("required")] =
@@ -260,7 +264,7 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
     rootProps[QStringLiteral("operations")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("array")},
                                                           {QStringLiteral("items"), opItem},
                                                           {QStringLiteral("minItems"), 1},
-                                                          {QStringLiteral("maxItems"), 2000}};
+                                                          {QStringLiteral("maxItems"), 160}};
 
     QJsonObject schema;
     schema[QStringLiteral("type")] = QStringLiteral("object");
@@ -596,6 +600,14 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
                                             KisAiStrokeProgram *outProgram,
                                             QString *errorMessage)
 {
+    constexpr int MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
+    if (responseBytes.size() > MAX_RESPONSE_BYTES) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("LLM応答が安全上限を超えています。");
+        }
+        return false;
+    }
+
     const QJsonDocument doc = QJsonDocument::fromJson(responseBytes);
     if (!doc.isObject()) {
         if (errorMessage) {
@@ -792,8 +804,41 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
         return {QPointF(), -1.0};
     };
 
-    constexpr int MAX_OPERATIONS = 2000;
-    constexpr int MAX_POINTS_PER_STROKE = 1000;
+    constexpr int MAX_OPERATIONS = 160;
+    constexpr int MAX_POINTS_PER_OPERATION = 256;
+    constexpr int MAX_TOTAL_CONTROL_POINTS = 8192;
+    constexpr int MAX_PARTICLES_PER_OPERATION = 200;
+    constexpr int MAX_TOTAL_PARTICLES = 4096;
+
+    int totalControlPoints = 0;
+    int totalParticles = 0;
+    const auto reserveControlPoints = [&](const QJsonArray &points) {
+        if (points.size() > MAX_POINTS_PER_OPERATION) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("1 操作あたりの制御点数が上限を超えています。");
+            }
+            return false;
+        }
+        if (points.size() > MAX_TOTAL_CONTROL_POINTS - totalControlPoints) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("ストロークプログラム全体の制御点数が上限を超えています。");
+            }
+            return false;
+        }
+        totalControlPoints += points.size();
+        return true;
+    };
+    const auto reserveParticles = [&](int count) {
+        const int safeCount = qMax(1, count);
+        if (safeCount > MAX_PARTICLES_PER_OPERATION || safeCount > MAX_TOTAL_PARTICLES - totalParticles) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("粒子数が安全上限を超えています。");
+            }
+            return false;
+        }
+        totalParticles += safeCount;
+        return true;
+    };
 
     const qreal canvasW = outProgram->canvasSize.width() > 0 ? outProgram->canvasSize.width() : 1024.0;
     const qreal canvasH = outProgram->canvasSize.height() > 0 ? outProgram->canvasSize.height() : 1024.0;
@@ -801,7 +846,13 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
     // v2: operations array
     if (rootObj.contains(QStringLiteral("operations"))) {
         const QJsonArray opArray = rootObj.value(QStringLiteral("operations")).toArray();
-        const int count = qMin(opArray.size(), MAX_OPERATIONS);
+        if (opArray.size() > MAX_OPERATIONS) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("ストローク操作数が上限を超えています。");
+            }
+            return false;
+        }
+        const int count = opArray.size();
         for (int oi = 0; oi < count; ++oi) {
             const QJsonValue &v = opArray.at(oi);
             if (!v.isObject())
@@ -818,7 +869,9 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 op.smooth = o.value(QStringLiteral("smooth")).toBool(true);
                 op.role = o.value(QStringLiteral("role")).toString(QStringLiteral("auto"));
                 const QJsonArray pts = o.value(QStringLiteral("points")).toArray();
-                const int ptCount = qMin(pts.size(), MAX_POINTS_PER_STROKE);
+                if (!reserveControlPoints(pts))
+                    return false;
+                const int ptCount = pts.size();
                 qreal maxCoord = 0.0;
                 for (int pi = 0; pi < ptCount; ++pi) {
                     const auto pt = parsePoint(pts.at(pi), 0.8);
@@ -840,7 +893,9 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 op.angleDeg = o.value(QStringLiteral("angle_deg")).toDouble(0.0);
                 op.spacing = o.value(QStringLiteral("spacing")).toDouble(0.5);
                 const QJsonArray poly = o.value(QStringLiteral("polygon")).toArray();
-                const int polyCount = qMin(poly.size(), MAX_POINTS_PER_STROKE);
+                if (!reserveControlPoints(poly))
+                    return false;
+                const int polyCount = poly.size();
                 qreal maxCoord = 0.0;
                 for (int pi = 0; pi < polyCount; ++pi) {
                     const auto pt = parsePoint(poly.at(pi));
@@ -875,8 +930,30 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 for (const QJsonValue &cv : colors) {
                     op.gradientColors.append(parseColor(cv.toString()));
                 }
+                const QJsonArray pts = o.value(QStringLiteral("points")).toArray();
+                if (!reserveControlPoints(pts))
+                    return false;
+                for (const QJsonValue &pv : pts) {
+                    const auto pt = parsePoint(pv);
+                    if (pt.second >= 0.0) {
+                        op.points.append(KisAiStrokePoint(pt.first.x(), pt.first.y(), pt.second));
+                    }
+                }
+                if (!op.points.isEmpty()) {
+                    qreal maxCoord = 0.0;
+                    for (const KisAiStrokePoint &point : op.points) {
+                        maxCoord = qMax(maxCoord, qMax(qAbs(point.pos.x()), qAbs(point.pos.y())));
+                    }
+                    if (maxCoord > 1.5) {
+                        for (KisAiStrokePoint &point : op.points) {
+                            point.pos = QPointF(point.pos.x() / canvasW, point.pos.y() / canvasH);
+                        }
+                    }
+                }
                 const QJsonArray poly = o.value(QStringLiteral("polygon")).toArray();
-                const int polyCount = qMin(poly.size(), MAX_POINTS_PER_STROKE);
+                if (!reserveControlPoints(poly))
+                    return false;
+                const int polyCount = poly.size();
                 qreal maxCoord = 0.0;
                 for (int pi = 0; pi < polyCount; ++pi) {
                     const auto pt = parsePoint(poly.at(pi));
@@ -897,7 +974,9 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 op.crossHatch =
                     o.value(QStringLiteral("cross_hatch")).toBool(o.value(QStringLiteral("crosshatch")).toBool(false));
                 const QJsonArray poly = o.value(QStringLiteral("polygon")).toArray();
-                const int polyCount = qMin(poly.size(), MAX_POINTS_PER_STROKE);
+                if (!reserveControlPoints(poly))
+                    return false;
+                const int polyCount = poly.size();
                 qreal maxCoord = 0.0;
                 for (int pi = 0; pi < polyCount; ++pi) {
                     const auto pt = parsePoint(poly.at(pi));
@@ -916,7 +995,9 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 op.widthMid = o.value(QStringLiteral("width_mid")).toDouble(0.015);
                 op.widthEnd = o.value(QStringLiteral("width_end")).toDouble(0.005);
                 const QJsonArray spine = o.value(QStringLiteral("spine")).toArray();
-                const int spineCount = qMin(spine.size(), MAX_POINTS_PER_STROKE);
+                if (!reserveControlPoints(spine))
+                    return false;
+                const int spineCount = spine.size();
                 qreal maxCoord = 0.0;
                 for (int pi = 0; pi < spineCount; ++pi) {
                     const auto pt = parsePoint(spine.at(pi));
@@ -933,6 +1014,8 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
             } else if (op.kind == KisAiStrokeOperation::Kind::Particles) {
                 op.particleShape = o.value(QStringLiteral("shape")).toString(QStringLiteral("petal"));
                 op.particleCount = o.value(QStringLiteral("count")).toInt(16);
+                if (!reserveParticles(op.particleCount))
+                    return false;
                 const QJsonArray b = o.value(QStringLiteral("bounds")).toArray();
                 if (b.size() >= 4) {
                     qreal x1 = b.at(0).toDouble();
@@ -960,7 +1043,13 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
     // v1 fallback: strokes array
     if (outProgram->operations.isEmpty() && rootObj.contains(QStringLiteral("strokes"))) {
         const QJsonArray strokeArray = rootObj.value(QStringLiteral("strokes")).toArray();
-        const int count = qMin(strokeArray.size(), MAX_OPERATIONS);
+        if (strokeArray.size() > MAX_OPERATIONS) {
+            if (errorMessage) {
+                *errorMessage = QStringLiteral("ストローク操作数が上限を超えています。");
+            }
+            return false;
+        }
+        const int count = strokeArray.size();
         for (int si = 0; si < count; ++si) {
             const QJsonValue &sv = strokeArray.at(si);
             if (!sv.isObject())
@@ -977,7 +1066,9 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
             op.brush.profile = QStringLiteral("gpen");
 
             const QJsonArray pts = s.value(QStringLiteral("points")).toArray();
-            const int ptCount = qMin(pts.size(), MAX_POINTS_PER_STROKE);
+            if (!reserveControlPoints(pts))
+                return false;
+            const int ptCount = pts.size();
             qreal maxCoord = 0.0;
             for (int pi = 0; pi < ptCount; ++pi) {
                 const auto pt = parsePoint(pts.at(pi), 0.8);

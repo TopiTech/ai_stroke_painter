@@ -30,6 +30,8 @@ private Q_SLOTS:
     void testCountLayerOperationsAndFormatSummary();
     void testRefineForRenderingRepairsModelGeometry();
     void testStructuralQualityScore();
+    void testParseGeometrySafetyLimits();
+    void testGradientDirectionPointsParsing();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

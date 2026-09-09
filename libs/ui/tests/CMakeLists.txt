@@ -1,28 +1,32 @@
-kis_add_tests(
-    kis_image_view_converter_test.cpp
-    kis_shape_selection_test.cpp
-    kis_coordinates_converter_test.cpp
-    kis_grid_config_test.cpp
-    kis_stabilized_events_sampler_test.cpp
-    kis_shape_commands_test.cpp
-    kis_stop_gradient_editor_test.cpp
-    kis_multinode_property_test.cpp
-    KisFrameSerializerTest.cpp
-    KisFrameCacheStoreTest.cpp
-    kis_animation_exporter_test.cpp
-    kis_prescaled_projection_test.cpp
-    kis_animation_importer_test.cpp
-    KisSpinBoxSplineUnitConverterTest.cpp
-    KisDocumentReplaceTest.cpp
-    KisRssReaderTest.cpp
-    kis_derived_resources_test.cpp
-    kis_animation_frame_cache_test.cpp
-    kis_shape_layer_test.cpp
-    KisSafeDocumentLoaderTest.cpp
-    KisSurfaceColorSpaceWrapperTest.cpp
+# These cover the public libkis API. The AI Stroke Painter build intentionally
+# omits that library, so do not create targets that cannot be compiled or linked.
+if(TARGET kritalibkis)
+    kis_add_tests(
+        kis_image_view_converter_test.cpp
+        kis_shape_selection_test.cpp
+        kis_coordinates_converter_test.cpp
+        kis_grid_config_test.cpp
+        kis_stabilized_events_sampler_test.cpp
+        kis_shape_commands_test.cpp
+        kis_stop_gradient_editor_test.cpp
+        kis_multinode_property_test.cpp
+        KisFrameSerializerTest.cpp
+        KisFrameCacheStoreTest.cpp
+        kis_animation_exporter_test.cpp
+        kis_prescaled_projection_test.cpp
+        kis_animation_importer_test.cpp
+        KisSpinBoxSplineUnitConverterTest.cpp
+        KisDocumentReplaceTest.cpp
+        KisRssReaderTest.cpp
+        kis_derived_resources_test.cpp
+        kis_animation_frame_cache_test.cpp
+        kis_shape_layer_test.cpp
+        KisSafeDocumentLoaderTest.cpp
+        KisSurfaceColorSpaceWrapperTest.cpp
 
-    LINK_LIBRARIES kritaui kritalibkis kritatestsdk
-    )
+        LINK_LIBRARIES kritaui kritalibkis kritatestsdk
+        )
+endif()
 
 kis_add_tests(
     kis_doc2_test.cpp
@@ -104,11 +108,13 @@ kis_add_test( kis_dummies_facade_test.cpp kis_dummies_facade_base_test.cpp ../..
     LINK_LIBRARIES kritaui kritatestsdk
     )
 
-kis_add_test(
-    kis_view_signals_test.cpp "${CMAKE_BINARY_DIR}/krita/krita.qrc"
-    TEST_NAME kis_view_signals_test
-    LINK_LIBRARIES kritaui kritalibkis kritatestsdk
-    )
+if(TARGET kritalibkis)
+    kis_add_test(
+        kis_view_signals_test.cpp "${CMAKE_BINARY_DIR}/krita/krita.qrc"
+        TEST_NAME kis_view_signals_test
+        LINK_LIBRARIES kritaui kritalibkis kritatestsdk
+        )
+endif()
 
 
 ##### Tests that currently fail and should be fixed #####
@@ -214,4 +220,3 @@ kis_add_test(KisAiIllustrationRendererTest.cpp
     TEST_NAME KisAiIllustrationRendererTest
     LINK_LIBRARIES kritaui kritatestsdk
 )
-

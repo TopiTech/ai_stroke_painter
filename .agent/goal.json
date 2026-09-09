@@ -1,31 +1,23 @@
 {
   "version": 1,
-  "id": "goal-20260909-llm-stroke-quality",
-  "status": "completed",
-  "objective": "LLM 座標ストローク描画モードの生成・補正・ラスタライズを根本改善し、構図、形状、線質、色彩、レイヤリングの品質と安定性を大幅に引き上げる",
+  "id": "goal-20260909-project-review",
+  "status": "complete",
+  "objective": "AI Stroke Painter プロジェクト全体をレビューし、重大な問題を必要最小限で修正して検証する。",
   "completion_criteria": [
-    "LLM 出力スキーマと作画指示が、構図設計、奥行き順、配色、ストローク役割、品質制約を明示する",
-    "不正・粗い・重複した LLM 座標を安全に正規化し、描画可能なストロークへ補正する品質パスが実装される",
-    "曲線補間、筆圧、テーパー、輪郭、塗り、陰影のレンダリング品質が改善される",
-    "改善点を検証する自動テストが追加され、AI ストロークの全スタンドアロンテストが成功する",
-    "代表的なプログラムの画像出力を生成し、画素内容と構造的品質を検証できる"
+    "仕様・設定・主要処理・UIを確認し、問題を重要度付きで評価する",
+    "発見した重大な問題を修正し、可能な限り回帰テストを追加する",
+    "既定の検証コマンドを実行し、未実行項目を区別して報告する"
   ],
   "constraints": [
-    "既存ユーザー変更を上書きしない",
-    "Krita/Qt6 と既存 StrokeProgram v2 の互換性を維持する",
-    "API キーを保存せず、外部 API 呼び出しやデプロイを行わない",
-    "Android Gradle lock の既存変更には触れない"
+    "既存のユーザー変更を上書き・破棄しない",
+    "無関係な変更を避け、公開・デプロイは行わない"
   ],
   "non_goals": [
-    "画像生成モデル API モードの全面改修",
-    "Krita 描画エンジン全体の置換",
-    "外部サービスへの公開や課金を伴う検証"
+    "製品要件がない機能追加",
+    "外部サービスへの公開や本番変更"
   ],
   "verification": [
-    "Qt6 スタンドアロン AI ストロークテストの configure/build/ctest",
-    "品質補正・スキーマ・曲線・レンダリングの新規ユニットテスト",
-    "代表プログラムのオフスクリーン画像レンダリングと画素統計",
-    "変更差分と既存変更の非干渉監査"
+    "既定の lint、型検査、テスト、ビルド、フォーマット検証"
   ],
   "budget": {
     "max_iterations": 20,
@@ -34,31 +26,24 @@
   "progress": {
     "iteration": 5,
     "completed": [
-      "関連ソース、直近コミット、既存テスト、ビルド手順を確認",
-      "Qt6 PATH を設定したベースラインで全3テストの成功を確認",
-      "構図先行・大形状優先・レイヤー登録・自己監査を要求する LLM 作画契約と予算配分を実装",
-      "座標、筆圧、ブラシ、重複点、退化形状を正規化する refineForRendering と構造品質スコアを実装",
-      "実際の Centripetal Catmull-Rom、単調な筆圧補間、適応サンプリング、丸い接合、2倍スーパーサンプリング、鉛筆質感、粒子サイズ制御、Screen ハイライトを実装",
-      "スキーマ、品質補正、曲線、線質、代表構図の画素指標を検証するテストを追加",
-      "スタンドアロンとフル Krita 構成のビルドおよび AI 関連テストを完走",
-      "README と DEVELOPMENT の仕様を同期"
+      "ベースライン確認と主要な処理・UI・設定のレビュー",
+      "外部応答・LLMジオメトリの上限、Windowsテスト実行環境、無効化依存のテスト構成を修正",
+      "AI回帰テスト、既定ビルド、既定CTestを実行して失敗を切り分け"
     ],
     "remaining": [],
-    "last_action": "スタンドアロン/フル構成の再ビルド、全 AI テスト、代表 PNG、diff check を最終検証",
-    "last_result": "両構成とも AI 関連テスト 3/3 成功。フル kritaui のリンク成功。代表 PNG の被覆・色彩・レイヤー品質指標も成功"
+    "last_action": "レビュー結果と検証結果を整理",
+    "last_result": "AIテスト3件は全成功。既定ビルドは成功。既定CTestは255件中198件成功、57件は既存の縮小構成に依存する失敗として記録。"
   },
   "evidence": [
-    "PATH に C:\\CraftRoot\\bin と C:\\CraftRoot\\mingw64\\bin を追加した ctest で 3/3 passed",
-    "strokeProgramJsonSchema の center 型が配列でなく number、ribbon 幅や path 品質属性が未定義",
-    "generateCatmullRomSpline と path 描画が centripetal ではなく uniform Catmull-Rom 式を使用",
-    "parseProgramJson が座標範囲・退化操作・重複点を描画前に品質補正していない",
-    "build-test: 3/3 tests passed (KisAiStrokeProgramTest, KisAiStrokeRendererTest, KisAiIllustrationRendererTest)",
-    "build-ai: kritaui linked and 3/3 full-configuration AI tests passed",
-    "representative-stroke-quality.png: 25,670 bytes, SHA-256 F34F015484F3B5708DA1EABAD18D9F3EFC8211AF79ED90E04CC328B5150FA950",
-    "representative quality test verifies all five layers, >=70% opaque coverage, >=35% chromatic samples, and >120 sampled colors",
-    "git diff --check completed without whitespace errors"
+    "cmake --build build-ai --parallel 4: 成功",
+    "ctest --test-dir build-ai -R KisAi(Stroke|Illustration) --output-on-failure: 3/3 成功",
+    "ctest --test-dir build-test --output-on-failure: 3/3 成功",
+    "ctest --test-dir build-ai --output-on-failure: 255件中198件成功、57件失敗（既存の広域構成依存）",
+    "git diff --check: 成功"
   ],
-  "blockers": [],
-  "created_at": "2026-09-09T10:47:41.6001235+09:00",
-  "updated_at": "2026-09-09T11:11:43.5310453+09:00"
+  "blockers": [
+    "削減済みのKrita構成では色管理・SVG・画像処理など広域の既存テスト57件が失敗する。AI機能の回帰ではないため、本レビューで無関係な機能復元は行わない。"
+  ],
+  "created_at": "2026-09-09T00:00:00+09:00",
+  "updated_at": "2026-09-09T12:00:00+09:00"
 }

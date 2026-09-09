@@ -51,6 +51,20 @@ if (AI_STROKE_STANDALONE_TESTS)
     target_link_libraries(KisAiIllustrationRendererTest PRIVATE ai_stroke_core Qt6::Test)
     add_test(NAME KisAiIllustrationRendererTest COMMAND KisAiIllustrationRendererTest)
 
+    # Qt and MinGW DLLs live outside the build tree on Windows. Keep the
+    # documented `ctest --test-dir build-test` command self-contained instead
+    # of requiring callers to prepare PATH manually.
+    if (WIN32)
+        get_filename_component(ai_stroke_compiler_runtime_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        set(ai_stroke_test_runtime_path
+            "$<TARGET_FILE_DIR:Qt6::Core>\\;${ai_stroke_compiler_runtime_dir}\\;$ENV{PATH}")
+        set_tests_properties(
+            KisAiStrokeProgramTest
+            KisAiStrokeRendererTest
+            KisAiIllustrationRendererTest
+            PROPERTIES ENVIRONMENT "PATH=${ai_stroke_test_runtime_path}")
+    endif()
+
     return()
 endif()
 

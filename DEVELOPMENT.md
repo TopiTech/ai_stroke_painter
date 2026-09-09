@@ -120,7 +120,8 @@ cmake -S . -B build-ai -G Ninja `
   -DPNG_ROOT="$craftRoot"
 
 # アプリケーション本体と AI ストローク単体テストを並列ビルド
-cmake --build build-ai --target ai-stroke-painter KisAiStrokeProgramTest KisAiStrokeRendererTest -- -j$env:NUMBER_OF_PROCESSORS
+# 実行ファイル名は ai-stroke-painter だが、CMake のアプリケーションターゲット名は krita。
+cmake --build build-ai --target krita KisAiStrokeProgramTest KisAiStrokeRendererTest --parallel $env:NUMBER_OF_PROCESSORS
 cmake --install build-ai --prefix "$craftRoot\ai-stroke-painter"
 ```
 

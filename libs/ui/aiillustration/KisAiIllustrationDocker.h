@@ -6,6 +6,7 @@
 #ifndef KIS_AI_ILLUSTRATION_DOCKER_H
 #define KIS_AI_ILLUSTRATION_DOCKER_H
 
+#include <QByteArray>
 #include <QDockWidget>
 #include <QPointer>
 
@@ -57,6 +58,8 @@ private:
     void generateRemoteImage(const QString &prompt);
     void finishRemoteImageRequest();
     void cancelRemoteRequest();
+    bool appendReplyData(QNetworkReply *reply);
+    QByteArray takeReplyData(QNetworkReply *reply);
     void updateModeUi();
     void setBusy(bool busy);
     bool ensureCanvas();
@@ -70,6 +73,7 @@ private:
     bool m_requestWasCancelled {false};
     bool m_requestTimedOut {false};
     bool m_responseTooLarge {false};
+    QByteArray m_responseBuffer;
     GenerationMode m_currentMode {GenerationMode::LlmStrokes};
 
     QComboBox *m_presetCombo {nullptr};
