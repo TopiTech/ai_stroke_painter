@@ -1,58 +1,64 @@
 {
   "version": 1,
-  "id": "goal-20260908-native-ai-illustration",
-  "status": "active",
-  "objective": "AI Stroke Painter を Python の Krita プラグインではなく、Krita の描画基盤を用いるネイティブな独自 AI イラストレーションアプリケーションとして統合し、不要な一般用途 UI を削減して Craft 環境でコンパイルする",
+  "id": "goal-20260909-llm-stroke-quality",
+  "status": "completed",
+  "objective": "LLM 座標ストローク描画モードの生成・補正・ラスタライズを根本改善し、構図、形状、線質、色彩、レイヤリングの品質と安定性を大幅に引き上げる",
   "completion_criteria": [
-    "AI 描画 UI・LLM リクエスト・生成結果のキャンバス反映が、PyKrita プラグインマネージャーに依存せず、アプリ本体にコンパイルされる",
-    "起動時の既定 UI が AI イラスト制作向けで、不要な Krita の一般用途メニュー・ドッカー・ワークスペースが露出しない",
-    "必要な文書作成・保存・キャンバス・レイヤー・描画機能は維持される",
-    "旧 Python プラグインのランタイム登録・配布物が除去される",
-    "Craft 環境で対象アプリケーションの構成とコンパイルが成功する",
-    "不要になったソース・設定・生成物を削除し、残存参照がない"
+    "LLM 出力スキーマと作画指示が、構図設計、奥行き順、配色、ストローク役割、品質制約を明示する",
+    "不正・粗い・重複した LLM 座標を安全に正規化し、描画可能なストロークへ補正する品質パスが実装される",
+    "曲線補間、筆圧、テーパー、輪郭、塗り、陰影のレンダリング品質が改善される",
+    "改善点を検証する自動テストが追加され、AI ストロークの全スタンドアロンテストが成功する",
+    "代表的なプログラムの画像出力を生成し、画素内容と構造的品質を検証できる"
   ],
   "constraints": [
     "既存ユーザー変更を上書きしない",
-    "Krita の既存描画基盤と CMake 規約を利用する",
-    "API キーや個人情報を保存しない",
-    "外部公開・リモートへの push は行わない",
-    "大規模削除の前にビルドへの影響を確認する"
+    "Krita/Qt6 と既存 StrokeProgram v2 の互換性を維持する",
+    "API キーを保存せず、外部 API 呼び出しやデプロイを行わない",
+    "Android Gradle lock の既存変更には触れない"
   ],
   "non_goals": [
-    "外部 AI サービスとの契約・課金・認証情報の取得",
-    "上流 Krita への PR 作成",
-    "Krita の描画エンジンを一から再実装する"
+    "画像生成モデル API モードの全面改修",
+    "Krita 描画エンジン全体の置換",
+    "外部サービスへの公開や課金を伴う検証"
   ],
   "verification": [
-    "CMake の AI アプリ本体ターゲットと PyKrita 非依存の静的参照監査",
-    "AI UI と生成・描画経路のユニットテストまたは対象ビルド",
-    "Craft 環境からの configure / compile",
-    "不要プラグイン・キャッシュ・旧配布物の不在確認"
+    "Qt6 スタンドアロン AI ストロークテストの configure/build/ctest",
+    "品質補正・スキーマ・曲線・レンダリングの新規ユニットテスト",
+    "代表プログラムのオフスクリーン画像レンダリングと画素統計",
+    "変更差分と既存変更の非干渉監査"
   ],
   "budget": {
-    "max_iterations": null,
+    "max_iterations": 20,
     "max_elapsed_minutes": null
   },
   "progress": {
-    "iteration": 1,
+    "iteration": 5,
     "completed": [
-      "Krita ソースツリーをプロジェクト直下へ移行",
-      "既存 Python プラグインの構成と Craft ルートを確認"
+      "関連ソース、直近コミット、既存テスト、ビルド手順を確認",
+      "Qt6 PATH を設定したベースラインで全3テストの成功を確認",
+      "構図先行・大形状優先・レイヤー登録・自己監査を要求する LLM 作画契約と予算配分を実装",
+      "座標、筆圧、ブラシ、重複点、退化形状を正規化する refineForRendering と構造品質スコアを実装",
+      "実際の Centripetal Catmull-Rom、単調な筆圧補間、適応サンプリング、丸い接合、2倍スーパーサンプリング、鉛筆質感、粒子サイズ制御、Screen ハイライトを実装",
+      "スキーマ、品質補正、曲線、線質、代表構図の画素指標を検証するテストを追加",
+      "スタンドアロンとフル Krita 構成のビルドおよび AI 関連テストを完走",
+      "README と DEVELOPMENT の仕様を同期"
     ],
-    "remaining": [
-      "ネイティブ AI 機能の実装と本体統合",
-      "専用アプリ UI への削減",
-      "Craft 依存関係の解決とコンパイル",
-      "旧プラグイン資産の削除と完了監査"
-    ],
-    "last_action": "新しい完全統合要件のベースライン監査",
-    "last_result": "Python プラグインが現在の機能本体であり、Craft にはコンパイラはあるが Krita 依存関係は未導入"
+    "remaining": [],
+    "last_action": "スタンドアロン/フル構成の再ビルド、全 AI テスト、代表 PNG、diff check を最終検証",
+    "last_result": "両構成とも AI 関連テスト 3/3 成功。フル kritaui のリンク成功。代表 PNG の被覆・色彩・レイヤー品質指標も成功"
   },
   "evidence": [
-    "plugins/python/ai_stroke_painter に UI・LLM・生成・描画の Python 実装が存在する",
-    "C:\\CraftRoot に GCC・CMake・Ninja はあるが、Craft の installed package 一覧に Qt/KF/Krita はない"
+    "PATH に C:\\CraftRoot\\bin と C:\\CraftRoot\\mingw64\\bin を追加した ctest で 3/3 passed",
+    "strokeProgramJsonSchema の center 型が配列でなく number、ribbon 幅や path 品質属性が未定義",
+    "generateCatmullRomSpline と path 描画が centripetal ではなく uniform Catmull-Rom 式を使用",
+    "parseProgramJson が座標範囲・退化操作・重複点を描画前に品質補正していない",
+    "build-test: 3/3 tests passed (KisAiStrokeProgramTest, KisAiStrokeRendererTest, KisAiIllustrationRendererTest)",
+    "build-ai: kritaui linked and 3/3 full-configuration AI tests passed",
+    "representative-stroke-quality.png: 25,670 bytes, SHA-256 F34F015484F3B5708DA1EABAD18D9F3EFC8211AF79ED90E04CC328B5150FA950",
+    "representative quality test verifies all five layers, >=70% opaque coverage, >=35% chromatic samples, and >120 sampled colors",
+    "git diff --check completed without whitespace errors"
   ],
   "blockers": [],
-  "created_at": "2026-09-08T18:40:00+09:00",
-  "updated_at": "2026-09-08T18:40:00+09:00"
+  "created_at": "2026-09-09T10:47:41.6001235+09:00",
+  "updated_at": "2026-09-09T11:11:43.5310453+09:00"
 }

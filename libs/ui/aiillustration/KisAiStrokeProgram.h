@@ -14,6 +14,7 @@
 #include <QRectF>
 #include <QSize>
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 #ifdef AI_STROKE_STANDALONE
@@ -109,6 +110,17 @@ struct KRITAUI_EXPORT KisAiStrokeProgram
     bool isValid() const { return !operations.isEmpty(); }
 };
 
+struct KRITAUI_EXPORT KisAiStrokeQualityReport
+{
+    int inputOperations {0};
+    int outputOperations {0};
+    int droppedOperations {0};
+    int repairedValues {0};
+    int deduplicatedPoints {0};
+    qreal score {0.0};
+    QStringList warnings;
+};
+
 /**
  * High-level parser, serializer, and prompt builder for text-based LLMs
  * generating coordinate-directed strokes (StrokeProgram v2).
@@ -161,6 +173,20 @@ public:
         KisAiStrokeProgram *outProgram,
         QString *errorMessage = nullptr
     );
+
+    /**
+     * Canonicalize unreliable model geometry before rasterization. This pass
+     * clamps non-finite/out-of-range values, removes duplicate points and
+     * degenerate operations, normalizes brush dynamics, and computes a
+     * structural quality score without changing the intended composition.
+     */
+    static KisAiStrokeProgram refineForRendering(
+        const KisAiStrokeProgram &program,
+        KisAiStrokeQualityReport *report = nullptr
+    );
+
+    /** Return a deterministic structural quality score in [0, 1]. */
+    static qreal qualityScore(const KisAiStrokeProgram &program);
 
     /**
      * Extract JSON substring from raw model output (handles ```json ... ``` and <think>...</think>).

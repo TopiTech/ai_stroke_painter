@@ -6,9 +6,12 @@
 #include "KisAiStrokeRendererTest.h"
 
 #include <QColor>
+#include <QDir>
 #include <QImage>
 #include <QPointF>
+#include <QSet>
 #include <QVector>
+#include <cmath>
 #ifndef AI_STROKE_STANDALONE
 #include <testui.h>
 #else
@@ -340,6 +343,114 @@ void KisAiStrokeRendererTest::testUnnormalizedLayerRendering()
 
     // Corner pixel outside the flat polygon must be clipped / transparent because Shading clips to Flats!
     QCOMPARE(qAlpha(img.pixel(10, 10)), 0);
+}
+
+void KisAiStrokeRendererTest::testCentripetalSplineAvoidsUnevenPointLoop()
+{
+    const QVector<QPointF> input = {
+        QPointF(0.0, 0.0),
+        QPointF(0.95, 0.02),
+        QPointF(1.0, 4.0),
+        QPointF(2.0, 4.1)
+    };
+    const QVector<QPointF> spline = KisAiStrokeRenderer::generateCatmullRomSpline(input, 16, false);
+
+    QCOMPARE(spline.first(), input.first());
+    QCOMPARE(spline.last(), input.last());
+    for (const QPointF &point : spline) {
+        QVERIFY(std::isfinite(point.x()));
+        QVERIFY(std::isfinite(point.y()));
+        QVERIFY2(point.x() >= -0.02 && point.x() <= 2.02, qPrintable(QString::number(point.x())));
+        QVERIFY2(point.y() >= -0.1 && point.y() <= 4.2, qPrintable(QString::number(point.y())));
+    }
+}
+
+void KisAiStrokeRendererTest::testPressureStrokeHasAntialiasedTaper()
+{
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(256, 256);
+
+    KisAiStrokeOperation stroke;
+    stroke.kind = KisAiStrokeOperation::Kind::Path;
+    stroke.id = QStringLiteral("taper_quality");
+    stroke.layer = QStringLiteral("Lineart");
+    stroke.brush.profile = QStringLiteral("gpen");
+    stroke.brush.color = QColor(24, 20, 32);
+    stroke.brush.size = 0.04;
+    stroke.points = {
+        KisAiStrokePoint(0.1, 0.5, 1.0),
+        KisAiStrokePoint(0.35, 0.42, 0.9),
+        KisAiStrokePoint(0.65, 0.58, 0.75),
+        KisAiStrokePoint(0.9, 0.5, 0.5)
+    };
+    program.operations.append(stroke);
+
+    const QImage image = KisAiStrokeRenderer::renderProgramToImage(program, QSize(256, 256));
+    QVERIFY(!image.isNull());
+
+    int partialAlphaPixels = 0;
+    int paintedPixels = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const int alpha = qAlpha(image.pixel(x, y));
+            if (alpha > 0) ++paintedPixels;
+            if (alpha > 0 && alpha < 255) ++partialAlphaPixels;
+        }
+    }
+    QVERIFY(paintedPixels > 250);
+    QVERIFY(partialAlphaPixels > 30);
+
+    auto verticalCoverage = [&image](int x) {
+        int count = 0;
+        for (int y = 0; y < image.height(); ++y) {
+            if (qAlpha(image.pixel(x, y)) > 16) ++count;
+        }
+        return count;
+    };
+    QVERIFY(verticalCoverage(128) > verticalCoverage(26));
+}
+
+void KisAiStrokeRendererTest::testRepresentativeCompositionQualityMetrics()
+{
+    const KisAiStrokeProgram program = KisAiStrokeProgramCodec::createDeterministicProgram(
+        QStringLiteral("cinematic sunset mountain landscape with sakura petals"),
+        QSize(1024, 768)
+    );
+    QVERIFY(program.isValid());
+    QVERIFY(program.completionScore >= 0.6);
+
+    const QMap<QString, int> layers = KisAiStrokeProgramCodec::countLayerOperations(program);
+    for (const QString &layer : {QStringLiteral("Flats"), QStringLiteral("Shading"), QStringLiteral("Lineart"), QStringLiteral("Highlights"), QStringLiteral("FX")}) {
+        QVERIFY2(layers.value(layer) > 0, qPrintable(layer));
+    }
+
+    const QImage image = KisAiStrokeRenderer::renderProgramToImage(program, QSize(512, 384));
+    QVERIFY(!image.isNull());
+
+    int opaqueSamples = 0;
+    int chromaticSamples = 0;
+    QSet<QRgb> sampledColors;
+    for (int y = 0; y < image.height(); y += 4) {
+        for (int x = 0; x < image.width(); x += 4) {
+            const QColor color = image.pixelColor(x, y);
+            if (color.alpha() > 220) ++opaqueSamples;
+            if (color.alpha() > 32 && (qMax(color.red(), qMax(color.green(), color.blue()))
+                    - qMin(color.red(), qMin(color.green(), color.blue()))) > 12) {
+                ++chromaticSamples;
+            }
+            if (color.alpha() > 0) sampledColors.insert(image.pixel(x, y));
+        }
+    }
+    const int sampleCount = (image.width() / 4) * (image.height() / 4);
+    QVERIFY(opaqueSamples > sampleCount * 0.70);
+    QVERIFY(chromaticSamples > sampleCount * 0.35);
+    QVERIFY(sampledColors.size() > 120);
+
+    const QString artifactDir = qEnvironmentVariable("AI_STROKE_TEST_ARTIFACT_DIR");
+    if (!artifactDir.isEmpty()) {
+        QVERIFY(QDir().mkpath(artifactDir));
+        QVERIFY(image.save(QDir(artifactDir).filePath(QStringLiteral("representative-stroke-quality.png"))));
+    }
 }
 
 KISTEST_MAIN(KisAiStrokeRendererTest)

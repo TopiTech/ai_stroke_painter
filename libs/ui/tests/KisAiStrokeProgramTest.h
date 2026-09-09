@@ -28,6 +28,8 @@ private Q_SLOTS:
     void testProceduralCharacterGeneration();
     void testNormalizeLayerName();
     void testCountLayerOperationsAndFormatSummary();
+    void testRefineForRenderingRepairsModelGeometry();
+    void testStructuralQualityScore();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

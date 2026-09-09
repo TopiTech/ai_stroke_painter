@@ -474,7 +474,8 @@ void KisAiIllustrationDocker::generateLocalStrokes(const QString &prompt)
         QString statusMsg;
         if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
             const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
-            const QString detailMsg = QStringLiteral("%1 (%2)").arg(statusMsg, summary);
+            const int qualityPercent = qRound(qBound<qreal>(0.0, program.completionScore, 1.0) * 100.0);
+            const QString detailMsg = i18n("%1 (%2 / 構造品質 %3%)", statusMsg, summary, qualityPercent);
             setStatus(detailMsg);
         } else {
             setStatus(statusMsg, true);
@@ -618,7 +619,8 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         QString statusMsg;
         if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
             const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
-            const QString detailMsg = QStringLiteral("%1 (%2)").arg(statusMsg, summary);
+            const int qualityPercent = qRound(qBound<qreal>(0.0, program.completionScore, 1.0) * 100.0);
+            const QString detailMsg = i18n("%1 (%2 / 構造品質 %3%)", statusMsg, summary, qualityPercent);
             setStatus(detailMsg);
         } else {
             setStatus(statusMsg, true);

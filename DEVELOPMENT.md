@@ -49,7 +49,8 @@ Windows では、Krita の実装本体を `bin/ai-stroke-painter.dll` にし、�
 3. **LLM 座標ストローク描画モード**:
    - `KisAiStrokeProgramCodec::buildChatCompletionsPayload()` がプロンプト・キャンバス寸法・作画戦略システムプロンプトから OpenAI Chat Completions (`/v1/chat/completions`) 互換の JSON リクエストを構築します。
    - レスポンスの思考タグ（`<think>`）除去やコードブロック抽出を行い、`StrokeProgram` をパースします。
-   - `KisAiStrokeRenderer::renderProgramToLayers()` が、指定された座標・筆圧・スタイルに基づき、`Flats`, `Shading`, `Lineart`, `Highlights`, `FX` の独立した `KisPaintLayer` を自動作成してキャンバスへ直接描画します（Undo/Redo 対応）。
+   - `refineForRendering()` が範囲外・非有限座標、重複点、退化形状、異常なブラシ値を補正または除外し、レイヤー被覆・プリミティブ多様性・画面占有・細部量から構造品質を採点します。
+   - `KisAiStrokeRenderer::renderProgramToLayers()` が、実際の Centripetal Catmull-Rom 補間、単調な筆圧補間、可変幅の丸い接合、適応サンプリング、通常キャンバスでの2倍スーパーサンプリングにより描画します。`Flats`, `Shading`, `Lineart`, `Highlights`, `FX` は独立した `KisPaintLayer` となり Undo/Redo できます。Highlights は白飛びを抑える Screen 合成です。
 4. **ローカル座標ストローク描画モード**:
    - `KisAiStrokeProgramCodec::createDeterministicProgram()` がプロンプトをシードに決定論的な多層座標ストロークを生成し、上記同様にキャンバスへ描画します。
 5. **画像モデル API モード**:
@@ -125,7 +126,7 @@ cmake --install build-ai --prefix "$craftRoot\ai-stroke-painter"
 
 ### 単体テストの実行（CI / ローカル）
 
-AI ストロークのパース・スキーマ生成・スプライン曲線補間・クリッピングマスクの回帰テストを実行します。
+AI ストロークのパース・スキーマ生成・品質補正・Centripetal スプライン・筆圧テーパー・スーパーサンプリング・クリッピングマスク・代表作品の画素品質指標を回帰テストします。
 
 ```powershell
 # フルビルド環境でのテスト

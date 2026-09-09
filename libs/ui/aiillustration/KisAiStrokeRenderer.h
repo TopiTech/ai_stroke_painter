@@ -69,6 +69,11 @@ public:
     );
 
 private:
+    static QImage renderOperationsToImage(
+        const QVector<KisAiStrokeOperation> &operations,
+        const QSize &canvasSize
+    );
+
     static void rasterizeOperation(
         QPainter &painter,
         const KisAiStrokeOperation &op,

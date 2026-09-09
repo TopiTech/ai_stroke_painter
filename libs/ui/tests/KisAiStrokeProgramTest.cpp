@@ -99,6 +99,15 @@ void KisAiStrokeProgramTest::testBuildChatCompletionsPayload()
     QVERIFY(systemPrompt.contains(QStringLiteral("Flats")));
     QVERIFY(systemPrompt.contains(QStringLiteral("Shading")));
     QVERIFY(systemPrompt.contains(QStringLiteral("Lineart")));
+    QVERIFY(systemPrompt.contains(QStringLiteral("MASTER DRAWING WORKFLOW")));
+    QVERIFY(systemPrompt.contains(QStringLiteral("silently audit"), Qt::CaseInsensitive));
+
+    const QJsonObject userRequest = QJsonDocument::fromJson(
+        messages.at(1).toObject().value(QStringLiteral("content")).toString().toUtf8()
+    ).object();
+    QCOMPARE(userRequest.value(QStringLiteral("geometry_budget")).toInt(), 300);
+    QCOMPARE(userRequest.value(QStringLiteral("operation_target")).toInt(), 60);
+    QVERIFY(userRequest.value(QStringLiteral("budget_allocation")).isObject());
 }
 
 void KisAiStrokeProgramTest::testStrokeProgramJsonSchema()
@@ -109,6 +118,16 @@ void KisAiStrokeProgramTest::testStrokeProgramJsonSchema()
     const QJsonObject props = schema.value(QStringLiteral("properties")).toObject();
     QVERIFY(props.contains(QStringLiteral("schema_version")));
     QVERIFY(props.contains(QStringLiteral("operations")));
+
+    const QJsonObject opSchema = props.value(QStringLiteral("operations")).toObject()
+        .value(QStringLiteral("items")).toObject();
+    const QJsonObject opProps = opSchema.value(QStringLiteral("properties")).toObject();
+    QCOMPARE(opProps.value(QStringLiteral("center")).toObject().value(QStringLiteral("type")).toString(), QStringLiteral("array"));
+    QVERIFY(opProps.contains(QStringLiteral("width_start")));
+    QVERIFY(opProps.contains(QStringLiteral("width_mid")));
+    QVERIFY(opProps.contains(QStringLiteral("width_end")));
+    QVERIFY(opProps.contains(QStringLiteral("smooth")));
+    QCOMPARE(props.value(QStringLiteral("operations")).toObject().value(QStringLiteral("minItems")).toInt(), 1);
 }
 
 void KisAiStrokeProgramTest::testTruncatedJsonRecovery()
@@ -484,6 +503,71 @@ void KisAiStrokeProgramTest::testCountLayerOperationsAndFormatSummary()
 
     const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
     QCOMPARE(summary, QStringLiteral("Flats: 2, Shading: 2, Lineart: 1, Highlights: 1, FX: 1"));
+}
+
+void KisAiStrokeProgramTest::testRefineForRenderingRepairsModelGeometry()
+{
+    KisAiStrokeProgram input;
+    input.canvasSize = QSize(1000, 800);
+
+    KisAiStrokeOperation path;
+    path.kind = KisAiStrokeOperation::Kind::Path;
+    path.layer = QStringLiteral("ink");
+    path.brush.profile = QStringLiteral("auto");
+    path.brush.color = Qt::black;
+    path.brush.size = -4.0;
+    path.brush.opacity = 2.0;
+    path.points = {
+        KisAiStrokePoint(-0.2, 0.2, -1.0),
+        KisAiStrokePoint(-0.2, 0.2, 0.7),
+        KisAiStrokePoint(1.4, 0.8, 4.0)
+    };
+    input.operations.append(path);
+
+    KisAiStrokeOperation degenerateFill;
+    degenerateFill.kind = KisAiStrokeOperation::Kind::Fill;
+    degenerateFill.layer = QStringLiteral("Flats");
+    degenerateFill.polygon = {QPointF(0.1, 0.1), QPointF(0.2, 0.2), QPointF(0.3, 0.3)};
+    input.operations.append(degenerateFill);
+
+    KisAiStrokeQualityReport report;
+    const KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(input, &report);
+    QCOMPARE(report.inputOperations, 2);
+    QCOMPARE(report.outputOperations, 1);
+    QCOMPARE(report.droppedOperations, 1);
+    QVERIFY(report.repairedValues >= 5);
+    QVERIFY(report.deduplicatedPoints >= 1);
+
+    const KisAiStrokeOperation &fixed = refined.operations.first();
+    QCOMPARE(fixed.layer, QStringLiteral("Lineart"));
+    QCOMPARE(fixed.brush.profile, QStringLiteral("gpen"));
+    QCOMPARE(fixed.points.size(), 2);
+    QCOMPARE(fixed.points.first().pos, QPointF(0.0, 0.2));
+    QCOMPARE(fixed.points.last().pos, QPointF(1.0, 0.8));
+    QVERIFY(fixed.points.first().pressure >= 0.05);
+    QVERIFY(fixed.brush.size > 0.0);
+    QCOMPARE(fixed.brush.opacity, 1.0);
+    QVERIFY(fixed.brush.color != QColor(Qt::black));
+}
+
+void KisAiStrokeProgramTest::testStructuralQualityScore()
+{
+    KisAiStrokeProgram sparse;
+    KisAiStrokeOperation line;
+    line.kind = KisAiStrokeOperation::Kind::Path;
+    line.layer = QStringLiteral("Lineart");
+    line.points = {KisAiStrokePoint(0.45, 0.45), KisAiStrokePoint(0.55, 0.55)};
+    sparse.operations.append(line);
+
+    KisAiStrokeProgram rich = KisAiStrokeProgramCodec::createDeterministicProgram(
+        QStringLiteral("sunset mountain landscape with sakura"), QSize(1024, 768));
+
+    const qreal sparseScore = KisAiStrokeProgramCodec::qualityScore(sparse);
+    const qreal richScore = KisAiStrokeProgramCodec::qualityScore(rich);
+    QVERIFY(sparseScore >= 0.0 && sparseScore <= 1.0);
+    QVERIFY(richScore >= 0.0 && richScore <= 1.0);
+    QVERIFY2(richScore > sparseScore + 0.25, qPrintable(QStringLiteral("sparse=%1 rich=%2").arg(sparseScore).arg(richScore)));
+    QCOMPARE(rich.completionScore, richScore);
 }
 
 KISTEST_MAIN(KisAiStrokeProgramTest)

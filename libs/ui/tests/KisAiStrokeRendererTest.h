@@ -23,6 +23,9 @@ private Q_SLOTS:
     void testRenderRadialGradient();
     void testRenderZeroDimensionsFallback();
     void testUnnormalizedLayerRendering();
+    void testCentripetalSplineAvoidsUnevenPointLoop();
+    void testPressureStrokeHasAntialiasedTaper();
+    void testRepresentativeCompositionQualityMetrics();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H
