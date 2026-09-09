@@ -1132,6 +1132,61 @@ void KisAiStrokeProgramTest::testParseSseStreamChunk()
     QVERIFY(unprocessed.isEmpty());
 }
 
+void KisAiStrokeProgramTest::testAcceptedResponseContentType()
+{
+    QVERIFY(KisAiStrokeProgramCodec::isAcceptedResponseContentType(QByteArray(), true));
+    QVERIFY(KisAiStrokeProgramCodec::isAcceptedResponseContentType(QByteArrayLiteral("application/json; charset=utf-8"),
+                                                                   false));
+    QVERIFY(KisAiStrokeProgramCodec::isAcceptedResponseContentType(QByteArrayLiteral("application/x-json"), false));
+    QVERIFY(KisAiStrokeProgramCodec::isAcceptedResponseContentType(QByteArrayLiteral("text/json"), false));
+
+    // Chat Completions with stream=true returns Server-Sent Events, not a
+    // buffered JSON media type.
+    QVERIFY(
+        KisAiStrokeProgramCodec::isAcceptedResponseContentType(QByteArrayLiteral("text/event-stream; charset=utf-8"),
+                                                               true));
+    QVERIFY(!KisAiStrokeProgramCodec::isAcceptedResponseContentType(QByteArrayLiteral("text/event-stream"), false));
+    QVERIFY(!KisAiStrokeProgramCodec::isAcceptedResponseContentType(QByteArrayLiteral("text/html"), true));
+}
+
+void KisAiStrokeProgramTest::testGoalModeCompletionInvariant()
+{
+    const QJsonObject operation{
+        {QStringLiteral("kind"), QStringLiteral("path")},
+        {QStringLiteral("id"), QStringLiteral("intermediate_line")},
+        {QStringLiteral("layer"), QStringLiteral("Lineart")},
+        {QStringLiteral("points"),
+         QJsonArray{
+             QJsonArray{0.2, 0.2, 0.8},
+             QJsonArray{0.8, 0.8, 0.7},
+         }},
+        {QStringLiteral("brush"),
+         QJsonObject{
+             {QStringLiteral("profile"), QStringLiteral("gpen")},
+             {QStringLiteral("color"), QStringLiteral("#222233")},
+             {QStringLiteral("size"), 0.006},
+         }},
+    };
+    const QJsonObject root{
+        {QStringLiteral("schema_version"), 2},
+        {QStringLiteral("current_step"), 1},
+        {QStringLiteral("total_steps"), 4},
+        // A model can incorrectly claim completion at an intermediate step.
+        {QStringLiteral("goal_reached"), true},
+        {QStringLiteral("operations"), QJsonArray{operation}},
+    };
+
+    KisAiStrokeProgram parsed;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseProgramJson(root, &parsed, &error), qPrintable(error));
+    const KisAiStrokeProgram intermediate = KisAiStrokeProgramCodec::refineForRendering(parsed);
+    QVERIFY(!intermediate.goalReached);
+
+    parsed.currentStep = parsed.totalSteps;
+    const KisAiStrokeProgram finalStep = KisAiStrokeProgramCodec::refineForRendering(parsed);
+    QVERIFY(finalStep.goalReached);
+}
+
 void KisAiStrokeProgramTest::testSchemaVersionValidation()
 {
     // 1. Valid v2 schema (explicit)

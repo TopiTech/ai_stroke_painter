@@ -6,6 +6,7 @@
 #ifndef KIS_AI_STROKE_PROGRAM_H
 #define KIS_AI_STROKE_PROGRAM_H
 
+#include <QByteArray>
 #include <QColor>
 #include <QJsonObject>
 #include <QMap>
@@ -288,6 +289,13 @@ public:
      * requiring max_completion_tokens rather than max_tokens.
      */
     static bool isReasoningModel(const QString &model);
+
+    /**
+     * Check the media type used by a Chat Completions response. Streaming
+     * responses are Server-Sent Events; buffered responses are JSON. Missing
+     * headers are retained for compatibility with otherwise valid providers.
+     */
+    static bool isAcceptedResponseContentType(const QByteArray &contentType, bool streaming);
 
     /**
      * Offline deterministic procedural stroke generator for a specific Goal Mode step.

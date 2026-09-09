@@ -62,6 +62,11 @@
 
 #include <klocalizedstring.h>
 
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#include <wincrypt.h>
+#endif
+
 namespace
 {
 constexpr qint64 MAX_REMOTE_RESPONSE_BYTES = 32LL * 1024 * 1024;
@@ -72,17 +77,78 @@ constexpr int ACTIVITY_TIMEOUT_MS = 60'000;
 constexpr int MAX_REQUEST_TIMEOUT_MS = 600'000;
 constexpr int REMOTE_IMAGE_TIMEOUT_MS = 180'000;
 
-// Validate that the response content-type indicates JSON.  Returns true if the
-// header is a JSON media type or if the header is absent (some misconfigured
-// servers omit it), so we only reject clearly non-JSON responses.
-bool isJsonContentType(const QByteArray &contentType)
+const QString kDpapiApiKeyPrefix = QStringLiteral("dpapi:");
+
+bool protectApiKeyForCurrentUser(const QString &apiKey, QString *protectedValue)
 {
-    if (contentType.isEmpty()) {
-        return true;
+#if defined(Q_OS_WIN)
+    if (!protectedValue || apiKey.isEmpty()) {
+        return false;
     }
-    // Content-Type may include parameters (e.g. "application/json; charset=utf-8").
-    const QByteArray primary = contentType.split(';').front().trimmed().toLower();
-    return primary == "application/json" || primary == "application/x-json" || primary == "text/json";
+
+    QByteArray plainText = apiKey.toUtf8();
+    DATA_BLOB input{};
+    input.cbData = static_cast<DWORD>(plainText.size());
+    input.pbData = reinterpret_cast<BYTE *>(plainText.data());
+
+    DATA_BLOB encrypted{};
+    if (!CryptProtectData(&input,
+                          L"AI Stroke Painter API key",
+                          nullptr,
+                          nullptr,
+                          nullptr,
+                          CRYPTPROTECT_UI_FORBIDDEN,
+                          &encrypted)) {
+        return false;
+    }
+
+    const QByteArray protectedBytes(reinterpret_cast<const char *>(encrypted.pbData),
+                                    static_cast<int>(encrypted.cbData));
+    LocalFree(encrypted.pbData);
+    *protectedValue = kDpapiApiKeyPrefix + QString::fromLatin1(protectedBytes.toBase64());
+    return true;
+#else
+    Q_UNUSED(apiKey);
+    Q_UNUSED(protectedValue);
+    return false;
+#endif
+}
+
+bool unprotectApiKeyForCurrentUser(const QString &protectedValue, QString *apiKey)
+{
+#if defined(Q_OS_WIN)
+    if (!apiKey || !protectedValue.startsWith(kDpapiApiKeyPrefix)) {
+        return false;
+    }
+
+    QByteArray protectedBytes = QByteArray::fromBase64(protectedValue.mid(kDpapiApiKeyPrefix.size()).toLatin1());
+    if (protectedBytes.isEmpty()) {
+        return false;
+    }
+
+    DATA_BLOB input{};
+    input.cbData = static_cast<DWORD>(protectedBytes.size());
+    input.pbData = reinterpret_cast<BYTE *>(protectedBytes.data());
+    DATA_BLOB plainText{};
+    LPWSTR description = nullptr;
+    const bool decrypted =
+        CryptUnprotectData(&input, &description, nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &plainText);
+    if (description) {
+        LocalFree(description);
+    }
+    if (!decrypted) {
+        return false;
+    }
+
+    const QByteArray plainBytes(reinterpret_cast<const char *>(plainText.pbData), static_cast<int>(plainText.cbData));
+    LocalFree(plainText.pbData);
+    *apiKey = QString::fromUtf8(plainBytes);
+    return !apiKey->isEmpty();
+#else
+    Q_UNUSED(protectedValue);
+    Q_UNUSED(apiKey);
+    return false;
+#endif
 }
 
 QString imageSizeText(const QSpinBox *widthSpin, const QSpinBox *heightSpin)
@@ -405,7 +471,14 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     m_saveApiKeyCheck = new QCheckBox(i18n("🔑 API キーをこの端末に保存する"), m_detailsContainer);
     m_saveApiKeyCheck->setChecked(false);
-    m_saveApiKeyCheck->setToolTip(i18n("チェックを入れると API キーが次回以降も保持・自動入力されます。"));
+#if defined(Q_OS_WIN)
+    m_saveApiKeyCheck->setToolTip(
+        i18n("チェックを入れると、API キーを Windows の現在のユーザー向け保護で保存し、次回起動時に自動入力します。"));
+#else
+    m_saveApiKeyCheck->setEnabled(false);
+    m_saveApiKeyCheck->setToolTip(
+        i18n("このプラットフォームでは API キーの保存は利用できません。リクエストごとに入力してください。"));
+#endif
 
     m_strokeBudgetLabel = new QLabel(i18n("ストローク予算"), m_detailsContainer);
     m_strokeBudgetSpin = new QSpinBox(m_detailsContainer);
@@ -679,6 +752,8 @@ KisAiIllustrationDocker::~KisAiIllustrationDocker()
         m_testReply->deleteLater();
         m_testReply = nullptr;
     }
+    m_testResponseBuffer.clear();
+    m_testResponseTooLarge = false;
     if (m_reply) {
         m_reply->disconnect(this);
         m_reply->abort();
@@ -763,7 +838,7 @@ void KisAiIllustrationDocker::createCanvas()
 
 void KisAiIllustrationDocker::generateIllustration()
 {
-    if (m_reply) {
+    if (m_reply || m_goalModeActive) {
         return;
     }
 
@@ -995,10 +1070,12 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         return;
     }
     // Content-type validation: reject clearly non-JSON responses before parsing.
-    if (!isJsonContentType(responseContentType)) {
-        logDebug(QStringLiteral("LLM_CONTENT_TYPE"), QStringLiteral("予期しないContent-Type: %1").arg(QString::fromUtf8(responseContentType)));
-        setStatus(i18n("LLM の応答が JSON 形式ではありません (Content-Type: %1)。",
-            QString::fromUtf8(responseContentType.isEmpty() ? QByteArray("unknown") : responseContentType)), true);
+    if (!KisAiStrokeProgramCodec::isAcceptedResponseContentType(responseContentType, true)) {
+        logDebug(QStringLiteral("LLM_CONTENT_TYPE"),
+                 QStringLiteral("予期しないContent-Type: %1").arg(QString::fromUtf8(responseContentType)));
+        setStatus(i18n("LLM の応答が JSON または SSE 形式ではありません (Content-Type: %1)。",
+                       QString::fromUtf8(responseContentType.isEmpty() ? QByteArray("unknown") : responseContentType)),
+                  true);
         m_streamedContent.clear();
         m_sseBuffer.clear();
         return;
@@ -1226,7 +1303,7 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
         return;
     }
     // Content-type validation: reject clearly non-JSON responses before parsing.
-    if (!isJsonContentType(responseContentType)) {
+    if (!KisAiStrokeProgramCodec::isAcceptedResponseContentType(responseContentType, false)) {
         logDebug(QStringLiteral("IMG_CONTENT_TYPE"), QStringLiteral("予期しないContent-Type: %1").arg(QString::fromUtf8(responseContentType)));
         setStatus(i18n("画像モデルの応答が JSON 形式ではありません (Content-Type: %1)。",
             QString::fromUtf8(responseContentType.isEmpty() ? QByteArray("unknown") : responseContentType)), true);
@@ -1338,6 +1415,36 @@ QByteArray KisAiIllustrationDocker::takeReplyData(QNetworkReply *reply)
     appendReplyData(reply);
     QByteArray response = m_responseBuffer;
     m_responseBuffer.clear();
+    return response;
+}
+
+bool KisAiIllustrationDocker::appendTestReplyData(QNetworkReply *reply)
+{
+    if (!reply || m_testResponseTooLarge) {
+        return false;
+    }
+
+    const QByteArray chunk = reply->readAll();
+    if (chunk.isEmpty()) {
+        return false;
+    }
+
+    if (chunk.size() > MAX_REMOTE_RESPONSE_BYTES - m_testResponseBuffer.size()) {
+        m_testResponseBuffer.clear();
+        m_testResponseTooLarge = true;
+        reply->abort();
+        return false;
+    }
+
+    m_testResponseBuffer.append(chunk);
+    return true;
+}
+
+QByteArray KisAiIllustrationDocker::takeTestReplyData(QNetworkReply *reply)
+{
+    appendTestReplyData(reply);
+    QByteArray response = m_testResponseBuffer;
+    m_testResponseBuffer.clear();
     return response;
 }
 
@@ -1761,7 +1868,7 @@ void KisAiIllustrationDocker::executeGoalStep()
 
         setBusy(false);
 
-        if (m_goalCurrentStep >= m_goalTotalSteps || program.goalReached) {
+        if (m_goalCurrentStep >= m_goalTotalSteps) {
             finishGoalMode(true);
         } else if (m_pausePerStepCheck && m_pausePerStepCheck->isChecked()) {
             m_waitingForUserStepAdvance = true;
@@ -1948,10 +2055,12 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         return;
     }
     // Content-type validation: reject clearly non-JSON responses before parsing.
-    if (!isJsonContentType(responseContentType)) {
-        logDebug(QStringLiteral("GOAL_CONTENT_TYPE"), QStringLiteral("予期しないContent-Type: %1").arg(QString::fromUtf8(responseContentType)));
-        setStatus(i18n("LLM の応答が JSON 形式ではありません (Content-Type: %1)。",
-            QString::fromUtf8(responseContentType.isEmpty() ? QByteArray("unknown") : responseContentType)), true);
+    if (!KisAiStrokeProgramCodec::isAcceptedResponseContentType(responseContentType, true)) {
+        logDebug(QStringLiteral("GOAL_CONTENT_TYPE"),
+                 QStringLiteral("予期しないContent-Type: %1").arg(QString::fromUtf8(responseContentType)));
+        setStatus(i18n("LLM の応答が JSON または SSE 形式ではありません (Content-Type: %1)。",
+                       QString::fromUtf8(responseContentType.isEmpty() ? QByteArray("unknown") : responseContentType)),
+                  true);
         m_streamedContent.clear();
         m_sseBuffer.clear();
         finishGoalMode(false);
@@ -2059,7 +2168,7 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         }
     }
 
-    if (m_goalCurrentStep >= m_goalTotalSteps || program.goalReached) {
+    if (m_goalCurrentStep >= m_goalTotalSteps) {
         finishGoalMode(true);
     } else if (m_pausePerStepCheck && m_pausePerStepCheck->isChecked()) {
         m_waitingForUserStepAdvance = true;
@@ -2143,19 +2252,41 @@ void KisAiIllustrationDocker::loadSettings()
         m_modelEditor->setText(savedLlmModel.isEmpty() ? QStringLiteral("gpt-4o") : savedLlmModel);
     }
 
-    // API キー (SEC-1: opt-in by default, obfuscated storage)
-    const bool saveKey = settings.value(QStringLiteral("AIIllustration/saveApiKey"), false).toBool();
+    // API keys are opt-in and use the operating system's current-user data
+    // protection. Previous releases wrote plaintext/base64-equivalent data to
+    // QSettings, so migrate it once on Windows or remove it elsewhere.
+    bool saveKey = settings.value(QStringLiteral("AIIllustration/saveApiKey"), false).toBool();
+    QString restoredKey;
+    if (saveKey) {
+        const QString storedKey = settings.value(QStringLiteral("AIIllustration/apiKey")).toString();
+        if (!storedKey.isEmpty() && !unprotectApiKeyForCurrentUser(storedKey, &restoredKey)) {
+#if defined(Q_OS_WIN)
+            const QByteArray legacyBytes = storedKey.startsWith(QStringLiteral("sk-"))
+                ? storedKey.toUtf8()
+                : QByteArray::fromBase64(storedKey.toLatin1());
+            const QString legacyKey = QString::fromUtf8(legacyBytes);
+            QString protectedKey;
+            if (!legacyKey.isEmpty() && protectApiKeyForCurrentUser(legacyKey, &protectedKey)) {
+                settings.setValue(QStringLiteral("AIIllustration/apiKey"), protectedKey);
+                restoredKey = legacyKey;
+            } else {
+                saveKey = false;
+            }
+#else
+            saveKey = false;
+#endif
+        }
+    }
+    if (!saveKey) {
+        settings.setValue(QStringLiteral("AIIllustration/saveApiKey"), false);
+        settings.remove(QStringLiteral("AIIllustration/apiKey"));
+    }
     if (m_saveApiKeyCheck) {
+        const QSignalBlocker blocker(m_saveApiKeyCheck);
         m_saveApiKeyCheck->setChecked(saveKey);
     }
-    if (saveKey && m_apiKeyEditor) {
-        const QString storedKey = settings.value(QStringLiteral("AIIllustration/apiKey")).toString();
-        if (storedKey.startsWith(QStringLiteral("sk-"))) {
-            m_apiKeyEditor->setText(storedKey);
-        } else {
-            const QByteArray decoded = QByteArray::fromBase64(storedKey.toLatin1());
-            m_apiKeyEditor->setText(QString::fromUtf8(decoded));
-        }
+    if (saveKey && m_apiKeyEditor && !restoredKey.isEmpty()) {
+        m_apiKeyEditor->setText(restoredKey);
     }
 
     // キャンバスサイズ
@@ -2231,8 +2362,19 @@ void KisAiIllustrationDocker::saveSettings()
         settings.setValue(QStringLiteral("AIIllustration/saveApiKey"), saveKey);
         if (saveKey) {
             const QString rawKey = m_apiKeyEditor->text();
-            const QString encodedKey = QString::fromLatin1(rawKey.toUtf8().toBase64());
-            settings.setValue(QStringLiteral("AIIllustration/apiKey"), encodedKey);
+            if (rawKey.isEmpty()) {
+                settings.remove(QStringLiteral("AIIllustration/apiKey"));
+            } else {
+                QString protectedKey;
+                if (protectApiKeyForCurrentUser(rawKey, &protectedKey)) {
+                    settings.setValue(QStringLiteral("AIIllustration/apiKey"), protectedKey);
+                } else {
+                    settings.setValue(QStringLiteral("AIIllustration/saveApiKey"), false);
+                    settings.remove(QStringLiteral("AIIllustration/apiKey"));
+                    const QSignalBlocker blocker(m_saveApiKeyCheck);
+                    m_saveApiKeyCheck->setChecked(false);
+                }
+            }
         } else {
             settings.remove(QStringLiteral("AIIllustration/apiKey"));
         }
@@ -2326,8 +2468,14 @@ void KisAiIllustrationDocker::testLlmConnection()
     }
 
     m_testStartTimeMs = QDateTime::currentMSecsSinceEpoch();
+    m_testResponseBuffer.clear();
+    m_testResponseTooLarge = false;
     m_testReply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
+    m_testReply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
 
+    connect(m_testReply.data(), &QNetworkReply::readyRead, this, [this] {
+        appendTestReplyData(m_testReply.data());
+    });
     connect(m_testReply.data(), &QNetworkReply::finished, this, &KisAiIllustrationDocker::finishTestConnectionRequest);
 
     const QPointer<QNetworkReply> pendingReply = m_testReply;
@@ -2355,8 +2503,21 @@ void KisAiIllustrationDocker::finishTestConnectionRequest()
     const qint64 elapsedMs = QDateTime::currentMSecsSinceEpoch() - m_testStartTimeMs;
     const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const bool success = reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300;
-    const QByteArray response = reply->readAll();
+    const QByteArray response = takeTestReplyData(reply.data());
+    const bool responseTooLarge = m_testResponseTooLarge;
+    m_testResponseTooLarge = false;
     reply->deleteLater();
+
+    if (responseTooLarge) {
+        const QString message = i18n("❌ 接続テストの応答が安全上限を超えました。");
+        if (m_testConnectionStatusLabel) {
+            m_testConnectionStatusLabel->setStyleSheet(QStringLiteral("color: #f87171; font-weight: 600;"));
+            m_testConnectionStatusLabel->setText(message);
+            m_testConnectionStatusLabel->setVisible(true);
+        }
+        logDebug(QStringLiteral("TEST_OVERFLOW"), QStringLiteral("接続テストの応答が上限サイズを超えました。"));
+        return;
+    }
 
     if (success) {
         QString modelResponseText;
@@ -2407,7 +2568,7 @@ void KisAiIllustrationDocker::finishTestConnectionRequest()
 
 void KisAiIllustrationDocker::logDebug(const QString &category, const QString &message)
 {
-    if (!m_debugLogText) {
+    if (!m_debugModeCheck || !m_debugModeCheck->isChecked() || !m_debugLogText) {
         return;
     }
     const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));

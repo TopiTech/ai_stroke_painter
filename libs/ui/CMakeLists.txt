@@ -744,6 +744,9 @@ if (KRITA_USE_SURFACE_COLOR_MANAGEMENT_API)
 endif()
 
 if(WIN32)
+    # DPAPI protects explicitly persisted API keys for the current Windows user.
+    target_link_libraries(kritaui PRIVATE crypt32)
+
     # Private headers are needed for:
     #    * KisDlgCustomTabletResolution
     #    * KisScreenInformationAdapter

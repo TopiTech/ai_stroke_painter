@@ -95,6 +95,25 @@ bool KisAiStrokeProgramCodec::isReasoningModel(const QString &model)
         || lower.contains(QLatin1String("note")) || lower.contains(QLatin1String("r1-distill"));
 }
 
+bool KisAiStrokeProgramCodec::isAcceptedResponseContentType(const QByteArray &contentType, bool streaming)
+{
+    if (contentType.isEmpty()) {
+        // A few OpenAI-compatible servers omit the header despite returning a
+        // valid response. The parser remains the final validation boundary.
+        return true;
+    }
+
+    const int parameterStart = contentType.indexOf(';');
+    const QByteArray primary =
+        contentType.left(parameterStart < 0 ? contentType.size() : parameterStart).trimmed().toLower();
+    if (primary == "application/json" || primary == "application/x-json" || primary == "text/json") {
+        return true;
+    }
+
+    // Chat Completions with stream=true returns data-only Server-Sent Events.
+    return streaming && primary == "text/event-stream";
+}
+
 quint32 KisAiStrokeProgramCodec::stableSeed(const QString &text)
 {
     const QByteArray bytes = text.toUtf8();
@@ -1583,7 +1602,10 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
     }
     refined.completionScore = localReport.score;
     if (program.totalSteps > 1) {
-        refined.goalReached = program.goalReached || (program.currentStep >= program.totalSteps);
+        // Goal Mode is orchestrated locally. A model response is untrusted
+        // metadata and must not terminate a user-selected multi-step run
+        // before the configured final step is reached.
+        refined.goalReached = program.currentStep >= program.totalSteps;
     } else {
         refined.goalReached = localReport.score >= 0.6;
     }
@@ -2858,7 +2880,7 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::mergePrograms(
     if (!extension.visualCritique.isEmpty()) {
         merged.visualCritique = extension.visualCritique;
     }
-    merged.goalReached = extension.goalReached || (merged.currentStep >= merged.totalSteps);
+    merged.goalReached = merged.totalSteps > 1 ? merged.currentStep >= merged.totalSteps : extension.goalReached;
 
     KisAiStrokeQualityReport report;
     return refineForRendering(merged, &report);

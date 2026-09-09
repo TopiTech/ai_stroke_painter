@@ -43,6 +43,8 @@ private Q_SLOTS:
     void testIsReasoningModel();
     void testScalarCoordinateAutoNormalization();
     void testParseSseStreamChunk();
+    void testAcceptedResponseContentType();
+    void testGoalModeCompletionInvariant();
     void testSchemaVersionValidation();
 };
 

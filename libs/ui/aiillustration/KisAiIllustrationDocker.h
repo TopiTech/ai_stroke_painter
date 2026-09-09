@@ -88,6 +88,8 @@ private:
 
     bool appendReplyData(QNetworkReply *reply);
     QByteArray takeReplyData(QNetworkReply *reply);
+    bool appendTestReplyData(QNetworkReply *reply);
+    QByteArray takeTestReplyData(QNetworkReply *reply);
     void updateModeUi();
     void setBusy(bool busy);
     bool ensureCanvas();
@@ -118,6 +120,8 @@ private:
 
     // Connection test state
     QPointer<QNetworkReply> m_testReply;
+    QByteArray m_testResponseBuffer;
+    bool m_testResponseTooLarge{false};
     qint64 m_testStartTimeMs {0};
 
     // Goal Mode State
