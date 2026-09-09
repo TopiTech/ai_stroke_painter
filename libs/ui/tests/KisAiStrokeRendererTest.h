@@ -28,6 +28,7 @@ private Q_SLOTS:
     void testRepresentativeCompositionQualityMetrics();
     void testRenderBackgroundLayer();
     void testRenderMangaLinesOperation();
+    void testRenderMangaLinesWithOriginCenter();
     void testNewBrushProfilesRendering();
     void testCaptureImageBase64();
 };

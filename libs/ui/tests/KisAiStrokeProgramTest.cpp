@@ -805,6 +805,88 @@ void KisAiStrokeProgramTest::testNewProceduralDomains()
     QVERIFY(hasMangaLines);
 }
 
+void KisAiStrokeProgramTest::testPixelCoordinateThresholdBoundary()
+{
+    // Verify that coordinates at exactly 1.5 are NOT auto-normalized,
+    // but coordinates above 1.5 ARE auto-normalized.
+    const QSize canvasSize(1000, 1000);
+
+    // Case 1: maxCoord = 1.5 (at threshold) - should NOT normalize
+    {
+        const QString jsonText = QStringLiteral(
+            "{\n"
+            "  \"schema_version\": 2,\n"
+            "  \"canvas\": {\"width\": 1000, \"height\": 1000},\n"
+            "  \"operations\": [\n"
+            "    {\n"
+            "      \"kind\": \"path\",\n"
+            "      \"id\": \"at_threshold\",\n"
+            "      \"layer\": \"Lineart\",\n"
+            "      \"points\": [[1.5, 0.5, 1.0], [0.5, 0.5, 1.0]],\n"
+            "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#000000\", \"size\": 10}\n"
+            "    }\n"
+            "  ]\n"
+            "}"
+        );
+        KisAiStrokeProgram program;
+        QString error;
+        const QJsonObject root = QJsonDocument::fromJson(jsonText.toUtf8()).object();
+        QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error));
+        // 1.5 is NOT > 1.5, so coordinates should remain as-is
+        QCOMPARE(program.operations[0].points[0].pos.x(), 1.5);
+    }
+
+    // Case 2: maxCoord = 1.5001 (just above threshold) - should normalize
+    {
+        const QString jsonText = QStringLiteral(
+            "{\n"
+            "  \"schema_version\": 2,\n"
+            "  \"canvas\": {\"width\": 1000, \"height\": 1000},\n"
+            "  \"operations\": [\n"
+            "    {\n"
+            "      \"kind\": \"path\",\n"
+            "      \"id\": \"above_threshold\",\n"
+            "      \"layer\": \"Lineart\",\n"
+            "      \"points\": [[1.5001, 0.5, 1.0], [0.5, 0.5, 1.0]],\n"
+            "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#000000\", \"size\": 10}\n"
+            "    }\n"
+            "  ]\n"
+            "}"
+        );
+        KisAiStrokeProgram program;
+        QString error;
+        const QJsonObject root = QJsonDocument::fromJson(jsonText.toUtf8()).object();
+        QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error));
+        // 1.5001 > 1.5, so coordinates should be normalized: 1.5001 / 1000 ≈ 0.0015
+        QVERIFY(program.operations[0].points[0].pos.x() < 0.01);
+    }
+
+    // Case 3: maxCoord = 1.4999 (just below threshold) - should NOT normalize
+    {
+        const QString jsonText = QStringLiteral(
+            "{\n"
+            "  \"schema_version\": 2,\n"
+            "  \"canvas\": {\"width\": 1000, \"height\": 1000},\n"
+            "  \"operations\": [\n"
+            "    {\n"
+            "      \"kind\": \"path\",\n"
+            "      \"id\": \"below_threshold\",\n"
+            "      \"layer\": \"Lineart\",\n"
+            "      \"points\": [[1.4999, 0.5, 1.0], [0.5, 0.5, 1.0]],\n"
+            "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#000000\", \"size\": 10}\n"
+            "    }\n"
+            "  ]\n"
+            "}"
+        );
+        KisAiStrokeProgram program;
+        QString error;
+        const QJsonObject root = QJsonDocument::fromJson(jsonText.toUtf8()).object();
+        QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error));
+        // 1.4999 is NOT > 1.5, so coordinates should remain as-is
+        QCOMPARE(program.operations[0].points[0].pos.x(), 1.4999);
+    }
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

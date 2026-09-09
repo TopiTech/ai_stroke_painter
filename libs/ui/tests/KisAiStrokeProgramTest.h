@@ -36,6 +36,7 @@ private Q_SLOTS:
     void testGoalModePayloadAndVisionModelDetection();
     void testGoalModeProgramStepAndMerge();
     void testNewProceduralDomains();
+    void testPixelCoordinateThresholdBoundary();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

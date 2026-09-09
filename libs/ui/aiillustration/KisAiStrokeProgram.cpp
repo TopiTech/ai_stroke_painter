@@ -6,6 +6,7 @@
 #include "KisAiStrokeProgram.h"
 #include "KisAiPromptAnalyzer.h"
 
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -20,6 +21,10 @@
 
 namespace
 {
+// Threshold above which coordinates are interpreted as pixel values
+// rather than normalized [0.0, 1.0] values.
+constexpr qreal kPixelCoordinateThreshold = 1.5;
+
 qreal clamp01(qreal v)
 {
     if (!std::isfinite(v)) {
@@ -682,30 +687,53 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
 QString KisAiStrokeProgramCodec::normalizeLayerName(const QString &name)
 {
     const QString lower = name.trimmed().toLower();
-    if (lower == QLatin1String("background") || lower == QLatin1String("bg") || lower == QLatin1String("backdrop")) {
-        return QStringLiteral("Background");
-    }
-    if (lower == QLatin1String("flat") || lower == QLatin1String("flats") || lower == QLatin1String("base")
-        || lower == QLatin1String("color") || lower == QLatin1String("colors")) {
-        return QStringLiteral("Flats");
-    }
-    if (lower == QLatin1String("shading") || lower == QLatin1String("shade") || lower == QLatin1String("shadow")
-        || lower == QLatin1String("shadows")) {
-        return QStringLiteral("Shading");
-    }
-    if (lower == QLatin1String("lineart") || lower == QLatin1String("line_art") || lower == QLatin1String("line art")
-        || lower == QLatin1String("lines") || lower == QLatin1String("line") || lower == QLatin1String("ink")) {
+    if (lower.isEmpty()) {
         return QStringLiteral("Lineart");
     }
-    if (lower == QLatin1String("highlight") || lower == QLatin1String("highlights")
-        || lower == QLatin1String("specular") || lower == QLatin1String("glint")) {
-        return QStringLiteral("Highlights");
+
+    // Static lookup table for layer name aliases.
+    static const QHash<QString, QString> aliases = {
+        // Background aliases
+        {QStringLiteral("background"), QStringLiteral("Background")},
+        {QStringLiteral("bg"), QStringLiteral("Background")},
+        {QStringLiteral("backdrop"), QStringLiteral("Background")},
+        // Flats aliases
+        {QStringLiteral("flat"), QStringLiteral("Flats")},
+        {QStringLiteral("flats"), QStringLiteral("Flats")},
+        {QStringLiteral("base"), QStringLiteral("Flats")},
+        {QStringLiteral("color"), QStringLiteral("Flats")},
+        {QStringLiteral("colors"), QStringLiteral("Flats")},
+        // Shading aliases
+        {QStringLiteral("shading"), QStringLiteral("Shading")},
+        {QStringLiteral("shade"), QStringLiteral("Shading")},
+        {QStringLiteral("shadow"), QStringLiteral("Shading")},
+        {QStringLiteral("shadows"), QStringLiteral("Shading")},
+        // Lineart aliases
+        {QStringLiteral("lineart"), QStringLiteral("Lineart")},
+        {QStringLiteral("line_art"), QStringLiteral("Lineart")},
+        {QStringLiteral("line art"), QStringLiteral("Lineart")},
+        {QStringLiteral("lines"), QStringLiteral("Lineart")},
+        {QStringLiteral("line"), QStringLiteral("Lineart")},
+        {QStringLiteral("ink"), QStringLiteral("Lineart")},
+        // Highlights aliases
+        {QStringLiteral("highlight"), QStringLiteral("Highlights")},
+        {QStringLiteral("highlights"), QStringLiteral("Highlights")},
+        {QStringLiteral("specular"), QStringLiteral("Highlights")},
+        {QStringLiteral("glint"), QStringLiteral("Highlights")},
+        // FX aliases
+        {QStringLiteral("fx"), QStringLiteral("FX")},
+        {QStringLiteral("effects"), QStringLiteral("FX")},
+        {QStringLiteral("effect"), QStringLiteral("FX")},
+        {QStringLiteral("particles"), QStringLiteral("FX")},
+        {QStringLiteral("manga_lines"), QStringLiteral("FX")},
+    };
+
+    const auto it = aliases.constFind(lower);
+    if (it != aliases.constEnd()) {
+        return it.value();
     }
-    if (lower == QLatin1String("fx") || lower == QLatin1String("effects") || lower == QLatin1String("effect")
-        || lower == QLatin1String("particles") || lower == QLatin1String("manga_lines")) {
-        return QStringLiteral("FX");
-    }
-    return name.trimmed().isEmpty() ? QStringLiteral("Lineart") : name.trimmed();
+
+    return name.trimmed();
 }
 
 QMap<QString, int> KisAiStrokeProgramCodec::countLayerOperations(const KisAiStrokeProgram &program)
@@ -913,7 +941,7 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     }
                 }
                 // Auto-normalize if coordinates were provided in pixel values instead of [0.0, 1.0]
-                if (maxCoord > 1.5) {
+                if (maxCoord > kPixelCoordinateThreshold) {
                     for (KisAiStrokePoint &p : op.points) {
                         p.pos = QPointF(p.pos.x() / canvasW, p.pos.y() / canvasH);
                     }
@@ -936,7 +964,7 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                         maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
                     }
                 }
-                if (maxCoord > 1.5) {
+                if (maxCoord > kPixelCoordinateThreshold) {
                     for (QPointF &p : op.polygon) {
                         p = QPointF(p.x() / canvasW, p.y() / canvasH);
                     }
@@ -951,7 +979,7 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     const auto cp = parsePoint(o.value(QStringLiteral("center")));
                     if (cp.second >= 0.0) {
                         op.gradientCenter = cp.first;
-                        if (qMax(op.gradientCenter.x(), op.gradientCenter.y()) > 1.5) {
+                        if (qMax(op.gradientCenter.x(), op.gradientCenter.y()) > kPixelCoordinateThreshold) {
                             op.gradientCenter =
                                 QPointF(op.gradientCenter.x() / canvasW, op.gradientCenter.y() / canvasH);
                         }
@@ -976,7 +1004,7 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     for (const KisAiStrokePoint &point : op.points) {
                         maxCoord = qMax(maxCoord, qMax(qAbs(point.pos.x()), qAbs(point.pos.y())));
                     }
-                    if (maxCoord > 1.5) {
+                    if (maxCoord > kPixelCoordinateThreshold) {
                         for (KisAiStrokePoint &point : op.points) {
                             point.pos = QPointF(point.pos.x() / canvasW, point.pos.y() / canvasH);
                         }
@@ -994,7 +1022,7 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                         maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
                     }
                 }
-                if (maxCoord > 1.5) {
+                if (maxCoord > kPixelCoordinateThreshold) {
                     for (QPointF &p : op.polygon) {
                         p = QPointF(p.x() / canvasW, p.y() / canvasH);
                     }
@@ -1017,7 +1045,7 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                         maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
                     }
                 }
-                if (maxCoord > 1.5) {
+                if (maxCoord > kPixelCoordinateThreshold) {
                     for (QPointF &p : op.polygon) {
                         p = QPointF(p.x() / canvasW, p.y() / canvasH);
                     }
@@ -1038,7 +1066,7 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                         maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
                     }
                 }
-                if (maxCoord > 1.5) {
+                if (maxCoord > kPixelCoordinateThreshold) {
                     for (QPointF &p : op.spine) {
                         p = QPointF(p.x() / canvasW, p.y() / canvasH);
                     }
@@ -1054,7 +1082,7 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     qreal y1 = b.at(1).toDouble();
                     qreal x2 = b.at(2).toDouble();
                     qreal y2 = b.at(3).toDouble();
-                    if (qMax(qMax(x1, y1), qMax(x2, y2)) > 1.5) {
+                    if (qMax(qMax(x1, y1), qMax(x2, y2)) > kPixelCoordinateThreshold) {
                         x1 /= canvasW;
                         y1 /= canvasH;
                         x2 /= canvasW;
@@ -1069,7 +1097,7 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     const auto cp = parsePoint(o.value(QStringLiteral("center")));
                     if (cp.second >= 0.0) {
                         op.gradientCenter = cp.first;
-                        if (qMax(op.gradientCenter.x(), op.gradientCenter.y()) > 1.5) {
+                        if (qMax(op.gradientCenter.x(), op.gradientCenter.y()) > kPixelCoordinateThreshold) {
                             op.gradientCenter = QPointF(op.gradientCenter.x() / canvasW, op.gradientCenter.y() / canvasH);
                         }
                     }
@@ -1123,7 +1151,7 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
                 }
             }
-            if (maxCoord > 1.5) {
+            if (maxCoord > kPixelCoordinateThreshold) {
                 for (KisAiStrokePoint &p : op.points) {
                     p.pos = QPointF(p.pos.x() / canvasW, p.pos.y() / canvasH);
                 }

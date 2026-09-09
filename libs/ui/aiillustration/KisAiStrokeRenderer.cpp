@@ -1098,7 +1098,10 @@ void KisAiStrokeRenderer::drawHatchOperation(QPainter &painter, const KisAiStrok
 
 void KisAiStrokeRenderer::drawMangaLinesOperation(QPainter &painter, const KisAiStrokeOperation &op, const QSize &canvasSize)
 {
-    const QPointF center = scalePoint(op.gradientCenter.isNull() ? QPointF(0.5, 0.5) : op.gradientCenter, canvasSize);
+    // gradientCenter defaults to (0.5, 0.5) per KisAiStrokeOperation struct.
+    // Since (0, 0) is a valid coordinate (top-left), we cannot use isNull() to
+    // detect "not set". Instead, we always use the value as-is after refinement.
+    const QPointF center = scalePoint(op.gradientCenter, canvasSize);
     const qreal baseDim = qMin(canvasSize.width(), canvasSize.height());
     const qreal rInner = qMax<qreal>(5.0, op.innerRadius * baseDim);
     const qreal rOuter = qMax<qreal>(rInner + 10.0, op.outerRadius * baseDim);

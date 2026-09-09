@@ -521,6 +521,61 @@ void KisAiStrokeRendererTest::testRenderMangaLinesOperation()
     QVERIFY(drawnPixels > 50);
 }
 
+void KisAiStrokeRendererTest::testRenderMangaLinesWithOriginCenter()
+{
+    // Regression test: gradientCenter (0, 0) must be treated as a valid coordinate
+    // (top-left corner), not as "not set". Previously, isNull() was used which
+    // incorrectly treated (0, 0) as the default and replaced it with (0.5, 0.5).
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(200, 200);
+
+    KisAiStrokeOperation manga;
+    manga.kind = KisAiStrokeOperation::Kind::MangaLines;
+    manga.layer = QStringLiteral("FX");
+    manga.gradientCenter = QPointF(0.0, 0.0); // Explicitly set to origin
+    manga.innerRadius = 0.05;
+    manga.outerRadius = 0.60;
+    manga.density = 36;
+    manga.brush.color = QColor(0, 0, 0);
+    manga.brush.size = 0.02;
+    program.operations.append(manga);
+
+    const QImage rendered = KisAiStrokeRenderer::renderProgramToImage(program, QSize(200, 200), false);
+    QVERIFY(!rendered.isNull());
+
+    // With center at (0, 0), the lines radiate from the top-left corner.
+    // The corner (0, 0) should be transparent (inside innerRadius).
+    QCOMPARE(rendered.pixelColor(0, 0).alpha(), 0);
+
+    // Pixels far from the origin should have drawn lines.
+    int drawnPixels = 0;
+    for (int y = 0; y < 200; ++y) {
+        for (int x = 0; x < 200; ++x) {
+            const qreal dist = std::hypot(x, y);
+            if (dist > 20.0 && dist < 110.0 && rendered.pixelColor(x, y).alpha() > 50) {
+                ++drawnPixels;
+            }
+        }
+    }
+    QVERIFY(drawnPixels > 50);
+
+    // Verify asymmetry: more lines should be drawn in the bottom-right quadrant
+    // (far from origin) than in the top-left quadrant (close to origin).
+    int topLeftCount = 0;
+    int bottomRightCount = 0;
+    for (int y = 0; y < 100; ++y) {
+        for (int x = 0; x < 100; ++x) {
+            if (rendered.pixelColor(x, y).alpha() > 50) ++topLeftCount;
+        }
+    }
+    for (int y = 100; y < 200; ++y) {
+        for (int x = 100; x < 200; ++x) {
+            if (rendered.pixelColor(x, y).alpha() > 50) ++bottomRightCount;
+        }
+    }
+    QVERIFY(bottomRightCount > topLeftCount);
+}
+
 void KisAiStrokeRendererTest::testNewBrushProfilesRendering()
 {
     for (const QString &profile : {QStringLiteral("marker"), QStringLiteral("crayon"), QStringLiteral("neon"), QStringLiteral("splatter")}) {
