@@ -1693,6 +1693,176 @@ void KisAiStrokeProgramTest::testGoalModePayloadReasoningEffortAndSamplingParams
     QVERIFY(!reasoningDefaultPayload.contains(QStringLiteral("temperature")));
 }
 
+void KisAiStrokeProgramTest::testPythonLiteralsAndMissingCommasRepair()
+{
+    // 1. Python literals (True, False, None), unit suffixes (px, deg), and BOM/zero-width chars
+    const QByteArray rawCorrupted = QByteArray(
+        "\xEF\xBB\xBF" // UTF-8 BOM
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \xE2\x80\x8B\"operations\": [\n" // zero-width space before "operations"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"id\": \"python_line_1\",\n"
+        "      \"layer\": \"Lineart\",\n"
+        "      \"points\": [[0.1 0.2 0.8] [0.5 0.5 0.9]],\n" // Missing commas between numbers and bracket pairs
+        "      \"brush\": {\n"
+        "        \"profile\": \"gpen\",\n"
+        "        \"color\": \"#000000\",\n"
+        "        \"size\": 0.02px,\n" // px unit suffix
+        "        \"is_eraser\": False\n" // Python boolean
+        "      }\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+
+    KisAiStrokeProgram prog1;
+    QString err1;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(rawCorrupted, &prog1, &err1), qPrintable(err1));
+    QCOMPARE(prog1.operations.size(), 1);
+    QCOMPARE(prog1.operations.first().id, QStringLiteral("python_line_1"));
+    QCOMPARE(prog1.operations.first().points.size(), 2);
+    QCOMPARE(prog1.operations.first().brush.isEraser, false);
+    QCOMPARE(prog1.operations.first().brush.size, 0.02);
+
+    // 2. Missing commas between object properties
+    const QByteArray missingPropCommas = QByteArrayLiteral(
+        "{\n"
+        "  \"schema_version\": 2\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"fill\"\n"
+        "      \"id\": \"fill_missing_comma\"\n"
+        "      \"layer\": \"Flats\"\n"
+        "      \"polygon\": [[0.0, 0.0], [1.0, 0.0], [0.5, 1.0]]\n"
+        "      \"brush\": {\"profile\": \"flat\", \"color\": \"#ff00ff\", \"size\": 0.01}\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+
+    KisAiStrokeProgram prog2;
+    QString err2;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(missingPropCommas, &prog2, &err2), qPrintable(err2));
+    QCOMPARE(prog2.operations.size(), 1);
+    QCOMPARE(prog2.operations.first().id, QStringLiteral("fill_missing_comma"));
+    QCOMPARE(prog2.operations.first().polygon.size(), 3);
+}
+
+void KisAiStrokeProgramTest::testNestedEnvelopeUnwrapping()
+{
+    // 1. Nested { "result": { "schema_version": 2, "operations": [...] } }
+    const QByteArray nestedResult = QByteArrayLiteral(
+        "{\n"
+        "  \"status\": \"success\",\n"
+        "  \"result\": {\n"
+        "    \"schema_version\": 2,\n"
+        "    \"operations\": [\n"
+        "      {\n"
+        "        \"kind\": \"path\",\n"
+        "        \"id\": \"nested_line\",\n"
+        "        \"layer\": \"Lineart\",\n"
+        "        \"points\": [[0.2, 0.2, 1.0], [0.8, 0.8, 1.0]],\n"
+        "        \"brush\": {\"profile\": \"pencil\", \"color\": \"#333333\", \"size\": 0.01}\n"
+        "      }\n"
+        "    ]\n"
+        "  }\n"
+        "}"
+    );
+
+    KisAiStrokeProgram prog1;
+    QString err1;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(nestedResult, &prog1, &err1), qPrintable(err1));
+    QCOMPARE(prog1.operations.size(), 1);
+    QCOMPARE(prog1.operations.first().id, QStringLiteral("nested_line"));
+
+    // 2. Deep nested { "data": { "output": { "operations": [...] } } }
+    const QByteArray deepNested = QByteArrayLiteral(
+        "{\n"
+        "  \"data\": {\n"
+        "    \"output\": {\n"
+        "      \"schema_version\": 2,\n"
+        "      \"operations\": [\n"
+        "        {\n"
+        "          \"kind\": \"fill\",\n"
+        "          \"id\": \"deep_fill\",\n"
+        "          \"layer\": \"Flats\",\n"
+        "          \"polygon\": [[0.1, 0.1], [0.9, 0.1], [0.5, 0.8]],\n"
+        "          \"brush\": {\"profile\": \"flat\", \"color\": \"#00aa00\", \"size\": 0.02}\n"
+        "        }\n"
+        "      ]\n"
+        "    }\n"
+        "  }\n"
+        "}"
+    );
+
+    KisAiStrokeProgram prog2;
+    QString err2;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(deepNested, &prog2, &err2), qPrintable(err2));
+    QCOMPARE(prog2.operations.size(), 1);
+    QCOMPARE(prog2.operations.first().id, QStringLiteral("deep_fill"));
+}
+
+void KisAiStrokeProgramTest::testGoalModePayloadMaxTokensOverride()
+{
+    const QSize canvasSize(1024, 1024);
+
+    // 1. Standard model with maxTokensOverride > 0
+    const QJsonObject stdPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("character art"),
+        canvasSize,
+        1,
+        4,
+        QString(),
+        QString(),
+        400,
+        QString(),
+        true,
+        true,
+        true,
+        0.70,
+        1.0,
+        8192 // maxTokensOverride
+    );
+    QCOMPARE(stdPayload.value(QStringLiteral("max_tokens")).toInt(), 8192);
+
+    // 2. Reasoning model (e.g. o3-mini) with maxTokensOverride > 0
+    const QJsonObject reasoningPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("o3-mini"),
+        QStringLiteral("character art"),
+        canvasSize,
+        1,
+        4,
+        QString(),
+        QString(),
+        400,
+        QStringLiteral("medium"),
+        true,
+        true,
+        false,
+        0.70,
+        1.0,
+        16384 // maxTokensOverride
+    );
+    QCOMPARE(reasoningPayload.value(QStringLiteral("max_completion_tokens")).toInt(), 16384);
+    QVERIFY(!reasoningPayload.contains(QStringLiteral("max_tokens")));
+
+    // 3. Default calculation (maxTokensOverride == 0) ensures budget >= 3072 for standard models
+    const QJsonObject defaultPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("character art"),
+        canvasSize,
+        1,
+        4,
+        QString(),
+        QString(),
+        400 // strokeBudget
+    );
+    QVERIFY(defaultPayload.value(QStringLiteral("max_tokens")).toInt() >= 3072);
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

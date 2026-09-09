@@ -1106,8 +1106,12 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     } else {
         enforceJson = false;
     }
+    if (m_isSelfCorrectionRetry) {
+        enforceJson = true;
+    }
 
-    const qreal temperature = m_temperatureSpin ? m_temperatureSpin->value() : 0.70;
+    const qreal configuredTemp = m_temperatureSpin ? m_temperatureSpin->value() : 0.70;
+    const qreal temperature = m_isSelfCorrectionRetry ? qMin<qreal>(0.20, configuredTemp) : configuredTemp;
     const qreal topP = m_topPSpin ? m_topPSpin->value() : 1.0;
     const int maxTokens = m_maxTokensSpin ? m_maxTokensSpin->value() : 0;
     const QString reasoningEffort = m_reasoningEffortCombo ? m_reasoningEffortCombo->currentData().toString() : QString();
@@ -1286,7 +1290,16 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         const bool isRetryableHttp = (httpStatus == 429 || (httpStatus >= 500 && httpStatus <= 504));
         const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
         if (isRetryableHttp && m_currentRetryCount < maxRetries) {
-            scheduleRetry(i18n("HTTP %1 一時エラー", httpStatus), false);
+            int retryAfterSec = 0;
+            const QByteArray retryAfterHeader = reply->rawHeader("Retry-After");
+            if (!retryAfterHeader.isEmpty()) {
+                bool ok = false;
+                const int val = retryAfterHeader.trimmed().toInt(&ok);
+                if (ok && val > 0) {
+                    retryAfterSec = qMin(val, 60);
+                }
+            }
+            scheduleRetry(i18n("HTTP %1 一時エラー", httpStatus), false, retryAfterSec);
             return;
         }
 
@@ -2193,11 +2206,31 @@ void KisAiIllustrationDocker::executeGoalStep()
         const QString guidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(
             m_goalCurrentStep, spec, canvasSize, m_goalTotalSteps);
 
-        const bool enforceJson = KisAiStrokeProgramCodec::supportsJsonFormat(endpoint);
+        bool enforceJson = false;
+        const int jsonModeIdx = m_jsonModeCombo ? m_jsonModeCombo->currentIndex() : 0;
+        if (jsonModeIdx == 0) {
+            enforceJson = KisAiStrokeProgramCodec::supportsJsonFormat(endpoint);
+        } else if (jsonModeIdx == 1) {
+            enforceJson = true;
+        } else {
+            enforceJson = false;
+        }
+        if (!m_goalSelfCorrectionFeedback.isEmpty()) {
+            enforceJson = true;
+        }
+
         const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 400;
         const QString reasoningEffort = m_reasoningEffortCombo ? m_reasoningEffortCombo->currentData().toString() : QString();
-        const qreal temperature = m_temperatureSpin ? m_temperatureSpin->value() : 0.70;
+        const qreal configuredTemp = m_temperatureSpin ? m_temperatureSpin->value() : 0.70;
+        const qreal temperature = !m_goalSelfCorrectionFeedback.isEmpty() ? qMin<qreal>(0.20, configuredTemp) : configuredTemp;
         const qreal topP = m_topPSpin ? m_topPSpin->value() : 1.0;
+        const int maxTokens = m_maxTokensSpin ? m_maxTokensSpin->value() : 0;
+
+        QString effectiveGuidance = guidance;
+        if (!m_goalSelfCorrectionFeedback.isEmpty()) {
+            effectiveGuidance += QStringLiteral("\n\n") + m_goalSelfCorrectionFeedback;
+        }
+
         const QJsonObject payload = KisAiStrokeProgramCodec::buildGoalStepPayload(
             model,
             m_goalPrompt,
@@ -2205,14 +2238,15 @@ void KisAiIllustrationDocker::executeGoalStep()
             m_goalCurrentStep,
             m_goalTotalSteps,
             imageBase64,
-            guidance,
+            effectiveGuidance,
             strokeBudget,
             reasoningEffort,
             !m_goalVisionFallbackActive,
             true, // enableStreaming
             enforceJson, // enforceJsonFormat
             temperature,
-            topP
+            topP,
+            maxTokens
         );
 
         logDebug(QStringLiteral("GOAL_REQ"), QStringLiteral(
@@ -2322,6 +2356,13 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     if (requestTimedOut) {
         const qint64 elapsedSec = m_requestElapsedTimer.isValid() ? m_requestElapsedTimer.elapsed() / 1000 : 0;
         logDebug(QStringLiteral("GOAL_TIMEOUT"), QStringLiteral("ステップ %1 のリクエストがタイムアウトしました (%2秒経過)。").arg(m_goalCurrentStep).arg(elapsedSec));
+        const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
+        if (m_goalCurrentRetryCount < maxRetries) {
+            m_streamedContent.clear();
+            m_sseBuffer.clear();
+            scheduleGoalStepRetry(i18n("リクエストタイムアウト"), false);
+            return;
+        }
         if (!m_streamedContent.isEmpty()) {
             setStatus(i18n("LLM からのデータ受信が %1 秒間途絶えたため中止しました。", ACTIVITY_TIMEOUT_MS / 1000), true);
         } else {
@@ -2392,6 +2433,22 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
             return;
         }
 
+        const bool isRetryableHttp = (httpStatus == 429 || (httpStatus >= 500 && httpStatus <= 504));
+        const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
+        if (isRetryableHttp && m_goalCurrentRetryCount < maxRetries) {
+            int retryAfterSec = 0;
+            const QByteArray retryAfterHeader = reply->rawHeader("Retry-After");
+            if (!retryAfterHeader.isEmpty()) {
+                bool ok = false;
+                const int val = retryAfterHeader.trimmed().toInt(&ok);
+                if (ok && val > 0) {
+                    retryAfterSec = qMin(val, 60);
+                }
+            }
+            scheduleGoalStepRetry(i18n("HTTP %1 一時エラー", httpStatus), false, retryAfterSec);
+            return;
+        }
+
         if (!detail.isEmpty()) {
             setStatus(i18n("LLM への接続または応答に失敗しました (HTTP %1): %2", httpStatus, detail), true);
         } else {
@@ -2417,12 +2474,21 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
 
     KisAiStrokeProgram program;
     QString parseError;
-    if (!KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError)) {
-        logDebug(QStringLiteral("GOAL_PARSE_ERR"), parseError);
+    KisAiJsonDiagnostic diagnostic;
+    if (!KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError, &diagnostic)) {
+        m_lastJsonDiagnostic = diagnostic;
+        logDebug(QStringLiteral("GOAL_PARSE_ERR"), QStringLiteral("%1\n%2").arg(parseError, diagnostic.formatForLog()));
+        const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
+        if (m_goalCurrentRetryCount < maxRetries) {
+            scheduleGoalStepRetry(parseError, true);
+            return;
+        }
         setStatus(parseError, true);
         finishGoalMode(false);
         return;
     }
+    m_goalCurrentRetryCount = 0;
+    m_goalSelfCorrectionFeedback.clear();
 
     // Step state is controlled by the local Goal Mode controller, not by an
     // untrusted model response. It also keeps the generated undo-group title
@@ -2498,6 +2564,8 @@ void KisAiIllustrationDocker::advanceGoalStep()
         return;
     }
     m_waitingForUserStepAdvance = false;
+    m_goalCurrentRetryCount = 0;
+    m_goalSelfCorrectionFeedback.clear();
     m_goalCurrentStep++;
     if (m_goalCurrentStep > m_goalTotalSteps) {
         finishGoalMode(true);
@@ -2510,6 +2578,8 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
 {
     m_goalModeActive = false;
     m_waitingForUserStepAdvance = false;
+    m_goalCurrentRetryCount = 0;
+    m_goalSelfCorrectionFeedback.clear();
     if (!m_goalApiKey.isEmpty()) {
         m_goalApiKey.fill(QLatin1Char('\0'));
         m_goalApiKey.clear();
@@ -2544,7 +2614,102 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
     setBusy(false);
 }
 
-void KisAiIllustrationDocker::scheduleRetry(const QString &reasonMessage, bool isSelfCorrection)
+void KisAiIllustrationDocker::scheduleGoalStepRetry(const QString &reasonMessage, bool isSelfCorrection, int retryAfterSec)
+{
+    const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
+    if (m_goalCurrentRetryCount >= maxRetries) {
+        logDebug(QStringLiteral("GOAL_RETRY_ABORT"),
+                 QStringLiteral("最大リトライ回数 (%1回) に達したためGoalモード中断: %2")
+                     .arg(maxRetries).arg(reasonMessage));
+        setStatus(reasonMessage, true);
+        finishGoalMode(false);
+        return;
+    }
+
+    m_goalCurrentRetryCount++;
+
+    int delayMs = 1500 * (1 << (m_goalCurrentRetryCount - 1));
+    delayMs += (QRandomGenerator::global()->bounded(500));
+    if (retryAfterSec > 0) {
+        delayMs = qMax(delayMs, retryAfterSec * 1000);
+    } else if (isSelfCorrection) {
+        delayMs = 800 * m_goalCurrentRetryCount;
+    }
+
+    if (isSelfCorrection) {
+        QString feedback = QStringLiteral("[CRITICAL RETRY / JSON ERROR: Your step %1 output could not be parsed as valid JSON.\n")
+            .arg(m_goalCurrentStep);
+        if (!m_lastJsonDiagnostic.errorMessage.isEmpty()) {
+            feedback += QStringLiteral("Error: %1\n").arg(m_lastJsonDiagnostic.errorMessage);
+        }
+        if (m_lastJsonDiagnostic.errorLine > 0) {
+            feedback += QStringLiteral("Near line %1, column %2.\n")
+                .arg(m_lastJsonDiagnostic.errorLine)
+                .arg(m_lastJsonDiagnostic.errorColumn);
+        }
+        if (!m_lastJsonDiagnostic.errorSnippet.isEmpty()) {
+            feedback += QStringLiteral("Snippet: %1\n").arg(m_lastJsonDiagnostic.errorSnippet);
+        }
+        if (m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("end of file"), Qt::CaseInsensitive) ||
+            m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unterminated"), Qt::CaseInsensitive) ||
+            m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("truncate"), Qt::CaseInsensitive) ||
+            m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unclosed"), Qt::CaseInsensitive)) {
+            feedback += QStringLiteral("Notice: Output was cut off/truncated before completion. Keep operations count lower and close all JSON brackets properly.\n");
+        }
+        feedback += QStringLiteral("CRITICAL: Output ONLY valid RFC 8259 JSON without any markdown formatting or commentary outside JSON.]");
+        m_goalSelfCorrectionFeedback = feedback;
+    } else {
+        m_goalSelfCorrectionFeedback.clear();
+    }
+
+    const QString retryTypeStr = isSelfCorrection
+        ? i18n("JSON自己修復")
+        : i18n("一時エラー再送");
+
+    const QString statusMsg = i18n("⚠️ Goal ステップ %1 %2 (%3/%4回目): %5 秒後に自動再試行します… [%6]",
+        m_goalCurrentStep,
+        retryTypeStr,
+        m_goalCurrentRetryCount,
+        maxRetries,
+        QString::number(delayMs / 1000.0, 'f', 1),
+        reasonMessage);
+
+    setStatus(statusMsg);
+    if (m_goalPhaseLabel) {
+        m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2: %3 再試行待機中…",
+            m_goalCurrentStep, m_goalTotalSteps, retryTypeStr));
+    }
+    logDebug(QStringLiteral("GOAL_RETRY_SCHEDULE"),
+             QStringLiteral("Goal Step %1 %2 (回数: %3/%4, 待機: %5ms, 理由: %6)")
+                 .arg(m_goalCurrentStep)
+                 .arg(retryTypeStr)
+                 .arg(m_goalCurrentRetryCount)
+                 .arg(maxRetries)
+                 .arg(delayMs)
+                 .arg(reasonMessage));
+
+    if (!m_retryTimer) {
+        m_retryTimer = new QTimer(this);
+        m_retryTimer->setSingleShot(true);
+        connect(m_retryTimer, &QTimer::timeout, this, &KisAiIllustrationDocker::executeRetry);
+    }
+    setBusy(true);
+    m_retryTimer->start(delayMs);
+}
+
+void KisAiIllustrationDocker::executeGoalStepRetry()
+{
+    if (!m_goalModeActive) {
+        return;
+    }
+    logDebug(QStringLiteral("GOAL_RETRY_EXEC"),
+             QStringLiteral("Goal ステップ %1 再試行実行中 (回数: %2)")
+                 .arg(m_goalCurrentStep).arg(m_goalCurrentRetryCount));
+
+    executeGoalStep();
+}
+
+void KisAiIllustrationDocker::scheduleRetry(const QString &reasonMessage, bool isSelfCorrection, int retryAfterSec)
 {
     const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
     if (m_currentRetryCount >= maxRetries) {
@@ -2564,7 +2729,9 @@ void KisAiIllustrationDocker::scheduleRetry(const QString &reasonMessage, bool i
     // Exponential backoff: base 1500ms * 2^(retry-1) + jitter (0..500ms)
     int delayMs = 1500 * (1 << (m_currentRetryCount - 1));
     delayMs += (QRandomGenerator::global()->bounded(500));
-    if (isSelfCorrection) {
+    if (retryAfterSec > 0) {
+        delayMs = qMax(delayMs, retryAfterSec * 1000);
+    } else if (isSelfCorrection) {
         delayMs = 800 * m_currentRetryCount;
     }
 
@@ -2599,6 +2766,11 @@ void KisAiIllustrationDocker::scheduleRetry(const QString &reasonMessage, bool i
 
 void KisAiIllustrationDocker::executeRetry()
 {
+    if (m_goalModeActive) {
+        executeGoalStepRetry();
+        return;
+    }
+
     if (m_isSelfCorrectionRetry) {
         QString correctionPrompt = m_lastFailedPrompt;
         correctionPrompt += QStringLiteral("\n\n[SYSTEM FEEDBACK / RETRY: Your previous output could not be parsed as valid JSON.\n");
@@ -2612,6 +2784,12 @@ void KisAiIllustrationDocker::executeRetry()
         }
         if (!m_lastJsonDiagnostic.errorSnippet.isEmpty()) {
             correctionPrompt += QStringLiteral("Snippet: %1\n").arg(m_lastJsonDiagnostic.errorSnippet);
+        }
+        if (m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("end of file"), Qt::CaseInsensitive) ||
+            m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unterminated"), Qt::CaseInsensitive) ||
+            m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("truncate"), Qt::CaseInsensitive) ||
+            m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unclosed"), Qt::CaseInsensitive)) {
+            correctionPrompt += QStringLiteral("Notice: The JSON was truncated before completion. Please generate a more concise response with fewer operations to fit within token limits, or close all opened objects and arrays properly.\n");
         }
         correctionPrompt += QStringLiteral("CRITICAL: Output ONLY valid JSON conforming strictly to the KisAiStrokeProgram schema without markdown explanation or stray text.]");
 
@@ -2636,6 +2814,8 @@ void KisAiIllustrationDocker::cancelRetry()
     }
     m_currentRetryCount = 0;
     m_isSelfCorrectionRetry = false;
+    m_goalCurrentRetryCount = 0;
+    m_goalSelfCorrectionFeedback.clear();
     m_lastFailedPrompt.clear();
     m_lastJsonDiagnostic = KisAiJsonDiagnostic();
     clearInFlightApiKey();

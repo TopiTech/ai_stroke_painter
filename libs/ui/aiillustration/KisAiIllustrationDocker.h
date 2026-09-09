@@ -72,9 +72,11 @@ private:
     void finishGoalStepRequest();
     void advanceGoalStep();
     void finishGoalMode(bool success = true);
+    void scheduleGoalStepRetry(const QString &reasonMessage, bool isSelfCorrection, int retryAfterSec = 0);
+    void executeGoalStepRetry();
 
     // Two-Tier Retry & Self-Correction
-    void scheduleRetry(const QString &reasonMessage, bool isSelfCorrection);
+    void scheduleRetry(const QString &reasonMessage, bool isSelfCorrection, int retryAfterSec = 0);
     void executeRetry();
     void cancelRetry();
     void clearInFlightApiKey();
@@ -145,6 +147,8 @@ private:
     bool m_goalModeActive {false};
     int m_goalCurrentStep {1};
     int m_goalTotalSteps {4};
+    int m_goalCurrentRetryCount {0};
+    QString m_goalSelfCorrectionFeedback;
     QString m_goalPrompt;
     QString m_goalApiKey;
     bool m_waitingForUserStepAdvance {false};
