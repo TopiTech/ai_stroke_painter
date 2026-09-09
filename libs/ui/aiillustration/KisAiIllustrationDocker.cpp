@@ -67,7 +67,10 @@ namespace
 constexpr qint64 MAX_REMOTE_RESPONSE_BYTES = 32LL * 1024 * 1024;
 constexpr qint64 MAX_REMOTE_IMAGE_BYTES = 24LL * 1024 * 1024;
 constexpr qint64 MAX_REMOTE_IMAGE_PIXELS = 24LL * 1024 * 1024;
-constexpr int REMOTE_REQUEST_TIMEOUT_MS = 120'000;
+constexpr int INITIAL_REQUEST_TIMEOUT_MS = 120'000;
+constexpr int ACTIVITY_TIMEOUT_MS = 60'000;
+constexpr int MAX_REQUEST_TIMEOUT_MS = 600'000;
+constexpr int REMOTE_IMAGE_TIMEOUT_MS = 180'000;
 
 QString imageSizeText(const QSpinBox *widthSpin, const QSpinBox *heightSpin)
 {
@@ -861,22 +864,38 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
+    if (endpoint.contains(QLatin1String("openrouter.ai"), Qt::CaseInsensitive)) {
+        request.setRawHeader("HTTP-Referer", "https://github.com/TopiTech/ai_stroke_painter");
+        request.setRawHeader("X-Title", "AI Stroke Painter");
+    }
+
+    const bool isNativeOpenAi = endpoint.contains(QLatin1String("api.openai.com"), Qt::CaseInsensitive);
     const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
     const QSize canvasSize(m_widthSpin->value(), m_heightSpin->value());
     const QJsonObject payload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
         model,
         prompt,
         canvasSize,
-        strokeBudget
+        strokeBudget,
+        QString(),
+        QString(),
+        true, // enableStreaming
+        isNativeOpenAi // enforceJsonFormat
     );
 
-    logDebug(QStringLiteral("LLM_REQ"), QStringLiteral("POST %1 (model=%2, prompt=\"%3\", budget=%4)")
-        .arg(endpoint, model, prompt.left(60), QString::number(strokeBudget)));
+    logDebug(QStringLiteral("LLM_REQ"), QStringLiteral("POST %1 (model=%2, stream=true, budget=%3, prompt=\"%4\")")
+        .arg(endpoint, model, QString::number(strokeBudget), prompt.left(60)));
 
+    m_activeRequestEndpoint = endpoint;
+    m_isStreamingRequest = true;
+    m_streamedContent.clear();
+    m_sseBuffer.clear();
     m_requestWasCancelled = false;
     m_requestTimedOut = false;
     m_responseTooLarge = false;
     m_responseBuffer.clear();
+    m_requestElapsedTimer.start();
+
     m_reply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
     m_reply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
 
@@ -890,17 +909,29 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] { appendReplyData(m_reply.data()); });
     connect(m_reply.data(), &QNetworkReply::finished, this, [this] { finishLlmStrokesRequest(); });
 
-    const QPointer<QNetworkReply> pendingReply = m_reply;
-    QTimer::singleShot(REMOTE_REQUEST_TIMEOUT_MS, this, [this, pendingReply] {
-        if (m_reply && m_reply.data() == pendingReply.data()) {
-            m_requestTimedOut = true;
-            m_reply->abort();
-        }
-    });
+    if (!m_activityTimer) {
+        m_activityTimer = new QTimer(this);
+        m_activityTimer->setSingleShot(true);
+        connect(m_activityTimer, &QTimer::timeout, this, [this] {
+            if (m_reply) {
+                m_requestTimedOut = true;
+                m_reply->abort();
+            }
+        });
+    }
+    m_activityTimer->start(INITIAL_REQUEST_TIMEOUT_MS);
+
+    if (!m_progressTimer) {
+        m_progressTimer = new QTimer(this);
+        connect(m_progressTimer, &QTimer::timeout, this, &KisAiIllustrationDocker::updateProgressStatus);
+    }
+    m_progressTimer->start(1000);
 }
 
 void KisAiIllustrationDocker::finishLlmStrokesRequest()
 {
+    stopAllRequestTimers();
+
     QPointer<QNetworkReply> reply = m_reply;
     m_reply = nullptr;
     const bool requestWasCancelled = m_requestWasCancelled;
@@ -911,12 +942,14 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
 
     if (!reply) {
         m_responseBuffer.clear();
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
         return;
     }
 
     const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const bool requestSucceeded = reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300;
-    const QByteArray response = takeReplyData(reply.data());
+    const QByteArray rawResponse = takeReplyData(reply.data());
     const bool responseTooLarge = m_responseTooLarge;
     m_responseTooLarge = false;
     reply->deleteLater();
@@ -924,22 +957,33 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     if (requestWasCancelled) {
         logDebug(QStringLiteral("LLM_CANCEL"), QStringLiteral("ユーザーにより生成が中止されました。"));
         setStatus(i18n("LLM ストローク生成を中止しました。"));
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
         return;
     }
     if (requestTimedOut) {
-        logDebug(QStringLiteral("LLM_TIMEOUT"), QStringLiteral("リクエストがタイムアウトしました (2分)。"));
-        setStatus(i18n("LLM の応答が 2 分以内に届かなかったため中止しました。"), true);
+        const qint64 elapsedSec = m_requestElapsedTimer.isValid() ? m_requestElapsedTimer.elapsed() / 1000 : 0;
+        logDebug(QStringLiteral("LLM_TIMEOUT"), QStringLiteral("リクエストがタイムアウトしました (%1秒経過)。").arg(elapsedSec));
+        if (!m_streamedContent.isEmpty()) {
+            setStatus(i18n("LLM からのデータ受信が %1 秒間途絶えたため中止しました。", ACTIVITY_TIMEOUT_MS / 1000), true);
+        } else {
+            setStatus(i18n("LLM の初期応答が %1 秒以内に届かなかったため中止しました。", INITIAL_REQUEST_TIMEOUT_MS / 1000), true);
+        }
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
         return;
     }
     if (responseTooLarge) {
         logDebug(QStringLiteral("LLM_OVERFLOW"), QStringLiteral("レスポンスが上限サイズを超えました。"));
         setStatus(i18n("LLM の応答が上限を超えています。"), true);
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
         return;
     }
     if (!requestSucceeded) {
         QString detail;
         QJsonParseError parseErr;
-        const QJsonDocument errDoc = QJsonDocument::fromJson(response, &parseErr);
+        const QJsonDocument errDoc = QJsonDocument::fromJson(rawResponse, &parseErr);
         if (!errDoc.isNull() && errDoc.isObject()) {
             const QJsonValue errVal = errDoc.object().value(QStringLiteral("error"));
             if (errVal.isObject()) {
@@ -952,16 +996,24 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
             detail = reply->errorString();
         }
         logDebug(QStringLiteral("LLM_ERROR"), QStringLiteral("HTTP %1: %2\nRaw: %3")
-            .arg(httpStatus).arg(detail, QString::fromUtf8(response.left(500))));
+            .arg(httpStatus).arg(detail, QString::fromUtf8(rawResponse.left(500))));
         if (!detail.isEmpty()) {
             setStatus(i18n("LLM への接続または応答に失敗しました (HTTP %1): %2", httpStatus, detail), true);
         } else {
             setStatus(i18n("LLM への接続または応答に失敗しました (HTTP %1)。", httpStatus), true);
         }
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
         return;
     }
 
-    logDebug(QStringLiteral("LLM_RESP"), QStringLiteral("HTTP %1 (%2 bytes) 受信\nRaw: %3")
+    const QByteArray response = !m_streamedContent.trimmed().isEmpty()
+        ? m_streamedContent.toUtf8()
+        : rawResponse;
+    m_streamedContent.clear();
+    m_sseBuffer.clear();
+
+    logDebug(QStringLiteral("LLM_RESP"), QStringLiteral("HTTP %1 (%2 bytes) 受信完了\nRaw: %3")
         .arg(httpStatus).arg(response.size()).arg(QString::fromUtf8(response.left(1000))));
 
     KisAiStrokeProgram program;
@@ -1069,10 +1121,15 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
     logDebug(QStringLiteral("IMG_REQ"), QStringLiteral("POST %1 (model=%2, size=%3, prompt=\"%4\")")
         .arg(endpoint, model, sizeStr, prompt.left(60)));
 
+    m_activeRequestEndpoint = endpoint;
+    m_isStreamingRequest = false;
+    m_streamedContent.clear();
+    m_sseBuffer.clear();
     m_requestWasCancelled = false;
     m_requestTimedOut = false;
     m_responseTooLarge = false;
     m_responseBuffer.clear();
+    m_requestElapsedTimer.start();
     m_reply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
     m_reply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
 
@@ -1086,17 +1143,29 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
     connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] { appendReplyData(m_reply.data()); });
     connect(m_reply.data(), &QNetworkReply::finished, this, [this] { finishRemoteImageRequest(); });
 
-    const QPointer<QNetworkReply> pendingReply = m_reply;
-    QTimer::singleShot(REMOTE_REQUEST_TIMEOUT_MS, this, [this, pendingReply] {
-        if (m_reply && m_reply.data() == pendingReply.data()) {
-            m_requestTimedOut = true;
-            m_reply->abort();
-        }
-    });
+    if (!m_activityTimer) {
+        m_activityTimer = new QTimer(this);
+        m_activityTimer->setSingleShot(true);
+        connect(m_activityTimer, &QTimer::timeout, this, [this] {
+            if (m_reply) {
+                m_requestTimedOut = true;
+                m_reply->abort();
+            }
+        });
+    }
+    m_activityTimer->start(REMOTE_IMAGE_TIMEOUT_MS);
+
+    if (!m_progressTimer) {
+        m_progressTimer = new QTimer(this);
+        connect(m_progressTimer, &QTimer::timeout, this, &KisAiIllustrationDocker::updateProgressStatus);
+    }
+    m_progressTimer->start(1000);
 }
 
 void KisAiIllustrationDocker::finishRemoteImageRequest()
 {
+    stopAllRequestTimers();
+
     QPointer<QNetworkReply> reply = m_reply;
     m_reply = nullptr;
     const bool requestWasCancelled = m_requestWasCancelled;
@@ -1123,8 +1192,8 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
         return;
     }
     if (requestTimedOut) {
-        logDebug(QStringLiteral("IMG_TIMEOUT"), QStringLiteral("画像モデルの応答がタイムアウトしました (2分)。"));
-        setStatus(i18n("画像モデルの応答が 2 分以内に届かなかったため中止しました。"), true);
+        logDebug(QStringLiteral("IMG_TIMEOUT"), QStringLiteral("画像モデルの応答がタイムアウトしました (%1 秒)。").arg(REMOTE_IMAGE_TIMEOUT_MS / 1000));
+        setStatus(i18n("画像モデルの応答が %1 秒以内に届かなかったため中止しました。", REMOTE_IMAGE_TIMEOUT_MS / 1000), true);
         return;
     }
     if (responseTooLarge) {
@@ -1183,6 +1252,10 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
 
 void KisAiIllustrationDocker::cancelRemoteRequest()
 {
+    stopAllRequestTimers();
+    m_streamedContent.clear();
+    m_sseBuffer.clear();
+
     if (m_testReply) {
         m_testReply->abort();
     }
@@ -1206,6 +1279,12 @@ bool KisAiIllustrationDocker::appendReplyData(QNetworkReply *reply)
     }
 
     const QByteArray chunk = reply->readAll();
+    if (chunk.isEmpty()) {
+        return false;
+    }
+
+    resetActivityTimeout();
+
     if (chunk.size() > MAX_REMOTE_RESPONSE_BYTES - m_responseBuffer.size()) {
         m_responseBuffer.clear();
         m_responseTooLarge = true;
@@ -1214,6 +1293,12 @@ bool KisAiIllustrationDocker::appendReplyData(QNetworkReply *reply)
     }
 
     m_responseBuffer.append(chunk);
+
+    if (m_isStreamingRequest) {
+        bool isDone = false;
+        KisAiStrokeProgramCodec::parseSseStreamChunk(chunk, &m_sseBuffer, &m_streamedContent, &isDone);
+    }
+
     return true;
 }
 
@@ -1417,6 +1502,74 @@ void KisAiIllustrationDocker::setStatus(const QString &message, bool isError)
     m_statusLabel->setProperty("error", isError);
     m_statusLabel->style()->unpolish(m_statusLabel);
     m_statusLabel->style()->polish(m_statusLabel);
+}
+
+void KisAiIllustrationDocker::resetActivityTimeout()
+{
+    if (m_requestElapsedTimer.isValid() && m_requestElapsedTimer.elapsed() > MAX_REQUEST_TIMEOUT_MS) {
+        logDebug(QStringLiteral("TIMEOUT"), QStringLiteral("最大リクエスト時間 (%1 秒) を超過したためリクエストを打ち切ります。").arg(MAX_REQUEST_TIMEOUT_MS / 1000));
+        m_requestTimedOut = true;
+        if (m_reply) {
+            m_reply->abort();
+        }
+        return;
+    }
+
+    if (m_activityTimer) {
+        m_activityTimer->start(ACTIVITY_TIMEOUT_MS);
+    }
+}
+
+void KisAiIllustrationDocker::updateProgressStatus()
+{
+    if (!m_reply) {
+        return;
+    }
+
+    const qint64 elapsedSec = m_requestElapsedTimer.isValid() ? m_requestElapsedTimer.elapsed() / 1000 : 0;
+    const QString endpointName = KisAiIllustrationRenderer::displayEndpoint(m_activeRequestEndpoint);
+
+    if (m_isStreamingRequest) {
+        const int receivedChars = m_streamedContent.length();
+        if (receivedChars > 0) {
+            const int estimatedTokens = qMax(1, receivedChars / 3);
+            if (m_goalModeActive) {
+                const QString visionTag = m_lastGoalRequestHadImage
+                    ? i18n(" (Vision画像付)")
+                    : (m_goalVisionFallbackActive ? i18n(" (テキストフォールバック)") : QString());
+                setStatus(i18n("Goal ステップ %1/%2: ストリーム受信中… (%3 秒経過 / 約 %4 トークン受信)",
+                    m_goalCurrentStep, m_goalTotalSteps, elapsedSec, estimatedTokens));
+                if (m_goalPhaseLabel) {
+                    m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2: 受信中 (%3 秒 / 約 %4 トークン)%5…",
+                        m_goalCurrentStep, m_goalTotalSteps, elapsedSec, estimatedTokens, visionTag));
+                }
+            } else {
+                setStatus(i18n("%1 からストロークを受信中… (%2 秒経過 / 約 %3 トークン受信)",
+                    endpointName, elapsedSec, estimatedTokens));
+            }
+        } else {
+            if (m_goalModeActive) {
+                setStatus(i18n("Goal ステップ %1/%2: LLM 思考・待機中… (%3 秒経過)",
+                    m_goalCurrentStep, m_goalTotalSteps, elapsedSec));
+            } else {
+                setStatus(i18n("%1 に接続中・思考待機中… (%2 秒経過)",
+                    endpointName, elapsedSec));
+            }
+        }
+    } else {
+        setStatus(i18n("%1 にリクエスト送信中… (%2 秒経過)",
+            endpointName, elapsedSec));
+    }
+}
+
+void KisAiIllustrationDocker::stopAllRequestTimers()
+{
+    if (m_activityTimer) {
+        m_activityTimer->stop();
+    }
+    if (m_progressTimer) {
+        m_progressTimer->stop();
+    }
 }
 
 void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
@@ -1625,6 +1778,7 @@ void KisAiIllustrationDocker::executeGoalStep()
         const QString guidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(
             m_goalCurrentStep, spec, canvasSize, m_goalTotalSteps);
 
+        const bool isNativeOpenAi = endpoint.contains(QLatin1String("api.openai.com"), Qt::CaseInsensitive);
         const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 400;
         const QJsonObject payload = KisAiStrokeProgramCodec::buildGoalStepPayload(
             model,
@@ -1636,11 +1790,13 @@ void KisAiIllustrationDocker::executeGoalStep()
             guidance,
             strokeBudget,
             QString(),
-            !m_goalVisionFallbackActive
+            !m_goalVisionFallbackActive,
+            true, // enableStreaming
+            isNativeOpenAi // enforceJsonFormat
         );
 
         logDebug(QStringLiteral("GOAL_REQ"), QStringLiteral(
-            "Step %1/%2 POST (model=%3, withImage=%4, fallbackActive=%5)")
+            "Step %1/%2 POST (model=%3, withImage=%4, fallbackActive=%5, stream=true)")
             .arg(m_goalCurrentStep).arg(m_goalTotalSteps).arg(model)
             .arg(m_lastGoalRequestHadImage ? QStringLiteral("Yes") : QStringLiteral("No"))
             .arg(m_goalVisionFallbackActive ? QStringLiteral("Yes") : QStringLiteral("No")));
@@ -1650,10 +1806,20 @@ void KisAiIllustrationDocker::executeGoalStep()
         request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
+        if (endpoint.contains(QLatin1String("openrouter.ai"), Qt::CaseInsensitive)) {
+            request.setRawHeader("HTTP-Referer", "https://github.com/TopiTech/ai_stroke_painter");
+            request.setRawHeader("X-Title", "AI Stroke Painter");
+        }
+
+        m_activeRequestEndpoint = endpoint;
+        m_isStreamingRequest = true;
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
         m_requestWasCancelled = false;
         m_requestTimedOut = false;
         m_responseTooLarge = false;
         m_responseBuffer.clear();
+        m_requestElapsedTimer.start();
         m_reply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
         m_reply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
         setBusy(true);
@@ -1673,18 +1839,30 @@ void KisAiIllustrationDocker::executeGoalStep()
         connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] { appendReplyData(m_reply.data()); });
         connect(m_reply.data(), &QNetworkReply::finished, this, [this] { finishGoalStepRequest(); });
 
-        const QPointer<QNetworkReply> pendingReply = m_reply;
-        QTimer::singleShot(REMOTE_REQUEST_TIMEOUT_MS, this, [this, pendingReply] {
-            if (m_reply && m_reply.data() == pendingReply.data()) {
-                m_requestTimedOut = true;
-                m_reply->abort();
-            }
-        });
+        if (!m_activityTimer) {
+            m_activityTimer = new QTimer(this);
+            m_activityTimer->setSingleShot(true);
+            connect(m_activityTimer, &QTimer::timeout, this, [this] {
+                if (m_reply) {
+                    m_requestTimedOut = true;
+                    m_reply->abort();
+                }
+            });
+        }
+        m_activityTimer->start(INITIAL_REQUEST_TIMEOUT_MS);
+
+        if (!m_progressTimer) {
+            m_progressTimer = new QTimer(this);
+            connect(m_progressTimer, &QTimer::timeout, this, &KisAiIllustrationDocker::updateProgressStatus);
+        }
+        m_progressTimer->start(1000);
     }
 }
 
 void KisAiIllustrationDocker::finishGoalStepRequest()
 {
+    stopAllRequestTimers();
+
     QPointer<QNetworkReply> reply = m_reply;
     m_reply = nullptr;
     const bool requestWasCancelled = m_requestWasCancelled;
@@ -1695,13 +1873,15 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
 
     if (!reply) {
         m_responseBuffer.clear();
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
         finishGoalMode(false);
         return;
     }
 
     const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const bool requestSucceeded = reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300;
-    const QByteArray response = takeReplyData(reply.data());
+    const QByteArray rawResponse = takeReplyData(reply.data());
     const bool responseTooLarge = m_responseTooLarge;
     m_responseTooLarge = false;
     reply->deleteLater();
@@ -1709,25 +1889,36 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     if (requestWasCancelled) {
         logDebug(QStringLiteral("GOAL_CANCEL"), QStringLiteral("Goalモードが中止されました。"));
         setStatus(i18n("Goal モードを中止しました。"));
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
         finishGoalMode(false);
         return;
     }
     if (requestTimedOut) {
-        logDebug(QStringLiteral("GOAL_TIMEOUT"), QStringLiteral("ステップ %1 の応答がタイムアウトしました。").arg(m_goalCurrentStep));
-        setStatus(i18n("LLM の応答が 2 分以内に届かなかったため中止しました。"), true);
+        const qint64 elapsedSec = m_requestElapsedTimer.isValid() ? m_requestElapsedTimer.elapsed() / 1000 : 0;
+        logDebug(QStringLiteral("GOAL_TIMEOUT"), QStringLiteral("ステップ %1 のリクエストがタイムアウトしました (%2秒経過)。").arg(m_goalCurrentStep).arg(elapsedSec));
+        if (!m_streamedContent.isEmpty()) {
+            setStatus(i18n("LLM からのデータ受信が %1 秒間途絶えたため中止しました。", ACTIVITY_TIMEOUT_MS / 1000), true);
+        } else {
+            setStatus(i18n("LLM の初期応答が %1 秒以内に届かなかったため中止しました。", INITIAL_REQUEST_TIMEOUT_MS / 1000), true);
+        }
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
         finishGoalMode(false);
         return;
     }
     if (responseTooLarge) {
         logDebug(QStringLiteral("GOAL_OVERFLOW"), QStringLiteral("ステップ %1 の応答が上限を超えました。").arg(m_goalCurrentStep));
         setStatus(i18n("LLM の応答が上限を超えています。"), true);
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
         finishGoalMode(false);
         return;
     }
     if (!requestSucceeded) {
         QString detail;
         QJsonParseError parseErr;
-        const QJsonDocument errDoc = QJsonDocument::fromJson(response, &parseErr);
+        const QJsonDocument errDoc = QJsonDocument::fromJson(rawResponse, &parseErr);
         if (!errDoc.isNull() && errDoc.isObject()) {
             const QJsonValue errVal = errDoc.object().value(QStringLiteral("error"));
             if (errVal.isObject()) {
@@ -1741,7 +1932,10 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         }
 
         logDebug(QStringLiteral("GOAL_ERROR"), QStringLiteral("Step %1 HTTP %2: %3\nRaw: %4")
-            .arg(m_goalCurrentStep).arg(httpStatus).arg(detail, QString::fromUtf8(response.left(500))));
+            .arg(m_goalCurrentStep).arg(httpStatus).arg(detail, QString::fromUtf8(rawResponse.left(500))));
+
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
 
         // Vision フォールバック（保険機構）:
         // 画像付きリクエストが失敗した場合、テキストのみの指示にフォールバックして再試行
@@ -1770,7 +1964,13 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         return;
     }
 
-    logDebug(QStringLiteral("GOAL_RESP"), QStringLiteral("Step %1 HTTP %2 (%3 bytes) 受信\nRaw: %4")
+    const QByteArray response = !m_streamedContent.trimmed().isEmpty()
+        ? m_streamedContent.toUtf8()
+        : rawResponse;
+    m_streamedContent.clear();
+    m_sseBuffer.clear();
+
+    logDebug(QStringLiteral("GOAL_RESP"), QStringLiteral("Step %1 HTTP %2 (%3 bytes) 受信完了\nRaw: %4")
         .arg(m_goalCurrentStep).arg(httpStatus).arg(response.size()).arg(QString::fromUtf8(response.left(1000))));
 
     KisAiStrokeProgram program;

@@ -91,7 +91,8 @@ bool KisAiStrokeProgramCodec::isReasoningModel(const QString &model)
     return lower.contains(QLatin1String("o1")) || lower.contains(QLatin1String("o3"))
         || lower.contains(QLatin1String("deepseek-r1")) || lower.contains(QLatin1String("deepseek-reasoner"))
         || lower.contains(QLatin1String("thinking")) || lower.contains(QLatin1String("reasoner"))
-        || lower.contains(QLatin1String("qwq"));
+        || lower.contains(QLatin1String("qwq")) || lower.contains(QLatin1String("dots"))
+        || lower.contains(QLatin1String("note")) || lower.contains(QLatin1String("r1-distill"));
 }
 
 quint32 KisAiStrokeProgramCodec::stableSeed(const QString &text)
@@ -442,7 +443,9 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
                                                                  const QSize &canvasSize,
                                                                  int strokeBudget,
                                                                  const QString &reasoningEffort,
-                                                                 const QString &customInstructions)
+                                                                 const QString &customInstructions,
+                                                                 bool enableStreaming,
+                                                                 bool enforceJsonFormat)
 {
     const bool reasoning = isReasoningModel(model);
     const QString systemText = buildSystemPrompt(canvasSize, prompt, customInstructions);
@@ -452,7 +455,7 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
     userObj[QStringLiteral("canvas_width")] = canvasSize.width();
     userObj[QStringLiteral("canvas_height")] = canvasSize.height();
     const int geometryBudget = qBound(20, strokeBudget, 2000);
-    const int operationTarget = qBound(24, geometryBudget / 5, 160);
+    const int operationTarget = qBound(16, geometryBudget / 15, 60);
     userObj[QStringLiteral("geometry_budget")] = geometryBudget;
     userObj[QStringLiteral("operation_target")] = operationTarget;
     userObj[QStringLiteral("budget_allocation")] =
@@ -477,12 +480,18 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
     payload[QStringLiteral("model")] = model.trimmed();
     payload[QStringLiteral("messages")] = messages;
 
-    // Structured output via json_object or json_schema
-    QJsonObject responseFormat;
-    responseFormat[QStringLiteral("type")] = QStringLiteral("json_object");
-    payload[QStringLiteral("response_format")] = responseFormat;
+    if (enableStreaming) {
+        payload[QStringLiteral("stream")] = true;
+    }
 
-    const int calculatedTokens = qBound(6144, operationTarget * 150 + (reasoning ? 8192 : 3072), 32768);
+    // Structured output via json_object or json_schema (optional, only when explicitly enforced or native OpenAI)
+    if (enforceJsonFormat) {
+        QJsonObject responseFormat;
+        responseFormat[QStringLiteral("type")] = QStringLiteral("json_object");
+        payload[QStringLiteral("response_format")] = responseFormat;
+    }
+
+    const int calculatedTokens = qBound(2048, operationTarget * 60 + (reasoning ? 4096 : 1536), 8192);
     if (reasoning) {
         payload[QStringLiteral("max_completion_tokens")] = calculatedTokens;
         if (!reasoningEffort.isEmpty() && reasoningEffort.toLower() != QLatin1String("none")) {
@@ -617,6 +626,84 @@ QString KisAiStrokeProgramCodec::sanitizeAndExtractJson(const QString &rawText)
     return text;
 }
 
+bool KisAiStrokeProgramCodec::parseSseStreamChunk(
+    const QByteArray &chunk,
+    QByteArray *unprocessedBuffer,
+    QString *accumulatedContent,
+    bool *isDone)
+{
+    if (isDone) {
+        *isDone = false;
+    }
+    if (!unprocessedBuffer || !accumulatedContent) {
+        return false;
+    }
+
+    unprocessedBuffer->append(chunk);
+    bool anyDeltaExtracted = false;
+
+    while (true) {
+        const int newlineIdx = unprocessedBuffer->indexOf('\n');
+        if (newlineIdx < 0) {
+            break;
+        }
+
+        QByteArray line = unprocessedBuffer->left(newlineIdx).trimmed();
+        unprocessedBuffer->remove(0, newlineIdx + 1);
+
+        if (line.isEmpty() || line.startsWith(':')) {
+            // SSE keep-alive or comment
+            continue;
+        }
+
+        if (line.startsWith("data:")) {
+            const QByteArray dataPayload = line.mid(5).trimmed();
+            if (dataPayload == "[DONE]") {
+                if (isDone) {
+                    *isDone = true;
+                }
+                continue;
+            }
+
+            QJsonParseError parseErr;
+            const QJsonDocument doc = QJsonDocument::fromJson(dataPayload, &parseErr);
+            if (!doc.isObject()) {
+                continue;
+            }
+
+            const QJsonObject root = doc.object();
+            if (root.contains(QStringLiteral("error"))) {
+                const QJsonObject errObj = root.value(QStringLiteral("error")).toObject();
+                const QString errMsg = errObj.value(QStringLiteral("message")).toString();
+                if (!errMsg.isEmpty() && accumulatedContent->isEmpty()) {
+                    accumulatedContent->append(QStringLiteral("ERROR: ") + errMsg);
+                }
+            }
+
+            const QJsonArray choices = root.value(QStringLiteral("choices")).toArray();
+            if (!choices.isEmpty()) {
+                const QJsonObject choice0 = choices.at(0).toObject();
+                const QJsonObject delta = choice0.value(QStringLiteral("delta")).toObject();
+                if (delta.contains(QStringLiteral("content"))) {
+                    const QString deltaContent = delta.value(QStringLiteral("content")).toString();
+                    if (!deltaContent.isEmpty()) {
+                        accumulatedContent->append(deltaContent);
+                        anyDeltaExtracted = true;
+                    }
+                } else if (choice0.contains(QStringLiteral("text"))) {
+                    const QString textChunk = choice0.value(QStringLiteral("text")).toString();
+                    if (!textChunk.isEmpty()) {
+                        accumulatedContent->append(textChunk);
+                        anyDeltaExtracted = true;
+                    }
+                }
+            }
+        }
+    }
+
+    return anyDeltaExtracted;
+}
+
 bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
                                             KisAiStrokeProgram *outProgram,
                                             QString *errorMessage)
@@ -625,23 +712,6 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
     if (responseBytes.size() > MAX_RESPONSE_BYTES) {
         if (errorMessage) {
             *errorMessage = QStringLiteral("LLM応答が安全上限を超えています。");
-        }
-        return false;
-    }
-
-    const QJsonDocument doc = QJsonDocument::fromJson(responseBytes);
-    if (!doc.isObject()) {
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("LLM応答がJSONオブジェクトではありません。");
-        }
-        return false;
-    }
-
-    const QJsonObject root = doc.object();
-    if (root.contains(QStringLiteral("error"))) {
-        const QString err = root.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString();
-        if (errorMessage) {
-            *errorMessage = QStringLiteral("APIエラー: ") + (err.isEmpty() ? QStringLiteral("不明なエラー") : err);
         }
         return false;
     }
@@ -665,6 +735,31 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
         }
         return true;
     };
+
+    const QJsonDocument doc = QJsonDocument::fromJson(responseBytes);
+    if (!doc.isObject()) {
+        // Streamed response or raw model output might not be wrapped in an API JSON response object.
+        // Attempt extracting and repairing JSON from the text directly.
+        const QString rawText = QString::fromUtf8(responseBytes).trimmed();
+        const QString extractedJson = sanitizeAndExtractJson(rawText);
+        const QJsonDocument extractedDoc = QJsonDocument::fromJson(extractedJson.toUtf8());
+        if (extractedDoc.isObject()) {
+            return parseAndRefine(extractedDoc.object());
+        }
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("LLM応答がJSONオブジェクトではありません。");
+        }
+        return false;
+    }
+
+    const QJsonObject root = doc.object();
+    if (root.contains(QStringLiteral("error"))) {
+        const QString err = root.value(QStringLiteral("error")).toObject().value(QStringLiteral("message")).toString();
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("APIエラー: ") + (err.isEmpty() ? QStringLiteral("不明なエラー") : err);
+        }
+        return false;
+    }
 
     // Direct StrokeProgram check
     if (root.contains(QStringLiteral("operations")) || root.contains(QStringLiteral("strokes"))) {
@@ -2449,7 +2544,9 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     const QString &additionalInstruction,
     int strokeBudget,
     const QString &reasoningEffort,
-    bool includeVision)
+    bool includeVision,
+    bool enableStreaming,
+    bool enforceJsonFormat)
 {
     const bool reasoning = isReasoningModel(model);
     const bool vision = includeVision && isVisionModel(model) && !imageBase64.trimmed().isEmpty();
@@ -2464,7 +2561,7 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     const QString systemText = buildSystemPrompt(canvasSize, prompt, combinedInstructions);
 
     const int geometryBudget = qBound(20, strokeBudget, 2000);
-    const int operationTarget = qBound(12, geometryBudget / (totalSteps > 0 ? totalSteps * 3 : 12), 80);
+    const int operationTarget = qBound(12, geometryBudget / (totalSteps > 0 ? totalSteps * 3 : 12), 60);
 
     QString phaseName;
     if (totalSteps <= 2) {
@@ -2546,11 +2643,17 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     payload[QStringLiteral("model")] = model.trimmed();
     payload[QStringLiteral("messages")] = messages;
 
-    QJsonObject responseFormat;
-    responseFormat[QStringLiteral("type")] = QStringLiteral("json_object");
-    payload[QStringLiteral("response_format")] = responseFormat;
+    if (enableStreaming) {
+        payload[QStringLiteral("stream")] = true;
+    }
 
-    const int calculatedTokens = qBound(4096, operationTarget * 120 + (reasoning ? 8192 : 2048), 32768);
+    if (enforceJsonFormat) {
+        QJsonObject responseFormat;
+        responseFormat[QStringLiteral("type")] = QStringLiteral("json_object");
+        payload[QStringLiteral("response_format")] = responseFormat;
+    }
+
+    const int calculatedTokens = qBound(2048, operationTarget * 60 + (reasoning ? 4096 : 1536), 8192);
     if (reasoning) {
         payload[QStringLiteral("max_completion_tokens")] = calculatedTokens;
         if (!reasoningEffort.isEmpty() && reasoningEffort.toLower() != QLatin1String("none")) {

@@ -42,6 +42,7 @@ private Q_SLOTS:
     void testParsePointsNanAndInfProtection();
     void testIsReasoningModel();
     void testScalarCoordinateAutoNormalization();
+    void testParseSseStreamChunk();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

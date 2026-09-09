@@ -106,8 +106,9 @@ void KisAiStrokeProgramTest::testBuildChatCompletionsPayload()
         messages.at(1).toObject().value(QStringLiteral("content")).toString().toUtf8()
     ).object();
     QCOMPARE(userRequest.value(QStringLiteral("geometry_budget")).toInt(), 300);
-    QCOMPARE(userRequest.value(QStringLiteral("operation_target")).toInt(), 60);
+    QCOMPARE(userRequest.value(QStringLiteral("operation_target")).toInt(), 20);
     QVERIFY(userRequest.value(QStringLiteral("budget_allocation")).isObject());
+    QCOMPARE(payload.value(QStringLiteral("stream")).toBool(), true);
 }
 
 void KisAiStrokeProgramTest::testStrokeProgramJsonSchema()
@@ -1023,7 +1024,9 @@ void KisAiStrokeProgramTest::testIsReasoningModel()
     QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("o3-mini")));
     QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("deepseek-reasoner")));
     QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("deepseek-r1")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("deepseek-r1-distill-qwen-32b")));
     QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("qwq-32b")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("dots-studio/dots-3-note-preview:free")));
 
     // Standard non-reasoning models
     QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("gpt-4o")));
@@ -1106,6 +1109,27 @@ void KisAiStrokeProgramTest::testScalarCoordinateAutoNormalization()
     QCOMPARE(prog.operations[2].innerRadius, 0.1);
     QCOMPARE(prog.operations[2].outerRadius, 0.8);
     QCOMPARE(prog.operations[2].gradientCenter, QPointF(0.5, 0.5));
+}
+
+void KisAiStrokeProgramTest::testParseSseStreamChunk()
+{
+    QByteArray unprocessed;
+    QString content;
+    bool isDone = false;
+
+    // 1. Partial chunk split across line boundaries
+    const QByteArray chunk1 = ": keep-alive\n\ndata: {\"choices\":[{\"delta\":{\"content\":\"{\\\"schema_\"}}]}\n\ndata: {\"choices\":";
+    QVERIFY(KisAiStrokeProgramCodec::parseSseStreamChunk(chunk1, &unprocessed, &content, &isDone));
+    QCOMPARE(content, QStringLiteral("{\"schema_"));
+    QCOMPARE(isDone, false);
+    QVERIFY(!unprocessed.isEmpty());
+
+    // 2. Second chunk completing the split JSON and finishing with [DONE]
+    const QByteArray chunk2 = "[{\"delta\":{\"content\":\"version\\\":2}\"}}]}\n\ndata: [DONE]\n\n";
+    QVERIFY(KisAiStrokeProgramCodec::parseSseStreamChunk(chunk2, &unprocessed, &content, &isDone));
+    QCOMPARE(content, QStringLiteral("{\"schema_version\":2}"));
+    QCOMPARE(isDone, true);
+    QVERIFY(unprocessed.isEmpty());
 }
 
 KISTEST_MAIN(KisAiStrokeProgramTest)

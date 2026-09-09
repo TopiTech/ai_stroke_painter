@@ -9,6 +9,7 @@
 #include "KisAiStrokeProgram.h"
 #include <QByteArray>
 #include <QDockWidget>
+#include <QElapsedTimer>
 #include <QPointer>
 
 class QCheckBox;
@@ -22,6 +23,7 @@ class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
 class QSpinBox;
+class QTimer;
 class QToolButton;
 class QWidget;
 class QImage;
@@ -92,6 +94,9 @@ private:
     bool addImageAsLayer(const QImage &image, const QString &layerName);
     QString promptForLayerName(const QString &prompt) const;
     void setStatus(const QString &message, bool isError = false);
+    void resetActivityTimeout();
+    void updateProgressStatus();
+    void stopAllRequestTimers();
 
     QPointer<KisMainWindow> m_mainWindow;
     QNetworkAccessManager *m_networkManager {nullptr};
@@ -101,6 +106,15 @@ private:
     bool m_responseTooLarge {false};
     QByteArray m_responseBuffer;
     GenerationMode m_currentMode {GenerationMode::LlmStrokes};
+
+    // Dynamic timeout & streaming state
+    QTimer *m_activityTimer {nullptr};
+    QTimer *m_progressTimer {nullptr};
+    QElapsedTimer m_requestElapsedTimer;
+    QString m_streamedContent;
+    QByteArray m_sseBuffer;
+    bool m_isStreamingRequest {false};
+    QString m_activeRequestEndpoint;
 
     // Connection test state
     QPointer<QNetworkReply> m_testReply;

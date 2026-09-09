@@ -148,7 +148,9 @@ public:
         const QSize &canvasSize,
         int strokeBudget = 500,
         const QString &reasoningEffort = QString(),
-        const QString &customInstructions = QString()
+        const QString &customInstructions = QString(),
+        bool enableStreaming = true,
+        bool enforceJsonFormat = false
     );
 
     /**
@@ -258,7 +260,21 @@ public:
         const QString &additionalInstruction = QString(),
         int strokeBudget = 400,
         const QString &reasoningEffort = QString(),
-        bool includeVision = true
+        bool includeVision = true,
+        bool enableStreaming = true,
+        bool enforceJsonFormat = false
+    );
+
+    /**
+     * Parse SSE (Server-Sent Events) chunks into accumulated text content.
+     * Updates unprocessedBuffer with any trailing line fragment and appends extracted
+     * delta content to accumulatedContent. Sets isDone to true when [DONE] is encountered.
+     */
+    static bool parseSseStreamChunk(
+        const QByteArray &chunk,
+        QByteArray *unprocessedBuffer,
+        QString *accumulatedContent,
+        bool *isDone = nullptr
     );
 
     /**
