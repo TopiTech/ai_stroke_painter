@@ -499,10 +499,16 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
     }
 
     // Default 4-step or extended 5/6-step mapping
-    const int effectivePhase = (totalSteps == 4) ? phase :
-                               (phase >= totalSteps) ? 4 :
-                               (phase == 1) ? 1 :
-                               (phase == 2) ? 2 : 3;
+    int effectivePhase = 3;
+    if (totalSteps == 4) {
+        effectivePhase = phase;
+    } else if (phase >= totalSteps) {
+        effectivePhase = 4;
+    } else if (phase == 1) {
+        effectivePhase = 1;
+    } else if (phase == 2) {
+        effectivePhase = 2;
+    }
 
     switch (effectivePhase) {
     case 1: // Phase 1: Background & Flats (Silhouette & Base Volumes)

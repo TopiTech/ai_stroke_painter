@@ -54,6 +54,7 @@ private Q_SLOTS:
     void testTestUtilsMockAndCorruptions();
     void testSpikeNoiseSuppressionAndLayerSorting();
     void testJsonDiagnosticReporting();
+    void testGoalModePayloadReasoningEffortAndSamplingParams();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

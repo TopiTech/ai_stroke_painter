@@ -77,6 +77,7 @@ private:
     void scheduleRetry(const QString &reasonMessage, bool isSelfCorrection);
     void executeRetry();
     void cancelRetry();
+    void clearInFlightApiKey();
 
     // Settings persistence
     void loadSettings();
@@ -138,6 +139,7 @@ private:
     bool m_isSelfCorrectionRetry {false};
     QString m_lastFailedPrompt;
     KisAiJsonDiagnostic m_lastJsonDiagnostic;
+    QString m_inFlightApiKey;
 
     // Goal Mode State
     bool m_goalModeActive {false};

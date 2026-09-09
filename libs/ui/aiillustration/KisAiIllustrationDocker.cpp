@@ -94,18 +94,21 @@ bool protectApiKeyForCurrentUser(const QString &apiKey, QString *protectedValue)
     input.pbData = reinterpret_cast<BYTE *>(plainText.data());
 
     DATA_BLOB encrypted{};
-    if (!CryptProtectData(&input,
-                          L"AI Stroke Painter API key",
-                          nullptr,
-                          nullptr,
-                          nullptr,
-                          CRYPTPROTECT_UI_FORBIDDEN,
-                          &encrypted)) {
+    const BOOL ok = CryptProtectData(&input,
+                                     L"AI Stroke Painter API key",
+                                     nullptr,
+                                     nullptr,
+                                     nullptr,
+                                     CRYPTPROTECT_UI_FORBIDDEN,
+                                     &encrypted);
+    SecureZeroMemory(plainText.data(), plainText.size());
+    if (!ok) {
         return false;
     }
 
     const QByteArray protectedBytes(reinterpret_cast<const char *>(encrypted.pbData),
                                     static_cast<int>(encrypted.cbData));
+    SecureZeroMemory(encrypted.pbData, encrypted.cbData);
     LocalFree(encrypted.pbData);
     *protectedValue = kDpapiApiKeyPrefix + QString::fromLatin1(protectedBytes.toBase64());
     return true;
@@ -143,6 +146,7 @@ bool unprotectApiKeyForCurrentUser(const QString &protectedValue, QString *apiKe
     }
 
     const QByteArray plainBytes(reinterpret_cast<const char *>(plainText.pbData), static_cast<int>(plainText.cbData));
+    SecureZeroMemory(plainText.pbData, plainText.cbData);
     LocalFree(plainText.pbData);
     *apiKey = QString::fromUtf8(plainBytes);
     return !apiKey->isEmpty();
@@ -380,6 +384,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     });
 
     m_promptEditor = new QPlainTextEdit(promptCard.frame);
+    m_promptEditor->setTabChangesFocus(true);
     m_promptEditor->setPlaceholderText(i18n("例: 雨上がりの夜、青い光に包まれた猫と花のある静かな路地 (Ctrl+Enter で生成)"));
     m_promptEditor->setMinimumHeight(75);
     m_promptEditor->setMaximumHeight(130);
@@ -407,6 +412,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     for (const auto &ratio : ratios) {
         auto *ratioBtn = new QPushButton(ratio.first, canvasCard.frame);
         ratioBtn->setProperty("class", "aiRatioButton");
+        ratioBtn->setFocusPolicy(Qt::StrongFocus);
+        ratioBtn->setAccessibleName(i18n("Aspect ratio %1", ratio.first));
         ratioBtn->setCursor(Qt::PointingHandCursor);
         const int w = ratio.second.first;
         const int h = ratio.second.second;
@@ -441,6 +448,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     m_newCanvasButton = new QPushButton(i18n("＋ 新しいキャンバスを作成"), canvasCard.frame);
     m_newCanvasButton->setObjectName(QStringLiteral("aiSecondaryButton"));
+    m_newCanvasButton->setFocusPolicy(Qt::StrongFocus);
+    m_newCanvasButton->setAccessibleName(i18n("Create new canvas"));
     m_newCanvasButton->setAccessibleDescription(i18n("指定した大きさの AI イラスト用キャンバスを作成します。"));
     canvasCard.layout->addWidget(m_newCanvasButton);
 
@@ -463,6 +472,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_detailsToggleBtn = new QToolButton(engineCard.frame);
     m_detailsToggleBtn->setObjectName(QStringLiteral("aiToggleDetails"));
     m_detailsToggleBtn->setCheckable(true);
+    m_detailsToggleBtn->setFocusPolicy(Qt::StrongFocus);
+    m_detailsToggleBtn->setAccessibleName(i18n("Toggle detailed settings"));
     m_detailsToggleBtn->setText(i18n("▶ 詳細設定（エンドポイント / API キー）"));
     m_detailsToggleBtn->setCursor(Qt::PointingHandCursor);
     engineCard.layout->addWidget(m_detailsToggleBtn);
@@ -515,6 +526,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_temperatureSpin->setSingleStep(0.05);
     m_temperatureSpin->setValue(0.70);
     m_temperatureSpin->setDecimals(2);
+    m_temperatureSpin->setAccessibleName(i18n("Sampling temperature"));
     m_temperatureSpin->setToolTip(i18n("サンプリング温度 (0.0=確定的/構造維持, 1.0=標準, 1.5=創造的)"));
 
     m_topPSpin = new QDoubleSpinBox(m_detailsContainer);
@@ -522,6 +534,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_topPSpin->setSingleStep(0.05);
     m_topPSpin->setValue(1.0);
     m_topPSpin->setDecimals(2);
+    m_topPSpin->setAccessibleName(i18n("Top-P sampling"));
     m_topPSpin->setToolTip(i18n("Top-P (核サンプリングの累積確率閾値)"));
 
     m_maxTokensSpin = new QSpinBox(m_detailsContainer);
@@ -530,6 +543,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_maxTokensSpin->setValue(0);
     m_maxTokensSpin->setSpecialValueText(i18n("自動計算"));
     m_maxTokensSpin->setSuffix(i18n(" トークン"));
+    m_maxTokensSpin->setAccessibleName(i18n("Maximum tokens"));
     m_maxTokensSpin->setToolTip(i18n("最大生成トークン数 (0でストローク予算から自動計算)"));
 
     m_timeoutSecSpin = new QSpinBox(m_detailsContainer);
@@ -537,18 +551,21 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_timeoutSecSpin->setSingleStep(10);
     m_timeoutSecSpin->setValue(90);
     m_timeoutSecSpin->setSuffix(i18n(" 秒"));
+    m_timeoutSecSpin->setAccessibleName(i18n("Request timeout seconds"));
     m_timeoutSecSpin->setToolTip(i18n("LLM リクエストの初期応答タイムアウト時間"));
 
     m_maxRetriesSpin = new QSpinBox(m_detailsContainer);
     m_maxRetriesSpin->setRange(0, 5);
     m_maxRetriesSpin->setValue(2);
     m_maxRetriesSpin->setSuffix(i18n(" 回"));
+    m_maxRetriesSpin->setAccessibleName(i18n("Maximum retry count"));
     m_maxRetriesSpin->setToolTip(i18n("通信一時エラー時やJSONパース失敗時の自動リトライ最大回数"));
 
     m_jsonModeCombo = new QComboBox(m_detailsContainer);
     m_jsonModeCombo->addItem(i18n("自動判定 (エンドポイント依存)"), 0);
     m_jsonModeCombo->addItem(i18n("強制 (json_object)"), 1);
     m_jsonModeCombo->addItem(i18n("無効 (プロンプトのみで指示)"), 2);
+    m_jsonModeCombo->setAccessibleName(i18n("JSON response mode"));
     m_jsonModeCombo->setToolTip(i18n("APIの response_format: {\"type\": \"json_object\"} を利用するかどうか"));
 
     m_reasoningEffortCombo = new QComboBox(m_detailsContainer);
@@ -556,9 +573,12 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_reasoningEffortCombo->addItem(i18n("Low (高速・低思考)"), QStringLiteral("low"));
     m_reasoningEffortCombo->addItem(i18n("Medium (標準思考)"), QStringLiteral("medium"));
     m_reasoningEffortCombo->addItem(i18n("High (深層思考・高品質)"), QStringLiteral("high"));
+    m_reasoningEffortCombo->setAccessibleName(i18n("Reasoning effort"));
     m_reasoningEffortCombo->setToolTip(i18n("推論モデル（o1, o3, etc.）の reasoning_effort レベル"));
 
     m_customInstructionsEdit = new QPlainTextEdit(m_detailsContainer);
+    m_customInstructionsEdit->setTabChangesFocus(true);
+    m_customInstructionsEdit->setAccessibleName(i18n("Custom instructions"));
     m_customInstructionsEdit->setPlaceholderText(i18n("システムプロンプトに追加する独自の作画指示・画風・禁止事項"));
     m_customInstructionsEdit->setMaximumHeight(70);
 
@@ -581,11 +601,15 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     settingsBtnRow->setSpacing(6);
     m_testConnectionButton = new QPushButton(i18n("🔌 接続テスト"), m_detailsContainer);
     m_testConnectionButton->setObjectName(QStringLiteral("aiSecondaryButton"));
+    m_testConnectionButton->setFocusPolicy(Qt::StrongFocus);
+    m_testConnectionButton->setAccessibleName(i18n("Test connection"));
     m_testConnectionButton->setCursor(Qt::PointingHandCursor);
     m_testConnectionButton->setToolTip(i18n("入力されたエンドポイント・モデル・APIキーで導通テストを行います。"));
 
     m_saveSettingsButton = new QPushButton(i18n("💾 設定を保存"), m_detailsContainer);
     m_saveSettingsButton->setObjectName(QStringLiteral("aiSecondaryButton"));
+    m_saveSettingsButton->setFocusPolicy(Qt::StrongFocus);
+    m_saveSettingsButton->setAccessibleName(i18n("Save settings"));
     m_saveSettingsButton->setCursor(Qt::PointingHandCursor);
     m_saveSettingsButton->setToolTip(i18n("現在のエンドポイント、モデル名、APIキー、各生成設定を保存します。"));
 
@@ -603,6 +627,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     engineCard.layout->addWidget(m_detailsContainer);
 
     m_debugModeCheck = new QCheckBox(i18n("🐛 デバッグモード（LLM送受信ログを表示）"), engineCard.frame);
+    m_debugModeCheck->setFocusPolicy(Qt::StrongFocus);
+    m_debugModeCheck->setAccessibleName(i18n("Debug mode"));
     m_debugModeCheck->setToolTip(i18n("LLMへのリクエスト・レスポンス・エラー・パース等の詳細ログを表示します。"));
     m_debugModeCheck->setCursor(Qt::PointingHandCursor);
     engineCard.layout->addWidget(m_debugModeCheck);
@@ -622,6 +648,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     goalCard.layout->addWidget(goalHeader);
 
     m_goalModeCheck = new QCheckBox(i18n("Goalモード（自律多段階作画）を有効にする"), goalCard.frame);
+    m_goalModeCheck->setFocusPolicy(Qt::StrongFocus);
+    m_goalModeCheck->setAccessibleName(i18n("Autonomous goal mode"));
     m_goalModeCheck->setToolTip(i18n("下地・陰影・線画・ハイライト等を段階的に自律作画し、完成度を高めます。"));
     m_goalModeCheck->setCursor(Qt::PointingHandCursor);
     goalCard.layout->addWidget(m_goalModeCheck);
@@ -649,6 +677,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     goalOptionsLayout->addRow(i18n("画風スタイル"), m_artStyleCombo);
 
     m_pausePerStepCheck = new QCheckBox(i18n("段階ごとに一時停止（手動加筆・確認を待つ）"), goalOptionsWidget);
+    m_pausePerStepCheck->setFocusPolicy(Qt::StrongFocus);
+    m_pausePerStepCheck->setAccessibleName(i18n("Pause after each step"));
     m_pausePerStepCheck->setToolTip(i18n("各ステップ完了時に一時停止し、Kritaのブラシで自由に加筆してから次のステップへ進めます。"));
     m_pausePerStepCheck->setCursor(Qt::PointingHandCursor);
     goalOptionsLayout->addRow(QString(), m_pausePerStepCheck);
@@ -685,11 +715,15 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     stepBtnRow->setSpacing(6);
     m_nextStepButton = new QPushButton(i18n("▶ 次のステップへ進む"), m_goalInspectorCard);
     m_nextStepButton->setObjectName(QStringLiteral("aiGenerateButton"));
+    m_nextStepButton->setFocusPolicy(Qt::StrongFocus);
+    m_nextStepButton->setAccessibleName(i18n("Advance to next step"));
     m_nextStepButton->setCursor(Qt::PointingHandCursor);
     m_nextStepButton->setVisible(false);
 
     m_finishGoalButton = new QPushButton(i18n("🏁 ここで完成"), m_goalInspectorCard);
     m_finishGoalButton->setObjectName(QStringLiteral("aiSecondaryButton"));
+    m_finishGoalButton->setFocusPolicy(Qt::StrongFocus);
+    m_finishGoalButton->setAccessibleName(i18n("Finish goal mode"));
     m_finishGoalButton->setCursor(Qt::PointingHandCursor);
     m_finishGoalButton->setVisible(false);
 
@@ -715,9 +749,13 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     auto *buttonRow = new QHBoxLayout();
     m_generateButton = new QPushButton(i18n("🎨 生成してレイヤーに追加"), actionCard.frame);
     m_generateButton->setObjectName(QStringLiteral("aiGenerateButton"));
+    m_generateButton->setFocusPolicy(Qt::StrongFocus);
+    m_generateButton->setAccessibleName(i18n("Generate illustration"));
     m_generateButton->setAccessibleDescription(i18n("プロンプトからイラストを生成し、現在のキャンバスに新しいレイヤーを追加します。"));
     m_cancelButton = new QPushButton(i18n("中止"), actionCard.frame);
     m_cancelButton->setObjectName(QStringLiteral("aiSecondaryButton"));
+    m_cancelButton->setFocusPolicy(Qt::StrongFocus);
+    m_cancelButton->setAccessibleName(i18n("Cancel generation"));
     m_cancelButton->setVisible(false);
     buttonRow->addWidget(m_generateButton, 1);
     buttonRow->addWidget(m_cancelButton);
@@ -836,7 +874,10 @@ KisAiIllustrationDocker::~KisAiIllustrationDocker()
 {
     cancelRetry();
     saveSettings();
-    m_goalApiKey.clear();
+    if (!m_goalApiKey.isEmpty()) {
+        m_goalApiKey.fill(QLatin1Char('\0'));
+        m_goalApiKey.clear();
+    }
     if (m_testReply) {
         m_testReply->disconnect(this);
         m_testReply->abort();
@@ -1003,7 +1044,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     QString errorMessage;
     const QString endpoint = m_endpointEditor->text().trimmed();
     const QString model = m_modelEditor->text().trimmed();
-    const QString apiKey = m_apiKeyEditor->text();
+    const QString apiKey = !m_inFlightApiKey.isEmpty() ? m_inFlightApiKey : m_apiKeyEditor->text();
 
     if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
         if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
@@ -1112,6 +1153,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     m_reply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
     m_reply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
 
+    m_inFlightApiKey = apiKey;
     if (m_saveApiKeyCheck && !m_saveApiKeyCheck->isChecked()) {
         m_apiKeyEditor->clear();
     }
@@ -1172,6 +1214,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
 
     if (requestWasCancelled) {
         cancelRetry();
+        clearInFlightApiKey();
         logDebug(QStringLiteral("LLM_CANCEL"), QStringLiteral("ユーザーにより生成が中止されました。"));
         setStatus(i18n("LLM ストローク生成を中止しました。"));
         m_streamedContent.clear();
@@ -1195,6 +1238,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         }
         m_currentRetryCount = 0;
         m_isSelfCorrectionRetry = false;
+        clearInFlightApiKey();
         return;
     }
     if (responseTooLarge) {
@@ -1204,6 +1248,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         m_sseBuffer.clear();
         m_currentRetryCount = 0;
         m_isSelfCorrectionRetry = false;
+        clearInFlightApiKey();
         return;
     }
     // Content-type validation: reject clearly non-JSON responses before parsing.
@@ -1217,6 +1262,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         m_sseBuffer.clear();
         m_currentRetryCount = 0;
         m_isSelfCorrectionRetry = false;
+        clearInFlightApiKey();
         return;
     }
     if (!requestSucceeded) {
@@ -1253,6 +1299,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         m_sseBuffer.clear();
         m_currentRetryCount = 0;
         m_isSelfCorrectionRetry = false;
+        clearInFlightApiKey();
         return;
     }
 
@@ -1284,10 +1331,12 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         setStatus(parseError, true);
         m_currentRetryCount = 0;
         m_isSelfCorrectionRetry = false;
+        clearInFlightApiKey();
         return;
     }
     m_currentRetryCount = 0;
     m_isSelfCorrectionRetry = false;
+    clearInFlightApiKey();
 
     logDebug(QStringLiteral("LLM_PARSE_OK"), QStringLiteral("解析成功: %1 operations, completionScore=%2")
         .arg(program.operations.size()).arg(program.completionScore));
@@ -1674,6 +1723,14 @@ void KisAiIllustrationDocker::updateModeUi()
         m_remoteForm->setRowVisible(2, needsRemote);
         m_remoteForm->setRowVisible(3, needsRemote); // Save API Key checkbox
         m_remoteForm->setRowVisible(4, isLlm);       // Stroke Budget
+        m_remoteForm->setRowVisible(5, isLlm);       // Temperature
+        m_remoteForm->setRowVisible(6, isLlm);       // Top-P
+        m_remoteForm->setRowVisible(7, isLlm);       // Max Tokens
+        m_remoteForm->setRowVisible(8, needsRemote); // Timeout
+        m_remoteForm->setRowVisible(9, isLlm);       // Auto-retries
+        m_remoteForm->setRowVisible(10, isLlm);      // JSON Mode
+        m_remoteForm->setRowVisible(11, isLlm);      // Reasoning Effort
+        m_remoteForm->setRowVisible(12, isLlm);      // Custom Instructions
     }
 
     if (m_testConnectionButton) {
@@ -2138,6 +2195,9 @@ void KisAiIllustrationDocker::executeGoalStep()
 
         const bool enforceJson = KisAiStrokeProgramCodec::supportsJsonFormat(endpoint);
         const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 400;
+        const QString reasoningEffort = m_reasoningEffortCombo ? m_reasoningEffortCombo->currentData().toString() : QString();
+        const qreal temperature = m_temperatureSpin ? m_temperatureSpin->value() : 0.70;
+        const qreal topP = m_topPSpin ? m_topPSpin->value() : 1.0;
         const QJsonObject payload = KisAiStrokeProgramCodec::buildGoalStepPayload(
             model,
             m_goalPrompt,
@@ -2147,17 +2207,21 @@ void KisAiIllustrationDocker::executeGoalStep()
             imageBase64,
             guidance,
             strokeBudget,
-            QString(),
+            reasoningEffort,
             !m_goalVisionFallbackActive,
             true, // enableStreaming
-            enforceJson // enforceJsonFormat
+            enforceJson, // enforceJsonFormat
+            temperature,
+            topP
         );
 
         logDebug(QStringLiteral("GOAL_REQ"), QStringLiteral(
-            "Step %1/%2 POST (model=%3, withImage=%4, fallbackActive=%5, stream=true)")
+            "Step %1/%2 POST (model=%3, withImage=%4, fallbackActive=%5, temp=%6, top_p=%7, stream=true)")
             .arg(m_goalCurrentStep).arg(m_goalTotalSteps).arg(model)
             .arg(m_lastGoalRequestHadImage ? QStringLiteral("Yes") : QStringLiteral("No"))
-            .arg(m_goalVisionFallbackActive ? QStringLiteral("Yes") : QStringLiteral("No")));
+            .arg(m_goalVisionFallbackActive ? QStringLiteral("Yes") : QStringLiteral("No"))
+            .arg(QString::number(temperature, 'f', 2))
+            .arg(QString::number(topP, 'f', 2)));
 
         QNetworkRequest request{QUrl(endpoint)};
         request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
@@ -2207,7 +2271,9 @@ void KisAiIllustrationDocker::executeGoalStep()
                 }
             });
         }
-        m_activityTimer->start(INITIAL_REQUEST_TIMEOUT_MS);
+        const int timeoutSec = m_timeoutSecSpin ? m_timeoutSecSpin->value() : 90;
+        const int initialTimeoutMs = qBound(10'000, timeoutSec * 1000, MAX_REQUEST_TIMEOUT_MS);
+        m_activityTimer->start(initialTimeoutMs);
 
         if (!m_progressTimer) {
             m_progressTimer = new QTimer(this);
@@ -2444,7 +2510,10 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
 {
     m_goalModeActive = false;
     m_waitingForUserStepAdvance = false;
-    m_goalApiKey.clear();
+    if (!m_goalApiKey.isEmpty()) {
+        m_goalApiKey.fill(QLatin1Char('\0'));
+        m_goalApiKey.clear();
+    }
     m_goalVisionFallbackActive = false;
     m_lastGoalRequestHadImage = false;
     m_goalAccumulatedProgram = KisAiStrokeProgram();
@@ -2485,6 +2554,7 @@ void KisAiIllustrationDocker::scheduleRetry(const QString &reasonMessage, bool i
         setStatus(reasonMessage, true);
         m_currentRetryCount = 0;
         m_isSelfCorrectionRetry = false;
+        clearInFlightApiKey();
         return;
     }
 
@@ -2568,6 +2638,15 @@ void KisAiIllustrationDocker::cancelRetry()
     m_isSelfCorrectionRetry = false;
     m_lastFailedPrompt.clear();
     m_lastJsonDiagnostic = KisAiJsonDiagnostic();
+    clearInFlightApiKey();
+}
+
+void KisAiIllustrationDocker::clearInFlightApiKey()
+{
+    if (!m_inFlightApiKey.isEmpty()) {
+        m_inFlightApiKey.fill(QLatin1Char('\0'));
+        m_inFlightApiKey.clear();
+    }
 }
 
 void KisAiIllustrationDocker::loadSettings()

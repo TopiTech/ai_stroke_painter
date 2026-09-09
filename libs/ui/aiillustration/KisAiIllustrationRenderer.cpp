@@ -240,7 +240,7 @@ QImage KisAiIllustrationRenderer::createConceptImage(const QString &prompt, cons
     const QSize size = boundedSize(requestedSize);
     const QString normalized = normalizedPrompt(prompt);
     QRandomGenerator random(KisAiStrokeProgramCodec::stableSeed(normalized));
-    const int hue = static_cast<int>(random.bounded(360));
+    const int hue = random.bounded(360);
 
     QImage image(size, QImage::Format_ARGB32_Premultiplied);
     image.fill(QColor(16, 22, 35));
@@ -272,7 +272,7 @@ QImage KisAiIllustrationRenderer::createConceptImage(const QString &prompt, cons
                                                             -size.width() * 0.12,
                                                             -size.height() * 0.12);
     for (int i = 0; i < 3; ++i) {
-        drawBrushRibbon(painter, illustrationBounds, random, hue + i * 38);
+        drawBrushRibbon(painter, illustrationBounds, random, hue + (i * 38));
     }
     drawPromptMotif(painter, illustrationBounds, normalized, hue);
 

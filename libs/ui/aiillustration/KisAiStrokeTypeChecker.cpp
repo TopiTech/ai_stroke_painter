@@ -546,9 +546,9 @@ bool KisAiStrokeTypeChecker::checkAndCoerceProgram(
     if (programObject->contains(QStringLiteral("schema_version"))) {
         const QJsonValue svVal = programObject->value(QStringLiteral("schema_version"));
         if (!svVal.isDouble()) {
-            qreal sv = 2.0;
-            if (coerceToNumber(svVal, &sv)) {
-                (*programObject)[QStringLiteral("schema_version")] = static_cast<int>(sv);
+            qreal schemaVersionVal = 2.0;
+            if (coerceToNumber(svVal, &schemaVersionVal)) {
+                (*programObject)[QStringLiteral("schema_version")] = static_cast<int>(schemaVersionVal);
                 if (report) ++report->coercedValues;
             } else {
                 (*programObject)[QStringLiteral("schema_version")] = 2;
@@ -604,7 +604,7 @@ bool KisAiStrokeTypeChecker::checkAndCoerceProgram(
     }
 
     if (report) {
-        report->totalCheckedOperations = ops.size();
+        report->totalCheckedOperations = static_cast<int>(ops.size());
     }
 
     (*programObject)[QStringLiteral("operations")] = validatedOps;

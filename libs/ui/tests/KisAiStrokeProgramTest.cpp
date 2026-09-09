@@ -1623,6 +1623,76 @@ void KisAiStrokeProgramTest::testJsonDiagnosticReporting()
     QVERIFY(logStr.contains(QStringLiteral("JsonDiagnostic")));
 }
 
+void KisAiStrokeProgramTest::testGoalModePayloadReasoningEffortAndSamplingParams()
+{
+    const QSize canvasSize(1024, 1024);
+
+    // 1. Standard model with temperature, top_p, and JSON enforcement
+    const QJsonObject stdPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("anime girl"),
+        canvasSize,
+        1,
+        4,
+        QString(),
+        QString(),
+        400,
+        QString(), // reasoningEffort
+        true,  // isVisionModel
+        true,  // enableStreaming
+        true,  // enforceJsonFormat
+        0.85,  // temperature
+        0.95   // topP
+    );
+    QCOMPARE(stdPayload.value(QStringLiteral("model")).toString(), QStringLiteral("gpt-4o"));
+    QCOMPARE(stdPayload.value(QStringLiteral("stream")).toBool(), true);
+    QCOMPARE(stdPayload.value(QStringLiteral("temperature")).toDouble(), 0.85);
+    QCOMPARE(stdPayload.value(QStringLiteral("top_p")).toDouble(), 0.95);
+    QVERIFY(!stdPayload.contains(QStringLiteral("reasoning_effort")));
+    QVERIFY(stdPayload.contains(QStringLiteral("response_format")));
+    QCOMPARE(stdPayload.value(QStringLiteral("response_format")).toObject().value(QStringLiteral("type")).toString(),
+             QStringLiteral("json_object"));
+
+    // 2. Reasoning model (e.g. o3-mini) with reasoning_effort
+    const QJsonObject reasoningPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("o3-mini"),
+        QStringLiteral("anime landscape"),
+        canvasSize,
+        2,
+        4,
+        QString(),
+        QString(),
+        500,
+        QStringLiteral("high"), // reasoningEffort
+        true,
+        true,
+        false, // enforceJsonFormat
+        0.70,
+        1.0
+    );
+    QCOMPARE(reasoningPayload.value(QStringLiteral("model")).toString(), QStringLiteral("o3-mini"));
+    QCOMPARE(reasoningPayload.value(QStringLiteral("reasoning_effort")).toString(), QStringLiteral("high"));
+    // Reasoning models must not have temperature or top_p injected
+    QVERIFY(!reasoningPayload.contains(QStringLiteral("temperature")));
+    QVERIFY(!reasoningPayload.contains(QStringLiteral("top_p")));
+    QVERIFY(!reasoningPayload.contains(QStringLiteral("response_format")));
+
+    // 3. Reasoning model with empty reasoning_effort does not set reasoning_effort key
+    const QJsonObject reasoningDefaultPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("o1"),
+        QStringLiteral("cyberpunk character"),
+        canvasSize,
+        1,
+        3,
+        QString(),
+        QString(),
+        350,
+        QString() // reasoningEffort
+    );
+    QVERIFY(!reasoningDefaultPayload.contains(QStringLiteral("reasoning_effort")));
+    QVERIFY(!reasoningDefaultPayload.contains(QStringLiteral("temperature")));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

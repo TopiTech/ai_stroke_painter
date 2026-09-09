@@ -3376,7 +3376,9 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     const QString &reasoningEffort,
     bool includeVision,
     bool enableStreaming,
-    bool enforceJsonFormat)
+    bool enforceJsonFormat,
+    qreal temperature,
+    qreal topP)
 {
     const bool reasoning = isReasoningModel(model);
     const bool vision = includeVision && isVisionModel(model) && !imageBase64.trimmed().isEmpty();
@@ -3491,7 +3493,10 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
         }
     } else {
         payload[QStringLiteral("max_tokens")] = calculatedTokens;
-        payload[QStringLiteral("temperature")] = 0.7;
+        payload[QStringLiteral("temperature")] = qBound<qreal>(0.0, temperature, 2.0);
+        if (topP < 1.0) {
+            payload[QStringLiteral("top_p")] = qBound<qreal>(0.05, topP, 1.0);
+        }
     }
 
     return payload;

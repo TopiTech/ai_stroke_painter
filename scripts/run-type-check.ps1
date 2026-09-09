@@ -47,6 +47,8 @@ $includeArgs = @(
     "-I$repoRoot\libs\ui\aiillustration",
     "-I$repoRoot\build-ai\libs\ui",
     "-I$repoRoot\libs\global",
+    "-I$repoRoot\libs\command",
+    "-I$repoRoot\libs\resources",
     "-I$repoRoot\libs\image",
     "-I$CraftRoot\include",
     "-I$CraftRoot\include\QtCore",
@@ -68,8 +70,13 @@ foreach ($file in $sourceFiles) {
     if ($Fix) {
         $tidyArgs += "--fix"
     }
-    $tidyArgs += "--"
-    $tidyArgs += $includeArgs
+    if ($buildDir) {
+        $tidyArgs += "-p"
+        $tidyArgs += $buildDir
+    } else {
+        $tidyArgs += "--"
+        $tidyArgs += $includeArgs
+    }
 
     $result = & $clangTidy.Source @tidyArgs 2>&1
     if ($LASTEXITCODE -eq 0 -and (-not $result -or $result.Length -eq 0)) {

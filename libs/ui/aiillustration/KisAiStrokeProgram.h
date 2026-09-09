@@ -313,7 +313,9 @@ public:
         const QString &reasoningEffort = QString(),
         bool includeVision = true,
         bool enableStreaming = true,
-        bool enforceJsonFormat = false
+        bool enforceJsonFormat = false,
+        qreal temperature = 0.7,
+        qreal topP = 1.0
     );
 
     /**
