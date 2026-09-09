@@ -19,6 +19,8 @@
 
 #include "aiillustration/KisAiStrokeProgram.h"
 #include "aiillustration/KisAiPromptAnalyzer.h"
+#include "aiillustration/KisAiStrokeTypeChecker.h"
+#include "KisAiTestUtils.h"
 
 void KisAiStrokeProgramTest::testSanitizeAndExtractJson()
 {
@@ -1460,6 +1462,165 @@ void KisAiStrokeProgramTest::testSupportsJsonFormat()
     // Unsupported / custom endpoints
     QVERIFY(!KisAiStrokeProgramCodec::supportsJsonFormat(QStringLiteral("https://my-custom-proxy.internal/v1/chat/completions")));
     QVERIFY(!KisAiStrokeProgramCodec::supportsJsonFormat(QStringLiteral("")));
+}
+
+void KisAiStrokeProgramTest::testTypeCheckerValidationAndCoercion()
+{
+    // Program with coerced types: string coordinates, object-formatted points, and hex without '#'
+    const QString jsonText = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": \"2\",\n"
+        "  \"prompt\": \"Coercion test\",\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"fill\",\n"
+        "      \"id\": \"fill_coerce\",\n"
+        "      \"layer\": \"Flats\",\n"
+        "      \"polygon\": [{\"x\": \"0.1\", \"y\": \"0.2\"}, {\"x\": 0.8, \"y\": 0.2}, {\"x\": 0.5, \"y\": \"0.9\"}],\n"
+        "      \"brush\": {\"profile\": \"watercolor\", \"color\": \"ff5500\", \"size\": \"0.03\"}\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"id\": \"path_coerce\",\n"
+        "      \"layer\": \"Lineart\",\n"
+        "      \"points\": [[\"0.1\", \"0.1\", \"0.9\"], [\"0.5\", \"0.5\", \"1.0\"]],\n"
+        "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#000000\", \"size\": 0.005}\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+
+    KisAiStrokeProgram prog;
+    QString error;
+    KisAiJsonDiagnostic diag;
+    const bool ok = KisAiStrokeProgramCodec::parseResponse(jsonText.toUtf8(), &prog, &error, &diag);
+    QVERIFY2(ok, qPrintable(error));
+    QCOMPARE(prog.operations.size(), 2);
+
+    // Verify coerced fill polygon
+    const auto &opFill = prog.operations.at(0);
+    QCOMPARE(opFill.polygon.size(), 3);
+    QCOMPARE(opFill.polygon.at(0), QPointF(0.1, 0.2));
+    QCOMPARE(opFill.brush.color, QColor(0xff, 0x55, 0x00));
+    QCOMPARE(opFill.brush.size, 0.03);
+
+    // Verify coerced path points
+    const auto &opPath = prog.operations.at(1);
+    QCOMPARE(opPath.points.size(), 2);
+    QCOMPARE(opPath.points.at(0).pos, QPointF(0.1, 0.1));
+    QCOMPARE(opPath.points.at(0).pressure, 0.9);
+}
+
+void KisAiStrokeProgramTest::testTestUtilsMockAndCorruptions()
+{
+    // Test 1: Mock Chat Response
+    const QString sample = KisAiTestUtils::createSampleProgramJson(KisAiTestUtils::SampleProgramType::CharacterPortrait);
+    const QByteArray mockResponse = KisAiTestUtils::createMockChatResponse(sample);
+    QVERIFY(!mockResponse.isEmpty());
+
+    KisAiStrokeProgram prog;
+    QString error;
+    QVERIFY(KisAiStrokeProgramCodec::parseResponse(mockResponse, &prog, &error));
+    QVERIFY(KisAiTestUtils::verifyProgramStructure(prog, 2, 0.5));
+
+    // Test 2: Full-Width Character Repair
+    const QString fullWidthCorrupted = KisAiTestUtils::corruptJson(sample, KisAiTestUtils::CorruptionType::FullWidthCharacters);
+    KisAiStrokeProgram progFw;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(fullWidthCorrupted.toUtf8(), &progFw, &error), qPrintable(error));
+    QVERIFY(progFw.operations.size() >= 2);
+
+    // Test 3: Unescaped Control Characters Repair
+    const QString controlCharCorrupted = KisAiTestUtils::corruptJson(sample, KisAiTestUtils::CorruptionType::UnescapedControlCharacters);
+    KisAiStrokeProgram progCtrl;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(controlCharCorrupted.toUtf8(), &progCtrl, &error), qPrintable(error));
+    QVERIFY(progCtrl.operations.size() >= 2);
+
+    // Test 4: Trailing Commas Repair
+    const QString trailingCommas = KisAiTestUtils::corruptJson(sample, KisAiTestUtils::CorruptionType::TrailingCommas);
+    KisAiStrokeProgram progTc;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(trailingCommas.toUtf8(), &progTc, &error), qPrintable(error));
+    QVERIFY(progTc.operations.size() >= 2);
+
+    // Test 5: Mock SSE Chunks
+    const QStringList tokens = {QStringLiteral("{\"schema_version\":"), QStringLiteral(" 2, \"operations\": []}")};
+    const auto chunks = KisAiTestUtils::createMockSseChunks(tokens);
+    QCOMPARE(chunks.size(), 3); // 2 tokens + [DONE]
+}
+
+void KisAiStrokeProgramTest::testSpikeNoiseSuppressionAndLayerSorting()
+{
+    // Test 1: Layer Sorting
+    KisAiStrokeProgram unsorted;
+    unsorted.schemaVersion = 2;
+
+    KisAiStrokeOperation opHigh;
+    opHigh.id = QStringLiteral("hl_1");
+    opHigh.layer = QStringLiteral("Highlights");
+    opHigh.kind = KisAiStrokeOperation::Kind::Path;
+    opHigh.points = {{0.5, 0.5, 1.0}, {0.6, 0.6, 1.0}};
+
+    KisAiStrokeOperation opFlat;
+    opFlat.id = QStringLiteral("flat_1");
+    opFlat.layer = QStringLiteral("Flats");
+    opFlat.kind = KisAiStrokeOperation::Kind::Fill;
+    opFlat.polygon = {{0.1, 0.1}, {0.9, 0.1}, {0.5, 0.9}};
+
+    KisAiStrokeOperation opLine;
+    opLine.id = QStringLiteral("line_1");
+    opLine.layer = QStringLiteral("Lineart");
+    opLine.kind = KisAiStrokeOperation::Kind::Path;
+    opLine.points = {{0.2, 0.2, 1.0}, {0.8, 0.8, 1.0}};
+
+    // Append in reverse order: Highlights -> Flats -> Lineart
+    unsorted.operations = {opHigh, opFlat, opLine};
+
+    const KisAiStrokeProgram sorted = KisAiStrokeProgramCodec::refineForRendering(unsorted);
+    QCOMPARE(sorted.operations.size(), 3);
+    // Flats must come first, then Lineart, then Highlights
+    QCOMPARE(sorted.operations.at(0).layer, QStringLiteral("Flats"));
+    QCOMPARE(sorted.operations.at(1).layer, QStringLiteral("Lineart"));
+    QCOMPARE(sorted.operations.at(2).layer, QStringLiteral("Highlights"));
+
+    // Test 2: Angle Spike Suppression
+    KisAiStrokeProgram spikyProgram;
+    spikyProgram.schemaVersion = 2;
+    KisAiStrokeOperation spikyOp;
+    spikyOp.id = QStringLiteral("spike_path");
+    spikyOp.layer = QStringLiteral("Lineart");
+    spikyOp.kind = KisAiStrokeOperation::Kind::Path;
+    // Points with an extreme acute back-and-forth spike
+    spikyOp.points = {
+        {0.1, 0.1, 1.0},
+        {0.15, 0.15, 1.0},
+        {0.1001, 0.1001, 1.0}, // extreme angle spike (len1 ~ 0.07, len2 ~ 0.07, len1+len2 ~ 0.14 < 0.15)
+        {0.3, 0.3, 1.0}
+    };
+    spikyProgram.operations.append(spikyOp);
+
+    KisAiStrokeQualityReport report;
+    const KisAiStrokeProgram smoothedProg = KisAiStrokeProgramCodec::refineForRendering(spikyProgram, &report);
+    QCOMPARE(smoothedProg.operations.size(), 1);
+    // Spike point should have been smoothed and recorded as repaired value
+    QVERIFY(report.repairedValues > 0);
+    // Point 1 was smoothed from (0.15, 0.15) towards midpoint of neighbors (~0.10)
+    const QPointF smoothedPoint = smoothedProg.operations.at(0).points.at(1).pos;
+    QVERIFY(smoothedPoint.x() < 0.12);
+}
+
+void KisAiStrokeProgramTest::testJsonDiagnosticReporting()
+{
+    const QString invalidJson = QStringLiteral("{\"schema_version\": 2, \"operations\": [ unquoted_garbage ]}");
+    KisAiStrokeProgram prog;
+    QString error;
+    KisAiJsonDiagnostic diag;
+    const bool ok = KisAiStrokeProgramCodec::parseResponse(invalidJson.toUtf8(), &prog, &error, &diag);
+    QVERIFY(!ok);
+    QVERIFY(diag.hasError);
+    QVERIFY(!diag.errorMessage.isEmpty());
+    QVERIFY(diag.errorOffset >= 0);
+    const QString logStr = diag.formatForLog();
+    QVERIFY(!logStr.isEmpty());
+    QVERIFY(logStr.contains(QStringLiteral("JsonDiagnostic")));
 }
 
 KISTEST_MAIN(KisAiStrokeProgramTest)

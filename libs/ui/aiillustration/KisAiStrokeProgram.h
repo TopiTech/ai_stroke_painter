@@ -133,6 +133,19 @@ struct KRITAUI_EXPORT KisAiStrokeQualityReport
     QStringList warnings;
 };
 
+struct KRITAUI_EXPORT KisAiJsonDiagnostic
+{
+    bool hasError {false};
+    int errorOffset {-1};
+    int errorLine {-1};
+    int errorColumn {-1};
+    QString errorSnippet;
+    QString errorMessage;
+    QStringList appliedRepairs;
+
+    QString formatForLog() const;
+};
+
 /**
  * High-level parser, serializer, and prompt builder for text-based LLMs
  * generating coordinate-directed strokes (StrokeProgram v2).
@@ -151,7 +164,11 @@ public:
         const QString &reasoningEffort = QString(),
         const QString &customInstructions = QString(),
         bool enableStreaming = true,
-        bool enforceJsonFormat = false
+        bool enforceJsonFormat = false,
+        qreal temperature = 0.7,
+        qreal topP = 1.0,
+        int maxTokensOverride = 0,
+        int artStyle = 0
     );
 
     /**
@@ -161,7 +178,8 @@ public:
     static QString buildSystemPrompt(
         const QSize &canvasSize,
         const QString &prompt,
-        const QString &customInstructions = QString()
+        const QString &customInstructions = QString(),
+        int artStyle = 0
     );
 
     /**
@@ -176,7 +194,8 @@ public:
     static bool parseResponse(
         const QByteArray &responseBytes,
         KisAiStrokeProgram *outProgram,
-        QString *errorMessage = nullptr
+        QString *errorMessage = nullptr,
+        KisAiJsonDiagnostic *diagnostic = nullptr
     );
 
     /**
@@ -207,7 +226,10 @@ public:
     /**
      * Extract JSON substring from raw model output (handles ```json ... ``` and <think>...</think>).
      */
-    static QString sanitizeAndExtractJson(const QString &rawText);
+    static QString sanitizeAndExtractJson(
+        const QString &rawText,
+        KisAiJsonDiagnostic *diagnostic = nullptr
+    );
 
     /**
      * Offline deterministic procedural stroke generator for testing coordinate rendering
@@ -227,14 +249,20 @@ public:
 
     /**
      * Attempt to repair common JSON syntax errors (comments, trailing commas, single quotes,
-     * unquoted keys, dirty numbers, dirty booleans, stray tokens).
+     * unquoted keys, dirty numbers, dirty booleans, stray tokens) using token masking.
      */
-    static QString repairJsonSyntax(const QString &text);
+    static QString repairJsonSyntax(
+        const QString &text,
+        KisAiJsonDiagnostic *diagnostic = nullptr
+    );
 
     /**
      * Attempt to repair truncated JSON containing an operations or strokes array.
      */
-    static QString repairTruncatedJson(const QString &jsonText);
+    static QString repairTruncatedJson(
+        const QString &jsonText,
+        KisAiJsonDiagnostic *diagnostic = nullptr
+    );
 
     /**
      * Extract individual stroke operations from arbitrary or severely mangled text when
@@ -243,7 +271,8 @@ public:
     static bool extractOperationsFromRawText(
         const QString &rawText,
         KisAiStrokeProgram *outProgram,
-        QString *errorMessage = nullptr
+        QString *errorMessage = nullptr,
+        KisAiJsonDiagnostic *diagnostic = nullptr
     );
 
     /**

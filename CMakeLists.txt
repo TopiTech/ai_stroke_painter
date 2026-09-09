@@ -12,6 +12,7 @@ if (AI_STROKE_STANDALONE_TESTS)
 
     add_library(ai_stroke_core STATIC
         libs/ui/aiillustration/KisAiPromptAnalyzer.cpp
+        libs/ui/aiillustration/KisAiStrokeTypeChecker.cpp
         libs/ui/aiillustration/KisAiStrokeProgram.cpp
         libs/ui/aiillustration/KisAiStrokeRenderer.cpp
         libs/ui/aiillustration/KisAiIllustrationRenderer.cpp
@@ -23,6 +24,7 @@ if (AI_STROKE_STANDALONE_TESTS)
 
     add_executable(KisAiStrokeProgramTest
         libs/ui/tests/KisAiStrokeProgramTest.cpp
+        libs/ui/tests/KisAiTestUtils.cpp
     )
     target_include_directories(KisAiStrokeProgramTest PRIVATE
         libs/ui
@@ -33,6 +35,7 @@ if (AI_STROKE_STANDALONE_TESTS)
 
     add_executable(KisAiStrokeRendererTest
         libs/ui/tests/KisAiStrokeRendererTest.cpp
+        libs/ui/tests/KisAiTestUtils.cpp
     )
     target_include_directories(KisAiStrokeRendererTest PRIVATE
         libs/ui

@@ -14,6 +14,7 @@
 
 class QCheckBox;
 class QComboBox;
+class QDoubleSpinBox;
 class QFrame;
 class QLabel;
 class QLineEdit;
@@ -72,6 +73,11 @@ private:
     void advanceGoalStep();
     void finishGoalMode(bool success = true);
 
+    // Two-Tier Retry & Self-Correction
+    void scheduleRetry(const QString &reasonMessage, bool isSelfCorrection);
+    void executeRetry();
+    void cancelRetry();
+
     // Settings persistence
     void loadSettings();
     void saveSettings();
@@ -125,6 +131,14 @@ private:
     bool m_testResponseTooLarge{false};
     qint64 m_testStartTimeMs {0};
 
+    // Retry & Self-Correction State
+    QTimer *m_retryTimer {nullptr};
+    int m_currentRetryCount {0};
+    int m_maxRetryCount {2};
+    bool m_isSelfCorrectionRetry {false};
+    QString m_lastFailedPrompt;
+    KisAiJsonDiagnostic m_lastJsonDiagnostic;
+
     // Goal Mode State
     bool m_goalModeActive {false};
     int m_goalCurrentStep {1};
@@ -154,6 +168,16 @@ private:
     QLabel *m_remoteOptionsLabel {nullptr};
     QToolButton *m_detailsToggleBtn {nullptr};
     QWidget *m_detailsContainer {nullptr};
+
+    // Fine-grained AI Settings UI Controls
+    QDoubleSpinBox *m_temperatureSpin {nullptr};
+    QDoubleSpinBox *m_topPSpin {nullptr};
+    QSpinBox *m_maxTokensSpin {nullptr};
+    QSpinBox *m_maxRetriesSpin {nullptr};
+    QSpinBox *m_timeoutSecSpin {nullptr};
+    QComboBox *m_jsonModeCombo {nullptr};
+    QComboBox *m_reasoningEffortCombo {nullptr};
+    QPlainTextEdit *m_customInstructionsEdit {nullptr};
 
     // Goal Mode UI Controls
     QCheckBox *m_goalModeCheck {nullptr};

@@ -50,6 +50,10 @@ private Q_SLOTS:
     void testJsonSyntaxRepairVariousCases();
     void testExtractOperationsFromTruncatedEnvelope();
     void testSupportsJsonFormat();
+    void testTypeCheckerValidationAndCoercion();
+    void testTestUtilsMockAndCorruptions();
+    void testSpikeNoiseSuppressionAndLayerSorting();
+    void testJsonDiagnosticReporting();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

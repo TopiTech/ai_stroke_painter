@@ -2,10 +2,10 @@
 # part of this application. The upstream Krita tests remain available through
 # AI_STROKE_PAINTER_BUILD_UPSTREAM_TESTS=ON when the full test stack is wanted.
 if (NOT AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
-    kis_add_test(KisAiStrokeProgramTest.cpp
+    kis_add_test(KisAiStrokeProgramTest.cpp KisAiTestUtils.cpp
         TEST_NAME KisAiStrokeProgramTest
         LINK_LIBRARIES kritaui kritatestsdk)
-    kis_add_test(KisAiStrokeRendererTest.cpp
+    kis_add_test(KisAiStrokeRendererTest.cpp KisAiTestUtils.cpp
         TEST_NAME KisAiStrokeRendererTest
         LINK_LIBRARIES kritaui kritatestsdk)
     kis_add_test(KisAiIllustrationRendererTest.cpp

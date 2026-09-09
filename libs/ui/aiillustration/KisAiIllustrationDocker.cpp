@@ -28,6 +28,7 @@
 #include <QClipboard>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDoubleSpinBox>
 #include <QFont>
 #include <QFormLayout>
 #include <QFrame>
@@ -49,6 +50,7 @@
 #include <QPixmap>
 #include <QProgressBar>
 #include <QPushButton>
+#include <QRandomGenerator>
 #include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
@@ -508,11 +510,71 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_strokeBudgetSpin->setSuffix(i18n(" 本"));
     m_strokeBudgetSpin->setAccessibleName(i18n("Stroke budget"));
 
+    m_temperatureSpin = new QDoubleSpinBox(m_detailsContainer);
+    m_temperatureSpin->setRange(0.0, 2.0);
+    m_temperatureSpin->setSingleStep(0.05);
+    m_temperatureSpin->setValue(0.70);
+    m_temperatureSpin->setDecimals(2);
+    m_temperatureSpin->setToolTip(i18n("サンプリング温度 (0.0=確定的/構造維持, 1.0=標準, 1.5=創造的)"));
+
+    m_topPSpin = new QDoubleSpinBox(m_detailsContainer);
+    m_topPSpin->setRange(0.05, 1.0);
+    m_topPSpin->setSingleStep(0.05);
+    m_topPSpin->setValue(1.0);
+    m_topPSpin->setDecimals(2);
+    m_topPSpin->setToolTip(i18n("Top-P (核サンプリングの累積確率閾値)"));
+
+    m_maxTokensSpin = new QSpinBox(m_detailsContainer);
+    m_maxTokensSpin->setRange(0, 65536);
+    m_maxTokensSpin->setSingleStep(1024);
+    m_maxTokensSpin->setValue(0);
+    m_maxTokensSpin->setSpecialValueText(i18n("自動計算"));
+    m_maxTokensSpin->setSuffix(i18n(" トークン"));
+    m_maxTokensSpin->setToolTip(i18n("最大生成トークン数 (0でストローク予算から自動計算)"));
+
+    m_timeoutSecSpin = new QSpinBox(m_detailsContainer);
+    m_timeoutSecSpin->setRange(10, 600);
+    m_timeoutSecSpin->setSingleStep(10);
+    m_timeoutSecSpin->setValue(90);
+    m_timeoutSecSpin->setSuffix(i18n(" 秒"));
+    m_timeoutSecSpin->setToolTip(i18n("LLM リクエストの初期応答タイムアウト時間"));
+
+    m_maxRetriesSpin = new QSpinBox(m_detailsContainer);
+    m_maxRetriesSpin->setRange(0, 5);
+    m_maxRetriesSpin->setValue(2);
+    m_maxRetriesSpin->setSuffix(i18n(" 回"));
+    m_maxRetriesSpin->setToolTip(i18n("通信一時エラー時やJSONパース失敗時の自動リトライ最大回数"));
+
+    m_jsonModeCombo = new QComboBox(m_detailsContainer);
+    m_jsonModeCombo->addItem(i18n("自動判定 (エンドポイント依存)"), 0);
+    m_jsonModeCombo->addItem(i18n("強制 (json_object)"), 1);
+    m_jsonModeCombo->addItem(i18n("無効 (プロンプトのみで指示)"), 2);
+    m_jsonModeCombo->setToolTip(i18n("APIの response_format: {\"type\": \"json_object\"} を利用するかどうか"));
+
+    m_reasoningEffortCombo = new QComboBox(m_detailsContainer);
+    m_reasoningEffortCombo->addItem(i18n("指定なし (デフォルト)"), QStringLiteral(""));
+    m_reasoningEffortCombo->addItem(i18n("Low (高速・低思考)"), QStringLiteral("low"));
+    m_reasoningEffortCombo->addItem(i18n("Medium (標準思考)"), QStringLiteral("medium"));
+    m_reasoningEffortCombo->addItem(i18n("High (深層思考・高品質)"), QStringLiteral("high"));
+    m_reasoningEffortCombo->setToolTip(i18n("推論モデル（o1, o3, etc.）の reasoning_effort レベル"));
+
+    m_customInstructionsEdit = new QPlainTextEdit(m_detailsContainer);
+    m_customInstructionsEdit->setPlaceholderText(i18n("システムプロンプトに追加する独自の作画指示・画風・禁止事項"));
+    m_customInstructionsEdit->setMaximumHeight(70);
+
     remoteForm->addRow(i18n("エンドポイント"), m_endpointEditor);
     remoteForm->addRow(i18n("モデル"), m_modelEditor);
     remoteForm->addRow(i18n("API キー"), m_apiKeyEditor);
     remoteForm->addRow(QString(), m_saveApiKeyCheck);
     remoteForm->addRow(m_strokeBudgetLabel, m_strokeBudgetSpin);
+    remoteForm->addRow(i18n("Temperature"), m_temperatureSpin);
+    remoteForm->addRow(i18n("Top-P"), m_topPSpin);
+    remoteForm->addRow(i18n("最大トークン"), m_maxTokensSpin);
+    remoteForm->addRow(i18n("タイムアウト"), m_timeoutSecSpin);
+    remoteForm->addRow(i18n("自動リトライ"), m_maxRetriesSpin);
+    remoteForm->addRow(i18n("JSONモード"), m_jsonModeCombo);
+    remoteForm->addRow(i18n("推論エフォート"), m_reasoningEffortCombo);
+    remoteForm->addRow(i18n("追加指示"), m_customInstructionsEdit);
     detailsLayout->addLayout(remoteForm);
 
     auto *settingsBtnRow = new QHBoxLayout();
@@ -757,6 +819,14 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     connect(m_goalStepsSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
     connect(m_artStyleCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
     connect(m_pausePerStepCheck, &QCheckBox::toggled, this, [this] { saveSettings(); });
+    connect(m_temperatureSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] { saveSettings(); });
+    connect(m_topPSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] { saveSettings(); });
+    connect(m_maxTokensSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
+    connect(m_maxRetriesSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
+    connect(m_timeoutSecSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
+    connect(m_jsonModeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
+    connect(m_reasoningEffortCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
+    connect(m_customInstructionsEdit, &QPlainTextEdit::textChanged, this, [this] { saveSettings(); });
 
     loadSettings();
     updateModeUi();
@@ -764,6 +834,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
 KisAiIllustrationDocker::~KisAiIllustrationDocker()
 {
+    cancelRetry();
     saveSettings();
     m_goalApiKey.clear();
     if (m_testReply) {
@@ -792,7 +863,7 @@ bool KisAiIllustrationDocker::eventFilter(QObject *watched, QEvent *event)
             generateIllustration();
             return true;
         }
-        if (keyEvent->key() == Qt::Key_Escape && (m_reply || m_goalModeActive || m_testReply)) {
+        if (keyEvent->key() == Qt::Key_Escape && (m_reply || m_goalModeActive || m_testReply || (m_retryTimer && m_retryTimer->isActive()))) {
             cancelRemoteRequest();
             return true;
         }
@@ -965,6 +1036,14 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         return;
     }
 
+    if (!m_isSelfCorrectionRetry && (m_retryTimer == nullptr || !m_retryTimer->isActive())) {
+        m_currentRetryCount = 0;
+        m_lastFailedPrompt = prompt;
+    }
+    if (m_maxRetriesSpin) {
+        m_maxRetryCount = m_maxRetriesSpin->value();
+    }
+
     saveSettings();
 
     QNetworkRequest request{QUrl(endpoint)};
@@ -977,7 +1056,23 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         request.setRawHeader("X-Title", "AI Stroke Painter");
     }
 
-    const bool enforceJson = KisAiStrokeProgramCodec::supportsJsonFormat(endpoint);
+    bool enforceJson = false;
+    const int jsonModeIdx = m_jsonModeCombo ? m_jsonModeCombo->currentIndex() : 0;
+    if (jsonModeIdx == 0) {
+        enforceJson = KisAiStrokeProgramCodec::supportsJsonFormat(endpoint);
+    } else if (jsonModeIdx == 1) {
+        enforceJson = true;
+    } else {
+        enforceJson = false;
+    }
+
+    const qreal temperature = m_temperatureSpin ? m_temperatureSpin->value() : 0.70;
+    const qreal topP = m_topPSpin ? m_topPSpin->value() : 1.0;
+    const int maxTokens = m_maxTokensSpin ? m_maxTokensSpin->value() : 0;
+    const QString reasoningEffort = m_reasoningEffortCombo ? m_reasoningEffortCombo->currentData().toString() : QString();
+    const QString customInstructions = m_customInstructionsEdit ? m_customInstructionsEdit->toPlainText() : QString();
+    const int artStyle = m_artStyleCombo ? m_artStyleCombo->currentData().toInt() : 0;
+
     const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
     const QSize canvasSize = effectiveCanvasSize();
     const QJsonObject payload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
@@ -985,17 +1080,23 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         prompt,
         canvasSize,
         strokeBudget,
-        QString(),
-        QString(),
+        reasoningEffort,
+        customInstructions,
         true, // enableStreaming
-        enforceJson // enforceJsonFormat
+        enforceJson,
+        temperature,
+        topP,
+        maxTokens,
+        artStyle
     );
 
     logDebug(QStringLiteral("LLM_REQ"),
-             QStringLiteral("POST %1 (model=%2, stream=true, budget=%3, prompt=\"%4\")")
+             QStringLiteral("POST %1 (model=%2, stream=true, budget=%3, temp=%4, top_p=%5, prompt=\"%6\")")
                  .arg(KisAiIllustrationRenderer::displayEndpoint(endpoint),
                       model,
                       QString::number(strokeBudget),
+                      QString::number(temperature, 'f', 2),
+                      QString::number(topP, 'f', 2),
                       prompt.left(60)));
 
     m_activeRequestEndpoint = endpoint;
@@ -1031,7 +1132,9 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
             }
         });
     }
-    m_activityTimer->start(INITIAL_REQUEST_TIMEOUT_MS);
+    const int timeoutSec = m_timeoutSecSpin ? m_timeoutSecSpin->value() : 90;
+    const int initialTimeoutMs = qBound(10'000, timeoutSec * 1000, MAX_REQUEST_TIMEOUT_MS);
+    m_activityTimer->start(initialTimeoutMs);
 
     if (!m_progressTimer) {
         m_progressTimer = new QTimer(this);
@@ -1068,6 +1171,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     reply->deleteLater();
 
     if (requestWasCancelled) {
+        cancelRetry();
         logDebug(QStringLiteral("LLM_CANCEL"), QStringLiteral("ユーザーにより生成が中止されました。"));
         setStatus(i18n("LLM ストローク生成を中止しました。"));
         m_streamedContent.clear();
@@ -1077,13 +1181,20 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     if (requestTimedOut) {
         const qint64 elapsedSec = m_requestElapsedTimer.isValid() ? m_requestElapsedTimer.elapsed() / 1000 : 0;
         logDebug(QStringLiteral("LLM_TIMEOUT"), QStringLiteral("リクエストがタイムアウトしました (%1秒経過)。").arg(elapsedSec));
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
+        const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
+        if (m_currentRetryCount < maxRetries) {
+            scheduleRetry(i18n("リクエストタイムアウト (%1秒)", elapsedSec), false);
+            return;
+        }
         if (!m_streamedContent.isEmpty()) {
             setStatus(i18n("LLM からのデータ受信が %1 秒間途絶えたため中止しました。", ACTIVITY_TIMEOUT_MS / 1000), true);
         } else {
-            setStatus(i18n("LLM の初期応答が %1 秒以内に届かなかったため中止しました。", INITIAL_REQUEST_TIMEOUT_MS / 1000), true);
+            setStatus(i18n("LLM の初期応答が %1 秒以内に届かなかったため中止しました。", elapsedSec), true);
         }
-        m_streamedContent.clear();
-        m_sseBuffer.clear();
+        m_currentRetryCount = 0;
+        m_isSelfCorrectionRetry = false;
         return;
     }
     if (responseTooLarge) {
@@ -1091,6 +1202,8 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         setStatus(i18n("LLM の応答が上限を超えています。"), true);
         m_streamedContent.clear();
         m_sseBuffer.clear();
+        m_currentRetryCount = 0;
+        m_isSelfCorrectionRetry = false;
         return;
     }
     // Content-type validation: reject clearly non-JSON responses before parsing.
@@ -1102,6 +1215,8 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
                   true);
         m_streamedContent.clear();
         m_sseBuffer.clear();
+        m_currentRetryCount = 0;
+        m_isSelfCorrectionRetry = false;
         return;
     }
     if (!requestSucceeded) {
@@ -1121,6 +1236,14 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         }
         logDebug(QStringLiteral("LLM_ERROR"), QStringLiteral("HTTP %1: %2\nRaw: %3")
             .arg(httpStatus).arg(detail, QString::fromUtf8(rawResponse.left(500))));
+
+        const bool isRetryableHttp = (httpStatus == 429 || (httpStatus >= 500 && httpStatus <= 504));
+        const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
+        if (isRetryableHttp && m_currentRetryCount < maxRetries) {
+            scheduleRetry(i18n("HTTP %1 一時エラー", httpStatus), false);
+            return;
+        }
+
         if (!detail.isEmpty()) {
             setStatus(i18n("LLM への接続または応答に失敗しました (HTTP %1): %2", httpStatus, detail), true);
         } else {
@@ -1128,6 +1251,8 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         }
         m_streamedContent.clear();
         m_sseBuffer.clear();
+        m_currentRetryCount = 0;
+        m_isSelfCorrectionRetry = false;
         return;
     }
 
@@ -1147,11 +1272,22 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
 
     KisAiStrokeProgram program;
     QString parseError;
-    if (!KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError)) {
-        logDebug(QStringLiteral("LLM_PARSE_ERR"), parseError);
+    KisAiJsonDiagnostic diagnostic;
+    if (!KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError, &diagnostic)) {
+        m_lastJsonDiagnostic = diagnostic;
+        logDebug(QStringLiteral("LLM_PARSE_ERR"), QStringLiteral("%1\n%2").arg(parseError, diagnostic.formatForLog()));
+        const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
+        if (m_currentRetryCount < maxRetries) {
+            scheduleRetry(parseError, true);
+            return;
+        }
         setStatus(parseError, true);
+        m_currentRetryCount = 0;
+        m_isSelfCorrectionRetry = false;
         return;
     }
+    m_currentRetryCount = 0;
+    m_isSelfCorrectionRetry = false;
 
     logDebug(QStringLiteral("LLM_PARSE_OK"), QStringLiteral("解析成功: %1 operations, completionScore=%2")
         .arg(program.operations.size()).arg(program.completionScore));
@@ -1390,6 +1526,7 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
 
 void KisAiIllustrationDocker::cancelRemoteRequest()
 {
+    cancelRetry();
     stopAllRequestTimers();
     m_streamedContent.clear();
     m_sseBuffer.clear();
@@ -1401,6 +1538,9 @@ void KisAiIllustrationDocker::cancelRemoteRequest()
         if (m_goalModeActive) {
             finishGoalMode(false);
             setStatus(i18n("Goalモード作画を中止しました。"));
+        } else {
+            setStatus(i18n("生成リクエストを中止しました。"));
+            setBusy(false);
         }
         return;
     }
@@ -1590,7 +1730,32 @@ void KisAiIllustrationDocker::setBusy(bool busy)
     if (m_artStyleCombo) {
         m_artStyleCombo->setEnabled(allowGeneralInput);
     }
-    m_cancelButton->setVisible((busy && !m_reply.isNull()) || m_goalModeActive);
+    if (m_temperatureSpin) {
+        m_temperatureSpin->setEnabled(allowGeneralInput);
+    }
+    if (m_topPSpin) {
+        m_topPSpin->setEnabled(allowGeneralInput);
+    }
+    if (m_maxTokensSpin) {
+        m_maxTokensSpin->setEnabled(allowGeneralInput);
+    }
+    if (m_maxRetriesSpin) {
+        m_maxRetriesSpin->setEnabled(allowGeneralInput);
+    }
+    if (m_timeoutSecSpin) {
+        m_timeoutSecSpin->setEnabled(allowGeneralInput);
+    }
+    if (m_jsonModeCombo) {
+        m_jsonModeCombo->setEnabled(allowGeneralInput);
+    }
+    if (m_reasoningEffortCombo) {
+        m_reasoningEffortCombo->setEnabled(allowGeneralInput);
+    }
+    if (m_customInstructionsEdit) {
+        m_customInstructionsEdit->setEnabled(allowGeneralInput);
+    }
+    const bool retryPending = (m_retryTimer && m_retryTimer->isActive());
+    m_cancelButton->setVisible((busy && (!m_reply.isNull() || retryPending)) || m_goalModeActive);
     m_progressBar->setVisible(busy);
 }
 
@@ -1717,19 +1882,23 @@ void KisAiIllustrationDocker::updateProgressStatus()
         const int receivedChars = m_streamedContent.length();
         if (receivedChars > 0) {
             const int estimatedTokens = qMax(1, receivedChars / 3);
+            const int detectedOps = m_streamedContent.count(QStringLiteral("\"kind\""));
+            const QString opsStr = detectedOps > 0
+                ? i18n(" / %1 本検出", detectedOps)
+                : QString();
             if (m_goalModeActive) {
                 const QString visionTag = m_lastGoalRequestHadImage
                     ? i18n(" (Vision画像付)")
                     : (m_goalVisionFallbackActive ? i18n(" (テキストフォールバック)") : QString());
-                setStatus(i18n("Goal ステップ %1/%2: ストリーム受信中… (%3 秒経過 / 約 %4 トークン受信)",
-                    m_goalCurrentStep, m_goalTotalSteps, elapsedSec, estimatedTokens));
+                setStatus(i18n("Goal ステップ %1/%2: ストリーム受信中… (%3 秒経過 / 約 %4 トークン%5)",
+                    m_goalCurrentStep, m_goalTotalSteps, elapsedSec, estimatedTokens, opsStr));
                 if (m_goalPhaseLabel) {
-                    m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2: 受信中 (%3 秒 / 約 %4 トークン)%5…",
-                        m_goalCurrentStep, m_goalTotalSteps, elapsedSec, estimatedTokens, visionTag));
+                    m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2: 受信中 (%3 秒 / 約 %4 トークン%5)%6…",
+                        m_goalCurrentStep, m_goalTotalSteps, elapsedSec, estimatedTokens, opsStr, visionTag));
                 }
             } else {
-                setStatus(i18n("%1 からストロークを受信中… (%2 秒経過 / 約 %3 トークン受信)",
-                    endpointName, elapsedSec, estimatedTokens));
+                setStatus(i18n("%1 からストロークを受信中… (%2 秒経過 / 約 %3 トークン%4)",
+                    endpointName, elapsedSec, estimatedTokens, opsStr));
             }
         } else {
             if (m_goalModeActive) {
@@ -2306,6 +2475,101 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
     setBusy(false);
 }
 
+void KisAiIllustrationDocker::scheduleRetry(const QString &reasonMessage, bool isSelfCorrection)
+{
+    const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
+    if (m_currentRetryCount >= maxRetries) {
+        logDebug(QStringLiteral("RETRY_ABORT"),
+                 QStringLiteral("最大リトライ回数 (%1回) に達したため中断: %2")
+                     .arg(maxRetries).arg(reasonMessage));
+        setStatus(reasonMessage, true);
+        m_currentRetryCount = 0;
+        m_isSelfCorrectionRetry = false;
+        return;
+    }
+
+    m_currentRetryCount++;
+    m_isSelfCorrectionRetry = isSelfCorrection;
+
+    // Exponential backoff: base 1500ms * 2^(retry-1) + jitter (0..500ms)
+    int delayMs = 1500 * (1 << (m_currentRetryCount - 1));
+    delayMs += (QRandomGenerator::global()->bounded(500));
+    if (isSelfCorrection) {
+        delayMs = 800 * m_currentRetryCount;
+    }
+
+    const QString retryTypeStr = isSelfCorrection
+        ? i18n("JSON自己修復")
+        : i18n("一時エラー再送");
+
+    const QString statusMsg = i18n("⚠️ %1 (%2/%3回目): %4 秒後に自動再試行します… [%5]",
+        retryTypeStr,
+        m_currentRetryCount,
+        maxRetries,
+        QString::number(delayMs / 1000.0, 'f', 1),
+        reasonMessage);
+
+    setStatus(statusMsg);
+    logDebug(QStringLiteral("RETRY_SCHEDULE"),
+             QStringLiteral("%1 (回数: %2/%3, 待機: %4ms, 理由: %5)")
+                 .arg(retryTypeStr)
+                 .arg(m_currentRetryCount)
+                 .arg(maxRetries)
+                 .arg(delayMs)
+                 .arg(reasonMessage));
+
+    if (!m_retryTimer) {
+        m_retryTimer = new QTimer(this);
+        m_retryTimer->setSingleShot(true);
+        connect(m_retryTimer, &QTimer::timeout, this, &KisAiIllustrationDocker::executeRetry);
+    }
+    setBusy(true);
+    m_retryTimer->start(delayMs);
+}
+
+void KisAiIllustrationDocker::executeRetry()
+{
+    if (m_isSelfCorrectionRetry) {
+        QString correctionPrompt = m_lastFailedPrompt;
+        correctionPrompt += QStringLiteral("\n\n[SYSTEM FEEDBACK / RETRY: Your previous output could not be parsed as valid JSON.\n");
+        if (!m_lastJsonDiagnostic.errorMessage.isEmpty()) {
+            correctionPrompt += QStringLiteral("Error: %1\n").arg(m_lastJsonDiagnostic.errorMessage);
+        }
+        if (m_lastJsonDiagnostic.errorLine > 0) {
+            correctionPrompt += QStringLiteral("Near line %1, column %2.\n")
+                .arg(m_lastJsonDiagnostic.errorLine)
+                .arg(m_lastJsonDiagnostic.errorColumn);
+        }
+        if (!m_lastJsonDiagnostic.errorSnippet.isEmpty()) {
+            correctionPrompt += QStringLiteral("Snippet: %1\n").arg(m_lastJsonDiagnostic.errorSnippet);
+        }
+        correctionPrompt += QStringLiteral("CRITICAL: Output ONLY valid JSON conforming strictly to the KisAiStrokeProgram schema without markdown explanation or stray text.]");
+
+        logDebug(QStringLiteral("RETRY_EXEC"),
+                 QStringLiteral("JSON自己修復リクエストを実行中 (回数: %1/%2)")
+                     .arg(m_currentRetryCount).arg(m_maxRetryCount));
+
+        generateLlmStrokes(correctionPrompt);
+    } else {
+        logDebug(QStringLiteral("RETRY_EXEC"),
+                 QStringLiteral("通信リトライリクエストを実行中 (回数: %1/%2)")
+                     .arg(m_currentRetryCount).arg(m_maxRetryCount));
+
+        generateLlmStrokes(m_lastFailedPrompt);
+    }
+}
+
+void KisAiIllustrationDocker::cancelRetry()
+{
+    if (m_retryTimer && m_retryTimer->isActive()) {
+        m_retryTimer->stop();
+    }
+    m_currentRetryCount = 0;
+    m_isSelfCorrectionRetry = false;
+    m_lastFailedPrompt.clear();
+    m_lastJsonDiagnostic = KisAiJsonDiagnostic();
+}
+
 void KisAiIllustrationDocker::loadSettings()
 {
     QSettings settings;
@@ -2400,6 +2664,32 @@ void KisAiIllustrationDocker::loadSettings()
             m_currentMode = static_cast<GenerationMode>(genMode);
         }
     }
+
+    // AI 詳細設定
+    if (m_temperatureSpin) m_temperatureSpin->setValue(settings.value(QStringLiteral("AIIllustration/temperature"), 0.70).toDouble());
+    if (m_topPSpin) m_topPSpin->setValue(settings.value(QStringLiteral("AIIllustration/topP"), 1.0).toDouble());
+    if (m_maxTokensSpin) m_maxTokensSpin->setValue(settings.value(QStringLiteral("AIIllustration/maxTokens"), 0).toInt());
+    if (m_maxRetriesSpin) {
+        m_maxRetryCount = settings.value(QStringLiteral("AIIllustration/maxRetries"), 2).toInt();
+        m_maxRetriesSpin->setValue(m_maxRetryCount);
+    }
+    if (m_timeoutSecSpin) m_timeoutSecSpin->setValue(settings.value(QStringLiteral("AIIllustration/timeoutSec"), 90).toInt());
+    if (m_jsonModeCombo) {
+        const int jMode = settings.value(QStringLiteral("AIIllustration/jsonMode"), 0).toInt();
+        if (jMode >= 0 && jMode < m_jsonModeCombo->count()) {
+            m_jsonModeCombo->setCurrentIndex(jMode);
+        }
+    }
+    if (m_reasoningEffortCombo) {
+        const QString rEffort = settings.value(QStringLiteral("AIIllustration/reasoningEffort"), QString()).toString();
+        const int idx = m_reasoningEffortCombo->findData(rEffort);
+        if (idx >= 0) {
+            m_reasoningEffortCombo->setCurrentIndex(idx);
+        }
+    }
+    if (m_customInstructionsEdit) {
+        m_customInstructionsEdit->setPlainText(settings.value(QStringLiteral("AIIllustration/customInstructions"), QString()).toString());
+    }
 }
 
 void KisAiIllustrationDocker::saveSettingsForMode(GenerationMode mode)
@@ -2472,6 +2762,14 @@ void KisAiIllustrationDocker::saveSettings()
     if (m_artStyleCombo) settings.setValue(QStringLiteral("AIIllustration/artStyle"), m_artStyleCombo->currentData().toInt());
     if (m_pausePerStepCheck) settings.setValue(QStringLiteral("AIIllustration/pausePerStep"), m_pausePerStepCheck->isChecked());
     if (m_debugModeCheck) settings.setValue(QStringLiteral("AIIllustration/debugModeEnabled"), m_debugModeCheck->isChecked());
+    if (m_temperatureSpin) settings.setValue(QStringLiteral("AIIllustration/temperature"), m_temperatureSpin->value());
+    if (m_topPSpin) settings.setValue(QStringLiteral("AIIllustration/topP"), m_topPSpin->value());
+    if (m_maxTokensSpin) settings.setValue(QStringLiteral("AIIllustration/maxTokens"), m_maxTokensSpin->value());
+    if (m_maxRetriesSpin) settings.setValue(QStringLiteral("AIIllustration/maxRetries"), m_maxRetriesSpin->value());
+    if (m_timeoutSecSpin) settings.setValue(QStringLiteral("AIIllustration/timeoutSec"), m_timeoutSecSpin->value());
+    if (m_jsonModeCombo) settings.setValue(QStringLiteral("AIIllustration/jsonMode"), m_jsonModeCombo->currentIndex());
+    if (m_reasoningEffortCombo) settings.setValue(QStringLiteral("AIIllustration/reasoningEffort"), m_reasoningEffortCombo->currentData().toString());
+    if (m_customInstructionsEdit) settings.setValue(QStringLiteral("AIIllustration/customInstructions"), m_customInstructionsEdit->toPlainText());
 }
 
 void KisAiIllustrationDocker::testLlmConnection()
