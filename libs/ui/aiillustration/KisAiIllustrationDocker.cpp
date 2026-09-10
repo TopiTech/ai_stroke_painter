@@ -345,6 +345,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     for (const auto &chip : chips) {
         auto *chipBtn = new QPushButton(chip.first, promptCard.frame);
         chipBtn->setProperty("class", "aiChipButton");
+        chipBtn->setFocusPolicy(Qt::StrongFocus);
+        chipBtn->setAccessibleName(i18n("Prompt preset %1", chip.first));
         chipBtn->setCursor(Qt::PointingHandCursor);
         connect(chipBtn, &QPushButton::clicked, this, [this, prompt = chip.second] {
             if (m_promptEditor) {
@@ -717,6 +719,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_nextStepButton->setObjectName(QStringLiteral("aiGenerateButton"));
     m_nextStepButton->setFocusPolicy(Qt::StrongFocus);
     m_nextStepButton->setAccessibleName(i18n("Advance to next step"));
+    m_nextStepButton->setToolTip(i18n("現在のステップを完了し、次のステップへ進みます (Ctrl+Enter)"));
     m_nextStepButton->setCursor(Qt::PointingHandCursor);
     m_nextStepButton->setVisible(false);
 
@@ -797,10 +800,14 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     m_copyLogButton = new QPushButton(i18n("📋 コピー"), m_debugCard);
     m_copyLogButton->setProperty("class", "aiChipButton");
+    m_copyLogButton->setFocusPolicy(Qt::StrongFocus);
+    m_copyLogButton->setAccessibleName(i18n("Copy debug log"));
     m_copyLogButton->setCursor(Qt::PointingHandCursor);
 
     m_clearLogButton = new QPushButton(i18n("🗑️ クリア"), m_debugCard);
     m_clearLogButton->setProperty("class", "aiChipButton");
+    m_clearLogButton->setFocusPolicy(Qt::StrongFocus);
+    m_clearLogButton->setAccessibleName(i18n("Clear debug log"));
     m_clearLogButton->setCursor(Qt::PointingHandCursor);
 
     debugHeaderRow->addWidget(m_copyLogButton);
@@ -849,6 +856,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     connect(m_copyLogButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::copyDebugLog);
     connect(m_clearLogButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::clearDebugLog);
 
+    connect(m_endpointEditor, &QLineEdit::editingFinished, this, [this] { saveSettings(); });
+    connect(m_modelEditor, &QLineEdit::editingFinished, this, [this] { saveSettings(); });
     connect(m_saveApiKeyCheck, &QCheckBox::toggled, this, [this] { saveSettings(); });
     connect(m_widthSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
     connect(m_heightSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
@@ -873,6 +882,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 KisAiIllustrationDocker::~KisAiIllustrationDocker()
 {
     cancelRetry();
+    clearInFlightApiKey();
     saveSettings();
     if (!m_goalApiKey.isEmpty()) {
         m_goalApiKey.fill(QLatin1Char('\0'));
@@ -901,7 +911,11 @@ bool KisAiIllustrationDocker::eventFilter(QObject *watched, QEvent *event)
         auto *keyEvent = static_cast<QKeyEvent *>(event);
         if ((keyEvent->modifiers() & Qt::ControlModifier) &&
             (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)) {
-            generateIllustration();
+            if (m_goalModeActive && m_waitingForUserStepAdvance) {
+                advanceGoalStep();
+            } else {
+                generateIllustration();
+            }
             return true;
         }
         if (keyEvent->key() == Qt::Key_Escape && (m_reply || m_goalModeActive || m_testReply || (m_retryTimer && m_retryTimer->isActive()))) {
@@ -916,7 +930,11 @@ void KisAiIllustrationDocker::keyPressEvent(QKeyEvent *event)
 {
     if ((event->modifiers() & Qt::ControlModifier) &&
         (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
-        generateIllustration();
+        if (m_goalModeActive && m_waitingForUserStepAdvance) {
+            advanceGoalStep();
+        } else {
+            generateIllustration();
+        }
         event->accept();
         return;
     }
@@ -2836,7 +2854,6 @@ void KisAiIllustrationDocker::loadSettings()
     const QString savedLlmEp = readSafeStoredEndpoint(settings,
                                                       QStringLiteral("AIIllustration/llmEndpoint"),
                                                       QStringLiteral("AIIllustration/endpoint"));
-    readSafeStoredEndpoint(settings, QStringLiteral("AIIllustration/imageEndpoint"));
     const QString savedLlmModel = settings.value(QStringLiteral("AIIllustration/llmModel"),
         settings.value(QStringLiteral("AIIllustration/model"))).toString();
     if (m_endpointEditor) {

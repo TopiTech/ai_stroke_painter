@@ -697,8 +697,8 @@ QColor KisAiStrokeQualityUtils::calculateHueShiftedShadow(
         // Warm colors (red, orange, yellow, skin tones: H < 0.18 or H > 0.85) shift toward cool blue/violet
         // Cool colors (blue, cyan: 0.45 < H < 0.75) deepen toward rich indigo/navy
         if (h >= 0.0f && h < 0.18f) {
-            // Red-orange-yellow -> shift towards purple-blue (approx 0.70 - 0.78)
-            targetHue = h + 0.08f;
+            // Red-orange-yellow -> shift towards purple-blue (approx 0.70 - 0.78 / wrap into violet)
+            targetHue = h - 0.08f;
         } else if (h >= 0.85f && h <= 1.0f) {
             targetHue = h - 0.08f;
         } else if (h >= 0.45f && h < 0.65f) {

@@ -35,6 +35,10 @@ void KisAiStrokeProgramTest::testSanitizeAndExtractJson()
     // Test 3: thinking tokens
     const QString thinking = QStringLiteral("<think>I should plan layers first.</think>\n{\"schema_version\": 2, \"operations\": []}");
     QCOMPARE(KisAiStrokeProgramCodec::sanitizeAndExtractJson(thinking), plain);
+
+    // Test 4: conversational preamble and postamble without codeblock, with single-quote syntax repair
+    const QString noisyWithPostamble = QStringLiteral("Here is the JSON:\n{'schema_version': 2, 'operations': []}\nHope you like it!");
+    QCOMPARE(KisAiStrokeProgramCodec::sanitizeAndExtractJson(noisyWithPostamble), plain);
 }
 
 void KisAiStrokeProgramTest::testParseValidProgram()
@@ -640,6 +644,18 @@ void KisAiStrokeProgramTest::testGradientDirectionPointsParsing()
     QCOMPARE(program.operations.first().points.size(), 2);
     QCOMPARE(program.operations.first().points.first().pos, QPointF(0.1, 0.2));
     QCOMPARE(program.operations.first().points.last().pos, QPointF(0.9, 0.8));
+
+    // Verify refineForRendering clamps GradientFill points
+    program.operations.first().points = {
+        KisAiStrokePoint(-0.4, 0.2),
+        KisAiStrokePoint(1.5, 2.0)
+    };
+    KisAiStrokeQualityReport report;
+    const KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(program, &report);
+    QCOMPARE(refined.operations.size(), 1);
+    QCOMPARE(refined.operations.first().points.size(), 2);
+    QCOMPARE(refined.operations.first().points.first().pos, QPointF(0.0, 0.2));
+    QCOMPARE(refined.operations.first().points.last().pos, QPointF(1.0, 1.0));
 }
 
 void KisAiStrokeProgramTest::testMangaLinesParsingAndRefinement()

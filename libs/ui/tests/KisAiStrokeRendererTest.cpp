@@ -864,6 +864,18 @@ void KisAiStrokeRendererTest::testQualityUtilsHueShiftedHarmonies()
     // Shadow must be darker than base
     QVERIFY(shadow.lightness() < skinColor.lightness());
 
+    // Verify warm shadow shifts toward violet/purple (wrap into > 0.85), not forward into yellow/green
+    const QColor skinShadowPure = KisAiStrokeQualityUtils::calculateHueShiftedShadow(skinColor, QColor());
+    float skinShadowH = 0.0f, skinShadowS = 0.0f, skinShadowL = 0.0f;
+    skinShadowPure.getHslF(&skinShadowH, &skinShadowS, &skinShadowL);
+    QVERIFY2(skinShadowH > 0.85f || skinShadowH <= 0.02f, qPrintable(QString::number(skinShadowH)));
+
+    const QColor redColor(240, 40, 40);
+    const QColor redShadowPure = KisAiStrokeQualityUtils::calculateHueShiftedShadow(redColor, QColor());
+    float redShadowH = 0.0f, redShadowS = 0.0f, redShadowL = 0.0f;
+    redShadowPure.getHslF(&redShadowH, &redShadowS, &redShadowL);
+    QVERIFY2(redShadowH > 0.85f, qPrintable(QString::number(redShadowH)));
+
     const QColor highlight = KisAiStrokeQualityUtils::calculateHueShiftedHighlight(skinColor);
     QVERIFY(highlight.isValid());
     QVERIFY(highlight.lightness() > skinColor.lightness());

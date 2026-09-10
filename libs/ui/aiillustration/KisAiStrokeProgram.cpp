@@ -1122,7 +1122,14 @@ QString KisAiStrokeProgramCodec::sanitizeAndExtractJson(const QString &rawText, 
             if (cErr.error == QJsonParseError::NoError) {
                 text = candidate;
             } else {
-                text = text.mid(firstBrace).trimmed();
+                const QString repairedCand = repairJsonSyntax(candidate);
+                QJsonParseError rErr;
+                const QJsonDocument rDoc = QJsonDocument::fromJson(repairedCand.toUtf8(), &rErr);
+                if (rErr.error == QJsonParseError::NoError && !rDoc.isNull()) {
+                    text = candidate;
+                } else {
+                    text = text.mid(firstBrace).trimmed();
+                }
             }
         } else {
             text = text.mid(firstBrace).trimmed();
@@ -2436,6 +2443,15 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             op.spacing = qBound<qreal>(0.002, op.spacing, 0.2);
             op.gradientCenter = clampedPoint(op.gradientCenter, &localReport.repairedValues);
             op.gradientRadius = qBound<qreal>(0.01, std::isfinite(op.gradientRadius) ? op.gradientRadius : 0.5, 2.0);
+            if (op.kind == KisAiStrokeOperation::Kind::GradientFill && !op.points.isEmpty()) {
+                QVector<KisAiStrokePoint> pts;
+                pts.reserve(op.points.size());
+                for (KisAiStrokePoint pt : op.points) {
+                    pt.pos = clampedPoint(pt.pos, &localReport.repairedValues);
+                    pts.append(pt);
+                }
+                op.points = pts;
+            }
             break;
         }
         case KisAiStrokeOperation::Kind::Ribbon: {
