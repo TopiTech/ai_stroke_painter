@@ -18,6 +18,39 @@ target_link_libraries(KisRandomGenerator2DDemo kritaimage)
 ecm_mark_as_test(KisRandomGenerator2DDemo)
 
 
+# When upstream tests are not fully enabled, register only the essential core tests
+# covering image, layers, nodes, painter, strokes, and undo transactions.
+if (NOT AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
+    kis_add_tests(
+        kis_paint_layer_test.cpp
+        kis_group_layer_test.cpp
+        kis_node_test.cpp
+        kis_node_facade_test.cpp
+        kis_node_commands_test.cpp
+        kis_painter_test.cpp
+        kis_stroke_test.cpp
+        kis_transaction_test.cpp
+        kis_base_node_test.cpp
+        kis_cubic_curve_test.cpp
+        LINK_LIBRARIES kritaimage kritatestsdk
+    )
+    set_tests_properties(
+        libs-image-kis_paint_layer_test
+        libs-image-kis_group_layer_test
+        libs-image-kis_node_test
+        libs-image-kis_node_facade_test
+        libs-image-kis_node_commands_test
+        libs-image-kis_painter_test
+        libs-image-kis_stroke_test
+        libs-image-kis_transaction_test
+        libs-image-kis_base_node_test
+        libs-image-kis_cubic_curve_test
+        PROPERTIES
+            LABELS "KritaCore"
+            TIMEOUT 60)
+    return()
+endif()
+
 kis_add_tests(
     kis_base_node_test.cpp
     kis_fast_math_test.cpp

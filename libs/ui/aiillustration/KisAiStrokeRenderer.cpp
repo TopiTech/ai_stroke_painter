@@ -18,6 +18,8 @@
 #include <KoCompositeOpRegistry.h>
 #include <klocalizedstring.h>
 #include <kundo2magicstring.h>
+#include <QApplication>
+#include <QThread>
 #else
 #define i18n(str, ...) QStringLiteral(str)
 #endif
@@ -303,6 +305,30 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
             orderedLayers.append(it.key());
         }
     }
+
+    // Guard against deadlocks: if the user is currently drawing a brush stroke or
+    // the image scheduler is processing background stroke jobs, calling beginMacro()
+    // directly would invoke KisLegacyUndoAdapter's barrierLock() which deadlocks
+    // the GUI thread because mouse/tablet release events cannot be dispatched.
+    // We request stroke completion and spin the event loop safely to allow pending
+    // input events to drain without freezing the UI.
+    if (!image->tryBarrierLock()) {
+        image->requestStrokeEnd();
+        int attempts = 0;
+        constexpr int MAX_ATTEMPTS = 50;
+        while (!image->tryBarrierLock() && attempts < MAX_ATTEMPTS) {
+            QApplication::processEvents(QEventLoop::AllEvents, 20);
+            QThread::msleep(20);
+            ++attempts;
+        }
+        if (attempts >= MAX_ATTEMPTS) {
+            if (statusMessage) {
+                *statusMessage = i18n("キャンバスが描画中のため、AIストロークをレイヤーに追加できませんでした。少し待ってから再度お試しください。");
+            }
+            return false;
+        }
+    }
+    image->unlock();
 
     KisNodeSP root = image->root();
     KisNodeSP aboveNode = root->lastChild();
@@ -1335,7 +1361,9 @@ QString KisAiStrokeRenderer::captureCanvasBase64(KisImageWSP image, int maxDimen
     if (bounds.isEmpty()) {
         return QString();
     }
-    image->waitForDone();
+    // Never invoke image->waitForDone() on the GUI thread: if the user is drawing
+    // or asynchronous projection updates are pending, it blocks the event loop
+    // and causes permanent deadlocks. convertToQImage directly reads projection tiles.
     const QImage canvasImg = image->convertToQImage(bounds, nullptr);
     return captureImageBase64(canvasImg, maxDimension, quality);
 }

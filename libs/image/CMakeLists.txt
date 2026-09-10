@@ -1,4 +1,4 @@
-if (AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
+if (BUILD_TESTING)
     add_subdirectory(tests)
 endif()
 
