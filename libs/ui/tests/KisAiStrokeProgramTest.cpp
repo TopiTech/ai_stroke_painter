@@ -1994,6 +1994,115 @@ void KisAiStrokeProgramTest::testSignedLeadingDotAndTypeCheckerEdgeCases()
     QVERIFY(reportI.typeErrors > 0);
 }
 
+void KisAiStrokeProgramTest::testSchemaAliasesAndGoalModeArtStyle()
+{
+    // 1. KisAiStrokeTypeChecker alias coercion for all geometry and metadata aliases
+    QJsonObject opPath;
+    opPath[QStringLiteral("kind")] = QStringLiteral("path");
+    opPath[QStringLiteral("pts")] = QJsonArray({QJsonArray({0.1, 0.2}), QJsonArray({0.3, 0.4})});
+    opPath[QStringLiteral("name")] = QStringLiteral("stroke_alpha");
+    opPath[QStringLiteral("layer_name")] = QStringLiteral("Lineart");
+    KisAiStrokeTypeCheckReport reportPath;
+    QVERIFY(KisAiStrokeTypeChecker::checkAndCoerceOperation(&opPath, 0, &reportPath));
+    QVERIFY(opPath.contains(QStringLiteral("points")));
+    QCOMPARE(opPath.value(QStringLiteral("id")).toString(), QStringLiteral("stroke_alpha"));
+    QCOMPARE(opPath.value(QStringLiteral("layer")).toString(), QStringLiteral("Lineart"));
+
+    QJsonObject opFill;
+    opFill[QStringLiteral("kind")] = QStringLiteral("fill");
+    opFill[QStringLiteral("poly")] = QJsonArray({QJsonArray({0.1, 0.1}), QJsonArray({0.5, 0.1}), QJsonArray({0.5, 0.5})});
+    KisAiStrokeTypeCheckReport reportFill;
+    QVERIFY(KisAiStrokeTypeChecker::checkAndCoerceOperation(&opFill, 1, &reportFill));
+    QVERIFY(opFill.contains(QStringLiteral("polygon")));
+
+    QJsonObject opRibbon;
+    opRibbon[QStringLiteral("kind")] = QStringLiteral("ribbon");
+    opRibbon[QStringLiteral("pts")] = QJsonArray({QJsonArray({0.2, 0.2}), QJsonArray({0.8, 0.8})});
+    KisAiStrokeTypeCheckReport reportRibbon;
+    QVERIFY(KisAiStrokeTypeChecker::checkAndCoerceOperation(&opRibbon, 2, &reportRibbon));
+    QVERIFY(opRibbon.contains(QStringLiteral("spine")));
+
+    QJsonObject opParticles;
+    opParticles[QStringLiteral("kind")] = QStringLiteral("particles");
+    opParticles[QStringLiteral("rect")] = QJsonArray({0.1, 0.1, 0.9, 0.9});
+    KisAiStrokeTypeCheckReport reportParticles;
+    QVERIFY(KisAiStrokeTypeChecker::checkAndCoerceOperation(&opParticles, 3, &reportParticles));
+    QVERIFY(opParticles.contains(QStringLiteral("bounds")));
+
+    QJsonObject opManga;
+    opManga[QStringLiteral("kind")] = QStringLiteral("manga_lines");
+    opManga[QStringLiteral("center_pt")] = QJsonArray({0.5, 0.6});
+    KisAiStrokeTypeCheckReport reportManga;
+    QVERIFY(KisAiStrokeTypeChecker::checkAndCoerceOperation(&opManga, 4, &reportManga));
+    QVERIFY(opManga.contains(QStringLiteral("center")));
+
+    // 2. Full parseResponse accepts program payload using aliases
+    const QString aliasJson = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"pts\": [[0.1, 0.1], [0.5, 0.5]],\n"
+        "      \"brush\": {\"color\": \"#000000\", \"size\": 0.01}\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"fill\",\n"
+        "      \"poly\": [[0.2, 0.2], [0.4, 0.2], [0.3, 0.5]],\n"
+        "      \"brush\": {\"color\": \"#ff8800\"}\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+    KisAiStrokeProgram parsedProg;
+    QString parseErr;
+    QVERIFY(KisAiStrokeProgramCodec::parseResponse(aliasJson.toUtf8(), &parsedProg, &parseErr));
+    QCOMPARE(parsedProg.operations.size(), 2);
+    QCOMPARE(parsedProg.operations.at(0).points.size(), 2);
+    QCOMPARE(parsedProg.operations.at(1).polygon.size(), 3);
+
+    // 3. Goal Mode buildGoalStepPayload artStyle propagation
+    const QSize canvasSize(1024, 1024);
+    const QJsonObject payloadDefault = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("portrait of a girl"),
+        canvasSize,
+        1,
+        4
+    );
+    const QString defaultSystem = payloadDefault.value(QStringLiteral("messages")).toArray().at(0).toObject().value(QStringLiteral("content")).toString();
+    QVERIFY(!defaultSystem.contains(QStringLiteral("Luminous Watercolor")));
+
+    const QJsonObject payloadWatercolor = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("portrait of a girl"),
+        canvasSize,
+        1,
+        4,
+        QString(), // imageBase64
+        QString(), // additionalInstruction
+        400,       // strokeBudget
+        QString(), // reasoningEffort
+        true,      // includeVision
+        true,      // enableStreaming
+        false,     // enforceJsonFormat
+        0.7,       // temperature
+        1.0,       // topP
+        0,         // maxTokensOverride
+        static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor)
+    );
+    const QString watercolorSystem = payloadWatercolor.value(QStringLiteral("messages")).toArray().at(0).toObject().value(QStringLiteral("content")).toString();
+    QVERIFY(watercolorSystem.contains(QStringLiteral("Luminous Watercolor")));
+
+    // 4. Goal Mode 5-step phase 4 mapping verification
+    KisAiPromptAnalyzer::SemanticSpec spec = KisAiPromptAnalyzer::analyze(QStringLiteral("fantasy landscape"), canvasSize);
+    const QString guidance5StepP4 = KisAiPromptAnalyzer::generateGoalPhaseGuidance(4, spec, canvasSize, 5);
+    QVERIFY(guidance5StepP4.contains(QStringLiteral("PHASE 4 MISSION")));
+    QVERIFY(guidance5StepP4.contains(QStringLiteral("SPECULAR HIGHLIGHTS")));
+    const QString guidance5StepP3 = KisAiPromptAnalyzer::generateGoalPhaseGuidance(3, spec, canvasSize, 5);
+    QVERIFY(guidance5StepP3.contains(QStringLiteral("PHASE 3 MISSION")));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

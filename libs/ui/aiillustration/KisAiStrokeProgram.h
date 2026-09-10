@@ -316,7 +316,8 @@ public:
         bool enforceJsonFormat = false,
         qreal temperature = 0.7,
         qreal topP = 1.0,
-        int maxTokensOverride = 0
+        int maxTokensOverride = 0,
+        int artStyle = 0
     );
 
     /**

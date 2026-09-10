@@ -440,13 +440,13 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
 
     // If kind still empty, infer from geometry
     if (kindStr.isEmpty()) {
-        if (opObj->contains(QStringLiteral("points"))) {
+        if (opObj->contains(QStringLiteral("points")) || opObj->contains(QStringLiteral("pts"))) {
             kindStr = QStringLiteral("path");
         } else if (opObj->contains(QStringLiteral("spine"))) {
             kindStr = QStringLiteral("ribbon");
-        } else if (opObj->contains(QStringLiteral("polygon"))) {
+        } else if (opObj->contains(QStringLiteral("polygon")) || opObj->contains(QStringLiteral("poly"))) {
             kindStr = opObj->contains(QStringLiteral("colors")) ? QStringLiteral("gradient_fill") : QStringLiteral("fill");
-        } else if (opObj->contains(QStringLiteral("bounds")) || opObj->contains(QStringLiteral("particle_shape")) || opObj->contains(QStringLiteral("particle_count"))) {
+        } else if (opObj->contains(QStringLiteral("bounds")) || opObj->contains(QStringLiteral("rect")) || opObj->contains(QStringLiteral("box")) || opObj->contains(QStringLiteral("particle_shape")) || opObj->contains(QStringLiteral("particle_count"))) {
             kindStr = QStringLiteral("particles");
         } else if (opObj->contains(QStringLiteral("inner_radius")) || opObj->contains(QStringLiteral("outer_radius")) || opObj->contains(QStringLiteral("density"))) {
             kindStr = QStringLiteral("manga_lines");
@@ -458,6 +458,10 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
     }
 
     // 2. ID validation
+    if (!opObj->contains(QStringLiteral("id")) && opObj->contains(QStringLiteral("name"))) {
+        (*opObj)[QStringLiteral("id")] = opObj->value(QStringLiteral("name"));
+        if (report) ++report->coercedValues;
+    }
     if (!opObj->contains(QStringLiteral("id")) || !opObj->value(QStringLiteral("id")).isString()
         || opObj->value(QStringLiteral("id")).toString().trimmed().isEmpty()) {
         (*opObj)[QStringLiteral("id")] = QStringLiteral("op_%1_%2").arg(opIndex).arg(kindStr);
@@ -465,6 +469,10 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
     }
 
     // 3. Layer normalization
+    if (!opObj->contains(QStringLiteral("layer")) && opObj->contains(QStringLiteral("layer_name"))) {
+        (*opObj)[QStringLiteral("layer")] = opObj->value(QStringLiteral("layer_name"));
+        if (report) ++report->coercedValues;
+    }
     if (opObj->contains(QStringLiteral("layer"))) {
         const QJsonValue lVal = opObj->value(QStringLiteral("layer"));
         if (!lVal.isString()) {
@@ -493,6 +501,10 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
 
     // 5. Geometry validation per kind
     if (kindStr == QLatin1String("path")) {
+        if (!opObj->contains(QStringLiteral("points")) && opObj->contains(QStringLiteral("pts"))) {
+            (*opObj)[QStringLiteral("points")] = opObj->value(QStringLiteral("pts"));
+            if (report) ++report->coercedValues;
+        }
         int ptCoerced = 0;
         QJsonArray pts = opObj->value(QStringLiteral("points")).toArray();
         if (!checkPointsArray(&pts, nullptr, &ptCoerced) || pts.isEmpty()) {
@@ -506,6 +518,18 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
         if (report) report->coercedValues += ptCoerced;
     } else if (kindStr == QLatin1String("gradient_fill")) {
         // Gradient fill may have points (start/end direction points) or polygon
+        if (!opObj->contains(QStringLiteral("points")) && opObj->contains(QStringLiteral("pts"))) {
+            (*opObj)[QStringLiteral("points")] = opObj->value(QStringLiteral("pts"));
+            if (report) ++report->coercedValues;
+        }
+        if (!opObj->contains(QStringLiteral("polygon")) && opObj->contains(QStringLiteral("poly"))) {
+            (*opObj)[QStringLiteral("polygon")] = opObj->value(QStringLiteral("poly"));
+            if (report) ++report->coercedValues;
+        }
+        if (!opObj->contains(QStringLiteral("center")) && opObj->contains(QStringLiteral("center_pt"))) {
+            (*opObj)[QStringLiteral("center")] = opObj->value(QStringLiteral("center_pt"));
+            if (report) ++report->coercedValues;
+        }
         if (opObj->contains(QStringLiteral("points"))) {
             int ptCoerced = 0;
             QJsonArray pts = opObj->value(QStringLiteral("points")).toArray();
@@ -523,6 +547,18 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
             }
         }
     } else if (kindStr == QLatin1String("fill") || kindStr == QLatin1String("hatch")) {
+        if (!opObj->contains(QStringLiteral("polygon"))) {
+            if (opObj->contains(QStringLiteral("poly"))) {
+                (*opObj)[QStringLiteral("polygon")] = opObj->value(QStringLiteral("poly"));
+                if (report) ++report->coercedValues;
+            } else if (opObj->contains(QStringLiteral("points"))) {
+                (*opObj)[QStringLiteral("polygon")] = opObj->value(QStringLiteral("points"));
+                if (report) ++report->coercedValues;
+            } else if (opObj->contains(QStringLiteral("pts"))) {
+                (*opObj)[QStringLiteral("polygon")] = opObj->value(QStringLiteral("pts"));
+                if (report) ++report->coercedValues;
+            }
+        }
         int polyCoerced = 0;
         QJsonArray poly = opObj->value(QStringLiteral("polygon")).toArray();
         if (!checkPolygonArray(&poly, nullptr, &polyCoerced) || poly.size() < 3) {
@@ -535,6 +571,15 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
         (*opObj)[QStringLiteral("polygon")] = poly;
         if (report) report->coercedValues += polyCoerced;
     } else if (kindStr == QLatin1String("ribbon")) {
+        if (!opObj->contains(QStringLiteral("spine"))) {
+            if (opObj->contains(QStringLiteral("points"))) {
+                (*opObj)[QStringLiteral("spine")] = opObj->value(QStringLiteral("points"));
+                if (report) ++report->coercedValues;
+            } else if (opObj->contains(QStringLiteral("pts"))) {
+                (*opObj)[QStringLiteral("spine")] = opObj->value(QStringLiteral("pts"));
+                if (report) ++report->coercedValues;
+            }
+        }
         int spineCoerced = 0;
         QJsonArray spine = opObj->value(QStringLiteral("spine")).toArray();
         if (!checkPolygonArray(&spine, nullptr, &spineCoerced) || spine.size() < 2) {
@@ -547,6 +592,15 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
         (*opObj)[QStringLiteral("spine")] = spine;
         if (report) report->coercedValues += spineCoerced;
     } else if (kindStr == QLatin1String("particles")) {
+        if (!opObj->contains(QStringLiteral("bounds"))) {
+            if (opObj->contains(QStringLiteral("rect"))) {
+                (*opObj)[QStringLiteral("bounds")] = opObj->value(QStringLiteral("rect"));
+                if (report) ++report->coercedValues;
+            } else if (opObj->contains(QStringLiteral("box"))) {
+                (*opObj)[QStringLiteral("bounds")] = opObj->value(QStringLiteral("box"));
+                if (report) ++report->coercedValues;
+            }
+        }
         if (opObj->contains(QStringLiteral("bounds"))) {
             const QJsonValue bVal = opObj->value(QStringLiteral("bounds"));
             if (bVal.isArray()) {
@@ -581,6 +635,10 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
             }
         }
     } else if (kindStr == QLatin1String("manga_lines")) {
+        if (!opObj->contains(QStringLiteral("center")) && opObj->contains(QStringLiteral("center_pt"))) {
+            (*opObj)[QStringLiteral("center")] = opObj->value(QStringLiteral("center_pt"));
+            if (report) ++report->coercedValues;
+        }
         if (opObj->contains(QStringLiteral("center"))) {
             const QJsonValue cVal = opObj->value(QStringLiteral("center"));
             if (cVal.isArray()) {

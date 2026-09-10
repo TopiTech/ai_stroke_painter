@@ -502,12 +502,34 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
     int effectivePhase = 3;
     if (totalSteps == 4) {
         effectivePhase = phase;
-    } else if (phase >= totalSteps) {
-        effectivePhase = 4;
-    } else if (phase == 1) {
-        effectivePhase = 1;
-    } else if (phase == 2) {
-        effectivePhase = 2;
+    } else if (totalSteps == 5) {
+        if (phase <= 1) {
+            effectivePhase = 1;
+        } else if (phase == 2) {
+            effectivePhase = 2;
+        } else if (phase == 3) {
+            effectivePhase = 3;
+        } else {
+            effectivePhase = 4;
+        }
+    } else if (totalSteps >= 6) {
+        if (phase <= 2) {
+            effectivePhase = 1;
+        } else if (phase == 3) {
+            effectivePhase = 2;
+        } else if (phase == 4) {
+            effectivePhase = 3;
+        } else {
+            effectivePhase = 4;
+        }
+    } else {
+        if (phase >= totalSteps) {
+            effectivePhase = 4;
+        } else if (phase == 1) {
+            effectivePhase = 1;
+        } else if (phase == 2) {
+            effectivePhase = 2;
+        }
     }
 
     switch (effectivePhase) {

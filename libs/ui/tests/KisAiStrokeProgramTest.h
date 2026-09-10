@@ -60,6 +60,7 @@ private Q_SLOTS:
     void testGoalModePayloadMaxTokensOverride();
     void testNewBrushProfilesNormalization();
     void testSignedLeadingDotAndTypeCheckerEdgeCases();
+    void testSchemaAliasesAndGoalModeArtStyle();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

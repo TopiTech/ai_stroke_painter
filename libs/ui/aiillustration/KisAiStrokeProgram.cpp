@@ -3518,19 +3518,27 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     bool enforceJsonFormat,
     qreal temperature,
     qreal topP,
-    int maxTokensOverride)
+    int maxTokensOverride,
+    int artStyle)
 {
     const bool reasoning = isReasoningModel(model);
     const bool vision = includeVision && isVisionModel(model) && !imageBase64.trimmed().isEmpty();
-    const auto spec = KisAiPromptAnalyzer::analyze(prompt, canvasSize);
+    auto spec = KisAiPromptAnalyzer::analyze(prompt, canvasSize);
+    if (artStyle > 0 && artStyle <= 5) {
+        spec.style = static_cast<KisAiPromptAnalyzer::ArtStyle>(artStyle);
+    }
     const QString phaseGuidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(step, spec, canvasSize, totalSteps);
 
     QString combinedInstructions = phaseGuidance;
     if (!additionalInstruction.trimmed().isEmpty()) {
-        combinedInstructions += QStringLiteral("\n\n[USER ADDITIONAL FEEDBACK]\n") + additionalInstruction.trimmed();
+        if (!additionalInstruction.contains(phaseGuidance.trimmed())) {
+            combinedInstructions += QStringLiteral("\n\n[USER ADDITIONAL FEEDBACK]\n") + additionalInstruction.trimmed();
+        } else {
+            combinedInstructions = additionalInstruction.trimmed();
+        }
     }
 
-    const QString systemText = buildSystemPrompt(canvasSize, prompt, combinedInstructions);
+    const QString systemText = buildSystemPrompt(canvasSize, prompt, combinedInstructions, artStyle);
 
     const int geometryBudget = qBound(20, strokeBudget, 2000);
     const int operationTarget = qBound(12, geometryBudget / (totalSteps > 0 ? totalSteps * 3 : 12), 60);

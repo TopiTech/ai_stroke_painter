@@ -2217,13 +2217,6 @@ void KisAiIllustrationDocker::executeGoalStep()
 
         m_lastGoalRequestHadImage = (!imageBase64.isEmpty() && !m_goalVisionFallbackActive);
 
-        KisAiPromptAnalyzer::SemanticSpec spec = KisAiPromptAnalyzer::analyze(m_goalPrompt, canvasSize);
-        if (artStyle != KisAiPromptAnalyzer::ArtStyle::General) {
-            spec.style = artStyle;
-        }
-        const QString guidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(
-            m_goalCurrentStep, spec, canvasSize, m_goalTotalSteps);
-
         bool enforceJson = false;
         const int jsonModeIdx = m_jsonModeCombo ? m_jsonModeCombo->currentIndex() : 0;
         if (jsonModeIdx == 0) {
@@ -2244,10 +2237,7 @@ void KisAiIllustrationDocker::executeGoalStep()
         const qreal topP = m_topPSpin ? m_topPSpin->value() : 1.0;
         const int maxTokens = m_maxTokensSpin ? m_maxTokensSpin->value() : 0;
 
-        QString effectiveGuidance = guidance;
-        if (!m_goalSelfCorrectionFeedback.isEmpty()) {
-            effectiveGuidance += QStringLiteral("\n\n") + m_goalSelfCorrectionFeedback;
-        }
+        const QString additionalInstruction = m_goalSelfCorrectionFeedback;
 
         const QJsonObject payload = KisAiStrokeProgramCodec::buildGoalStepPayload(
             model,
@@ -2256,7 +2246,7 @@ void KisAiIllustrationDocker::executeGoalStep()
             m_goalCurrentStep,
             m_goalTotalSteps,
             imageBase64,
-            effectiveGuidance,
+            additionalInstruction,
             strokeBudget,
             reasoningEffort,
             !m_goalVisionFallbackActive,
@@ -2264,7 +2254,8 @@ void KisAiIllustrationDocker::executeGoalStep()
             enforceJson, // enforceJsonFormat
             temperature,
             topP,
-            maxTokens
+            maxTokens,
+            static_cast<int>(artStyle)
         );
 
         logDebug(QStringLiteral("GOAL_REQ"), QStringLiteral(
