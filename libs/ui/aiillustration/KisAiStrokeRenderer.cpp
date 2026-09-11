@@ -223,20 +223,33 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
         const bool isFlats = (layerKey.compare(QLatin1String("Flats"), Qt::CaseInsensitive) == 0);
         const bool isShading = (layerKey.compare(QLatin1String("Shading"), Qt::CaseInsensitive) == 0);
         const bool isHighlights = (layerKey.compare(QLatin1String("Highlights"), Qt::CaseInsensitive) == 0);
+        const bool isFx = (layerKey.compare(QLatin1String("FX"), Qt::CaseInsensitive) == 0);
 
         if (isFlats) {
             flatsImage = layerImage;
             hasFlats = true;
-        } else if (clipShadingToFlats && hasFlats && (isShading || isHighlights)) {
-            QPainter clipPainter(&layerImage);
-            clipPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
-            clipPainter.drawImage(0, 0, flatsImage);
+        } else if (isShading) {
+            // Apply soft-edge diffusion to eliminate polygon stepping and blend shadows organically
+            applySoftEdgeDiffusion(layerImage, 2);
+            if (clipShadingToFlats && hasFlats) {
+                QPainter clipPainter(&layerImage);
+                clipPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+                clipPainter.drawImage(0, 0, flatsImage);
+            }
+        } else if (isHighlights) {
+            if (clipShadingToFlats && hasFlats) {
+                QPainter clipPainter(&layerImage);
+                clipPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+                clipPainter.drawImage(0, 0, flatsImage);
+            }
         }
 
         if (isShading) {
             compPainter.setCompositionMode(QPainter::CompositionMode_Multiply);
         } else if (isHighlights) {
             compPainter.setCompositionMode(QPainter::CompositionMode_Screen);
+        } else if (isFx) {
+            compPainter.setCompositionMode(QPainter::CompositionMode_Plus);
         } else {
             compPainter.setCompositionMode(QPainter::CompositionMode_SourceOver);
         }
@@ -373,13 +386,22 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
         const bool isShading = (layerKey.compare(QLatin1String("Shading"), Qt::CaseInsensitive) == 0);
         const bool isHighlights = (layerKey.compare(QLatin1String("Highlights"), Qt::CaseInsensitive) == 0);
         const bool isBackground = (layerKey.compare(QLatin1String("Background"), Qt::CaseInsensitive) == 0);
+        const bool isFx = (layerKey.compare(QLatin1String("FX"), Qt::CaseInsensitive) == 0);
 
         if (isFlats) {
             flatsImage = layerImage;
             hasFlats = true;
-        } else if (clipShadingToFlats && hasFlats && (isShading || isHighlights)) {
+        } else if (isShading) {
+            // Apply soft-edge diffusion to eliminate polygon stepping and blend shadows organically
+            applySoftEdgeDiffusion(layerImage, 2);
+            if (clipShadingToFlats && hasFlats) {
+                QPainter clipPainter(&layerImage);
+                clipPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+                clipPainter.drawImage(0, 0, flatsImage);
+            }
+        } else if (clipShadingToFlats && hasFlats && isHighlights) {
             // Apply clipping mask to Flats silhouette:
-            // Shading and Highlights will stay strictly within the filled regions of Flats
+            // Highlights will stay strictly within the filled regions of Flats
             QPainter clipPainter(&layerImage);
             clipPainter.setCompositionMode(QPainter::CompositionMode_DestinationIn);
             clipPainter.drawImage(0, 0, flatsImage);
@@ -393,7 +415,7 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
             layer->setCompositeOpId(COMPOSITE_MULT);
             layer->setColorLabelIndex(7); // Purple
         } else if (isHighlights) {
-            layer->setCompositeOpId(COMPOSITE_SCREEN);
+            layer->setCompositeOpId(COMPOSITE_DODGE); // Color Dodge for luminous highlights
             layer->setColorLabelIndex(3); // Yellow
         } else if (isFlats) {
             layer->setCompositeOpId(COMPOSITE_OVER);
@@ -404,6 +426,9 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
         } else if (layerKey.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) == 0) {
             layer->setCompositeOpId(COMPOSITE_OVER);
             layer->setColorLabelIndex(4); // Orange
+        } else if (isFx) {
+            layer->setCompositeOpId(COMPOSITE_ADD); // Additive blending for floating particles & sparkles
+            layer->setColorLabelIndex(2); // Green (FX)
         } else {
             layer->setCompositeOpId(COMPOSITE_OVER);
             layer->setColorLabelIndex(2); // Green (FX)
@@ -952,8 +977,8 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
 
     QPolygonF poly = scalePolygon(op.polygon, canvasSize);
 
-    // Smooth jagged polygon vertices if smooth requested
-    if (op.smooth && poly.size() >= 3) {
+    // Smooth jagged polygon vertices to eliminate raw low-poly faceting
+    if (poly.size() >= 3) {
         poly = KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(poly, 135.0, 4);
     }
 
@@ -963,7 +988,8 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
     if (op.fillStyle.compare(QLatin1String("scanline"), Qt::CaseInsensitive) == 0) {
         // Comic halftone screen fill
         KisAiStrokeQualityUtils::drawHalftonePattern(painter, poly, color, 8.0, 2.5, op.angleDeg != 0.0 ? op.angleDeg : 45.0, false);
-    } else if (op.fillStyle.compare(QLatin1String("wash"), Qt::CaseInsensitive) == 0) {
+    } else if (op.fillStyle.compare(QLatin1String("wash"), Qt::CaseInsensitive) == 0 ||
+               op.brush.profile.compare(QLatin1String("watercolor"), Qt::CaseInsensitive) == 0) {
         // Watercolor wash with subtle vertical illumination gradient and wet edge
         const QRectF b = poly.boundingRect();
         QLinearGradient washGrad(b.topLeft(), b.bottomLeft());
@@ -978,10 +1004,10 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
         painter.setBrush(washGrad);
         painter.drawPolygon(poly);
 
-        // Darkened fringe around the fill
+        // Darkened fringe around the fill to simulate natural pigment pooling
         QColor fringe = color;
-        fringe.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.92, 1.0));
-        QPen fringePen(fringe, 1.0);
+        fringe.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.85, 1.0));
+        QPen fringePen(fringe, 0.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
         painter.setPen(fringePen);
         painter.setBrush(Qt::NoBrush);
         painter.drawPolygon(poly);
@@ -1243,10 +1269,11 @@ void KisAiStrokeRenderer::drawHatchOperation(QPainter &painter, const KisAiStrok
     painter.setClipPath(clipPath);
 
     QColor color = op.brush.color;
-    color.setAlphaF(qBound<qreal>(0.0, op.brush.opacity * color.alphaF(), 1.0));
+    color.setAlphaF(qBound<qreal>(0.0, op.brush.opacity * color.alphaF() * 0.70, 1.0));
 
     const qreal minDim = qMin(canvasSize.width(), canvasSize.height());
-    const qreal penWidth = qMax<qreal>(0.6, effectiveBrushWidth(op.brush, 0.8, canvasSize) * 0.35);
+    // Use delicate, fine linework instead of heavy wireframe bars
+    const qreal penWidth = qMax<qreal>(0.5, effectiveBrushWidth(op.brush, 0.5, canvasSize) * 0.20);
     QPen pen(color, penWidth, Qt::SolidLine, Qt::RoundCap);
     painter.setPen(pen);
 
@@ -1368,4 +1395,94 @@ QString KisAiStrokeRenderer::captureCanvasBase64(KisImageWSP image, int maxDimen
     return captureImageBase64(canvasImg, maxDimension, quality);
 }
 #endif
+
+void KisAiStrokeRenderer::applySoftEdgeDiffusion(QImage &image, int radius)
+{
+    if (image.isNull() || radius <= 0) {
+        return;
+    }
+
+    const int w = image.width();
+    const int h = image.height();
+    if (w < 4 || h < 4) {
+        return;
+    }
+
+    if (image.format() != QImage::Format_ARGB32_Premultiplied && image.format() != QImage::Format_ARGB32) {
+        image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    }
+
+    QImage temp(image.size(), image.format());
+    const int diameter = radius * 2 + 1;
+    const qreal invDiv = 1.0 / diameter;
+
+    // Horizontal pass
+    for (int y = 0; y < h; ++y) {
+        const QRgb *srcRow = reinterpret_cast<const QRgb *>(image.constScanLine(y));
+        QRgb *dstRow = reinterpret_cast<QRgb *>(temp.scanLine(y));
+
+        int sumA = 0;
+        int sumR = 0;
+        int sumG = 0;
+        int sumB = 0;
+        for (int i = -radius; i <= radius; ++i) {
+            const int cx = qBound(0, i, w - 1);
+            const QRgb c = srcRow[cx];
+            sumA += qAlpha(c);
+            sumR += qRed(c);
+            sumG += qGreen(c);
+            sumB += qBlue(c);
+        }
+
+        for (int x = 0; x < w; ++x) {
+            dstRow[x] = qRgba(qRound(sumR * invDiv),
+                              qRound(sumG * invDiv),
+                              qRound(sumB * invDiv),
+                              qRound(sumA * invDiv));
+
+            const int xRemove = qBound(0, x - radius, w - 1);
+            const int xAdd = qBound(0, x + radius + 1, w - 1);
+            const QRgb cRem = srcRow[xRemove];
+            const QRgb cAdd = srcRow[xAdd];
+            sumA += qAlpha(cAdd) - qAlpha(cRem);
+            sumR += qRed(cAdd) - qRed(cRem);
+            sumG += qGreen(cAdd) - qGreen(cRem);
+            sumB += qBlue(cAdd) - qBlue(cRem);
+        }
+    }
+
+    // Vertical pass
+    for (int x = 0; x < w; ++x) {
+        int sumA = 0;
+        int sumR = 0;
+        int sumG = 0;
+        int sumB = 0;
+        for (int i = -radius; i <= radius; ++i) {
+            const int cy = qBound(0, i, h - 1);
+            const QRgb c = *reinterpret_cast<const QRgb *>(temp.constScanLine(cy) + x * sizeof(QRgb));
+            sumA += qAlpha(c);
+            sumR += qRed(c);
+            sumG += qGreen(c);
+            sumB += qBlue(c);
+        }
+
+        for (int y = 0; y < h; ++y) {
+            QRgb *dstPixel = reinterpret_cast<QRgb *>(image.scanLine(y) + x * sizeof(QRgb));
+            *dstPixel = qRgba(qRound(sumR * invDiv),
+                              qRound(sumG * invDiv),
+                              qRound(sumB * invDiv),
+                              qRound(sumA * invDiv));
+
+            const int yRemove = qBound(0, y - radius, h - 1);
+            const int yAdd = qBound(0, y + radius + 1, h - 1);
+            const QRgb cRem = *reinterpret_cast<const QRgb *>(temp.constScanLine(yRemove) + x * sizeof(QRgb));
+            const QRgb cAdd = *reinterpret_cast<const QRgb *>(temp.constScanLine(yAdd) + x * sizeof(QRgb));
+            sumA += qAlpha(cAdd) - qAlpha(cRem);
+            sumR += qRed(cAdd) - qRed(cRem);
+            sumG += qGreen(cAdd) - qGreen(cRem);
+            sumB += qBlue(cAdd) - qBlue(cRem);
+        }
+    }
+}
+
 

@@ -158,6 +158,11 @@ private:
         const KisAiStrokeOperation &op,
         const QSize &canvasSize
     );
+
+    static void applySoftEdgeDiffusion(
+        QImage &image,
+        int radius
+    );
 };
 
 #endif // KIS_AI_STROKE_RENDERER_H

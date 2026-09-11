@@ -313,32 +313,36 @@ QString KisAiPromptAnalyzer::generateArtDirection(
     case DomainType::Character: {
         out += QStringLiteral(
             "[DOMAIN ART DIRECTION: Anime / Manga Character Portrait]\n"
-            "1. Layer 'Flats' (Seamless Base Volumes & 3-Layer Hair):\n"
-            "   - Skin Base: Clean complete coverage of face, neck, and shoulders with fill (style: 'wash', color: #fff0e6 or #fef2ea).\n"
-            "   - Back Hair Mass: Darker deep hair silhouette behind neck with fill or ribbon (color: '%1').\n"
-            "   - Sclera Base: Bright white discs (#f8f9fa) under eye sockets.\n"
-            "   - Iris Base: Vivid circular/oval color blocks with fill (style: 'radial', color: '%2').\n"
-            "   - Front/Side Hair Masses: Volumetric framing clumps with fill or ribbon (color: '%1').\n"
-            "2. Layer 'Shading' (3D Facial Planes & 4-Tier Lighting):\n"
-            "   - Forehead Cast Shadow: Soft cast shadow directly beneath front bangs onto forehead (#e09f90, opacity: 0.45).\n"
-            "   - Eye Socket AO & Sclera Top Shadow: Soft shadow under brow bone and top half of eyeballs for spherical depth.\n"
-            "   - Soft Facial Blush: Warm pinkish tint (#ff9fb2, opacity: 0.30) across cheek apples and nose bridge.\n"
-            "   - Nose & Subnasal Shadow: Subtle side bridge contour + delicate shadow right beneath nose tip (#d88c7d).\n"
-            "   - Lip Groove AO & Upper Lip Tone: Shaded upper lip + dark ambient occlusion under lower lip center.\n"
-            "   - Neck Contact AO: Deep contact shadow directly under chin/jawline grading down the neck.\n"
-            "   - Hair Lock Crevices: Directional shadow grooves between major hair strands with hatch or directional fill.\n"
-            "3. Layer 'Lineart' (EXQUISITE MICRO-DETAILS - Use 1.5 to 3.0 px):\n"
-            "   - Jawline Contour: Smooth tapered jaw and chin line with path (brush: 'gpen', color: #231c26).\n"
-            "   - Upper Eyelash Arches: Thick, expressive curved strokes with taper (brush: 'gpen', color: #1a1622).\n"
-            "   - Lash Flicks & Double Eyelids: Delicate upward flicks at outer corners + subtle crease arch above each eye.\n"
-            "   - Iris Contours & Pupil Core: Deep dark pupil center + crisp iris rim contour.\n"
-            "   - Nose Tip & Soft Mouth Line: Tiny delicate point/crease for nose + gentle expressive lips line.\n"
-            "   - Hair Strands & Flow: Fine tapering strand ribbons and wispy flyaway hairs framing the face.\n"
-            "4. Layer 'Highlights' & 'FX':\n"
-            "   - Eye Specular Catchlights: Sharp pure white glints (#ffffff, size: 2-4px) at 10 o'clock or 2 o'clock on irises.\n"
-            "   - Iris Crescent Glow: Delicate bright curved glow at lower rim of iris for luminous depth.\n"
+            "STRICT RULES (ZERO TOLERANCE):\n"
+            "- NEVER use 'hatch' for human skin, facial shading, or hair! Hatching produces disastrous barcode-like vertical stripes.\n"
+            "- NEVER use 'manga_lines' (radial speed lines) in character portraits unless explicitly requested as an action scene!\n"
+            "- Render smooth, beautiful, organic forms using 'fill', 'path', and 'ribbon'.\n"
+            "1. Layer 'Flats' (Seamless Base Volumes & Organic Hair):\n"
+            "   - Skin Base: Complete, smooth coverage of face, neck, and ears with fill (style: 'wash', color: #fff1e8 or #fef3eb).\n"
+            "   - Back Hair Mass: Deep hair silhouette framing the head behind neck with ribbon/fill (color: '%1').\n"
+            "   - Sclera Base: Clean white almond discs (#f8f9fa) inside eye sockets.\n"
+            "   - Iris Base: Rich vivid circular/oval color blocks with fill (color: '%2').\n"
+            "   - Front/Side Hair Masses: Volumetric framing clumps using flowing 'ribbon' with smooth tapering width (color: '%1').\n"
+            "2. Layer 'Shading' (Smooth 3D Facial Planes & Soft Blush - MULTIPLY BLEND):\n"
+            "   - Forehead Bangs Cast Shadow: Soft cast shadow directly beneath front bangs onto forehead (#d89a8c, opacity: 0.35-0.5).\n"
+            "   - Eye Socket AO & Upper Sclera Shadow: Subtle dark shade over top half of eyeballs for spherical depth.\n"
+            "   - Soft Facial Blush: Beautiful warm pinkish wash (#ff9fb2, opacity: 0.25-0.35) across cheek apples and nose bridge.\n"
+            "   - Nose Contour: Delicate subtle shadow under nose tip and alongside bridge (#d88c7d, opacity: 0.4).\n"
+            "   - Lip Tone & AO: Shaded upper lip + delicate ambient shadow under lower lip plump center.\n"
+            "   - Neck Cast Shadow: Smooth shadow under jawline and chin grading gently down the neck.\n"
+            "   - Hair Strand Depth: Deep shadow grooves between hair masses using smooth directional fills, NEVER barcode lines!\n"
+            "3. Layer 'Lineart' (EXQUISITE ANIME DETAIL - Use 1.5 to 3.5 px):\n"
+            "   - Jaw & Face Contour: Ultra-smooth, elegant V-line or soft curve jawline using path with Catmull-Rom splines (brush: 'gpen', color: #231c26).\n"
+            "   - Upper Eyelash Arches: Thick, expressive sweeping curved strokes with tapering ends (brush: 'gpen', color: #1a1622).\n"
+            "   - Lash Flicks & Double Eyelid: Outer eyelash flick + delicate arch line above upper lid.\n"
+            "   - Iris Rim & Pupil: Deep dark pupil at center + crisp circular iris contour.\n"
+            "   - Expressive Lips & Nose: Tiny delicate dot/dash for nose tip + sweet curved mouth line.\n"
+            "   - Flowing Hair Strands: Long, graceful S-curved ribbon and path strokes that follow the hair's natural flow.\n"
+            "4. Layer 'Highlights' & 'FX' (LUMINOUS POLISH):\n"
+            "   - Eye Specular Catchlights: Pure crisp white glints (#ffffff, size: 2-5px) at 10 or 2 o'clock on irises - brings eyes to life!\n"
+            "   - Iris Lower Crescent: Soft radiant glow (#ffffff or bright cyan/gold) on lower rim of iris.\n"
             "   - Nose & Lip Glints: Tiny pinpoint specular dot on nose tip and lower lip plump center.\n"
-            "   - Hair Angel Halo: Luminous rim highlights along top crown and hair ridges.\n"
+            "   - Angel Halo: Elegant luminous rim highlight arcs across top hair crown.\n"
         ).arg(spec.hairColor, spec.eyeColor);
         break;
     }
@@ -346,27 +350,30 @@ QString KisAiPromptAnalyzer::generateArtDirection(
         QString skyColorsStr = QStringLiteral("[\"") + spec.skyGradientColors.join(QStringLiteral("\", \"")) + QStringLiteral("\"]");
         out += QStringLiteral(
             "[DOMAIN ART DIRECTION: Landscape, Scenery & Nature]\n"
+            "STRICT RULES (ZERO TOLERANCE):\n"
+            "- NEVER draw 'manga_lines' (radial speed lines) across the sky in serene landscapes!\n"
+            "- NEVER draw tree canopies or foliage as flat polygonal blocks or sliced wedges!\n"
             "1. Layer 'Flats' (Depth Horizons & Atmospheric Silhouettes):\n"
             "   - Sky Gradient: Use 'gradient_fill' with colors %1 (angle_deg: 90) across upper canvas. Leave NO white gaps!\n"
-            "   - Distant Mountain Ridges: Silhouetted peaks with fill (style: 'directional', angle_deg: 25) in soft haze.\n"
-            "   - Midground Terrain / Trees: Rich ground wash and tree canopy masses.\n"
+            "   - Distant Mountain Ridges: Grand undulating mountain silhouettes with fill (style: 'wash') in soft atmospheric haze.\n"
+            "   - Midground Terrain / Earth: Harmonious ground wash and hillside contours.\n"
         ).arg(skyColorsStr);
         if (spec.hasSakura) {
             out += QStringLiteral(
-                "   - Sakura Blossom Canopies: Puffy billowing foliage masses using fill (style: 'contour') with colors #ffb8cd, #ffd6e5.\n"
+                "   - Sakura Blossom Canopies: Billowing, cloud-like organic foliage clusters with gentle curves using fill (colors #ffb8cd, #ffd6e5, #fff0f5).\n"
             );
         }
         out += QStringLiteral(
-            "2. Layer 'Shading' (3D Strata & Ridge Facets):\n"
-            "   - Mountain Shading: Dramatic crag shadow facets along ridge lines using hatch or directional fill.\n"
-            "   - Cloud Undersides: Soft purplish shadow bulges beneath puffy clouds (style: 'contour', opacity: 0.5-0.7).\n"
-            "   - Foliage Deep Shadow: Core occlusion beneath tree branches and canopy clumps.\n"
+            "2. Layer 'Shading' (Atmospheric Depth & Form Volumes):\n"
+            "   - Mountain Shading: Majestic shadow slopes across the non-lit face of mountains using smooth wash fills.\n"
+            "   - Cloud Undersides: Soft violet/pinkish shadow bulges beneath puffy clouds (style: 'wash', opacity: 0.4-0.6).\n"
+            "   - Tree Canopy Under-Shadow: Deep organic occlusion beneath lower canopy masses and branch armatures.\n"
             "3. Layer 'Lineart' (Organic Contours & Tree Anatomy):\n"
-            "   - Tree Trunks & Branches: Twisting organic limbs using ribbon or path with S-curves (brush: 'gpen', color: #342017).\n"
-            "   - Mountain Crests & Cloud Edges: Crisp jagged ridge lines and billowing cloud rims.\n"
-            "4. Layer 'Highlights' & 'FX':\n"
-            "   - Sunlight Rim Lighting: Pure luminous highlights on sunny ridge crests and cloud tops.\n"
-            "   - Atmospheric Accents: Use 'particles' (shape: 'petal' or 'sparkle') drifting through foreground.\n"
+            "   - Tree Trunks & Branches: Graceful twisting organic limbs using ribbon or path with natural tapering (brush: 'gpen', color: #342017).\n"
+            "   - Mountain Crests & Cloud Rims: Crisp sweeping silhouette lines defining ridges.\n"
+            "4. Layer 'Highlights' & 'FX' (Atmospheric Magic):\n"
+            "   - Sunlight Rim Lighting: Luminous golden/warm rim highlights along sun-facing mountain crests and canopy tops.\n"
+            "   - Drifting Petals/Particles: Gentle floating petals using 'particles' (shape: 'petal', count: 15-30) dancing in the wind.\n"
         );
         break;
     }
@@ -547,7 +554,8 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
             "PHASE 2 MISSION: [3D SHADING & FORM VOLUMES]\n"
             "- Target Layer: 'Shading' ONLY (rendered with Multiply and clipped to Flats).\n"
             "- Look at the Phase 1 canvas image: locate the key light and cast shadows beneath forms.\n"
-            "- Add core form shadows, contact ambient occlusion (AO) under chin/hair/folds, and delicate blush/hatch tones.\n"
+            "- Add core form shadows, contact ambient occlusion (AO) under chin/hair/folds, and delicate blush washes.\n"
+            "- STRICT: NEVER use 'hatch' on facial features or skin! Use smooth 'fill' with watercolor/brush profiles.\n"
             "- Color Selection: Use cool ambient tones (%1) for shadows to create warm-cool color harmony.\n"
         ).arg(spec.harmony.ambientShadow.name());
         break;
@@ -564,10 +572,11 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
     case 4: // Phase 4: Highlights, FX & Polish
     default:
         out += QStringLiteral(
-            "PHASE 4 MISSION: [SPECULAR HIGHLIGHTS, MANGA LINES & FX POLISH]\n"
-            "- Target Layers: 'Highlights' (Screen blend) and 'FX' (Particles, MangaLines).\n"
-            "- Specular Glints: Eye catchlights (#ffffff), lip glints, nose tip point, hair angel halo rim lighting.\n"
-            "- Dynamic FX: Floating petals, embers, stars, or manga_lines (speed/focus lines) directed toward the focal anchor.\n"
+            "PHASE 4 MISSION: [SPECULAR HIGHLIGHTS & ATMOSPHERIC FX POLISH]\n"
+            "- Target Layers: 'Highlights' (Screen blend) and 'FX' (Particles, Highlights).\n"
+            "- Specular Glints: Eye catchlights (#ffffff, 2-5px glints on irises), lip glints, nose tip point, hair angel halo rim lighting.\n"
+            "- Dynamic FX: Floating petals, embers, stars, or light sparkles (shape: petal/sparkle/bokeh/star).\n"
+            "- STRICT: DO NOT use 'manga_lines' (radial speed lines) unless explicitly requested as an action/battle scene!\n"
             "- Final Goal Check: Bring the illustration to 100% presentation readiness.\n"
         );
         break;
