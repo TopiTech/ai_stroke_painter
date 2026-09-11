@@ -8,6 +8,8 @@
 #include <QColor>
 #include <QPainterPath>
 #include <QRandomGenerator>
+#include <QTransform>
+#include <QtMath>
 
 #include <algorithm>
 #include <cmath>
@@ -657,26 +659,63 @@ void KisAiStrokeQualityUtils::drawHalftonePattern(
     const qreal spacing = qMax<qreal>(3.0, dotSpacingPx);
     const qreal radius = qMax<qreal>(0.5, dotRadiusPx);
 
+    // Work in the painter's rotated frame so only the dots that can actually
+    // intersect the polygon are drawn. Iterating a square around the bounding
+    // diagonal instead issued millions of painter calls for a large fill.
+    QTransform screenTransform;
+    screenTransform.translate(bounds.center().x(), bounds.center().y());
+    screenTransform.rotate(angleDeg);
+    bool invertible = false;
+    const QTransform inverseTransform = screenTransform.inverted(&invertible);
+    if (!invertible) {
+        painter.restore();
+        return;
+    }
+    // Dots are emitted at (ix * spacing, iy * spacing) in the rotated frame, so the
+    // polygon has to be brought into that same frame to find the covered range.
+    const QRectF screenBounds = inverseTransform.map(polygon).boundingRect();
+    if (!screenBounds.isValid() || !std::isfinite(screenBounds.width()) || !std::isfinite(screenBounds.height())) {
+        painter.restore();
+        return;
+    }
+
+    // Keep one operation from monopolizing the UI thread. The spacing is only ever
+    // widened, never narrowed, so the whole polygon stays covered rather than
+    // rendering just a central patch.
+    constexpr qreal MAX_HALFTONE_DOTS = 400000.0;
+    qreal effectiveSpacing = spacing;
+    const qreal screenArea = qMax<qreal>(0.0, screenBounds.width()) * qMax<qreal>(0.0, screenBounds.height());
+    const qreal estimatedDots = screenArea / (effectiveSpacing * effectiveSpacing);
+    if (estimatedDots > MAX_HALFTONE_DOTS) {
+        effectiveSpacing = std::sqrt(screenArea / MAX_HALFTONE_DOTS);
+    }
+    if (!std::isfinite(effectiveSpacing) || effectiveSpacing <= 0.0) {
+        painter.restore();
+        return;
+    }
+
+    const int ixStart = qFloor(screenBounds.left() / effectiveSpacing);
+    const int ixEnd = qCeil(screenBounds.right() / effectiveSpacing);
+    const int iyStart = qFloor(screenBounds.top() / effectiveSpacing);
+    const int iyEnd = qCeil(screenBounds.bottom() / effectiveSpacing);
+
     painter.translate(bounds.center());
     painter.rotate(angleDeg);
-
-    const qreal diag = std::hypot(bounds.width(), bounds.height());
-    const int steps = qCeil(diag / spacing);
 
     if (lineScreen) {
         QPen pen(color, radius * 2.0, Qt::SolidLine, Qt::RoundCap);
         painter.setPen(pen);
         painter.setBrush(Qt::NoBrush);
-        for (int i = -steps; i <= steps; ++i) {
-            const qreal y = i * spacing;
-            painter.drawLine(QPointF(-diag, y), QPointF(diag, y));
+        for (int i = iyStart; i <= iyEnd; ++i) {
+            const qreal y = i * effectiveSpacing;
+            painter.drawLine(QPointF(screenBounds.left(), y), QPointF(screenBounds.right(), y));
         }
     } else {
         painter.setPen(Qt::NoPen);
         painter.setBrush(color);
-        for (int iy = -steps; iy <= steps; ++iy) {
-            for (int ix = -steps; ix <= steps; ++ix) {
-                const QPointF pt(ix * spacing, iy * spacing);
+        for (int iy = iyStart; iy <= iyEnd; ++iy) {
+            for (int ix = ixStart; ix <= ixEnd; ++ix) {
+                const QPointF pt(ix * effectiveSpacing, iy * effectiveSpacing);
                 painter.drawEllipse(pt, radius, radius);
             }
         }
@@ -807,7 +846,10 @@ KisAiStrokeProgram KisAiStrokeQualityUtils::applyTrapping(
         return program;
     }
 
-    const QSize canvasSize = program.canvasSize.isValid() ? program.canvasSize : QSize(1024, 1024);
+    // QSize::isValid() is true for (0, 0), which would then be used as a divisor.
+    const QSize canvasSize = (program.canvasSize.width() > 0 && program.canvasSize.height() > 0)
+        ? program.canvasSize
+        : QSize(1024, 1024);
     KisAiStrokeProgram trapped = program;
 
     for (KisAiStrokeOperation &op : trapped.operations) {

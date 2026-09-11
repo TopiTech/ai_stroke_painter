@@ -7,11 +7,15 @@
 
 #include <QColor>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QImage>
+#include <QPainter>
 #include <QPointF>
+#include <QPolygonF>
 #include <QSet>
 #include <QVector>
 #include <cmath>
+#include <limits>
 #ifndef AI_STROKE_STANDALONE
 #include <testui.h>
 #else
@@ -1084,6 +1088,112 @@ void KisAiStrokeRendererTest::testFinishingFiltersVignette()
     QVERIFY(qRed(cCorner) < 250);
     QVERIFY(qGreen(cCorner) < 250);
     QVERIFY(qBlue(cCorner) < 250);
+}
+
+void KisAiStrokeRendererTest::testRenderProgramToImageBoundsDerivedCanvasSize()
+{
+    // With no explicit target size the renderer falls back to program.canvasSize,
+    // which is model-supplied metadata. It must be bounded before allocating.
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(100000, 100000);
+
+    KisAiStrokeOperation fill;
+    fill.kind = KisAiStrokeOperation::Kind::Fill;
+    fill.layer = QStringLiteral("Flats");
+    fill.polygon << QPointF(0.1, 0.1) << QPointF(0.9, 0.1) << QPointF(0.9, 0.9);
+    fill.brush.color = QColor(200, 30, 30);
+    fill.brush.opacity = 1.0;
+    program.operations.append(fill);
+
+    const QImage image = KisAiStrokeRenderer::renderProgramToImage(program, QSize());
+    QVERIFY(!image.isNull());
+    QVERIFY(image.width() <= 4096);
+    QVERIFY(image.height() <= 4096);
+    QVERIFY(image.width() >= 64);
+    QVERIFY(image.height() >= 64);
+
+    // An explicit caller-provided target size (document/preview) is honoured.
+    const QImage explicitSize = KisAiStrokeRenderer::renderProgramToImage(program, QSize(128, 96));
+    QCOMPARE(explicitSize.size(), QSize(128, 96));
+}
+
+void KisAiStrokeRendererTest::testHalftonePatternWorkIsBounded()
+{
+    // A full-canvas scanline fill previously issued millions of painter calls for
+    // one operation. The bounded path must still produce a visible screen quickly.
+    QImage canvas(4096, 4096, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+
+    QPolygonF poly;
+    poly << QPointF(0, 0) << QPointF(4095, 0) << QPointF(4095, 4095) << QPointF(0, 4095);
+
+    QElapsedTimer timer;
+    timer.start();
+    {
+        QPainter painter(&canvas);
+        KisAiStrokeQualityUtils::drawHalftonePattern(painter, poly, QColor(0, 0, 0, 255), 3.0, 1.5, 45.0, false);
+    }
+    const qint64 elapsedMs = timer.elapsed();
+    QVERIFY2(elapsedMs < 10000, qPrintable(QStringLiteral("halftone fill took %1 ms").arg(elapsedMs)));
+
+    bool hasDrawnPixel = false;
+    for (int y = 1000; y < 1200 && !hasDrawnPixel; y += 7) {
+        for (int x = 1000; x < 1200; ++x) {
+            if (canvas.pixelColor(x, y).alpha() > 100) {
+                hasDrawnPixel = true;
+                break;
+            }
+        }
+    }
+    QVERIFY(hasDrawnPixel);
+}
+
+void KisAiStrokeRendererTest::testGradientAngleNormalizationIsFinite()
+{
+    // Non-finite and unwrapped angles previously reached QPainter::rotate().
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(256, 256);
+
+    KisAiStrokeOperation fill;
+    fill.kind = KisAiStrokeOperation::Kind::Fill;
+    fill.layer = QStringLiteral("Flats");
+    fill.fillStyle = QStringLiteral("scanline");
+    fill.polygon << QPointF(0.1, 0.1) << QPointF(0.9, 0.1) << QPointF(0.9, 0.9);
+    fill.brush.color = QColor(0, 0, 0);
+    fill.brush.opacity = 1.0;
+    fill.angleDeg = std::numeric_limits<qreal>::infinity();
+    program.operations.append(fill);
+
+    KisAiStrokeQualityReport report;
+    const KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(program, &report);
+    QVERIFY(!refined.operations.isEmpty());
+    QVERIFY(std::isfinite(refined.operations.first().angleDeg));
+
+    const QImage image = KisAiStrokeRenderer::renderProgramToImage(refined, QSize(256, 256));
+    QVERIFY(!image.isNull());
+    QCOMPARE(image.size(), QSize(256, 256));
+}
+
+void KisAiStrokeRendererTest::testCaptureImageBase64RejectsInvalidArguments()
+{
+    QImage image(64, 64, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::red);
+
+    // A non-positive dimension used to produce a null scaling result while still
+    // emitting a data URL with an empty payload.
+    QVERIFY(KisAiStrokeRenderer::captureImageBase64(image, 0, 80).isEmpty());
+    QVERIFY(KisAiStrokeRenderer::captureImageBase64(image, -8, 80).isEmpty());
+    QVERIFY(KisAiStrokeRenderer::captureImageBase64(QImage(), 768, 80).isEmpty());
+
+    // Valid input still round-trips as a JPEG data URL.
+    const QString dataUrl = KisAiStrokeRenderer::captureImageBase64(image, 768, 80);
+    QVERIFY(dataUrl.startsWith(QStringLiteral("data:image/jpeg;base64,")));
+    const QByteArray payload = QByteArray::fromBase64(dataUrl.mid(QStringLiteral("data:image/jpeg;base64,").size()).toLatin1());
+    QVERIFY(!payload.isEmpty());
+    QVERIFY(payload.startsWith("\xFF\xD8")); // JPEG SOI marker
+
+    // Out-of-range quality must not reach QImage::save() unchanged.
+    QVERIFY(!KisAiStrokeRenderer::captureImageBase64(image, 768, 9999).isEmpty());
 }
 
 KISTEST_MAIN(KisAiStrokeRendererTest)

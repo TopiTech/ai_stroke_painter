@@ -80,6 +80,14 @@ QPointF clampedPoint(const QPointF &point, int *repairCount)
     return result;
 }
 
+// Placeholder written in place of a preserved string literal while the syntax
+// repair passes run. Kept in one place so the masking and restore steps cannot
+// drift apart.
+QString stringMaskPlaceholder(int index)
+{
+    return QStringLiteral("\"__AI_STR_MASK_%1__\"").arg(index);
+}
+
 template<typename PointAccessor>
 void removeAdjacentDuplicates(int count, PointAccessor pointAt, QVector<int> *keptIndices, int *removedCount)
 {
@@ -159,8 +167,13 @@ QColor KisAiStrokeProgramCodec::parseColor(const QString &colorStr, const QColor
             const int b = qBound(0, match.captured(3).toInt(), 255);
             int a = 255;
             if (match.lastCapturedIndex() >= 4 && !match.captured(4).isEmpty()) {
-                const qreal alphaVal = match.captured(4).toDouble();
-                a = qBound(0, qRound(alphaVal * 255.0), 255);
+                bool alphaOk = false;
+                const qreal alphaVal = match.captured(4).toDouble(&alphaOk);
+                // Clamp before qRound(): converting an out-of-range double to int is
+                // undefined behaviour and a long digit run parses as infinity.
+                if (alphaOk && std::isfinite(alphaVal)) {
+                    a = qRound(qBound<qreal>(0.0, alphaVal, 1.0) * 255.0);
+                }
             }
             return QColor(r, g, b, a);
         }
@@ -687,7 +700,7 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
                     }
                     const int maskIndex = maskedStrings.size();
                     maskedStrings.append(cleanLiteral);
-                    masked.append(QStringLiteral("\"__AI_STR_MASK_%1__\"").arg(maskIndex));
+                    masked.append(stringMaskPlaceholder(maskIndex));
                     currentStr.clear();
                     continue;
                 }
@@ -723,7 +736,7 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
             }
             const int maskIndex = maskedStrings.size();
             maskedStrings.append(cleanLiteral);
-            masked.append(QStringLiteral("\"__AI_STR_MASK_%1__\"").arg(maskIndex));
+            masked.append(stringMaskPlaceholder(maskIndex));
         }
 
         text = masked;
@@ -895,11 +908,31 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
     static const QRegularExpression trailingComma(QStringLiteral(R"(,\s*([\}\]]))"));
     text.replace(trailingComma, QStringLiteral("\\1"));
 
-    // 17. Restore preserved string literals
-    for (int mIdx = 0; mIdx < maskedStrings.size(); ++mIdx) {
-        const QString placeholder = QStringLiteral("\"__AI_STR_MASK_%1__\"").arg(mIdx);
-        // Replace with escaped quotes
-        text.replace(placeholder, QStringLiteral("\"") + maskedStrings.at(mIdx) + QStringLiteral("\""));
+    // 17. Restore preserved string literals in a single left-to-right pass.
+    // Replacing one placeholder at a time rescans the whole document per literal
+    // (quadratic in the number of literals) and can stall on a large response,
+    // so the masked document is rewritten once.
+    if (!maskedStrings.isEmpty()) {
+        static const QRegularExpression maskPlaceholder(QStringLiteral("\"__AI_STR_MASK_(\\d+)__\""));
+        QString restored;
+        restored.reserve(text.size());
+        int lastIndex = 0;
+        auto matches = maskPlaceholder.globalMatch(text);
+        while (matches.hasNext()) {
+            const QRegularExpressionMatch match = matches.next();
+            const int start = static_cast<int>(match.capturedStart());
+            const int end = static_cast<int>(match.capturedEnd());
+            restored.append(text.mid(lastIndex, start - lastIndex));
+            const int maskIndex = match.captured(1).toInt();
+            restored.append(QLatin1Char('"'));
+            if (maskIndex >= 0 && maskIndex < maskedStrings.size()) {
+                restored.append(maskedStrings.at(maskIndex));
+            }
+            restored.append(QLatin1Char('"'));
+            lastIndex = end;
+        }
+        restored.append(text.mid(lastIndex));
+        text = restored;
     }
 
     return text;
@@ -1175,6 +1208,14 @@ bool KisAiStrokeProgramCodec::parseSseStreamChunk(
         *isDone = false;
     }
     if (!unprocessedBuffer || !accumulatedContent) {
+        return false;
+    }
+
+    // A partial SSE line is bounded by the response size limit; refuse to grow
+    // the carry-over buffer without bound if a peer never terminates a line.
+    constexpr int MAX_SSE_LINE_BYTES = 8 * 1024 * 1024;
+    if (chunk.size() > MAX_SSE_LINE_BYTES - unprocessedBuffer->size()) {
+        unprocessedBuffer->clear();
         return false;
     }
 
@@ -1729,7 +1770,10 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
     };
 
     const auto toDoubleField = [](const QJsonValue &val, qreal defaultVal) -> qreal {
-        if (val.isDouble()) return val.toDouble(defaultVal);
+        if (val.isDouble()) {
+            const qreal v = val.toDouble(defaultVal);
+            return std::isfinite(v) ? v : defaultVal;
+        }
         if (val.isString()) {
             bool ok = false;
             QString s = val.toString().trimmed();
@@ -1740,11 +1784,13 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 }
             }
             const qreal v = clean.toDouble(&ok);
-            if (ok) return v;
+            // A long digit run overflows to +/-inf with ok == true; such a value
+            // must never reach the renderer as geometry.
+            if (ok && std::isfinite(v)) return v;
         }
         bool ok = false;
         const qreal v = val.toVariant().toDouble(&ok);
-        return ok ? v : defaultVal;
+        return (ok && std::isfinite(v)) ? v : defaultVal;
     };
 
     const auto toIntField = [](const QJsonValue &val, int defaultVal) -> int {
@@ -2071,7 +2117,13 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                     op.gradientRadius /= qMin(canvasW, canvasH);
                 }
                 const QJsonArray colors = findField(o, {QStringLiteral("colors"), QStringLiteral("gradient_colors")}).toArray();
+                // A gradient only needs a handful of stops; an unbounded list from
+                // the model must not translate into unbounded work per operation.
+                constexpr int MAX_GRADIENT_COLORS = 64;
                 for (const QJsonValue &cv : colors) {
+                    if (op.gradientColors.size() >= MAX_GRADIENT_COLORS) {
+                        break;
+                    }
                     op.gradientColors.append(parseColor(cv.toString()));
                 }
                 const QJsonArray pts = findField(o, {QStringLiteral("points"), QStringLiteral("pts")}).toArray();
@@ -2286,12 +2338,37 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
     refined.operations.clear();
     refined.operations.reserve(program.operations.size());
 
-    const qreal minCanvasDimension = qMax<qreal>(64.0, qMin(program.canvasSize.width(), program.canvasSize.height()));
+    // canvas_size is model-supplied metadata. Clamp it here so a hostile or
+    // confused value can never size a downstream QImage allocation.
+    constexpr int MAX_CANVAS_EDGE = 4096;
+    const QSize declaredCanvas = refined.canvasSize;
+    refined.canvasSize =
+        QSize(qBound(1, declaredCanvas.width(), MAX_CANVAS_EDGE), qBound(1, declaredCanvas.height(), MAX_CANVAS_EDGE));
+    if (refined.canvasSize != declaredCanvas) {
+        ++localReport.repairedValues;
+    }
+
+    const qreal minCanvasDimension = qMax<qreal>(64.0, qMin(refined.canvasSize.width(), refined.canvasSize.height()));
     int generatedId = 1;
 
     for (const KisAiStrokeOperation &source : program.operations) {
         KisAiStrokeOperation op = source;
         op.layer = normalizeLayerName(op.layer);
+
+        // Hatch screens and gradient directions are rasterized through
+        // QPainter::rotate(), so a non-finite or unwrapped angle must not
+        // survive this pass.
+        if (!std::isfinite(op.angleDeg)) {
+            op.angleDeg = 0.0;
+            ++localReport.repairedValues;
+        } else {
+            const qreal wrapped = std::fmod(op.angleDeg, 360.0);
+            const qreal normalized = wrapped < 0.0 ? wrapped + 360.0 : wrapped;
+            if (normalized != op.angleDeg)
+                ++localReport.repairedValues;
+            op.angleDeg = normalized;
+        }
+
         if (op.id.trimmed().isEmpty()) {
             op.id = QStringLiteral("op_%1").arg(generatedId);
             ++localReport.repairedValues;
@@ -2468,6 +2545,10 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
                 pts.reserve(op.points.size());
                 for (KisAiStrokePoint pt : op.points) {
                     pt.pos = clampedPoint(pt.pos, &localReport.repairedValues);
+                    const qreal pressure = std::isfinite(pt.pressure) ? qBound<qreal>(0.05, pt.pressure, 1.0) : 0.8;
+                    if (pressure != pt.pressure)
+                        ++localReport.repairedValues;
+                    pt.pressure = pressure;
                     pts.append(pt);
                 }
                 op.points = pts;

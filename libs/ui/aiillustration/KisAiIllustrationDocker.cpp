@@ -64,6 +64,8 @@
 
 #include <klocalizedstring.h>
 
+#include <algorithm>
+
 #if defined(Q_OS_WIN)
 #include <windows.h>
 #include <wincrypt.h>
@@ -849,6 +851,12 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     setWidget(scrollArea);
 
+    // Restore persisted settings before wiring the auto-save handlers below.
+    // loadSettings() assigns widget values, and if the handlers were already
+    // connected those assignments would immediately write still-default values
+    // back over the user's stored settings.
+    loadSettings();
+
     connect(m_newCanvasButton, &QPushButton::clicked, this, [this] { createCanvas(); });
     connect(m_generateButton, &QPushButton::clicked, this, [this] { generateIllustration(); });
     connect(m_cancelButton, &QPushButton::clicked, this, [this] { cancelRemoteRequest(); });
@@ -890,7 +898,6 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     connect(m_reasoningEffortCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
     connect(m_customInstructionsEdit, &QPlainTextEdit::textChanged, this, [this] { saveSettings(); });
 
-    loadSettings();
     updateModeUi();
 }
 
@@ -1110,10 +1117,14 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         return;
     }
 
-    if (!m_isSelfCorrectionRetry && (m_retryTimer == nullptr || !m_retryTimer->isActive())) {
+    // A fresh user request starts a new retry budget; a re-entry from
+    // executeRetry() must keep counting towards the current budget, otherwise the
+    // retry limit is never reached and the app re-POSTs forever.
+    if (!m_retryInFlight) {
         m_currentRetryCount = 0;
         m_lastFailedPrompt = prompt;
     }
+    m_retryInFlight = false;
     if (m_maxRetriesSpin) {
         m_maxRetryCount = m_maxRetriesSpin->value();
     }
@@ -1261,6 +1272,9 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     if (requestTimedOut) {
         const qint64 elapsedSec = m_requestElapsedTimer.isValid() ? m_requestElapsedTimer.elapsed() / 1000 : 0;
         logDebug(QStringLiteral("LLM_TIMEOUT"), QStringLiteral("リクエストがタイムアウトしました (%1秒経過)。").arg(elapsedSec));
+        // Capture this before clearing the streamed content, otherwise the
+        // "partial data then stall" case can never be reported.
+        const bool receivedPartialData = !m_streamedContent.isEmpty();
         m_streamedContent.clear();
         m_sseBuffer.clear();
         const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
@@ -1268,7 +1282,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
             scheduleRetry(i18n("リクエストタイムアウト (%1秒)", elapsedSec), false);
             return;
         }
-        if (!m_streamedContent.isEmpty()) {
+        if (receivedPartialData) {
             setStatus(i18n("LLM からのデータ受信が %1 秒間途絶えたため中止しました。", ACTIVITY_TIMEOUT_MS / 1000), true);
         } else {
             setStatus(i18n("LLM の初期応答が %1 秒以内に届かなかったため中止しました。", elapsedSec), true);
@@ -2226,6 +2240,15 @@ void KisAiIllustrationDocker::executeGoalStep()
         const QString model = m_modelEditor->text().trimmed();
         const QString apiKey = m_goalApiKey;
 
+        // The endpoint field stays editable during Goal mode, so every step must
+        // re-validate it before attaching the Authorization header.
+        QString endpointError;
+        if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &endpointError)) {
+            setStatus(endpointError, true);
+            finishGoalMode(false);
+            return;
+        }
+
         if (apiKey.isEmpty()) {
             setStatus(i18n("API キーが見つかりません。Goalモードを終了します。"), true);
             finishGoalMode(false);
@@ -2747,8 +2770,11 @@ void KisAiIllustrationDocker::scheduleGoalStepRetry(const QString &reasonMessage
         m_retryTimer->setSingleShot(true);
         connect(m_retryTimer, &QTimer::timeout, this, &KisAiIllustrationDocker::executeRetry);
     }
-    setBusy(true);
+    // Start the timer before setBusy(): setBusy() decides the Cancel button's
+    // visibility from m_retryTimer->isActive(), so starting it afterwards hid
+    // Cancel for the whole back-off wait.
     m_retryTimer->start(delayMs);
+    setBusy(true);
 }
 
 void KisAiIllustrationDocker::executeGoalStepRetry()
@@ -2814,8 +2840,9 @@ void KisAiIllustrationDocker::scheduleRetry(const QString &reasonMessage, bool i
         m_retryTimer->setSingleShot(true);
         connect(m_retryTimer, &QTimer::timeout, this, &KisAiIllustrationDocker::executeRetry);
     }
-    setBusy(true);
+    // See scheduleRetry(): the timer must be active before setBusy() evaluates it.
     m_retryTimer->start(delayMs);
+    setBusy(true);
 }
 
 void KisAiIllustrationDocker::executeRetry()
@@ -2824,6 +2851,9 @@ void KisAiIllustrationDocker::executeRetry()
         executeGoalStepRetry();
         return;
     }
+
+    // Mark the re-entry so generateLlmStrokes() keeps the current retry budget.
+    m_retryInFlight = true;
 
     if (m_isSelfCorrectionRetry) {
         QString correctionPrompt = m_lastFailedPrompt;
@@ -2868,6 +2898,7 @@ void KisAiIllustrationDocker::cancelRetry()
     }
     m_currentRetryCount = 0;
     m_isSelfCorrectionRetry = false;
+    m_retryInFlight = false;
     m_goalCurrentRetryCount = 0;
     m_goalSelfCorrectionFeedback.clear();
     m_lastFailedPrompt.clear();
@@ -2908,12 +2939,19 @@ void KisAiIllustrationDocker::loadSettings()
         const QString storedKey = settings.value(QStringLiteral("AIIllustration/apiKey")).toString();
         if (!storedKey.isEmpty() && !unprotectApiKeyForCurrentUser(storedKey, &restoredKey)) {
 #if defined(Q_OS_WIN)
+            // Legacy value: either a plaintext key or its Base64 form. A blob that
+            // decrypts to garbage (for example a corrupt dpapi: payload or a key
+            // from another user/device) must be deleted rather than re-encrypted.
             const QByteArray legacyBytes = storedKey.startsWith(QStringLiteral("sk-"))
                 ? storedKey.toUtf8()
                 : QByteArray::fromBase64(storedKey.toLatin1());
             const QString legacyKey = QString::fromUtf8(legacyBytes);
+            const bool plausibleKey = !legacyKey.isEmpty()
+                && std::all_of(legacyKey.cbegin(), legacyKey.cend(), [](QChar c) {
+                       return c.isPrint() && !c.isSpace();
+                   });
             QString protectedKey;
-            if (!legacyKey.isEmpty() && protectApiKeyForCurrentUser(legacyKey, &protectedKey)) {
+            if (plausibleKey && protectApiKeyForCurrentUser(legacyKey, &protectedKey)) {
                 settings.setValue(QStringLiteral("AIIllustration/apiKey"), protectedKey);
                 restoredKey = legacyKey;
             } else {

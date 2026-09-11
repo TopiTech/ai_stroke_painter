@@ -63,6 +63,12 @@ private Q_SLOTS:
     void testSchemaAliasesAndGoalModeArtStyle();
     void testAgentCritiqueAndReadinessParsing();
     void testSanitizeUnescapedControlCharsInStrings();
+    void testRefineBoundsHostileCanvasSizeAndAngle();
+    void testGradientColorCountIsCapped();
+    void testNumericOverflowFieldsFallBackToDefaults();
+    void testParseColorAlphaOverflowIsSafe();
+    void testSseCarryOverBufferIsBounded();
+    void testRepairJsonSyntaxPreservesManyLiterals();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

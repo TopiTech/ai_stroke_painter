@@ -49,6 +49,10 @@ private Q_SLOTS:
     void testDualShadowSeparation();
     void testFinishingFiltersBloomAndChromaticAberration();
     void testFinishingFiltersVignette();
+    void testRenderProgramToImageBoundsDerivedCanvasSize();
+    void testHalftonePatternWorkIsBounded();
+    void testGradientAngleNormalizationIsFinite();
+    void testCaptureImageBase64RejectsInvalidArguments();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

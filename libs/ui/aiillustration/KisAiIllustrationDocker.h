@@ -139,6 +139,10 @@ private:
     int m_currentRetryCount {0};
     int m_maxRetryCount {2};
     bool m_isSelfCorrectionRetry {false};
+    // True while generateLlmStrokes() is being re-entered from executeRetry().
+    // A single-shot QTimer is already inactive by then, so the retry budget must
+    // not be reset based on the timer state.
+    bool m_retryInFlight {false};
     QString m_lastFailedPrompt;
     KisAiJsonDiagnostic m_lastJsonDiagnostic;
     QString m_inFlightApiKey;

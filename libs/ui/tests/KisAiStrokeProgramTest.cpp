@@ -22,6 +22,9 @@
 #include "aiillustration/KisAiStrokeTypeChecker.h"
 #include "KisAiTestUtils.h"
 
+#include <cmath>
+#include <limits>
+
 void KisAiStrokeProgramTest::testSanitizeAndExtractJson()
 {
     // Test 1: plain valid JSON
@@ -2184,6 +2187,181 @@ void KisAiStrokeProgramTest::testSanitizeUnescapedControlCharsInStrings()
     const QString critique = doc.object().value(QStringLiteral("agent_critique")).toString();
     QVERIFY(critique.contains(QStringLiteral("Line 1 critique")));
     QVERIFY(critique.contains(QStringLiteral("Line 2 with")));
+}
+
+void KisAiStrokeProgramTest::testRefineBoundsHostileCanvasSizeAndAngle()
+{
+    // A model-supplied canvas_size must never survive refineForRendering() as a
+    // value that could size a multi-gigabyte downstream QImage allocation.
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(200000, 200000);
+
+    KisAiStrokeOperation fill;
+    fill.kind = KisAiStrokeOperation::Kind::Fill;
+    fill.layer = QStringLiteral("Flats");
+    fill.polygon << QPointF(0.1, 0.1) << QPointF(0.9, 0.1) << QPointF(0.9, 0.9);
+    fill.brush.profile = QStringLiteral("brush");
+    fill.angleDeg = std::numeric_limits<qreal>::infinity();
+    program.operations.append(fill);
+
+    KisAiStrokeOperation nanAngle = fill;
+    nanAngle.angleDeg = std::numeric_limits<qreal>::quiet_NaN();
+    program.operations.append(nanAngle);
+
+    KisAiStrokeOperation wrapped = fill;
+    wrapped.angleDeg = -450.0; // must wrap into [0, 360)
+    program.operations.append(wrapped);
+
+    KisAiStrokeQualityReport report;
+    const KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(program, &report);
+
+    QVERIFY(refined.canvasSize.width() <= 4096);
+    QVERIFY(refined.canvasSize.height() <= 4096);
+    QVERIFY(refined.canvasSize.width() > 0);
+    QVERIFY(refined.canvasSize.height() > 0);
+
+    for (const KisAiStrokeOperation &op : refined.operations) {
+        QVERIFY2(std::isfinite(op.angleDeg), "hatch/gradient angle must stay finite");
+        QVERIFY(op.angleDeg >= 0.0);
+        QVERIFY(op.angleDeg < 360.0);
+    }
+
+    QCOMPARE(refined.operations.at(0).angleDeg, 0.0);
+    QCOMPARE(refined.operations.at(1).angleDeg, 0.0);
+    QCOMPARE(refined.operations.at(2).angleDeg, 270.0);
+}
+
+void KisAiStrokeProgramTest::testGradientColorCountIsCapped()
+{
+    QJsonArray colors;
+    for (int i = 0; i < 5000; ++i) {
+        colors.append(QStringLiteral("#101010"));
+    }
+
+    const QJsonObject root {
+        {QStringLiteral("schema_version"), 2},
+        {QStringLiteral("operations"), QJsonArray {
+            QJsonObject {
+                {QStringLiteral("kind"), QStringLiteral("gradient_fill")},
+                {QStringLiteral("id"), QStringLiteral("huge_gradient")},
+                {QStringLiteral("layer"), QStringLiteral("Flats")},
+                {QStringLiteral("colors"), colors},
+                {QStringLiteral("brush"), QJsonObject {
+                    {QStringLiteral("profile"), QStringLiteral("brush")},
+                    {QStringLiteral("color"), QStringLiteral("#101010")},
+                    {QStringLiteral("size"), 0.02},
+                    {QStringLiteral("is_eraser"), false},
+                }},
+            },
+        }},
+    };
+
+    KisAiStrokeProgram program;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(QJsonDocument(root).toJson(QJsonDocument::Compact), &program, &error),
+             qPrintable(error));
+    QCOMPARE(program.operations.size(), 1);
+    // Unbounded gradient stops from the model must not translate into unbounded work.
+    QVERIFY(program.operations.first().gradientColors.size() <= 64);
+    QVERIFY(!program.operations.first().gradientColors.isEmpty());
+}
+
+void KisAiStrokeProgramTest::testNumericOverflowFieldsFallBackToDefaults()
+{
+    // A long digit run parses to +inf while still reporting success; every numeric
+    // field must fall back to its default rather than propagate a non-finite value.
+    const QString hugeDigits(400, QLatin1Char('9'));
+
+    QString json = QStringLiteral("{\"schema_version\":2,\"completion_score\":\"%1\",\"seed\":1,")
+                       .arg(hugeDigits);
+    json += QStringLiteral("\"operations\":[{\"kind\":\"fill\",\"id\":\"o\",\"layer\":\"Flats\",")
+            + QStringLiteral("\"angle_deg\":\"%1\",").arg(hugeDigits)
+            + QStringLiteral("\"polygon\":[[0.1,0.1],[0.9,0.1],[0.9,0.9]],")
+            + QStringLiteral("\"brush\":{\"profile\":\"brush\",\"color\":\"#101010\",\"size\":0.02}}]}");
+
+    KisAiStrokeProgram program;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(json.toUtf8(), &program, &error), qPrintable(error));
+    QCOMPARE(program.operations.size(), 1);
+
+    QVERIFY2(std::isfinite(program.completionScore), "completion_score must be finite");
+    QVERIFY(program.completionScore >= 0.0 && program.completionScore <= 1.0);
+    QVERIFY2(std::isfinite(program.operations.first().angleDeg), "angle_deg must be finite");
+}
+
+void KisAiStrokeProgramTest::testParseColorAlphaOverflowIsSafe()
+{
+    // qRound() on an out-of-range double is undefined behaviour; the alpha value
+    // must be clamped before conversion and never produce an invalid color.
+    const QColor overflowed = KisAiStrokeProgramCodec::parseColor(QStringLiteral("rgba(10, 20, 30, 1e999)"));
+    QVERIFY(overflowed.isValid());
+    QCOMPARE(overflowed.alpha(), 255);
+
+    const QColor negative = KisAiStrokeProgramCodec::parseColor(QStringLiteral("rgba(10, 20, 30, -5)"));
+    QVERIFY(negative.isValid());
+    QVERIFY(negative.alpha() >= 0 && negative.alpha() <= 255);
+
+    const QColor normal = KisAiStrokeProgramCodec::parseColor(QStringLiteral("rgba(10, 20, 30, 0.5)"));
+    QCOMPARE(normal.alpha(), 128);
+
+    // Short hex forms must keep working.
+    QCOMPARE(KisAiStrokeProgramCodec::parseColor(QStringLiteral("#f00")).rgb(), QColor(255, 0, 0).rgb());
+}
+
+void KisAiStrokeProgramTest::testSseCarryOverBufferIsBounded()
+{
+    // A peer that never terminates a line must not grow the carry-over buffer
+    // without bound for the whole stream.
+    QByteArray buffer;
+    QString content;
+    bool done = false;
+
+    const QByteArray chunk(1024 * 1024, 'x');
+    bool accepted = true;
+    for (int i = 0; i < 64 && accepted; ++i) {
+        accepted = KisAiStrokeProgramCodec::parseSseStreamChunk(chunk, &buffer, &content, &done);
+    }
+
+    QVERIFY2(!accepted, "oversized unterminated SSE data must be rejected");
+    QVERIFY(buffer.size() <= 8 * 1024 * 1024);
+    QVERIFY(content.isEmpty());
+}
+
+void KisAiStrokeProgramTest::testRepairJsonSyntaxPreservesManyLiterals()
+{
+    // The mask/restore pass must rebuild the document in one pass; correctness is
+    // checked here with many literals, including duplicate values and one that
+    // looks like a placeholder. The operation count stays inside the parser's
+    // MAX_OPERATIONS budget so this exercises masking, not the limit.
+    const int literalCount = 150;
+    QJsonArray ops;
+    for (int i = 0; i < literalCount; ++i) {
+        ops.append(QJsonObject {
+            {QStringLiteral("kind"), QStringLiteral("path")},
+            {QStringLiteral("id"), QStringLiteral("__AI_STR_MASK_0__")},
+            {QStringLiteral("layer"), QStringLiteral("Lineart")},
+            {QStringLiteral("points"), QJsonArray {QJsonArray {0.1, 0.2}, QJsonArray {0.8, 0.9}}},
+            {QStringLiteral("brush"), QJsonObject {
+                {QStringLiteral("profile"), QStringLiteral("gpen")},
+                {QStringLiteral("color"), QStringLiteral("#202020")},
+                {QStringLiteral("size"), 0.01},
+                {QStringLiteral("is_eraser"), false},
+            }},
+        });
+    }
+
+    QJsonObject root {
+        {QStringLiteral("schema_version"), 2},
+        {QStringLiteral("operations"), ops},
+    };
+
+    KisAiStrokeProgram program;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(QJsonDocument(root).toJson(QJsonDocument::Compact), &program, &error),
+             qPrintable(error));
+    QCOMPARE(program.operations.size(), literalCount);
+    // A literal whose text resembles the internal placeholder must survive intact.
+    QCOMPARE(program.operations.first().id, QStringLiteral("__AI_STR_MASK_0__"));
 }
 
 KISTEST_MAIN(KisAiStrokeProgramTest)

@@ -202,8 +202,15 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
                                                  bool clipShadingToFlats,
                                                  const KisAiStrokeProgram *inheritedFlatsProgram)
 {
-    QSize size = (!targetSize.isEmpty() && targetSize.width() >= 64 && targetSize.height() >= 64) ? targetSize
-                                                                                                  : program.canvasSize;
+    const bool hasExplicitTarget = !targetSize.isEmpty() && targetSize.width() >= 64 && targetSize.height() >= 64;
+    QSize size = hasExplicitTarget ? targetSize : program.canvasSize;
+    // program.canvasSize is model-supplied metadata, so bound it before it sizes a
+    // QImage allocation. An explicit target size is caller-owned (document or
+    // preview size) and is honoured as given.
+    if (!hasExplicitTarget) {
+        constexpr int MAX_DERIVED_RENDER_EDGE = 4096;
+        size = size.boundedTo(QSize(MAX_DERIVED_RENDER_EDGE, MAX_DERIVED_RENDER_EDGE));
+    }
     if (size.width() < 64 || size.height() < 64) {
         size = QSize(1024, 1024);
     }
@@ -409,16 +416,18 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
     // the GUI thread because mouse/tablet release events cannot be dispatched.
     // We request stroke completion and spin the event loop safely to allow pending
     // input events to drain without freezing the UI.
-    if (!image->tryBarrierLock()) {
+    // Every acquired lock must reach unlock(): holding it while returning false
+    // would leave the image barrier-locked for the rest of the session.
+    bool locked = image->tryBarrierLock();
+    if (!locked) {
         image->requestStrokeEnd();
-        int attempts = 0;
         constexpr int MAX_ATTEMPTS = 50;
-        while (!image->tryBarrierLock() && attempts < MAX_ATTEMPTS) {
+        for (int attempts = 0; !locked && attempts < MAX_ATTEMPTS; ++attempts) {
             QApplication::processEvents(QEventLoop::AllEvents, 20);
             QThread::msleep(20);
-            ++attempts;
+            locked = image->tryBarrierLock();
         }
-        if (attempts >= MAX_ATTEMPTS) {
+        if (!locked) {
             if (statusMessage) {
                 *statusMessage = i18n("キャンバスが描画中のため、AIストロークをレイヤーに追加できませんでした。少し待ってから再度お試しください。");
             }
@@ -1490,13 +1499,20 @@ void KisAiStrokeRenderer::drawMangaLinesOperation(QPainter &painter, const KisAi
 
 QString KisAiStrokeRenderer::captureImageBase64(const QImage &image, int maxDimension, int quality)
 {
-    if (image.isNull()) {
+    if (image.isNull() || maxDimension <= 0) {
         return QString();
     }
+
+    // QImage::save() documents that an out-of-range quality gives undefined
+    // results, and scaling to a non-positive dimension yields a null image.
+    const int boundedQuality = qBound(-1, quality, 100);
 
     QImage scaled = image;
     if (qMax(image.width(), image.height()) > maxDimension) {
         scaled = image.scaled(maxDimension, maxDimension, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    if (scaled.isNull()) {
+        return QString();
     }
 
     QImage rgb(scaled.size(), QImage::Format_RGB32);
@@ -1508,7 +1524,9 @@ QString KisAiStrokeRenderer::captureImageBase64(const QImage &image, int maxDime
     QByteArray bytes;
     QBuffer buffer(&bytes);
     buffer.open(QIODevice::WriteOnly);
-    rgb.save(&buffer, "JPEG", quality);
+    if (!rgb.save(&buffer, "JPEG", boundedQuality) || bytes.isEmpty()) {
+        return QString();
+    }
 
     return QStringLiteral("data:image/jpeg;base64,") + QString::fromLatin1(bytes.toBase64());
 }
