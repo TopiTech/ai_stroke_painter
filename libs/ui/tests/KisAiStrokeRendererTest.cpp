@@ -1196,4 +1196,117 @@ void KisAiStrokeRendererTest::testCaptureImageBase64RejectsInvalidArguments()
     QVERIFY(!KisAiStrokeRenderer::captureImageBase64(image, 768, 9999).isEmpty());
 }
 
+void KisAiStrokeRendererTest::testPxBrushSizeSurvivesSupersampling()
+{
+    // A px-mode brush on a canvas small enough to be rasterized at 2x supersampling
+    // used to keep its raw width on the working image, shrinking the final stroke
+    // by half after the downscale. The painted width on the final image must match
+    // a non-supersampled render of the same px size.
+    auto makeProgram = [](qreal px) {
+        KisAiStrokeProgram program;
+        program.canvasSize = QSize(256, 256);
+
+        KisAiStrokeOperation stroke;
+        stroke.kind = KisAiStrokeOperation::Kind::Path;
+        stroke.id = QStringLiteral("px_stroke");
+        stroke.layer = QStringLiteral("Lineart");
+        stroke.brush.profile = QStringLiteral("gpen");
+        stroke.brush.color = QColor(0, 0, 0);
+        stroke.brush.sizeMode = QStringLiteral("px");
+        stroke.brush.size = px;
+        stroke.smooth = false;
+        stroke.points = {KisAiStrokePoint(0.1, 0.5, 1.0), KisAiStrokePoint(0.9, 0.5, 1.0)};
+        program.operations.append(stroke);
+        return program;
+    };
+
+    const auto measureThickness = [](const QImage &image, int x) {
+        int minY = -1;
+        int maxY = -1;
+        for (int y = 0; y < image.height(); ++y) {
+            if (qAlpha(image.pixel(x, y)) > 100) {
+                if (minY < 0) minY = y;
+                maxY = y;
+            }
+        }
+        return (minY < 0) ? 0 : (maxY - minY + 1);
+    };
+
+    const qreal px = 12.0;
+
+    // 2048x2048 canvas -> no supersampling (scale 1), stroke of 12 px.
+    KisAiStrokeProgram bigProgram = makeProgram(px);
+    bigProgram.canvasSize = QSize(2048, 2048);
+    const QImage bigImage = KisAiStrokeRenderer::renderProgramToImage(bigProgram, QSize(2048, 2048));
+    QVERIFY(!bigImage.isNull());
+    const int bigThickness = measureThickness(bigImage, bigImage.width() / 2);
+    QVERIFY2(bigThickness >= 10 && bigThickness <= 17,
+             qPrintable(QStringLiteral("unsupersampled thickness %1").arg(bigThickness)));
+
+    // 256x256 canvas -> supersampled at 2x, same 12 px stroke.
+    const QImage smallImage = KisAiStrokeRenderer::renderProgramToImage(makeProgram(px), QSize(256, 256));
+    QVERIFY(!smallImage.isNull());
+    const int smallThickness = measureThickness(smallImage, smallImage.width() / 2);
+    QVERIFY2(smallThickness >= 10 && smallThickness <= 17,
+             qPrintable(QStringLiteral("supersampled thickness %1").arg(smallThickness)));
+
+    // Both renders must agree within antialiasing tolerance (previously the
+    // supersampled stroke came out about half the requested width).
+    QVERIFY2(qAbs(smallThickness - bigThickness) <= 3,
+             qPrintable(QStringLiteral("supersampled %1 vs unsupersampled %2").arg(smallThickness).arg(bigThickness)));
+}
+
+void KisAiStrokeRendererTest::testHatchErasersAreShapeBounded()
+{
+    // Eraser hatches must only clear inside their own clipped polygon, never the
+    // whole hatch bounding area. A regression here would wipe unrelated artwork.
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(256, 256);
+    program.goalReached = false; // skip finishing post-process for exact pixel checks
+
+    // A solid-filled square far to the right of the eraser hatch polygon.
+    // "contour" maps to the plain solid-fill branch ("wash" would render a
+    // gradient with partial alpha).
+    KisAiStrokeOperation square;
+    square.kind = KisAiStrokeOperation::Kind::Fill;
+    square.id = QStringLiteral("target_square");
+    square.layer = QStringLiteral("Flats");
+    square.fillStyle = QStringLiteral("contour");
+    square.brush.color = QColor(30, 30, 30);
+    square.brush.opacity = 1.0;
+    square.polygon = {QPointF(0.80, 0.0), QPointF(0.90, 0.0), QPointF(0.90, 1.0), QPointF(0.80, 1.0)};
+    program.operations.append(square);
+
+    // A fat-stroked eraser hatch over the left part of the canvas. The i=0 hatch
+    // line always passes through the clip polygon's center, so (64,64) sits on an
+    // eraser stroke and must be fully cleared.
+    KisAiStrokeOperation hatch;
+    hatch.kind = KisAiStrokeOperation::Kind::Hatch;
+    hatch.id = QStringLiteral("limited_eraser");
+    hatch.layer = QStringLiteral("Flats"); // same layer as the square: Clear must be scoped to this layer
+    hatch.brush.isEraser = true;
+    hatch.brush.sizeMode = QStringLiteral("px");
+    hatch.brush.size = 48.0; // penWidth = size * 0.20 = 9.6 px
+    hatch.angleDeg = 45.0;
+    hatch.spacing = 0.2;
+    hatch.smooth = false;
+    hatch.polygon = {QPointF(0.05, 0.05), QPointF(0.35, 0.05), QPointF(0.35, 0.35), QPointF(0.05, 0.35)};
+    program.operations.append(hatch);
+
+    const QImage image = KisAiStrokeRenderer::renderProgramToImage(program, QSize(256, 256));
+    QVERIFY(!image.isNull());
+
+    // On the eraser stroke, inside the hatch polygon: cleared.
+    QVERIFY2(qAlpha(image.pixel(64, 64)) <= 60,
+             qPrintable(QStringLiteral("alpha@64,64 = %1").arg(qAlpha(image.pixel(64, 64)))));
+
+    // The far-right filled square must be untouched by the eraser.
+    QVERIFY2(qAlpha(image.pixel(215, 128)) > 200,
+             qPrintable(QStringLiteral("alpha@215,128 = %1").arg(qAlpha(image.pixel(215, 128)))));
+    QCOMPARE(qRed(image.pixel(215, 128)), 30);
+
+    // Outside both shapes the canvas stays transparent.
+    QCOMPARE(qAlpha(image.pixel(150, 128)), 0);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

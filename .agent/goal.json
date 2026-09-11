@@ -1,55 +1,43 @@
 {
   "version": 1,
-  "id": "goal-20260909-project-review-current",
+  "id": "goal-20260911-code-review",
   "status": "completed",
-  "objective": "AI Stroke Painter プロジェクト全体をコードレビューし、既存仕様・設定・主要処理経路を確認したうえで、重大な問題を必要最小限で修正し、再発防止テストと既定の検証を完了する。",
+  "objective": "プロジェクト全体をコードレビューし、重要度・影響範囲・修正リスクを判断した上で必要な修正とテストを実施する",
   "completion_criteria": [
-    "AI Stroke Painter 固有の仕様、設定、主要な生成・解析・描画・UI経路を確認し、問題を重要度・影響範囲・修正リスク付きで評価する",
-    "確認できた重大・主要な問題を最小限に修正し、可能な限り振る舞いベースの回帰テストを追加する",
-    "変更に関係する既定のビルド、テスト、静的解析、書式検証を実行し、未実行・既存失敗を区別して記録する"
+    "aiillustration モジュールの主要処理経路をレビュー済み",
+    "発見した問題に優先度を付け、重大なものを修正済み",
+    "修正に対応する回帰テストを追加済み",
+    "既定のテストスイートがすべて成功"
   ],
   "constraints": [
-    "既存のユーザー変更を上書き・破棄しない",
-    "無関係な変更、公開、デプロイ、外部サービスへの実リクエストを行わない",
-    "既存の公開動作とデータ互換性を合理的な範囲で維持する"
-  ],
-  "non_goals": [
-    "要件に根拠のない機能追加",
-    "外部LLMまたは画像サービスに対する実データを用いた通信"
+    "既存動作・公開APIの互換性を維持",
+    "無関係な変更をしない"
   ],
   "verification": [
-    "CMake/Ninja の対象ビルド",
-    "CTest の AI Stroke Painter 対象テスト",
-    "利用可能な静的解析・フォーマット・差分検証",
-    "実行可能な範囲のUI起動・操作確認"
+    "build-test: ctest 3/3 passed (KisAiStrokeProgramTest, KisAiStrokeRendererTest, KisAiIllustrationRendererTest)",
+    "build-ai: 変更TU単体コンパイル成功 (Docker/StrokeRenderer/StrokeProgram)"
   ],
-  "budget": {
-    "max_iterations": 20,
-    "max_elapsed_minutes": null
-  },
   "progress": {
-    "iteration": 2,
+    "iteration": 9,
     "completed": [
-      "クリーンなGit作業ツリー、README.md、DEVELOPMENT.md、既存ビルド構成と最新コミットを確認",
-      "AI固有の生成・Goal Mode・応答解析・描画・設定保存・ネットワーク検証・UIコードをレビュー",
-      "URL上の秘密情報の保存・ログ出力、Goal Modeのクリッピング不整合、既存キャンバス寸法不整合、切断応答の操作救出失敗を修正し、回帰テストを追加",
-      "build-ai/build-test のビルドとAI対象CTest、差分書式検証、git diff --checkを実行"
+      "core review (Program/Renderer/QualityUtils/Docker/Analyzer/TypeChecker)",
+      "P1: px brush width halved under 2x supersampling",
+      "P1: reserveParticles hard-fail on count>200",
+      "P2: corrupt QSettings ints widen spinbox range",
+      "P2: refine re-inflated budget-zeroed particle ops (found by new test)",
+      "renderer zero-count particles must draw nothing",
+      "regression tests added (parser + renderer x2)"
     ],
-    "remaining": [
-    ],
-    "last_action": "最終差分・書式・ゴール記録を確認",
-    "last_result": "修正対象のビルド、AI対象CTest、差分書式、git diff --checkが成功し、最終報告の準備が完了。"
+    "remaining": [],
+    "last_action": "final verification: all standalone tests pass, Krita TUs compile",
+    "last_result": "100% tests passed out of 3"
   },
   "evidence": [
-    "git status --short: 出力なし",
-    "README.md と DEVELOPMENT.md を確認",
-    "git log --oneline --decorate -25 を確認",
-    "cmake --build build-ai --parallel 4 と ctest --test-dir build-ai --output-on-failure --no-tests=error: 3/3成功",
-    "cmake --build build-test --parallel 4 と ctest --test-dir build-test --output-on-failure --no-tests=error: 3/3成功",
-    "clang-format-diff.py による変更行検証: 成功",
-    "git diff --check: 成功"
+    "ctest build-test: 3/3 suites pass",
+    "build-ai obj compile: KisAiIllustrationDocker.cpp.obj, KisAiStrokeRenderer.cpp.obj, KisAiStrokeProgram.cpp.obj OK",
+    "new tests: testPxBrushSizeSurvivesSupersampling, testHatchErasersAreShapeBounded, testParticleCountClamping"
   ],
   "blockers": [],
-  "created_at": "2026-09-09T17:30:00+09:00",
-  "updated_at": "2026-09-09T19:34:33+09:00"
+  "created_at": "2026-09-11T00:00:00Z",
+  "updated_at": "2026-09-11T00:00:00Z"
 }

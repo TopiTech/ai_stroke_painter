@@ -22,6 +22,7 @@
 #include "aiillustration/KisAiStrokeTypeChecker.h"
 #include "KisAiTestUtils.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -641,6 +642,115 @@ void KisAiStrokeProgramTest::testParseGeometrySafetyLimits()
     QString error;
     QVERIFY(!KisAiStrokeProgramCodec::parseResponse(QJsonDocument(root).toJson(QJsonDocument::Compact), &program, &error));
     QVERIFY(error.contains(QStringLiteral("上限")));
+}
+
+void KisAiStrokeProgramTest::testParticleCountClamping()
+{
+    // A hostile or confused particle count must be clamped instead of aborting
+    // the whole parse: the renderer clamps again at rasterization time, so an
+    // absurd `count` for one operation must not discard the remaining ops.
+    auto makeProgram = [](int count) {
+        return QJsonDocument(QJsonObject {
+            {QStringLiteral("schema_version"), 2},
+            {QStringLiteral("operations"), QJsonArray {
+                QJsonObject {
+                    {QStringLiteral("kind"), QStringLiteral("particles")},
+                    {QStringLiteral("id"), QStringLiteral("hostile_particles")},
+                    {QStringLiteral("layer"), QStringLiteral("FX")},
+                    {QStringLiteral("bounds"), QJsonArray {0.1, 0.1, 0.9, 0.9}},
+                    {QStringLiteral("count"), count},
+                    {QStringLiteral("brush"), QJsonObject {
+                        {QStringLiteral("profile"), QStringLiteral("brush")},
+                        {QStringLiteral("color"), QStringLiteral("#331122")},
+                        {QStringLiteral("size"), 0.005},
+                        {QStringLiteral("is_eraser"), false},
+                    }},
+                },
+                QJsonObject {
+                    {QStringLiteral("kind"), QStringLiteral("path")},
+                    {QStringLiteral("id"), QStringLiteral("after_hostile_op")},
+                    {QStringLiteral("layer"), QStringLiteral("Lineart")},
+                    {QStringLiteral("points"), QJsonArray {
+                        QJsonArray {0.2, 0.2, 0.8},
+                        QJsonArray {0.8, 0.8, 0.7},
+                    }},
+                    {QStringLiteral("brush"), QJsonObject {
+                        {QStringLiteral("profile"), QStringLiteral("gpen")},
+                        {QStringLiteral("color"), QStringLiteral("#222222")},
+                        {QStringLiteral("size"), 0.005},
+                        {QStringLiteral("is_eraser"), false},
+                    }},
+                },
+            }},
+        }).toJson(QJsonDocument::Compact);
+    };
+
+    KisAiStrokeProgram program;
+    QString error;
+    // Count far above the per-operation cap (200): parse must succeed and clamp.
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(makeProgram(1000000), &program, &error), qPrintable(error));
+    QCOMPARE(program.operations.size(), 2);
+    auto particlesIt = std::find_if(program.operations.cbegin(), program.operations.cend(),
+                                          [](const KisAiStrokeOperation &op) {
+                                              return op.kind == KisAiStrokeOperation::Kind::Particles;
+                                          });
+    QVERIFY(particlesIt != program.operations.cend());
+    QVERIFY2(particlesIt->particleCount >= 1 && particlesIt->particleCount <= 200,
+             qPrintable(QString::number(particlesIt->particleCount)));
+
+    // Zero and negative counts are also clamped to the valid range.
+    program = KisAiStrokeProgram();
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(makeProgram(0), &program, &error), qPrintable(error));
+    particlesIt = std::find_if(program.operations.cbegin(), program.operations.cend(),
+                               [](const KisAiStrokeOperation &op) {
+                                   return op.kind == KisAiStrokeOperation::Kind::Particles;
+                               });
+    QVERIFY(particlesIt != program.operations.cend());
+    QCOMPARE(particlesIt->particleCount, 1);
+
+    program = KisAiStrokeProgram();
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(makeProgram(-50), &program, &error), qPrintable(error));
+    particlesIt = std::find_if(program.operations.cbegin(), program.operations.cend(),
+                               [](const KisAiStrokeOperation &op) {
+                                   return op.kind == KisAiStrokeOperation::Kind::Particles;
+                               });
+    QVERIFY(particlesIt != program.operations.cend());
+    QCOMPARE(particlesIt->particleCount, 1);
+
+    // The total particle budget (4096) caps the sum across many operations
+    // instead of failing the parse.
+    QJsonArray manyOps;
+    for (int i = 0; i < 30; ++i) {
+        manyOps.append(QJsonObject {
+            {QStringLiteral("kind"), QStringLiteral("particles")},
+            {QStringLiteral("id"), QString("budget_particles_%1").arg(i)},
+            {QStringLiteral("layer"), QStringLiteral("FX")},
+            {QStringLiteral("bounds"), QJsonArray {0.1, 0.1, 0.9, 0.9}},
+            {QStringLiteral("count"), 200},
+            {QStringLiteral("brush"), QJsonObject {
+                {QStringLiteral("profile"), QStringLiteral("brush")},
+                {QStringLiteral("color"), QStringLiteral("#331122")},
+                {QStringLiteral("size"), 0.005},
+                {QStringLiteral("is_eraser"), false},
+            }},
+        });
+    }
+    const QJsonObject budgetRoot {
+        {QStringLiteral("schema_version"), 2},
+        {QStringLiteral("operations"), manyOps},
+    };
+
+    program = KisAiStrokeProgram();
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(QJsonDocument(budgetRoot).toJson(QJsonDocument::Compact), &program, &error), qPrintable(error));
+    QCOMPARE(program.operations.size(), 30);
+
+    int totalParticles = 0;
+    for (const KisAiStrokeOperation &op : program.operations) {
+        QVERIFY(op.particleCount >= 0);
+        totalParticles += op.particleCount;
+    }
+    QVERIFY2(totalParticles <= 4096,
+             qPrintable(QString::number(totalParticles)));
 }
 
 void KisAiStrokeProgramTest::testGradientDirectionPointsParsing()

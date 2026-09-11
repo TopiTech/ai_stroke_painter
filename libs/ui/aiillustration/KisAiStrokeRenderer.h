@@ -173,13 +173,15 @@ private:
     static void rasterizeOperation(
         QPainter &painter,
         const KisAiStrokeOperation &op,
-        const QSize &canvasSize
+        const QSize &canvasSize,
+        int supersampleScale = 1
     );
 
     static void drawPathOperation(
         QPainter &painter,
         const KisAiStrokeOperation &op,
-        const QSize &canvasSize
+        const QSize &canvasSize,
+        int supersampleScale = 1
     );
 
     static void drawFillOperation(
@@ -203,19 +205,22 @@ private:
     static void drawParticlesOperation(
         QPainter &painter,
         const KisAiStrokeOperation &op,
-        const QSize &canvasSize
+        const QSize &canvasSize,
+        int supersampleScale = 1
     );
 
     static void drawHatchOperation(
         QPainter &painter,
         const KisAiStrokeOperation &op,
-        const QSize &canvasSize
+        const QSize &canvasSize,
+        int supersampleScale = 1
     );
 
     static void drawMangaLinesOperation(
         QPainter &painter,
         const KisAiStrokeOperation &op,
-        const QSize &canvasSize
+        const QSize &canvasSize,
+        int supersampleScale = 1
     );
 };
 

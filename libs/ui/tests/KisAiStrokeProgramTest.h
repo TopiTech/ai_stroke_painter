@@ -31,6 +31,7 @@ private Q_SLOTS:
     void testRefineForRenderingRepairsModelGeometry();
     void testStructuralQualityScore();
     void testParseGeometrySafetyLimits();
+    void testParticleCountClamping();
     void testGradientDirectionPointsParsing();
     void testMangaLinesParsingAndRefinement();
     void testGoalModePayloadAndVisionModelDetection();

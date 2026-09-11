@@ -184,6 +184,15 @@ QString readSafeStoredEndpoint(QSettings &settings, const QString &primaryKey, c
     return QString();
 }
 
+// QSettings values are user- or tool-editable; a corrupt or out-of-range persisted
+// number must not widen a spin box range (Qt silently clamps to the widget range,
+// so an explicit clamp keeps logic and UI in sync and predictable).
+int readBoundedSetting(QSettings &settings, const QString &key, int defaultValue, int minValue, int maxValue)
+{
+    const int value = settings.value(key, defaultValue).toInt();
+    return qBound(minValue, value, maxValue);
+}
+
 QImage decodeModelImage(const QByteArray &response, QString *errorMessage)
 {
     const QJsonDocument document = QJsonDocument::fromJson(response);
@@ -2975,20 +2984,16 @@ void KisAiIllustrationDocker::loadSettings()
     }
 
     // キャンバスサイズ
-    const int savedW = settings.value(QStringLiteral("AIIllustration/canvasWidth"), 1024).toInt();
-    const int savedH = settings.value(QStringLiteral("AIIllustration/canvasHeight"), 1024).toInt();
-    if (m_widthSpin) m_widthSpin->setValue(savedW);
-    if (m_heightSpin) m_heightSpin->setValue(savedH);
+    if (m_widthSpin) m_widthSpin->setValue(readBoundedSetting(settings, QStringLiteral("AIIllustration/canvasWidth"), 1024, m_widthSpin->minimum(), m_widthSpin->maximum()));
+    if (m_heightSpin) m_heightSpin->setValue(readBoundedSetting(settings, QStringLiteral("AIIllustration/canvasHeight"), 1024, m_heightSpin->minimum(), m_heightSpin->maximum()));
 
     // ストローク予算
-    const int savedBudget = settings.value(QStringLiteral("AIIllustration/strokeBudget"), 500).toInt();
-    if (m_strokeBudgetSpin) m_strokeBudgetSpin->setValue(savedBudget);
+    if (m_strokeBudgetSpin) m_strokeBudgetSpin->setValue(readBoundedSetting(settings, QStringLiteral("AIIllustration/strokeBudget"), 500, m_strokeBudgetSpin->minimum(), m_strokeBudgetSpin->maximum()));
 
     // Goal モード
     const bool goalEnabled = settings.value(QStringLiteral("AIIllustration/goalModeEnabled"), false).toBool();
     if (m_goalModeCheck) m_goalModeCheck->setChecked(goalEnabled);
-    const int goalSteps = settings.value(QStringLiteral("AIIllustration/goalSteps"), 4).toInt();
-    if (m_goalStepsSpin) m_goalStepsSpin->setValue(goalSteps);
+    if (m_goalStepsSpin) m_goalStepsSpin->setValue(readBoundedSetting(settings, QStringLiteral("AIIllustration/goalSteps"), 4, m_goalStepsSpin->minimum(), m_goalStepsSpin->maximum()));
     const int artStyle = settings.value(QStringLiteral("AIIllustration/artStyle"), 0).toInt();
     if (m_artStyleCombo) {
         int idx = m_artStyleCombo->findData(artStyle);
@@ -3005,7 +3010,7 @@ void KisAiIllustrationDocker::loadSettings()
     }
 
     // 生成モード
-    const int genMode = settings.value(QStringLiteral("AIIllustration/generationMode"), 0).toInt();
+    const int genMode = readBoundedSetting(settings, QStringLiteral("AIIllustration/generationMode"), 0, 0, 3);
     if (m_modeCombo) {
         int idx = m_modeCombo->findData(genMode);
         if (idx >= 0) {
@@ -3016,14 +3021,14 @@ void KisAiIllustrationDocker::loadSettings()
     }
 
     // AI 詳細設定
-    if (m_temperatureSpin) m_temperatureSpin->setValue(settings.value(QStringLiteral("AIIllustration/temperature"), 0.70).toDouble());
-    if (m_topPSpin) m_topPSpin->setValue(settings.value(QStringLiteral("AIIllustration/topP"), 1.0).toDouble());
-    if (m_maxTokensSpin) m_maxTokensSpin->setValue(settings.value(QStringLiteral("AIIllustration/maxTokens"), 0).toInt());
+    if (m_temperatureSpin) m_temperatureSpin->setValue(qBound(m_temperatureSpin->minimum(), settings.value(QStringLiteral("AIIllustration/temperature"), 0.70).toDouble(), m_temperatureSpin->maximum()));
+    if (m_topPSpin) m_topPSpin->setValue(qBound(m_topPSpin->minimum(), settings.value(QStringLiteral("AIIllustration/topP"), 1.0).toDouble(), m_topPSpin->maximum()));
+    if (m_maxTokensSpin) m_maxTokensSpin->setValue(readBoundedSetting(settings, QStringLiteral("AIIllustration/maxTokens"), 0, m_maxTokensSpin->minimum(), m_maxTokensSpin->maximum()));
     if (m_maxRetriesSpin) {
-        m_maxRetryCount = settings.value(QStringLiteral("AIIllustration/maxRetries"), 2).toInt();
+        m_maxRetryCount = readBoundedSetting(settings, QStringLiteral("AIIllustration/maxRetries"), 2, m_maxRetriesSpin->minimum(), m_maxRetriesSpin->maximum());
         m_maxRetriesSpin->setValue(m_maxRetryCount);
     }
-    if (m_timeoutSecSpin) m_timeoutSecSpin->setValue(settings.value(QStringLiteral("AIIllustration/timeoutSec"), 90).toInt());
+    if (m_timeoutSecSpin) m_timeoutSecSpin->setValue(readBoundedSetting(settings, QStringLiteral("AIIllustration/timeoutSec"), 90, m_timeoutSecSpin->minimum(), m_timeoutSecSpin->maximum()));
     if (m_jsonModeCombo) {
         const int jMode = settings.value(QStringLiteral("AIIllustration/jsonMode"), 0).toInt();
         if (jMode >= 0 && jMode < m_jsonModeCombo->count()) {

@@ -1998,16 +1998,17 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
         totalControlPoints += points.size();
         return true;
     };
+    // A hostile or confused particle count must not abort an otherwise valid
+    // program: the renderer clamps again at rasterization time, so clamping here
+    // keeps the total work bounded while preserving the remaining operations.
     const auto reserveParticles = [&](int count) {
-        const int safeCount = qMax(1, count);
-        if (safeCount > MAX_PARTICLES_PER_OPERATION || safeCount > MAX_TOTAL_PARTICLES - totalParticles) {
-            if (errorMessage) {
-                *errorMessage = QStringLiteral("粒子数が安全上限を超えています。");
-            }
-            return false;
+        int safeCount = qBound(1, count, MAX_PARTICLES_PER_OPERATION);
+        const int remaining = MAX_TOTAL_PARTICLES - totalParticles;
+        if (safeCount > remaining) {
+            safeCount = qMax(0, remaining);
         }
         totalParticles += safeCount;
-        return true;
+        return safeCount;
     };
 
     const qreal canvasW = outProgram->canvasSize.width() > 0 ? outProgram->canvasSize.width() : 1024.0;
@@ -2219,8 +2220,7 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
             } else if (op.kind == KisAiStrokeOperation::Kind::Particles) {
                 op.particleShape = findField(o, {QStringLiteral("shape"), QStringLiteral("particle_shape")}, QStringLiteral("petal")).toString(QStringLiteral("petal"));
                 op.particleCount = toIntField(findField(o, {QStringLiteral("count"), QStringLiteral("particle_count")}), 16);
-                if (!reserveParticles(op.particleCount))
-                    return false;
+                op.particleCount = reserveParticles(op.particleCount);
                 const QJsonArray b = findField(o, {QStringLiteral("bounds"), QStringLiteral("rect"), QStringLiteral("box")}).toArray();
                 if (b.size() >= 4) {
                     qreal x1 = toDoubleField(b.at(0), 0.1);
@@ -2587,7 +2587,10 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             const QPointF topLeft = clampedPoint(bounds.topLeft(), &localReport.repairedValues);
             const QPointF bottomRight = clampedPoint(bounds.bottomRight(), &localReport.repairedValues);
             op.bounds = QRectF(topLeft, bottomRight).normalized();
-            op.particleCount = qBound(1, op.particleCount, 300);
+            // 0 is allowed: parse-time budgeting zeroes operations that exceeded
+            // MAX_TOTAL_PARTICLES, and re-inflating them to 1 would break that
+            // total-work bound. A zero-count op simply draws nothing.
+            op.particleCount = qBound(0, op.particleCount, 300);
             renderable = op.bounds.width() > 1.0e-4 && op.bounds.height() > 1.0e-4;
             break;
         }

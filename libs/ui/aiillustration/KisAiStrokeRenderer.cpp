@@ -56,12 +56,16 @@ QPolygonF scalePolygon(const QPolygonF &normPoly, const QSize &canvasSize)
     return poly;
 }
 
-qreal effectiveBrushWidth(const KisAiStrokeBrush &brush, qreal pressure, const QSize &canvasSize)
+qreal effectiveBrushWidth(const KisAiStrokeBrush &brush, qreal pressure, const QSize &canvasSize, int supersampleScale = 1)
 {
     const qreal baseDim = qMin(canvasSize.width(), canvasSize.height());
+    const qreal scale = qMax(1, supersampleScale);
     qreal sz = 8.0;
     if (brush.sizeMode == QLatin1String("px")) {
-        sz = brush.size;
+        // The rasterizer paints on a supersampled working image and downscales it
+        // afterwards, so an absolute px width must be enlarged by the same factor
+        // to keep the requested device-pixel width on the final image.
+        sz = brush.size * scale;
     } else {
         sz = brush.size * baseDim;
     }
@@ -622,7 +626,7 @@ QImage KisAiStrokeRenderer::renderOperationsToImage(const QVector<KisAiStrokeOpe
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
         for (const KisAiStrokeOperation &op : operations) {
-            rasterizeOperation(painter, op, workingSize);
+            rasterizeOperation(painter, op, workingSize, scale);
         }
     }
 
@@ -631,7 +635,7 @@ QImage KisAiStrokeRenderer::renderOperationsToImage(const QVector<KisAiStrokeOpe
     return working.scaled(canvasSize, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
 }
 
-void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter, const KisAiStrokeOperation &op, const QSize &canvasSize)
+void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter, const KisAiStrokeOperation &op, const QSize &canvasSize, int supersampleScale)
 {
     painter.save();
 
@@ -643,7 +647,7 @@ void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter, const KisAiStrok
 
     switch (op.kind) {
     case KisAiStrokeOperation::Kind::Path:
-        drawPathOperation(painter, op, canvasSize);
+        drawPathOperation(painter, op, canvasSize, supersampleScale);
         break;
     case KisAiStrokeOperation::Kind::Fill:
         drawFillOperation(painter, op, canvasSize);
@@ -655,13 +659,13 @@ void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter, const KisAiStrok
         drawRibbonOperation(painter, op, canvasSize);
         break;
     case KisAiStrokeOperation::Kind::Particles:
-        drawParticlesOperation(painter, op, canvasSize);
+        drawParticlesOperation(painter, op, canvasSize, supersampleScale);
         break;
     case KisAiStrokeOperation::Kind::Hatch:
-        drawHatchOperation(painter, op, canvasSize);
+        drawHatchOperation(painter, op, canvasSize, supersampleScale);
         break;
     case KisAiStrokeOperation::Kind::MangaLines:
-        drawMangaLinesOperation(painter, op, canvasSize);
+        drawMangaLinesOperation(painter, op, canvasSize, supersampleScale);
         break;
     default:
         break;
@@ -670,7 +674,7 @@ void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter, const KisAiStrok
     painter.restore();
 }
 
-void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStrokeOperation &op, const QSize &canvasSize)
+void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStrokeOperation &op, const QSize &canvasSize, int supersampleScale)
 {
     if (op.points.isEmpty())
         return;
@@ -681,7 +685,7 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
     // Single point: render as crisp dab / dot
     if (op.points.size() == 1) {
         const QPointF pt = scalePoint(op.points.at(0).pos, canvasSize);
-        const qreal r = effectiveBrushWidth(op.brush, op.points.at(0).pressure, canvasSize) * 0.5;
+        const qreal r = effectiveBrushWidth(op.brush, op.points.at(0).pressure, canvasSize, supersampleScale) * 0.5;
         painter.setPen(Qt::NoPen);
         painter.setBrush(color);
         painter.drawEllipse(pt, r, r);
@@ -699,7 +703,6 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
         scaledPts.append(scalePoint(pt.pos, canvasSize));
         pressures.append(qBound<qreal>(0.05, pt.pressure, 1.0));
     }
-
     // Adapt sampling to on-canvas segment length. Long LLM spans otherwise
     // facet visibly while tiny facial details are needlessly oversampled.
     const int segments = op.closed ? n : (n - 1);
@@ -749,7 +752,7 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
             // Natural stroke taper according to brush profile
             const qreal taper = KisAiStrokeQualityUtils::calculateTaper(globalT, op.brush.profile, op.closed);
 
-            qreal strokeW = effectiveBrushWidth(op.brush, p * taper, canvasSize);
+            qreal strokeW = effectiveBrushWidth(op.brush, p * taper, canvasSize, supersampleScale);
 
             // If calligraphy profile, modulate width based on tangent vector
             if (op.brush.profile.compare(QLatin1String("calligraphy"), Qt::CaseInsensitive) == 0) {
@@ -763,7 +766,7 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
 
     if (!op.closed) {
         const qreal endTaper = KisAiStrokeQualityUtils::calculateTaper(1.0, op.brush.profile, false);
-        curveSamples.append({scaledPts.last(), effectiveBrushWidth(op.brush, pressures.last() * endTaper, canvasSize)});
+        curveSamples.append({scaledPts.last(), effectiveBrushWidth(op.brush, pressures.last() * endTaper, canvasSize, supersampleScale)});
     }
 
     const int sampleCount = curveSamples.size();
@@ -890,7 +893,7 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
         // Darkened wet-edge fringe boundary along stroke contours
         QColor fringe = color;
         fringe.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.92, 1.0));
-        QPen fringePen(fringe, qMax<qreal>(0.8, effectiveBrushWidth(op.brush, 0.5, canvasSize) * 0.12));
+        QPen fringePen(fringe, qMax<qreal>(0.8, effectiveBrushWidth(op.brush, 0.5, canvasSize, supersampleScale) * 0.12));
         painter.setPen(fringePen);
         painter.setBrush(Qt::NoBrush);
         painter.drawPolyline(leftEdge);
@@ -913,7 +916,7 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
             strokeSpine.append(KisAiStrokePoint(sample.pos.x(), sample.pos.y(), 0.8));
         }
 
-        const qreal avgW = effectiveBrushWidth(op.brush, 0.7, canvasSize);
+        const qreal avgW = effectiveBrushWidth(op.brush, 0.7, canvasSize, supersampleScale);
         const quint32 brushSeed = KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/bristles"));
         const auto strands = KisAiStrokeQualityUtils::generateBristleStrands(strokeSpine, 5, avgW * 0.40, brushSeed);
 
@@ -938,7 +941,7 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
         // Crisp chisel edge
         QColor edgeColor = color;
         edgeColor.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.50, 1.0));
-        QPen edgePen(edgeColor, qMax<qreal>(0.8, effectiveBrushWidth(op.brush, 0.4, canvasSize) * 0.20));
+        QPen edgePen(edgeColor, qMax<qreal>(0.8, effectiveBrushWidth(op.brush, 0.4, canvasSize, supersampleScale) * 0.20));
         painter.setPen(edgePen);
         painter.setBrush(Qt::NoBrush);
         painter.drawPolyline(leftEdge);
@@ -982,7 +985,7 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
         QColor filament = color;
         filament.setAlphaF(color.alphaF() * 0.28);
         QPen filamentPen(filament,
-                         qMax<qreal>(0.45, effectiveBrushWidth(op.brush, 0.3, canvasSize) * 0.18),
+                         qMax<qreal>(0.45, effectiveBrushWidth(op.brush, 0.3, canvasSize, supersampleScale) * 0.18),
                          Qt::SolidLine,
                          Qt::RoundCap);
         painter.setPen(filamentPen);
@@ -990,7 +993,7 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
         for (int pass = 0; pass < 3; ++pass) {
             QPolygonF filamentPath;
             filamentPath.reserve(sampleCount);
-            const qreal offset = (grain.generateDouble() - 0.5) * effectiveBrushWidth(op.brush, 0.7, canvasSize) * 0.45;
+            const qreal offset = (grain.generateDouble() - 0.5) * effectiveBrushWidth(op.brush, 0.7, canvasSize, supersampleScale) * 0.45;
             for (int i = 0; i < sampleCount; ++i) {
                 const QPointF normal = leftEdge.at(i) - rightEdge.at(i);
                 const qreal normalLength = std::hypot(normal.x(), normal.y());
@@ -1012,7 +1015,7 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
         // Chisel edge accent
         QColor edgeColor = color;
         edgeColor.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.40, 1.0));
-        QPen edgePen(edgeColor, qMax<qreal>(1.0, effectiveBrushWidth(op.brush, 0.5, canvasSize) * 0.25));
+        QPen edgePen(edgeColor, qMax<qreal>(1.0, effectiveBrushWidth(op.brush, 0.5, canvasSize, supersampleScale) * 0.25));
         painter.setPen(edgePen);
         painter.setBrush(Qt::NoBrush);
         painter.drawPolyline(leftEdge);
@@ -1069,7 +1072,7 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
         // 4. White hot filament center line
         QColor whiteCore(255, 255, 255);
         whiteCore.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.90, 1.0));
-        QPen whitePen(whiteCore, qMax<qreal>(1.0, effectiveBrushWidth(op.brush, 0.5, canvasSize) * 0.28),
+        QPen whitePen(whiteCore, qMax<qreal>(1.0, effectiveBrushWidth(op.brush, 0.5, canvasSize, supersampleScale) * 0.28),
                       Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
         painter.setPen(whitePen);
         painter.setBrush(Qt::NoBrush);
@@ -1336,9 +1339,7 @@ void KisAiStrokeRenderer::drawRibbonOperation(QPainter &painter,
     painter.drawPolygon(ribbonPoly);
 }
 
-void KisAiStrokeRenderer::drawParticlesOperation(QPainter &painter,
-                                                 const KisAiStrokeOperation &op,
-                                                 const QSize &canvasSize)
+void KisAiStrokeRenderer::drawParticlesOperation(QPainter &painter, const KisAiStrokeOperation &op, const QSize &canvasSize, int supersampleScale)
 {
     const QRectF normBounds = op.bounds.isValid() ? op.bounds : QRectF(0.0, 0.0, 1.0, 1.0);
     const QRectF area(normBounds.left() * canvasSize.width(),
@@ -1346,6 +1347,10 @@ void KisAiStrokeRenderer::drawParticlesOperation(QPainter &painter,
                       normBounds.width() * canvasSize.width(),
                       normBounds.height() * canvasSize.height());
 
+    // A zero count is legal: parse-time total-budgeting zeroes over-budget
+    // particle operations, and such an operation must draw nothing.
+    if (op.particleCount <= 0)
+        return;
     const int count = qBound(1, op.particleCount, 300);
     QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id.isEmpty() ? QStringLiteral("particles") : op.id));
 
@@ -1354,7 +1359,7 @@ void KisAiStrokeRenderer::drawParticlesOperation(QPainter &painter,
     partColor.setAlphaF(qBound<qreal>(0.0, partColor.alphaF() * op.brush.opacity, 1.0));
     painter.setBrush(partColor);
 
-    const qreal baseDiameter = effectiveBrushWidth(op.brush, 1.0, canvasSize);
+    const qreal baseDiameter = effectiveBrushWidth(op.brush, 1.0, canvasSize, supersampleScale);
 
     for (int i = 0; i < count; ++i) {
         const qreal x = area.left() + rng.generateDouble() * area.width();
@@ -1393,7 +1398,7 @@ void KisAiStrokeRenderer::drawParticlesOperation(QPainter &painter,
     }
 }
 
-void KisAiStrokeRenderer::drawHatchOperation(QPainter &painter, const KisAiStrokeOperation &op, const QSize &canvasSize)
+void KisAiStrokeRenderer::drawHatchOperation(QPainter &painter, const KisAiStrokeOperation &op, const QSize &canvasSize, int supersampleScale)
 {
     if (op.polygon.size() < 3)
         return;
@@ -1417,7 +1422,7 @@ void KisAiStrokeRenderer::drawHatchOperation(QPainter &painter, const KisAiStrok
 
     const qreal minDim = qMin(canvasSize.width(), canvasSize.height());
     // Use delicate, fine linework instead of heavy wireframe bars
-    const qreal penWidth = qMax<qreal>(0.5, effectiveBrushWidth(op.brush, 0.5, canvasSize) * 0.20);
+    const qreal penWidth = qMax<qreal>(0.5, effectiveBrushWidth(op.brush, 0.5, canvasSize, supersampleScale) * 0.20);
     QPen pen(color, penWidth, Qt::SolidLine, Qt::RoundCap);
     painter.setPen(pen);
 
@@ -1450,7 +1455,7 @@ void KisAiStrokeRenderer::drawHatchOperation(QPainter &painter, const KisAiStrok
     painter.restore();
 }
 
-void KisAiStrokeRenderer::drawMangaLinesOperation(QPainter &painter, const KisAiStrokeOperation &op, const QSize &canvasSize)
+void KisAiStrokeRenderer::drawMangaLinesOperation(QPainter &painter, const KisAiStrokeOperation &op, const QSize &canvasSize, int supersampleScale)
 {
     // gradientCenter defaults to (0.5, 0.5) per KisAiStrokeOperation struct.
     // Since (0, 0) is a valid coordinate (top-left), we cannot use isNull() to
@@ -1467,7 +1472,7 @@ void KisAiStrokeRenderer::drawMangaLinesOperation(QPainter &painter, const KisAi
     QColor lineColor = op.brush.color;
     lineColor.setAlphaF(qBound<qreal>(0.0, op.brush.opacity * lineColor.alphaF(), 1.0));
 
-    const qreal lineWidth = effectiveBrushWidth(op.brush, 0.8, canvasSize);
+    const qreal lineWidth = effectiveBrushWidth(op.brush, 0.8, canvasSize, supersampleScale);
 
     for (int i = 0; i < count; ++i) {
         const qreal baseAngle = (2.0 * PI * i) / count;
