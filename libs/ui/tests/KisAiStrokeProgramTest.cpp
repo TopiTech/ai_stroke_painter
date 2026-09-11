@@ -1807,7 +1807,7 @@ void KisAiStrokeProgramTest::testGoalModePayloadReasoningEffortAndSamplingParams
     QVERIFY(!stdPayload.contains(QStringLiteral("reasoning_effort")));
     QVERIFY(stdPayload.contains(QStringLiteral("response_format")));
     QCOMPARE(stdPayload.value(QStringLiteral("response_format")).toObject().value(QStringLiteral("type")).toString(),
-             QStringLiteral("json_object"));
+             QStringLiteral("json_schema"));
 
     // 2. Reasoning model (e.g. o3-mini) with reasoning_effort
     const QJsonObject reasoningPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
@@ -2472,6 +2472,222 @@ void KisAiStrokeProgramTest::testRepairJsonSyntaxPreservesManyLiterals()
     QCOMPARE(program.operations.size(), literalCount);
     // A literal whose text resembles the internal placeholder must survive intact.
     QCOMPARE(program.operations.first().id, QStringLiteral("__AI_STR_MASK_0__"));
+}
+
+void KisAiStrokeProgramTest::testStrictStructuredOutputsAndJsonSchema()
+{
+    // B1: Verify OpenAI Strict Structured Outputs detection
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("gpt-4o")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("gpt-4o-mini")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("gpt-4.5-preview")));
+    QVERIFY(!KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("deepseek/deepseek-chat")));
+    QVERIFY(!KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("anthropic/claude-3.7-sonnet")));
+
+    const QJsonObject payload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("Landscape with trees"),
+        QSize(800, 600),
+        300,
+        QString(), // reasoningEffort
+        QString(), // customInstructions
+        true,      // enableStreaming
+        true       // enforceJsonFormat
+    );
+
+    const QJsonObject respFormat = payload.value(QStringLiteral("response_format")).toObject();
+    QCOMPARE(respFormat.value(QStringLiteral("type")).toString(), QStringLiteral("json_schema"));
+    const QJsonObject schemaObj = respFormat.value(QStringLiteral("json_schema")).toObject();
+    QCOMPARE(schemaObj.value(QStringLiteral("name")).toString(), QStringLiteral("stroke_program"));
+    QCOMPARE(schemaObj.value(QStringLiteral("strict")).toBool(), true);
+}
+
+void KisAiStrokeProgramTest::testCompositionPlanPayloadAndParsing()
+{
+    // B2: Verify composition blueprint payload & parser
+    const QJsonObject payload = KisAiStrokeProgramCodec::buildCompositionPlanPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("Sunset beach with distant cliffs"),
+        QSize(1920, 1080)
+    );
+    QCOMPARE(payload.value(QStringLiteral("model")).toString(), QStringLiteral("gpt-4o"));
+    QCOMPARE(payload.value(QStringLiteral("stream")).toBool(), false);
+
+    const QByteArray mockResponse = QByteArrayLiteral(
+        "{\n"
+        "  \"composition_type\": \"rule_of_thirds\",\n"
+        "  \"focal_point\": {\"x\": 0.65, \"y\": 0.45},\n"
+        "  \"primary_palette\": [\"#1d1b32\", \"#d97736\", \"#f4b251\", \"#3a6b88\"],\n"
+        "  \"artistic_directives\": \"Establish warm golden backlight with strong silhouettes for the cliffs.\"\n"
+        "}"
+    );
+
+    QString directives;
+    QString error;
+    const bool ok = KisAiStrokeProgramCodec::parseCompositionPlan(mockResponse, &directives, &error);
+    QVERIFY2(ok, qPrintable(error));
+    QVERIFY(directives.contains(QStringLiteral("Establish warm golden backlight")));
+    QVERIFY(directives.contains(QStringLiteral("Focal point at (0.65, 0.45)")));
+}
+
+void KisAiStrokeProgramTest::testHueShiftedShadowCalculation()
+{
+    // B3: Verify hue-shifted shadow color avoiding dirty black shading
+    const QColor skinBase(QStringLiteral("#fedac6")); // warm skin
+    const QColor warmShadow = KisAiStrokeProgramCodec::calculateHueShiftedShadow(skinBase, true);
+    QVERIFY(warmShadow.isValid());
+    // Warm light -> shadow shifts toward cool / purple-blue (hsvHue around 240)
+    QVERIFY(warmShadow.hsvHue() > 0);
+    // Must retain saturation and not collapse to flat grey or black
+    QVERIFY(warmShadow.hsvSaturation() > 30);
+    QVERIFY(warmShadow.value() > 20);
+}
+
+void KisAiStrokeProgramTest::testRevisedQualityScoreAndLinting()
+{
+    // A5: Shading coarse hatch rescue
+    KisAiStrokeProgram prog;
+    prog.prompt = QStringLiteral("A calm quiet portrait of an anime girl");
+    prog.canvasSize = QSize(800, 800);
+
+    KisAiStrokeOperation coarseHatch;
+    coarseHatch.kind = KisAiStrokeOperation::Kind::Hatch;
+    coarseHatch.layer = QStringLiteral("Shading");
+    coarseHatch.spacing = 0.04; // too coarse!
+    coarseHatch.crossHatch = false;
+    coarseHatch.polygon << QPointF(0.3, 0.3) << QPointF(0.5, 0.3) << QPointF(0.4, 0.5);
+    coarseHatch.brush.color = QColor(QStringLiteral("#402030"));
+    prog.operations.append(coarseHatch);
+
+    // A5: Degenerate tiny polygon (area < 1e-4)
+    KisAiStrokeOperation tinyPoly;
+    tinyPoly.kind = KisAiStrokeOperation::Kind::Fill;
+    tinyPoly.layer = QStringLiteral("Flats");
+    tinyPoly.polygon << QPointF(0.1, 0.1) << QPointF(0.1001, 0.1) << QPointF(0.1, 0.1001);
+    prog.operations.append(tinyPoly);
+
+    // A5: Manga lines in non-FX layer or in calm context
+    KisAiStrokeOperation badMangaLines;
+    badMangaLines.kind = KisAiStrokeOperation::Kind::MangaLines;
+    badMangaLines.layer = QStringLiteral("Lineart"); // wrong layer
+    prog.operations.append(badMangaLines);
+
+    KisAiStrokeQualityReport report;
+    const KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(prog, &report);
+
+    // Coarse hatch must have been rescued to smooth watercolor fill
+    bool foundRescuedFill = false;
+    for (const auto &op : refined.operations) {
+        if (op.layer == QLatin1String("Shading") && op.kind == KisAiStrokeOperation::Kind::Fill) {
+            foundRescuedFill = true;
+            QCOMPARE(op.brush.profile, QStringLiteral("watercolor"));
+        }
+        // Tiny polygon and bad manga lines must have been discarded
+        QVERIFY(op.kind != KisAiStrokeOperation::Kind::MangaLines);
+    }
+    QVERIFY(foundRescuedFill);
+    QVERIFY(report.repairedValues > 0);
+
+    // B5: Structural quality score on full procedural program
+    const KisAiStrokeProgram full = KisAiStrokeProgramCodec::createDeterministicProgram(
+        QStringLiteral("anime girl portrait"), QSize(1024, 1024)
+    );
+    const qreal score = KisAiStrokeProgramCodec::qualityScore(full);
+    QVERIFY(score >= 0.60);
+}
+
+void KisAiStrokeProgramTest::testIntentAdherenceCheck()
+{
+    // B7: Verify intent adherence calculation
+    KisAiStrokeProgram nightProg;
+    nightProg.prompt = QStringLiteral("A dark starry night with crescent moon");
+    nightProg.canvasSize = QSize(800, 600);
+
+    KisAiStrokeOperation bg;
+    bg.kind = KisAiStrokeOperation::Kind::Fill;
+    bg.layer = QStringLiteral("Background");
+    bg.polygon << QPointF(0, 0) << QPointF(1, 0) << QPointF(1, 1) << QPointF(0, 1);
+    bg.brush.color = QColor(QStringLiteral("#0f1226")); // deep dark night tone
+    nightProg.operations.append(bg);
+
+    KisAiStrokeOperation flat;
+    flat.kind = KisAiStrokeOperation::Kind::Fill;
+    flat.layer = QStringLiteral("Flats");
+    flat.polygon << QPointF(0.4, 0.4) << QPointF(0.6, 0.4) << QPointF(0.5, 0.7);
+    flat.brush.color = QColor(QStringLiteral("#1e2338"));
+    nightProg.operations.append(flat);
+
+    const auto result = KisAiStrokeProgramCodec::checkIntentAdherence(nightProg, nightProg.prompt);
+    QVERIFY(result.score >= 0.80);
+    QVERIFY(!result.matchedAspects.isEmpty());
+}
+
+void KisAiStrokeProgramTest::testTrimOperationsToBudget()
+{
+    // B6: Verify intelligent operation trimming
+    KisAiStrokeProgram prog;
+    prog.prompt = QStringLiteral("Landscape");
+    prog.canvasSize = QSize(800, 600);
+
+    // Add 40 operations across layers
+    for (int i = 0; i < 15; ++i) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Fill;
+        op.layer = QStringLiteral("Flats");
+        op.polygon << QPointF(0.1 + i * 0.02, 0.1) << QPointF(0.2 + i * 0.02, 0.1) << QPointF(0.15, 0.3);
+        prog.operations.append(op);
+    }
+    for (int i = 0; i < 15; ++i) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Path;
+        op.layer = QStringLiteral("Lineart");
+        op.points << KisAiStrokePoint(0.1, 0.1 + i * 0.02) << KisAiStrokePoint(0.2, 0.2) << KisAiStrokePoint(0.3, 0.3);
+        prog.operations.append(op);
+    }
+    for (int i = 0; i < 10; ++i) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Fill;
+        op.layer = QStringLiteral("Shading");
+        op.polygon << QPointF(0.2, 0.2) << QPointF(0.4, 0.2) << QPointF(0.3, 0.4);
+        prog.operations.append(op);
+    }
+
+    QCOMPARE(prog.operations.size(), 40);
+    const KisAiStrokeProgram trimmed = KisAiStrokeProgramCodec::trimOperationsToBudget(prog, 12);
+    QVERIFY(trimmed.operations.size() <= 12);
+    // Essential layers must be preserved
+    const auto counts = KisAiStrokeProgramCodec::countLayerOperations(trimmed);
+    QVERIFY(counts.contains(QStringLiteral("Flats")));
+    QVERIFY(counts.contains(QStringLiteral("Lineart")));
+}
+
+void KisAiStrokeProgramTest::testGoalModeGeometryDigest()
+{
+    // Phase 2: Verify geometry digest generation
+    const KisAiStrokeProgram full = KisAiStrokeProgramCodec::createDeterministicProgram(
+        QStringLiteral("anime girl portrait"), QSize(1024, 1024)
+    );
+    const QJsonObject digest = KisAiStrokeProgramCodec::buildGeometryDigest(full);
+
+    QVERIFY(digest.contains(QStringLiteral("total_operations")));
+    QVERIFY(digest.contains(QStringLiteral("layer_counts")));
+    QVERIFY(digest.contains(QStringLiteral("flats_coverage_estimated")));
+    QVERIFY(digest.contains(QStringLiteral("active_palette")));
+    QVERIFY(digest.contains(QStringLiteral("bounding_box")));
+
+    const QJsonObject layers = digest.value(QStringLiteral("layer_counts")).toObject();
+    QVERIFY(layers.contains(QStringLiteral("Flats")));
+    QVERIFY(layers.contains(QStringLiteral("Lineart")));
+}
+
+void KisAiStrokeProgramTest::testPromptFirstPriorityBlock()
+{
+    // A0: Verify Prompt-First absolute priority block
+    const QString prompt = QStringLiteral("Cyberpunk motorcycle speeding through rainy neon city");
+    const QString systemText = KisAiStrokeProgramCodec::buildSystemPrompt(QSize(1280, 720), prompt);
+
+    QVERIFY(systemText.startsWith(QStringLiteral("=== USER REQUEST (ABSOLUTE HIGHEST PRIORITY) ===")));
+    QVERIFY(systemText.contains(prompt));
+    QVERIFY(systemText.contains(QStringLiteral("=== MASTER DRAWING WORKFLOW (MANDATORY) ===")));
 }
 
 KISTEST_MAIN(KisAiStrokeProgramTest)

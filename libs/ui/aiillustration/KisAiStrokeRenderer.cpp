@@ -196,15 +196,17 @@ QVector<KisAiStrokeOperation> KisAiStrokeRenderer::expandProceduralOperations(
 
 QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &program,
                                                  const QSize &targetSize,
-                                                 bool clipShadingToFlats)
+                                                 bool clipShadingToFlats,
+                                                 qreal trappingPx)
 {
-    return renderProgramToImage(program, targetSize, clipShadingToFlats, nullptr);
+    return renderProgramToImage(program, targetSize, clipShadingToFlats, nullptr, trappingPx);
 }
 
 QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &program,
                                                  const QSize &targetSize,
                                                  bool clipShadingToFlats,
-                                                 const KisAiStrokeProgram *inheritedFlatsProgram)
+                                                 const KisAiStrokeProgram *inheritedFlatsProgram,
+                                                 qreal trappingPx)
 {
     const bool hasExplicitTarget = !targetSize.isEmpty() && targetSize.width() >= 64 && targetSize.height() >= 64;
     QSize size = hasExplicitTarget ? targetSize : program.canvasSize;
@@ -219,6 +221,14 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
         size = QSize(1024, 1024);
     }
 
+    // A2: Apply Flats trapping (slight dilation) to tuck under Lineart strokes and eliminate white underfill seams
+    const qreal minDim = qMin(size.width(), size.height());
+    const qreal effectiveTrapping = trappingPx < 0.0 ? qMax<qreal>(1.0, minDim / 1000.0 * 1.5) : trappingPx;
+    KisAiStrokeProgram activeProgram = program;
+    if (effectiveTrapping > 0.0) {
+        activeProgram = KisAiStrokeQualityUtils::applyTrapping(program, effectiveTrapping);
+    }
+
     QImage compositeImage(size, QImage::Format_ARGB32_Premultiplied);
     compositeImage.fill(Qt::transparent);
 
@@ -230,7 +240,7 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
                                     QStringLiteral("Highlights"),
                                     QStringLiteral("FX")};
 
-    const QVector<KisAiStrokeOperation> expandedOps = expandProceduralOperations(program.operations, size);
+    const QVector<KisAiStrokeOperation> expandedOps = expandProceduralOperations(activeProgram.operations, size);
     QMap<QString, QVector<KisAiStrokeOperation>> layerBuckets;
     for (const KisAiStrokeOperation &op : expandedOps) {
         const QString lName = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
@@ -359,9 +369,10 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
                                                 KisViewManager *viewManager,
                                                 const KisAiStrokeProgram &program,
                                                 QString *statusMessage,
-                                                bool clipShadingToFlats)
+                                                bool clipShadingToFlats,
+                                                qreal trappingPx)
 {
-    return renderProgramToLayers(image, viewManager, program, statusMessage, clipShadingToFlats, nullptr);
+    return renderProgramToLayers(image, viewManager, program, statusMessage, clipShadingToFlats, nullptr, trappingPx);
 }
 
 bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
@@ -369,7 +380,8 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
                                                 const KisAiStrokeProgram &program,
                                                 QString *statusMessage,
                                                 bool clipShadingToFlats,
-                                                const KisAiStrokeProgram *inheritedFlatsProgram)
+                                                const KisAiStrokeProgram *inheritedFlatsProgram,
+                                                qreal trappingPx)
 {
     if (!image || !viewManager || program.operations.isEmpty()) {
         if (statusMessage) {
@@ -388,6 +400,14 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
 
     const QSize canvasSize = bounds.size();
 
+    // A2: Apply Flats trapping (slight dilation) to tuck under Lineart strokes and eliminate white underfill seams
+    const qreal minDim = qMin(canvasSize.width(), canvasSize.height());
+    const qreal effectiveTrapping = trappingPx < 0.0 ? qMax<qreal>(1.0, minDim / 1000.0 * 1.5) : trappingPx;
+    KisAiStrokeProgram activeProgram = program;
+    if (effectiveTrapping > 0.0) {
+        activeProgram = KisAiStrokeQualityUtils::applyTrapping(program, effectiveTrapping);
+    }
+
     const QStringList layerOrder = {QStringLiteral("Background"),
                                     QStringLiteral("Flats"),
                                     QStringLiteral("Shading"),
@@ -395,7 +415,7 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
                                     QStringLiteral("Highlights"),
                                     QStringLiteral("FX")};
 
-    const QVector<KisAiStrokeOperation> expandedOps = expandProceduralOperations(program.operations, canvasSize);
+    const QVector<KisAiStrokeOperation> expandedOps = expandProceduralOperations(activeProgram.operations, canvasSize);
     QMap<QString, QVector<KisAiStrokeOperation>> layerBuckets;
     for (const KisAiStrokeOperation &op : expandedOps) {
         const QString lName = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
@@ -544,7 +564,8 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
             layer->setCompositeOpId(COMPOSITE_MULT);
             layer->setColorLabelIndex(7); // Purple
         } else if (isHighlights) {
-            layer->setCompositeOpId(COMPOSITE_DODGE); // Color Dodge for luminous highlights
+            // A2b: Screen blend mode matching preview and preventing harsh blowout/disappearance
+            layer->setCompositeOpId(COMPOSITE_SCREEN);
             layer->setColorLabelIndex(3); // Yellow
         } else if (isFlats) {
             layer->setCompositeOpId(COMPOSITE_OVER);
@@ -571,14 +592,15 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
 
     if (program.stepPhase.compare(QLatin1String("finishing"), Qt::CaseInsensitive) == 0 ||
         (program.goalReached && program.currentStep >= program.totalSteps)) {
-        // Generate isolated, non-destructive Cinematic Bloom Layer
-        QImage compPreview = renderProgramToImage(program, canvasSize, clipShadingToFlats, inheritedFlatsProgram);
+        // B4: Generate isolated, non-destructive Cinematic Bloom Layer on real canvas
+        QImage compPreview = renderProgramToImage(activeProgram, canvasSize, clipShadingToFlats, inheritedFlatsProgram, effectiveTrapping);
         if (!compPreview.isNull()) {
-            QImage bloomGlow = generateBloomMap(compPreview, 0.45, 8);
+            QImage bloomGlow = generateBloomMap(compPreview, 0.40, 8);
             if (!bloomGlow.isNull()) {
-                KisPaintLayerSP bloomLayer = new KisPaintLayer(image, QStringLiteral("AI: Bloom (Finishing)"), OPACITY_OPAQUE_U8);
+                // 40% opacity Screen blending for soft atmospheric glow
+                KisPaintLayerSP bloomLayer = new KisPaintLayer(image, QStringLiteral("🎨 AI: Bloom FX"), qRound(0.40 * 255));
                 bloomLayer->paintDevice()->convertFromQImage(bloomGlow, nullptr);
-                bloomLayer->setCompositeOpId(COMPOSITE_ADD);
+                bloomLayer->setCompositeOpId(COMPOSITE_SCREEN);
                 bloomLayer->setColorLabelIndex(3); // Yellow
                 bloomLayer->setDirty(bounds);
                 adapter.addNode(bloomLayer, group, childAboveNode);

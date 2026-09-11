@@ -1309,4 +1309,51 @@ void KisAiStrokeRendererTest::testHatchErasersAreShapeBounded()
     QCOMPARE(qAlpha(image.pixel(150, 128)), 0);
 }
 
+void KisAiStrokeRendererTest::testTrappingWidthAndScreenBlending()
+{
+    // A2: Test trapping expansion on Flats
+    KisAiStrokeProgram prog;
+    prog.prompt = QStringLiteral("Trapping and Screen test");
+    prog.canvasSize = QSize(100, 100);
+
+    KisAiStrokeOperation flat;
+    flat.kind = KisAiStrokeOperation::Kind::Fill;
+    flat.layer = QStringLiteral("Flats");
+    flat.polygon << QPointF(0.3, 0.3) << QPointF(0.7, 0.3) << QPointF(0.7, 0.7) << QPointF(0.3, 0.7);
+    flat.brush.color = QColor(100, 50, 50); // dark red
+    prog.operations.append(flat);
+
+    KisAiStrokeOperation highlight;
+    highlight.kind = KisAiStrokeOperation::Kind::Fill;
+    highlight.layer = QStringLiteral("Highlights");
+    highlight.polygon << QPointF(0.4, 0.4) << QPointF(0.6, 0.4) << QPointF(0.6, 0.6) << QPointF(0.4, 0.6);
+    highlight.brush.color = QColor(100, 100, 100); // light gray
+    prog.operations.append(highlight);
+
+    // Render without trapping
+    const QImage imgNoTrap = KisAiStrokeRenderer::renderProgramToImage(prog, QSize(100, 100), false, 0.0);
+    // Render with strong trapping (3.0 px)
+    const QImage imgTrap = KisAiStrokeRenderer::renderProgramToImage(prog, QSize(100, 100), false, 3.0);
+
+    QVERIFY(!imgNoTrap.isNull());
+    QVERIFY(!imgTrap.isNull());
+
+    // Count non-transparent pixels in both
+    int nonZeroNoTrap = 0;
+    int nonZeroTrap = 0;
+    for (int y = 0; y < 100; ++y) {
+        for (int x = 0; x < 100; ++x) {
+            if (qAlpha(imgNoTrap.pixel(x, y)) > 0) ++nonZeroNoTrap;
+            if (qAlpha(imgTrap.pixel(x, y)) > 0) ++nonZeroTrap;
+        }
+    }
+    // Trapping must dilate Flats slightly to prevent white gaps
+    QVERIFY(nonZeroTrap >= nonZeroNoTrap);
+
+    // Screen blend mode check: Center pixel (50, 50) must be brighter than base flat color (100, 50, 50)
+    const QRgb centerPixel = imgNoTrap.pixel(50, 50);
+    QVERIFY(qRed(centerPixel) > 100);
+    QVERIFY(qGreen(centerPixel) > 50);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

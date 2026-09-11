@@ -537,10 +537,10 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_temperatureSpin = new QDoubleSpinBox(m_detailsContainer);
     m_temperatureSpin->setRange(0.0, 2.0);
     m_temperatureSpin->setSingleStep(0.05);
-    m_temperatureSpin->setValue(0.70);
+    m_temperatureSpin->setValue(0.50); // A6: Stable 0.50 default for geometry precision
     m_temperatureSpin->setDecimals(2);
     m_temperatureSpin->setAccessibleName(i18n("Sampling temperature"));
-    m_temperatureSpin->setToolTip(i18n("サンプリング温度 (0.0=確定的/構造維持, 1.0=標準, 1.5=創造的)"));
+    m_temperatureSpin->setToolTip(i18n("サンプリング温度 (0.0=確定的/構造維持, 0.5=推奨安定, 1.0=創造的)"));
 
     m_topPSpin = new QDoubleSpinBox(m_detailsContainer);
     m_topPSpin->setRange(0.05, 1.0);
@@ -549,6 +549,16 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_topPSpin->setDecimals(2);
     m_topPSpin->setAccessibleName(i18n("Top-P sampling"));
     m_topPSpin->setToolTip(i18n("Top-P (核サンプリングの累積確率閾値)"));
+
+    // A2: Flats trapping spinbox
+    m_trappingPxSpin = new QDoubleSpinBox(m_detailsContainer);
+    m_trappingPxSpin->setRange(0.0, 10.0);
+    m_trappingPxSpin->setSingleStep(0.5);
+    m_trappingPxSpin->setValue(1.5);
+    m_trappingPxSpin->setDecimals(1);
+    m_trappingPxSpin->setSuffix(i18n(" px"));
+    m_trappingPxSpin->setAccessibleName(i18n("Flats trapping width"));
+    m_trappingPxSpin->setToolTip(i18n("線画と塗りの境界の白抜けを防ぐトラッピング（塗り拡張）幅 (px)"));
 
     m_maxTokensSpin = new QSpinBox(m_detailsContainer);
     m_maxTokensSpin->setRange(0, 65536);
@@ -572,14 +582,19 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_maxRetriesSpin->setValue(2);
     m_maxRetriesSpin->setSuffix(i18n(" 回"));
     m_maxRetriesSpin->setAccessibleName(i18n("Maximum retry count"));
-    m_maxRetriesSpin->setToolTip(i18n("通信一時エラー時やJSONパース失敗時の自動リトライ最大回数"));
+    m_maxRetriesSpin->setToolTip(i18n("通信一時エラー時や品質自己修復時の自動リトライ最大回数"));
 
     m_jsonModeCombo = new QComboBox(m_detailsContainer);
     m_jsonModeCombo->addItem(i18n("自動判定 (エンドポイント依存)"), 0);
-    m_jsonModeCombo->addItem(i18n("強制 (json_object)"), 1);
-    m_jsonModeCombo->addItem(i18n("無効 (プロンプトのみで指示)"), 2);
+    m_jsonModeCombo->addItem(i18n("構造化出力 (json_schema)"), 1);
+    m_jsonModeCombo->addItem(i18n("強制 (json_object)"), 2);
+    m_jsonModeCombo->addItem(i18n("無効 (プロンプトのみで指示)"), 3);
     m_jsonModeCombo->setAccessibleName(i18n("JSON response mode"));
-    m_jsonModeCombo->setToolTip(i18n("APIの response_format: {\"type\": \"json_object\"} を利用するかどうか"));
+    m_jsonModeCombo->setToolTip(i18n("APIの response_format (json_schema / json_object) を利用するかどうか"));
+
+    m_compositionPlanCheck = new QCheckBox(i18n("2段階構図生成 (Composition Plan)"), m_detailsContainer);
+    m_compositionPlanCheck->setChecked(false);
+    m_compositionPlanCheck->setToolTip(i18n("複雑な構図向けに、事前に構図計画を策定してから実ストロークを生成します。"));
 
     m_reasoningEffortCombo = new QComboBox(m_detailsContainer);
     m_reasoningEffortCombo->addItem(i18n("指定なし (デフォルト)"), QStringLiteral(""));
@@ -602,10 +617,12 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     remoteForm->addRow(m_strokeBudgetLabel, m_strokeBudgetSpin);
     remoteForm->addRow(i18n("Temperature"), m_temperatureSpin);
     remoteForm->addRow(i18n("Top-P"), m_topPSpin);
+    remoteForm->addRow(i18n("トラッピング幅"), m_trappingPxSpin);
     remoteForm->addRow(i18n("最大トークン"), m_maxTokensSpin);
     remoteForm->addRow(i18n("タイムアウト"), m_timeoutSecSpin);
     remoteForm->addRow(i18n("自動リトライ"), m_maxRetriesSpin);
     remoteForm->addRow(i18n("JSONモード"), m_jsonModeCombo);
+    remoteForm->addRow(QString(), m_compositionPlanCheck);
     remoteForm->addRow(i18n("推論エフォート"), m_reasoningEffortCombo);
     remoteForm->addRow(i18n("追加指示"), m_customInstructionsEdit);
     detailsLayout->addLayout(remoteForm);
@@ -1389,8 +1406,10 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     KisAiStrokeProgram program;
     QString parseError;
     KisAiJsonDiagnostic diagnostic;
-    if (!KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError, &diagnostic)) {
+    KisAiStrokeQualityReport qualityReport;
+    if (!KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError, &diagnostic, &qualityReport)) {
         m_lastJsonDiagnostic = diagnostic;
+        m_isQualityCorrectionRetry = false;
         logDebug(QStringLiteral("LLM_PARSE_ERR"), QStringLiteral("%1\n%2").arg(parseError, diagnostic.formatForLog()));
         const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
         if (m_currentRetryCount < maxRetries) {
@@ -1400,18 +1419,48 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         setStatus(parseError, true);
         m_currentRetryCount = 0;
         m_isSelfCorrectionRetry = false;
+        m_isQualityCorrectionRetry = false;
         clearInFlightApiKey();
         return;
     }
+
+    m_lastQualityReport = qualityReport;
+
+    // A1: Quality Feedback Self-Correction Loop
+    // Trigger correction retry if Flats layer is missing, structural score is below 0.55,
+    // or over half of the generated operations were dropped as invalid.
+    const int flatsCount = KisAiStrokeProgramCodec::countLayerOperations(program).value(QStringLiteral("Flats"), 0);
+    const bool severelyDegradedQuality = (qualityReport.score < 0.55) ||
+                                         (flatsCount == 0 && !program.operations.isEmpty()) ||
+                                         (qualityReport.inputOperations > 4 && qualityReport.droppedOperations > qualityReport.inputOperations * 0.5);
+
+    const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
+    if (severelyDegradedQuality && m_currentRetryCount < maxRetries) {
+        QString qualityReason;
+        if (flatsCount == 0) {
+            qualityReason = i18n("Flatsレイヤー（シルエット下地）不在");
+        } else if (qualityReport.score < 0.55) {
+            qualityReason = i18n("構造品質スコア不足 (%1/1.0)", QString::number(qualityReport.score, 'f', 2));
+        } else {
+            qualityReason = i18n("無効操作多数 (%1/%2 除外)", qualityReport.droppedOperations, qualityReport.inputOperations);
+        }
+        logDebug(QStringLiteral("LLM_QUALITY_RETRY"), QStringLiteral("品質自己修復を発火: %1").arg(qualityReason));
+        m_isQualityCorrectionRetry = true;
+        scheduleRetry(qualityReason, true);
+        return;
+    }
+
     m_currentRetryCount = 0;
     m_isSelfCorrectionRetry = false;
+    m_isQualityCorrectionRetry = false;
     clearInFlightApiKey();
 
     logDebug(QStringLiteral("LLM_PARSE_OK"), QStringLiteral("解析成功: %1 operations, completionScore=%2")
         .arg(program.operations.size()).arg(program.completionScore));
 
+    const qreal trappingPx = m_trappingPxSpin ? m_trappingPxSpin->value() : 1.5;
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
-    const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize);
+    const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize, true, nullptr, trappingPx);
     if (!preview.isNull()) {
         m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
     }
@@ -1419,7 +1468,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
     if (view && view->image()) {
         QString statusMsg;
-        if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
+        if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg, true, nullptr, trappingPx)) {
             const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
             const int qualityPercent = qRound(qBound<qreal>(0.0, program.completionScore, 1.0) * 100.0);
             const QString detailMsg = i18n("%1 (%2 / 構造品質 %3%)", statusMsg, summary, qualityPercent);
@@ -1786,6 +1835,7 @@ void KisAiIllustrationDocker::updateModeUi()
         }
     }
 
+    const bool isStrokeMode = (isLlm || newMode == GenerationMode::LocalStrokes);
     if (m_remoteForm) {
         m_remoteForm->setRowVisible(0, needsRemote);
         m_remoteForm->setRowVisible(1, needsRemote);
@@ -1794,12 +1844,14 @@ void KisAiIllustrationDocker::updateModeUi()
         m_remoteForm->setRowVisible(4, isLlm);       // Stroke Budget
         m_remoteForm->setRowVisible(5, isLlm);       // Temperature
         m_remoteForm->setRowVisible(6, isLlm);       // Top-P
-        m_remoteForm->setRowVisible(7, isLlm);       // Max Tokens
-        m_remoteForm->setRowVisible(8, needsRemote); // Timeout
-        m_remoteForm->setRowVisible(9, isLlm);       // Auto-retries
-        m_remoteForm->setRowVisible(10, isLlm);      // JSON Mode
-        m_remoteForm->setRowVisible(11, isLlm);      // Reasoning Effort
-        m_remoteForm->setRowVisible(12, isLlm);      // Custom Instructions
+        m_remoteForm->setRowVisible(7, isStrokeMode);// Trapping px
+        m_remoteForm->setRowVisible(8, isLlm);       // Max Tokens
+        m_remoteForm->setRowVisible(9, needsRemote); // Timeout
+        m_remoteForm->setRowVisible(10, isLlm);      // Auto-retries
+        m_remoteForm->setRowVisible(11, isLlm);      // JSON Mode
+        m_remoteForm->setRowVisible(12, isLlm);      // Composition Plan
+        m_remoteForm->setRowVisible(13, isLlm);      // Reasoning Effort
+        m_remoteForm->setRowVisible(14, isLlm);      // Custom Instructions
     }
 
     if (m_testConnectionButton) {
@@ -2069,6 +2121,7 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
     m_goalVisionFallbackActive = false;
     m_lastGoalRequestHadImage = false;
     m_goalAccumulatedProgram = KisAiStrokeProgram();
+    m_lastGoalCritique.clear();
 
     saveSettings();
 
@@ -2298,6 +2351,8 @@ void KisAiIllustrationDocker::executeGoalStep()
 
         const QString additionalInstruction = m_goalSelfCorrectionFeedback;
 
+        const KisAiStrokeProgram *accumProg = (m_goalCurrentStep > 1 && !m_goalAccumulatedProgram.operations.isEmpty())
+            ? &m_goalAccumulatedProgram : nullptr;
         const QJsonObject payload = KisAiStrokeProgramCodec::buildGoalStepPayload(
             model,
             m_goalPrompt,
@@ -2314,7 +2369,10 @@ void KisAiIllustrationDocker::executeGoalStep()
             temperature,
             topP,
             maxTokens,
-            static_cast<int>(artStyle)
+            static_cast<int>(artStyle),
+            accumProg,
+            m_lastGoalCritique,
+            QStringLiteral("auto")
         );
 
         logDebug(QStringLiteral("GOAL_REQ"), QStringLiteral(
@@ -2610,6 +2668,7 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     }
     if (m_critiqueLabel) {
         const QString critique = !program.agentCritique.isEmpty() ? program.agentCritique : program.visualCritique;
+        m_lastGoalCritique = critique;
         if (!critique.isEmpty()) {
             m_critiqueLabel->setText(i18n("👀 AI視覚批評: %1", critique));
         } else {
@@ -2672,6 +2731,7 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
     m_goalVisionFallbackActive = false;
     m_lastGoalRequestHadImage = false;
     m_goalAccumulatedProgram = KisAiStrokeProgram();
+    m_lastGoalCritique.clear();
 
     logDebug(QStringLiteral("GOAL_FINISH"), QStringLiteral("Goalモード終了 (success=%1, step=%2/%3)")
         .arg(success ? QStringLiteral("true") : QStringLiteral("false")).arg(m_goalCurrentStep).arg(m_goalTotalSteps));
@@ -2866,29 +2926,51 @@ void KisAiIllustrationDocker::executeRetry()
 
     if (m_isSelfCorrectionRetry) {
         QString correctionPrompt = m_lastFailedPrompt;
-        correctionPrompt += QStringLiteral("\n\n[SYSTEM FEEDBACK / RETRY: Your previous output could not be parsed as valid JSON.\n");
-        if (!m_lastJsonDiagnostic.errorMessage.isEmpty()) {
-            correctionPrompt += QStringLiteral("Error: %1\n").arg(m_lastJsonDiagnostic.errorMessage);
-        }
-        if (m_lastJsonDiagnostic.errorLine > 0) {
-            correctionPrompt += QStringLiteral("Near line %1, column %2.\n")
-                .arg(m_lastJsonDiagnostic.errorLine)
-                .arg(m_lastJsonDiagnostic.errorColumn);
-        }
-        if (!m_lastJsonDiagnostic.errorSnippet.isEmpty()) {
-            correctionPrompt += QStringLiteral("Snippet: %1\n").arg(m_lastJsonDiagnostic.errorSnippet);
-        }
-        if (m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("end of file"), Qt::CaseInsensitive) ||
-            m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unterminated"), Qt::CaseInsensitive) ||
-            m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("truncate"), Qt::CaseInsensitive) ||
-            m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unclosed"), Qt::CaseInsensitive)) {
-            correctionPrompt += QStringLiteral("Notice: The JSON was truncated before completion. Please generate a more concise response with fewer operations to fit within token limits, or close all opened objects and arrays properly.\n");
-        }
-        correctionPrompt += QStringLiteral("CRITICAL: Output ONLY valid JSON conforming strictly to the KisAiStrokeProgram schema without markdown explanation or stray text.]");
+        if (m_isQualityCorrectionRetry) {
+            correctionPrompt += QStringLiteral("\n\n[QUALITY CORRECTION REQUEST]\n"
+                "Your previous output parsed as valid JSON, but had structural quality issues:\n");
+            if (m_lastQualityReport.score < 0.55) {
+                correctionPrompt += QStringLiteral("- Low structural score: %1/1.0. Ensure rich silhouettes, clean contours, and registered layers.\n")
+                    .arg(QString::number(m_lastQualityReport.score, 'f', 2));
+            }
+            if (!m_lastQualityReport.warnings.isEmpty()) {
+                correctionPrompt += QStringLiteral("- Specific issues detected:\n");
+                for (const QString &w : m_lastQualityReport.warnings) {
+                    correctionPrompt += QStringLiteral("  * %1\n").arg(w);
+                }
+            }
+            correctionPrompt += QStringLiteral("- Please generate solid silhouette base color fills on 'Flats' layer first before adding Shading and Lineart.\n"
+                "- Ensure major subjects are filled with solid color masses to prevent empty transparent holes.\n"
+                "Please regenerate the StrokeProgram correcting these issues while strictly preserving the original user prompt.]");
 
-        logDebug(QStringLiteral("RETRY_EXEC"),
-                 QStringLiteral("JSON自己修復リクエストを実行中 (回数: %1/%2)")
-                     .arg(m_currentRetryCount).arg(m_maxRetryCount));
+            logDebug(QStringLiteral("RETRY_EXEC"),
+                     QStringLiteral("品質自己修復リクエストを実行中 (回数: %1/%2)")
+                         .arg(m_currentRetryCount).arg(m_maxRetryCount));
+        } else {
+            correctionPrompt += QStringLiteral("\n\n[SYSTEM FEEDBACK / RETRY: Your previous output could not be parsed as valid JSON.\n");
+            if (!m_lastJsonDiagnostic.errorMessage.isEmpty()) {
+                correctionPrompt += QStringLiteral("Error: %1\n").arg(m_lastJsonDiagnostic.errorMessage);
+            }
+            if (m_lastJsonDiagnostic.errorLine > 0) {
+                correctionPrompt += QStringLiteral("Near line %1, column %2.\n")
+                    .arg(m_lastJsonDiagnostic.errorLine)
+                    .arg(m_lastJsonDiagnostic.errorColumn);
+            }
+            if (!m_lastJsonDiagnostic.errorSnippet.isEmpty()) {
+                correctionPrompt += QStringLiteral("Snippet: %1\n").arg(m_lastJsonDiagnostic.errorSnippet);
+            }
+            if (m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("end of file"), Qt::CaseInsensitive) ||
+                m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unterminated"), Qt::CaseInsensitive) ||
+                m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("truncate"), Qt::CaseInsensitive) ||
+                m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unclosed"), Qt::CaseInsensitive)) {
+                correctionPrompt += QStringLiteral("Notice: The JSON was truncated before completion. Please generate a more concise response with fewer operations to fit within token limits, or close all opened objects and arrays properly.\n");
+            }
+            correctionPrompt += QStringLiteral("CRITICAL: Output ONLY valid JSON conforming strictly to the KisAiStrokeProgram schema without markdown explanation or stray text.]");
+
+            logDebug(QStringLiteral("RETRY_EXEC"),
+                     QStringLiteral("JSON自己修復リクエストを実行中 (回数: %1/%2)")
+                         .arg(m_currentRetryCount).arg(m_maxRetryCount));
+        }
 
         generateLlmStrokes(correctionPrompt);
     } else {

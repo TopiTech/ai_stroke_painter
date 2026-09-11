@@ -194,13 +194,24 @@ public:
     /**
      * Parse raw response body from Chat Completions API into a KisAiStrokeProgram.
      * Handles markdown codeblocks, thinking tokens, and minor repairs.
+     * Optionally returns the KisAiStrokeQualityReport computed during refinement.
      */
     static bool parseResponse(
         const QByteArray &responseBytes,
         KisAiStrokeProgram *outProgram,
         QString *errorMessage = nullptr,
-        KisAiJsonDiagnostic *diagnostic = nullptr
+        KisAiJsonDiagnostic *diagnostic = nullptr,
+        KisAiStrokeQualityReport *qualityReport = nullptr
     );
+
+    // Section builders for modular prompt composition
+    static QString buildJsonContractSection();
+    static QString buildCoordinateSection(const QSize &canvasSize);
+    static QString buildLayerSemanticsSection();
+    static QString buildDrawingWorkflowSection();
+    static QString buildArtisticGuidelinesSection();
+    static QString buildOperationKindsSection();
+    static QString buildOutputSchemaExampleSection();
 
     /**
      * Parse a JSON object into a KisAiStrokeProgram.
@@ -284,8 +295,50 @@ public:
      */
     static bool supportsJsonFormat(const QString &endpoint);
 
+    /**
+     * Check if a model supports OpenAI Strict Structured Outputs (response_format: {"type": "json_schema"}).
+     */
+    static bool supportsJsonSchema(const QString &model);
 
+    struct IntentAdherenceResult {
+        qreal score = 1.0;
+        QStringList matchedAspects;
+        QStringList missingAspects;
+    };
 
+    /**
+     * Evaluate deterministic intent adherence between prompt and generated program.
+     */
+    static IntentAdherenceResult checkIntentAdherence(const KisAiStrokeProgram &program, const QString &prompt);
+
+    /**
+     * Intelligently trim stroke operations while preserving essential structural layers.
+     */
+    static KisAiStrokeProgram trimOperationsToBudget(const KisAiStrokeProgram &program, int maxOperations);
+
+    /**
+     * Build two-phase composition plan payload.
+     */
+    static QJsonObject buildCompositionPlanPayload(
+        const QString &model,
+        const QString &prompt,
+        const QSize &canvasSize,
+        int artStyle = 0
+    );
+
+    /**
+     * Parse composition plan response JSON and extract artistic directives.
+     */
+    static bool parseCompositionPlan(
+        const QByteArray &responseBytes,
+        QString *outDirectives,
+        QString *errorMessage = nullptr
+    );
+
+    /**
+     * Calculate hue-shifted shadow color avoiding dirty black shading.
+     */
+    static QColor calculateHueShiftedShadow(const QColor &baseColor, bool warmLight = true);
     /**
      * Normalize layer name into one of the standard layers: Flats, Shading, Lineart, Highlights, FX.
      * Returns trimmed original name if no standard alias matched, or "Lineart" if empty.
@@ -303,6 +356,11 @@ public:
     static QString formatLayerSummary(const KisAiStrokeProgram &program);
 
     /**
+     * Build lightweight JSON summary of accumulated geometry for Goal Mode continuity.
+     */
+    static QJsonObject buildGeometryDigest(const KisAiStrokeProgram &program);
+
+    /**
      * Build the Goal Mode Chat Completions request payload with vision feedback (image base64 data URL).
      */
     static QJsonObject buildGoalStepPayload(
@@ -318,10 +376,13 @@ public:
         bool includeVision = true,
         bool enableStreaming = true,
         bool enforceJsonFormat = false,
-        qreal temperature = 0.7,
+        qreal temperature = 0.5,
         qreal topP = 1.0,
         int maxTokensOverride = 0,
-        int artStyle = 0
+        int artStyle = 0,
+        const KisAiStrokeProgram *accumulatedProgram = nullptr,
+        const QString &previousCritique = QString(),
+        const QString &visionDetail = QStringLiteral("auto")
     );
 
     /**

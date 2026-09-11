@@ -145,6 +145,8 @@ private:
     bool m_retryInFlight {false};
     QString m_lastFailedPrompt;
     KisAiJsonDiagnostic m_lastJsonDiagnostic;
+    KisAiStrokeQualityReport m_lastQualityReport;
+    bool m_isQualityCorrectionRetry {false};
     QString m_inFlightApiKey;
 
     // Goal Mode State
@@ -159,6 +161,7 @@ private:
     bool m_goalVisionFallbackActive {false};
     bool m_lastGoalRequestHadImage {false};
     KisAiStrokeProgram m_goalAccumulatedProgram;
+    QString m_lastGoalCritique;
 
     QComboBox *m_presetCombo {nullptr};
     QPlainTextEdit *m_promptEditor {nullptr};
@@ -182,10 +185,13 @@ private:
     // Fine-grained AI Settings UI Controls
     QDoubleSpinBox *m_temperatureSpin {nullptr};
     QDoubleSpinBox *m_topPSpin {nullptr};
+    QDoubleSpinBox *m_trappingPxSpin {nullptr};
     QSpinBox *m_maxTokensSpin {nullptr};
     QSpinBox *m_maxRetriesSpin {nullptr};
     QSpinBox *m_timeoutSecSpin {nullptr};
     QComboBox *m_jsonModeCombo {nullptr};
+    QComboBox *m_visionQualityCombo {nullptr};
+    QCheckBox *m_compositionPlanCheck {nullptr};
     QComboBox *m_reasoningEffortCombo {nullptr};
     QPlainTextEdit *m_customInstructionsEdit {nullptr};
 

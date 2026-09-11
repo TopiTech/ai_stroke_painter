@@ -362,149 +362,182 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
     return schema;
 }
 
+QString KisAiStrokeProgramCodec::buildJsonContractSection()
+{
+    return QStringLiteral(
+        "=== STRICT JSON SYNTAX RULES (ZERO TOLERANCE) ===\n"
+        "1. No trailing commas: never put a comma before a closing '}' or ']'.\n"
+        "2. Double quotes only: all object keys and string values must use standard double quotes (\"), never single quotes or backticks.\n"
+        "3. No comments: never include JavaScript comments (// or /* */) anywhere in the output.\n"
+        "4. No Python literals: use true, false, and null (all lowercase) instead of True, False, None.\n"
+        "5. No ellipses or placeholders: never write '...' or placeholder entries; emit complete geometry only.\n"
+        "6. Valid numbers only: coordinates must be standard decimal numbers (e.g. 0.5, -0.1). Never output NaN, Infinity, or unit suffixes (no 'px', 'deg', '%').\n"
+        "7. Complete JSON: budget your points and operations so your output completes fully before reaching token limits."
+    );
+}
+
+QString KisAiStrokeProgramCodec::buildCoordinateSection(const QSize &canvasSize)
+{
+    const qreal aspect = canvasSize.height() > 0 ? qreal(canvasSize.width()) / canvasSize.height() : 1.0;
+    return QStringLiteral(
+        "=== COORDINATE SYSTEM & RESOLUTION ===\n"
+        "Coordinates are normalized float numbers strictly in [0.0, 1.0]. (0.0, 0.0) is top-left, (1.0, 1.0) is bottom-right.\n"
+        "Canvas size: %1x%2 (Aspect %3:1)."
+    ).arg(canvasSize.width()).arg(canvasSize.height()).arg(QString::number(aspect, 'f', 2));
+}
+
+QString KisAiStrokeProgramCodec::buildLayerSemanticsSection()
+{
+    return QStringLiteral(
+        "=== LAYER ARCHITECTURE & COMPOSITION (Back-to-Front) ===\n"
+        "1. 'Background': Far distance, sky/environment washes, atmospheric depth (rendered behind all subjects; NOT clipped).\n"
+        "2. 'Flats': Major subject silhouette color blocking (hair base, skin base, clothing base, foreground terrain). Base volumes for everything.\n"
+        "3. 'Shading': Form shadows, ambient occlusion, depth crevices, cast shadows (rendered with Multiply blend and automatically clipped to Flats).\n"
+        "4. 'Lineart': Crisp contours, facial details, hair strands, structural outlines (rendered with natural Catmull-Rom spline curves and tapering).\n"
+        "5. 'Highlights': Specular glints, eye catchlights, rim lighting, atmospheric glow (rendered with Screen blend and clipped to Flats).\n"
+        "6. 'FX': Particle accents, petals, embers, stars, sparkles, bloom, manga focus lines."
+    );
+}
+
+QString KisAiStrokeProgramCodec::buildDrawingWorkflowSection()
+{
+    return QStringLiteral(
+        "=== MASTER DRAWING WORKFLOW (MANDATORY) ===\n"
+        "Silently design the complete image before emitting JSON: establish a focal point, horizon/gesture, "
+        "foreground-midground-background depth, and a limited 5-8 color palette.\n"
+        "Then emit painter-order geometry from large to small: (A) full-canvas underpainting, (B) large "
+        "overlapping silhouettes, (C) form and cast shadows, (D) continuous structural contours, (E) focal "
+        "micro-details, (F) restrained highlights/FX.\n"
+        "Reuse the same landmark coordinates across Flats, Shading, and Lineart so boundaries register. Prefer one "
+        "coherent 4-8 point path over many disconnected 2-point fragments.\n"
+        "Concentrate the smallest marks and highest contrast at the focal point. Maintain clean silhouettes on Flats.\n"
+        "Before returning JSON, silently audit: canvas coverage, recognizable silhouette, layer registration, "
+        "depth ordering, tangent continuity, palette harmony, and required geometry for every operation. Fix "
+        "failures in the final JSON."
+    );
+}
+
+QString KisAiStrokeProgramCodec::buildArtisticGuidelinesSection()
+{
+    return QStringLiteral(
+        "=== ARTISTIC & ANATOMICAL GUIDELINES ===\n"
+        "- Contours & Splines: Smooth anchor points per curved feature (silhouette curves, hair flow, eyes, fabric folds).\n"
+        "- Subject Anatomical Structure: Build focal features with registered multi-layer operations (Flats base -> Shading plane -> Lineart contour -> Highlights glint).\n"
+        "- Shading Surfaces: Avoid harsh mechanical 'hatch' across smooth organic skin or flat skies; use soft 'fill' with 'watercolor' or 'brush' profile.\n"
+        "- Natural Foliage & Canopies: Group foliage and landscape features into undulating organic masses with natural curved contours.\n"
+        "- Line & Color Harmony: Avoid harsh pure black (#000000) for lineart; use deep dark harmonious tones (e.g. #1a162b, #1c2438, #2b1b17).\n"
+        "  Pair warm key lights with cool shadows, or cool ambient light with warm bounce light."
+    );
+}
+
+QString KisAiStrokeProgramCodec::buildOperationKindsSection()
+{
+    return QStringLiteral(
+        "=== OPERATION KINDS ===\n"
+        "- 'gradient_fill': Full/partial sky & background washes. Polygon [ [x, y], ... ], colors [ '#hex', ... ], "
+        "angle_deg (0=horizontal, 90=vertical), is_radial (true/false), center [cx, cy], radius.\n"
+        "- 'fill': Color masses, silhouettes, hair/clothing base, shadow blocks. Polygon [ [x, y], ... ], brush { "
+        "'profile': 'watercolor'/'brush'/'marker', 'color': '#hex' }, style ('wash'/'contour'/'directional').\n"
+        "- 'hatch': Technical screentone hatching. Polygon [ [x, y], ... ], angle_deg (0-180), spacing "
+        "(0.005-0.03), cross_hatch (true/false), brush { 'profile': 'pencil'/'gpen', 'color': '#hex' }.\n"
+        "- 'ribbon': Tapered organic strokes (tree limbs, hair clumps, cloth folds). Spine [ [x, y], ... ], "
+        "width_start, width_mid, width_end (0.005-0.05).\n"
+        "- 'path': Expressive linework, contours, facial features. Points [ [x, y, pressure], ... ] where pressure "
+        "is 0.1-1.0. brush { 'profile': 'gpen'/'pencil'/'airbrush'/'watercolor'/'marker'/'crayon'/'neon'/'splatter', 'color': '#hex', 'size': "
+        "0.002-0.01 }.\n"
+        "- 'particles': Atmospheric particles. Bounds [x1, y1, x2, y2], count (10-50), shape "
+        "('petal'/'sparkle'/'star'/'dot'), brush { 'color': '#hex' }.\n"
+        "- 'manga_lines': Radial speed/focus lines toward a center. center [cx, cy], inner_radius (0.05-0.3), outer_radius (0.5-1.0), density (16-80), brush { 'profile': 'gpen', 'color': '#hex', 'size': 0.002 }."
+    );
+}
+
+QString KisAiStrokeProgramCodec::buildOutputSchemaExampleSection()
+{
+    // A0: Neutral abstract geometry schema example completely free of thematic motifs (no trees, stars, or night skies)
+    return QStringLiteral(
+        "=== OUTPUT SCHEMA EXAMPLE ===\n"
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"prompt\": \"user illustration description\",\n"
+        "  \"title\": \"Artwork Title\",\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"gradient_fill\",\n"
+        "      \"id\": \"bg_wash\",\n"
+        "      \"layer\": \"Background\",\n"
+        "      \"polygon\": [[0.0,0.0],[1.0,0.0],[1.0,1.0],[0.0,1.0]],\n"
+        "      \"colors\": [\"#1e293b\", \"#0f172a\"],\n"
+        "      \"angle_deg\": 90,\n"
+        "      \"brush\": {\"profile\": \"watercolor\", \"color\": \"#1e293b\", \"size\": 0.05, \"is_eraser\": false}\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"fill\",\n"
+        "      \"id\": \"subject_silhouette\",\n"
+        "      \"layer\": \"Flats\",\n"
+        "      \"polygon\": [[0.2,0.2],[0.8,0.2],[0.75,0.85],[0.25,0.85]],\n"
+        "      \"brush\": {\"profile\": \"brush\", \"color\": \"#64748b\", \"size\": 0.04, \"is_eraser\": false}\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"fill\",\n"
+        "      \"id\": \"core_shadow\",\n"
+        "      \"layer\": \"Shading\",\n"
+        "      \"polygon\": [[0.45,0.3],[0.75,0.3],[0.7,0.8],[0.4,0.8]],\n"
+        "      \"brush\": {\"profile\": \"watercolor\", \"color\": \"#334155\", \"size\": 0.03, \"is_eraser\": false},\n"
+        "      \"style\": \"wash\"\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"id\": \"primary_contour\",\n"
+        "      \"layer\": \"Lineart\",\n"
+        "      \"points\": [[0.2,0.2,0.8],[0.25,0.5,0.9],[0.25,0.85,0.7]],\n"
+        "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#0f172a\", \"size\": 0.004, \"is_eraser\": false}\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"id\": \"specular_point\",\n"
+        "      \"layer\": \"Highlights\",\n"
+        "      \"points\": [[0.35,0.3,0.9],[0.36,0.31,0.3]],\n"
+        "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#ffffff\", \"size\": 0.003, \"is_eraser\": false}\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+}
+
 QString KisAiStrokeProgramCodec::buildSystemPrompt(const QSize &canvasSize,
                                                    const QString &prompt,
                                                    const QString &customInstructions,
                                                    int artStyle)
 {
-    const qreal aspect = canvasSize.height() > 0 ? qreal(canvasSize.width()) / canvasSize.height() : 1.0;
     auto spec = KisAiPromptAnalyzer::analyze(prompt, canvasSize);
     if (artStyle > 0 && artStyle <= 5) {
         spec.style = static_cast<KisAiPromptAnalyzer::ArtStyle>(artStyle);
     }
     const QString artDirection = KisAiPromptAnalyzer::generateArtDirection(spec, canvasSize);
 
-    QString systemText =
-        QStringLiteral(
-            "You are an autonomous AI master digital painter directing layer-by-layer drawing plans for Krita.\n"
-            "Generate a rich, cohesive, painterly illustration by specifying coordinate-directed strokes in "
-            "StrokeProgram JSON format.\n"
-            "Output ONLY valid, parseable RFC 8259 JSON starting with '{' and ending with '}'.\n"
-            "Do NOT include markdown explanations, thought text, or conversational chatter outside the JSON.\n\n"
-            "=== STRICT JSON SYNTAX RULES (ZERO TOLERANCE) ===\n"
-            "1. No trailing commas: never put a comma before a closing '}' or ']'.\n"
-            "2. Double quotes only: all object keys and string values must use standard double quotes (\"), never single quotes or backticks.\n"
-            "3. No comments: never include JavaScript comments (// or /* */) anywhere in the output.\n"
-            "4. No Python literals: use true, false, and null (all lowercase) instead of True, False, None.\n"
-            "5. No ellipses or placeholders: never write '...' or placeholder entries; emit complete geometry only.\n"
-            "6. Valid numbers only: coordinates must be standard decimal numbers (e.g. 0.5, -0.1). Never output NaN, Infinity, or unit suffixes (no 'px', 'deg', '%').\n"
-            "7. Complete JSON: budget your points and operations so your output completes fully before reaching token limits.\n\n"
-            "=== COORDINATE SYSTEM & RESOLUTION ===\n"
-            "Coordinates are normalized float numbers strictly in [0.0, 1.0]. (0.0, 0.0) is top-left, (1.0, 1.0) is "
-            "bottom-right.\n"
-            "Canvas size: %1x%2 (Aspect %3:1).\n\n"
-            "=== LAYER ARCHITECTURE & COMPOSITION (Back-to-Front) ===\n"
-            "1. 'Background': Far distance, sky washes, atmospheric depth (rendered behind all subjects; NOT clipped).\n"
-            "2. 'Flats': Major subject silhouette color blocking (hair base, skin base, clothing base, foreground terrain).\n"
-            "3. 'Shading': Form shadows, ambient occlusion, depth crevices, cast shadows (rendered with Multiply blend "
-            "and automatically clipped to Flats).\n"
-            "4. 'Lineart': Crisp contours, facial details, hair strands, structural outlines (rendered with natural "
-            "Catmull-Rom spline curves and tapering).\n"
-            "5. 'Highlights': Specular glints, eye catchlights, rim lighting, atmospheric glow (rendered with Screen "
-            "blend and clipped to Flats).\n"
-            "6. 'FX': Particle accents, petals, embers, stars, sparkles, bloom, manga focus lines.\n\n"
-            "=== MASTER DRAWING WORKFLOW (MANDATORY) ===\n"
-            "Silently design the complete image before emitting JSON: establish a focal point, horizon/gesture, "
-            "foreground-midground-background depth, and a limited 5-8 color palette.\n"
-            "Then emit painter-order geometry from large to small: (A) full-canvas underpainting, (B) large "
-            "overlapping silhouettes, (C) form and cast shadows, (D) continuous structural contours, (E) focal "
-            "micro-details, (F) restrained highlights/FX.\n"
-            "Reuse the same landmark coordinates across Flats, Shading, and Lineart so boundaries register. Prefer one "
-            "coherent 4-8 point path over many disconnected 2-point fragments.\n"
-            "Concentrate the smallest marks and highest contrast at the focal point. Maintain clean silhouettes on Flats.\n"
-            "Before returning JSON, silently audit: canvas coverage, recognizable silhouette, layer registration, "
-            "depth ordering, tangent continuity, palette harmony, and required geometry for every operation. Fix "
-            "failures in the final JSON.\n\n"
-            "=== ARTISTIC & ANATOMICAL GUIDELINES ===\n"
-            "- Contours & Splines: Smooth anchor points per curved feature (silhouette curves, hair flow, eyes, fabric folds).\n"
-            "- Eyes & Face: When characters are present, build eyes with multiple registered strokes: (1) almond sclera base, (2) rich colored iris oval, (3) dark iris top shade, (4) deep pupil core, (5) bold curved upper eyelid arch with outer taper, (6) delicate crease line, and (7) sharp specular catchlight in Highlights. NEVER draw eyes as crude empty boxes.\n"
-            "- Facial & Body Shading: NEVER use 'hatch' on human skin or face! Use smooth, soft 'fill' with 'watercolor' or 'brush' profile for facial planes, cheek blush, nose shadow, and neck cast shadow.\n"
-            "- Foliage & Canopies: NEVER draw tree canopies or mountains as flat sharp polygonal tiles! Group canopy into undulating cloud-like organic masses, using natural curved contours and scattered petal/leaf strokes.\n"
-            "- Hair & Folds: Group hair into 3-5 primary clumping masses (ribbon/fill) before adding single strand accents.\n"
-            "- Color Harmony: Avoid harsh pure black (#000000) for lineart; use rich dark tones (e.g. #1a162b, #1c2438, #2b1b17).\n"
-            "  Employ warm key lights paired with cool shadows, or cool ambient light paired with warm saturated bounced light.\n\n"
-            "=== OPERATION KINDS ===\n"
-            "- 'gradient_fill': Full/partial sky & background washes. Polygon [ [x, y], ... ], colors [ '#hex', ... ], "
-            "angle_deg (0=horizontal, 90=vertical), is_radial (true/false), center [cx, cy], radius.\n"
-            "- 'fill': Color masses, silhouettes, hair/clothing base, shadow blocks. Polygon [ [x, y], ... ], brush { "
-            "'profile': 'watercolor'/'brush'/'marker', 'color': '#hex' }, style ('wash'/'contour'/'directional').\n"
-            "- 'hatch': Technical or manga screentone hatching. STRICT PROHIBITION: NEVER use 'hatch' for human skin, facial shading, or skies (causes ugly barcode lines)! Use smooth 'fill' instead. Polygon [ [x, y], ... ], angle_deg (0-180), spacing "
-            "(0.005-0.03), cross_hatch (true/false), brush { 'profile': 'pencil'/'gpen', 'color': '#hex' }.\n"
-            "- 'ribbon': Tapered organic strokes (tree trunks, hair clumps, cloth folds). Spine [ [x, y], ... ], "
-            "width_start, width_mid, width_end (0.005-0.05).\n"
-            "- 'path': Expressive linework, contours, facial features. Points [ [x, y, pressure], ... ] where pressure "
-            "is 0.1-1.0. brush { 'profile': 'gpen'/'pencil'/'airbrush'/'watercolor'/'marker'/'crayon'/'neon'/'splatter', 'color': '#hex', 'size': "
-            "0.002-0.01 }.\n"
-            "- 'particles': Atmospheric particles. Bounds [x1, y1, x2, y2], count (10-50), shape "
-            "('petal'/'sparkle'/'star'/'dot'), brush { 'color': '#hex' }.\n"
-            "- 'manga_lines': Radial speed/focus lines toward a center. STRICT: ONLY use when explicitly requested as an action/battle manga effect. NEVER use across serene skies or portraits! center [cx, cy], inner_radius (0.05-0.3), outer_radius (0.5-1.0), density (16-80), brush { 'profile': 'gpen', 'color': '#hex', 'size': 0.002 }.\n\n"
-            "%4\n"
-            "=== OUTPUT SCHEMA EXAMPLE ===\n"
-            "{\n"
-            "  \"schema_version\": 2,\n"
-            "  \"prompt\": \"illustration description\",\n"
-            "  \"title\": \"Title\",\n"
-            "  \"operations\": [\n"
-            "    {\n"
-            "      \"kind\": \"gradient_fill\",\n"
-            "      \"id\": \"sky\",\n"
-            "      \"layer\": \"Flats\",\n"
-            "      \"polygon\": [[0.0,0.0],[1.0,0.0],[1.0,0.6],[0.0,0.6]],\n"
-            "      \"colors\": [\"#1b2a4a\", \"#416788\", \"#dbe7f2\"],\n"
-            "      \"angle_deg\": 90,\n"
-            "      \"brush\": {\"profile\": \"watercolor\", \"color\": \"#416788\", \"size\": 0.05, \"is_eraser\": "
-            "false}\n"
-            "    },\n"
-            "    {\n"
-            "      \"kind\": \"fill\",\n"
-            "      \"id\": \"ground\",\n"
-            "      \"layer\": \"Flats\",\n"
-            "      \"polygon\": [[0.0,0.55],[1.0,0.55],[1.0,1.0],[0.0,1.0]],\n"
-            "      \"brush\": {\"profile\": \"brush\", \"color\": \"#2d3748\", \"size\": 0.04, \"is_eraser\": false}\n"
-            "    },\n"
-            "    {\n"
-            "      \"kind\": \"hatch\",\n"
-            "      \"id\": \"ground_shade\",\n"
-            "      \"layer\": \"Shading\",\n"
-            "      \"polygon\": [[0.1,0.65],[0.5,0.65],[0.4,0.85],[0.1,0.85]],\n"
-            "      \"angle_deg\": 45,\n"
-            "      \"spacing\": 0.015,\n"
-            "      \"cross_hatch\": false,\n"
-            "      \"brush\": {\"profile\": \"pencil\", \"color\": \"#1a202c\", \"size\": 0.002, \"is_eraser\": "
-            "false}\n"
-            "    },\n"
-            "    {\n"
-            "      \"kind\": \"ribbon\",\n"
-            "      \"id\": \"main_tree\",\n"
-            "      \"layer\": \"Lineart\",\n"
-            "      \"spine\": [[0.35,0.95],[0.36,0.65],[0.42,0.40]],\n"
-            "      \"width_start\": 0.04,\n"
-            "      \"width_mid\": 0.025,\n"
-            "      \"width_end\": 0.01,\n"
-            "      \"brush\": {\"profile\": \"brush\", \"color\": \"#221612\", \"size\": 0.01, \"is_eraser\": false}\n"
-            "    },\n"
-            "    {\n"
-            "      \"kind\": \"path\",\n"
-            "      \"id\": \"branch_lines\",\n"
-            "      \"layer\": \"Lineart\",\n"
-            "      \"points\": [[0.36,0.65,0.8],[0.48,0.52,0.6],[0.58,0.48,0.2]],\n"
-            "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#1a100d\", \"size\": 0.003, \"is_eraser\": false}\n"
-            "    },\n"
-            "    {\n"
-            "      \"kind\": \"particles\",\n"
-            "      \"id\": \"stars\",\n"
-            "      \"layer\": \"FX\",\n"
-            "      \"bounds\": [0.05,0.05,0.95,0.50],\n"
-            "      \"count\": 30,\n"
-            "      \"shape\": \"sparkle\",\n"
-            "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#ffffff\", \"size\": 0.002, \"is_eraser\": false}\n"
-            "    }\n"
-            "  ]\n"
-            "}")
-            .arg(canvasSize.width())
-            .arg(canvasSize.height())
-            .arg(QString::number(aspect, 'f', 2))
-            .arg(artDirection);
+    // A0: User Request is placed at the absolute top with strict priority rule
+    QString systemText;
+    systemText += QStringLiteral(
+        "=== USER REQUEST (ABSOLUTE HIGHEST PRIORITY) ===\n"
+        "\"%1\"\n"
+        "PRIORITY RULE: If any artistic guideline, example, or default suggestion below conflicts with the USER REQUEST, you MUST follow the USER REQUEST. Every subject, character, mood, color palette, and detail MUST be derived strictly from the USER REQUEST.\n\n"
+    ).arg(prompt.trimmed());
+
+    systemText += QStringLiteral(
+        "You are an autonomous AI master digital painter directing layer-by-layer drawing plans for Krita.\n"
+        "Generate a rich, cohesive, painterly illustration by specifying coordinate-directed strokes in StrokeProgram JSON format.\n"
+        "Output ONLY valid, parseable RFC 8259 JSON starting with '{' and ending with '}'.\n"
+        "Do NOT include markdown explanations, thought text, or conversational chatter outside the JSON.\n\n"
+    );
+
+    systemText += buildJsonContractSection() + QStringLiteral("\n\n");
+    systemText += buildCoordinateSection(canvasSize) + QStringLiteral("\n\n");
+    systemText += buildLayerSemanticsSection() + QStringLiteral("\n\n");
+    systemText += buildDrawingWorkflowSection() + QStringLiteral("\n\n");
+    systemText += buildArtisticGuidelinesSection() + QStringLiteral("\n\n");
+    systemText += buildOperationKindsSection() + QStringLiteral("\n\n");
+    systemText += artDirection + QStringLiteral("\n\n");
+    systemText += buildOutputSchemaExampleSection();
 
     if (!customInstructions.trimmed().isEmpty()) {
         systemText += QStringLiteral("\n\n[USER CUSTOM INSTRUCTIONS]\n") + customInstructions.trimmed();
@@ -558,6 +591,7 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
     QJsonObject payload;
     payload[QStringLiteral("model")] = model.trimmed();
     payload[QStringLiteral("messages")] = messages;
+    payload[QStringLiteral("seed")] = static_cast<int>(stableSeed(prompt.simplified()));
 
     if (enableStreaming) {
         payload[QStringLiteral("stream")] = true;
@@ -565,9 +599,21 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
 
     // Structured output via json_object or json_schema (optional, only when explicitly enforced or native OpenAI)
     if (enforceJsonFormat) {
-        QJsonObject responseFormat;
-        responseFormat[QStringLiteral("type")] = QStringLiteral("json_object");
-        payload[QStringLiteral("response_format")] = responseFormat;
+        if (supportsJsonSchema(model)) {
+            QJsonObject schemaObj;
+            schemaObj[QStringLiteral("name")] = QStringLiteral("stroke_program");
+            schemaObj[QStringLiteral("strict")] = true;
+            schemaObj[QStringLiteral("schema")] = strokeProgramJsonSchema();
+
+            QJsonObject responseFormat;
+            responseFormat[QStringLiteral("type")] = QStringLiteral("json_schema");
+            responseFormat[QStringLiteral("json_schema")] = schemaObj;
+            payload[QStringLiteral("response_format")] = responseFormat;
+        } else {
+            QJsonObject responseFormat;
+            responseFormat[QStringLiteral("type")] = QStringLiteral("json_object");
+            payload[QStringLiteral("response_format")] = responseFormat;
+        }
     }
 
     int calculatedTokens = maxTokensOverride > 0
@@ -1438,10 +1484,237 @@ bool KisAiStrokeProgramCodec::supportsJsonFormat(const QString &endpoint)
         || ep.contains(QLatin1String("1234"));  // LM Studio default port
 }
 
+bool KisAiStrokeProgramCodec::supportsJsonSchema(const QString &model)
+{
+    const QString m = model.trimmed().toLower();
+    return (m.contains(QLatin1String("gpt-4o")) || m.contains(QLatin1String("gpt-4.5")))
+        && !m.contains(QLatin1String("vision-preview"));
+}
+
+QColor KisAiStrokeProgramCodec::calculateHueShiftedShadow(const QColor &baseColor, bool warmLight)
+{
+    if (!baseColor.isValid()) return QColor(30, 24, 45, 120);
+
+    int h, s, v, a;
+    baseColor.getHsv(&h, &s, &v, &a);
+    if (h < 0) h = 240;
+
+    if (warmLight) {
+        if (h >= 60 && h < 240) {
+            h = qMin(240, h + 25);
+        } else if (h < 60 || h > 240) {
+            h = (h - 25 + 360) % 360;
+        }
+    } else {
+        if (h >= 180 && h <= 300) {
+            h = (h + 30) % 360;
+        }
+    }
+
+    s = qBound(30, s + 35, 220);
+    v = qBound(25, static_cast<int>(v * 0.55), 150);
+
+    return QColor::fromHsv(h, s, v, a);
+}
+
+KisAiStrokeProgramCodec::IntentAdherenceResult KisAiStrokeProgramCodec::checkIntentAdherence(
+    const KisAiStrokeProgram &program,
+    const QString &prompt)
+{
+    IntentAdherenceResult result;
+    const QString pLower = prompt.toLower();
+
+    bool expectDark = pLower.contains(QLatin1String("night")) ||
+                      pLower.contains(QLatin1String("dark")) ||
+                      pLower.contains(QLatin1String("evening")) ||
+                      pLower.contains(QLatin1String("starry")) ||
+                      pLower.contains(QLatin1String("midnight"));
+    bool expectSunset = pLower.contains(QLatin1String("sunset")) ||
+                        pLower.contains(QLatin1String("dusk")) ||
+                        pLower.contains(QLatin1String("golden hour"));
+
+    int darkCount = 0;
+    int warmCount = 0;
+    int totalColors = 0;
+
+    for (const KisAiStrokeOperation &op : program.operations) {
+        const QColor col = op.brush.color;
+        if (col.isValid()) {
+            ++totalColors;
+            if (col.value() < 120) {
+                ++darkCount;
+            }
+            int h = col.hsvHue();
+            if (h >= 0 && (h <= 55 || h >= 330)) {
+                ++warmCount;
+            }
+        }
+    }
+
+    qreal adherence = 1.0;
+
+    if (expectDark) {
+        if (totalColors > 0 && qreal(darkCount) / totalColors >= 0.25) {
+            result.matchedAspects.append(QStringLiteral("Night/Dark atmospheric tones matched"));
+        } else {
+            result.missingAspects.append(QStringLiteral("Expected darker night/evening tones"));
+            adherence -= 0.2;
+        }
+    }
+
+    if (expectSunset) {
+        if (totalColors > 0 && qreal(warmCount) / totalColors >= 0.20) {
+            result.matchedAspects.append(QStringLiteral("Sunset warm golden tones matched"));
+        } else {
+            result.missingAspects.append(QStringLiteral("Expected warm sunset/golden palette"));
+            adherence -= 0.2;
+        }
+    }
+
+    const auto layerCounts = countLayerOperations(program);
+    if (!layerCounts.contains(QStringLiteral("Flats")) && !layerCounts.contains(QStringLiteral("Background"))) {
+        result.missingAspects.append(QStringLiteral("Missing base silhouette and flats"));
+        adherence -= 0.3;
+    } else {
+        result.matchedAspects.append(QStringLiteral("Base color silhouettes present"));
+    }
+
+    result.score = qBound<qreal>(0.0, adherence, 1.0);
+    return result;
+}
+
+KisAiStrokeProgram KisAiStrokeProgramCodec::trimOperationsToBudget(
+    const KisAiStrokeProgram &program,
+    int maxOperations)
+{
+    if (program.operations.size() <= maxOperations || maxOperations <= 0) {
+        return program;
+    }
+
+    KisAiStrokeProgram trimmed = program;
+    trimmed.operations.clear();
+
+    QMap<QString, QVector<KisAiStrokeOperation>> byLayer;
+    for (const KisAiStrokeOperation &op : program.operations) {
+        byLayer[normalizeLayerName(op.layer)].append(op);
+    }
+
+    const int flatsBudget = qMax(1, static_cast<int>(maxOperations * 0.35));
+    const int lineartBudget = qMax(1, static_cast<int>(maxOperations * 0.30));
+    const int shadingBudget = qMax(1, static_cast<int>(maxOperations * 0.20));
+    const int highlightsBudget = qMax(1, static_cast<int>(maxOperations * 0.10));
+    const int fxBudget = maxOperations - (flatsBudget + lineartBudget + shadingBudget + highlightsBudget);
+
+    auto takeBest = [](QVector<KisAiStrokeOperation> &ops, int budget) -> QVector<KisAiStrokeOperation> {
+        if (ops.size() <= budget) {
+            return ops;
+        }
+        std::stable_sort(ops.begin(), ops.end(), [](const KisAiStrokeOperation &a, const KisAiStrokeOperation &b) {
+            const qreal scoreA = a.polygon.size() > 0 ? polygonArea(a.polygon) : (a.points.size() * 0.01);
+            const qreal scoreB = b.polygon.size() > 0 ? polygonArea(b.polygon) : (b.points.size() * 0.01);
+            return scoreA > scoreB;
+        });
+        return ops.mid(0, budget);
+    };
+
+    QVector<KisAiStrokeOperation> selected;
+    if (byLayer.contains(QStringLiteral("Background"))) {
+        selected.append(byLayer[QStringLiteral("Background")]);
+    }
+    selected.append(takeBest(byLayer[QStringLiteral("Flats")], flatsBudget));
+    selected.append(takeBest(byLayer[QStringLiteral("Shading")], shadingBudget));
+    selected.append(takeBest(byLayer[QStringLiteral("Lineart")], lineartBudget));
+    selected.append(takeBest(byLayer[QStringLiteral("Highlights")], highlightsBudget));
+    selected.append(takeBest(byLayer[QStringLiteral("FX")], qMax(0, fxBudget)));
+
+    trimmed.operations = selected;
+    return refineForRendering(trimmed);
+}
+
+QJsonObject KisAiStrokeProgramCodec::buildCompositionPlanPayload(
+    const QString &model,
+    const QString &prompt,
+    const QSize &canvasSize,
+    int artStyle)
+{
+    Q_UNUSED(artStyle);
+    const qreal aspect = canvasSize.height() > 0 ? qreal(canvasSize.width()) / canvasSize.height() : 1.0;
+
+    const QString systemText = QStringLiteral(
+        "You are an expert art director and master illustrator. "
+        "Before generating digital strokes, formulate a high-level composition and lighting blueprint in JSON.\n"
+        "Output strictly valid JSON with this schema:\n"
+        "{\n"
+        "  \"composition_type\": \"rule_of_thirds\" | \"centered\" | \"diagonal\" | \"panoramic\",\n"
+        "  \"focal_point\": {\"x\": 0.5, \"y\": 0.4},\n"
+        "  \"primary_palette\": [\"#hex1\", \"#hex2\", \"#hex3\", \"#hex4\", \"#hex5\"],\n"
+        "  \"light_source\": {\"direction\": \"top_left\" | \"top_right\" | \"rim\" | \"ambient\", \"temperature\": \"warm\" | \"cool\"},\n"
+        "  \"depth_planes\": {\"background\": \"...\", \"midground\": \"...\", \"foreground\": \"...\"},\n"
+        "  \"artistic_directives\": \"Concise 2-sentence directive for stroke generation.\"\n"
+        "}"
+    );
+
+    QJsonObject userObj;
+    userObj[QStringLiteral("prompt")] = prompt;
+    userObj[QStringLiteral("canvas_width")] = canvasSize.width();
+    userObj[QStringLiteral("canvas_height")] = canvasSize.height();
+    userObj[QStringLiteral("aspect_ratio")] = aspect;
+
+    QJsonArray messages;
+    messages.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("system")}, {QStringLiteral("content"), systemText}});
+    messages.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("user")}, {QStringLiteral("content"), QString::fromUtf8(QJsonDocument(userObj).toJson(QJsonDocument::Compact))}});
+
+    QJsonObject payload;
+    payload[QStringLiteral("model")] = model.trimmed();
+    payload[QStringLiteral("messages")] = messages;
+    payload[QStringLiteral("stream")] = false;
+
+    QJsonObject responseFormat;
+    responseFormat[QStringLiteral("type")] = QStringLiteral("json_object");
+    payload[QStringLiteral("response_format")] = responseFormat;
+
+    payload[QStringLiteral("max_tokens")] = 1024;
+    payload[QStringLiteral("temperature")] = 0.6;
+    return payload;
+}
+
+bool KisAiStrokeProgramCodec::parseCompositionPlan(
+    const QByteArray &responseBytes,
+    QString *outDirectives,
+    QString *errorMessage)
+{
+    if (outDirectives) outDirectives->clear();
+    const QString raw = QString::fromUtf8(responseBytes);
+    const QString jsonStr = sanitizeAndExtractJson(raw);
+
+    QJsonParseError parseErr;
+    const QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8(), &parseErr);
+    if (!doc.isObject()) {
+        if (errorMessage) *errorMessage = QStringLiteral("Failed to parse composition plan JSON: %1").arg(parseErr.errorString());
+        return false;
+    }
+
+    const QJsonObject root = doc.object();
+    QString directives;
+    if (root.contains(QStringLiteral("artistic_directives"))) {
+        directives = root.value(QStringLiteral("artistic_directives")).toString().trimmed();
+    }
+    const QJsonObject focal = root.value(QStringLiteral("focal_point")).toObject();
+    if (!focal.isEmpty()) {
+        directives += QStringLiteral(" [Focal point at (%1, %2)]")
+                          .arg(QString::number(focal.value(QStringLiteral("x")).toDouble(0.5), 'f', 2))
+                          .arg(QString::number(focal.value(QStringLiteral("y")).toDouble(0.5), 'f', 2));
+    }
+
+    if (outDirectives) *outDirectives = directives;
+    return !directives.isEmpty();
+}
+
 bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
                                             KisAiStrokeProgram *outProgram,
                                             QString *errorMessage,
-                                            KisAiJsonDiagnostic *diagnostic)
+                                            KisAiJsonDiagnostic *diagnostic,
+                                            KisAiStrokeQualityReport *qualityReport)
 {
     constexpr int MAX_RESPONSE_BYTES = 32 * 1024 * 1024;
     if (responseBytes.size() > MAX_RESPONSE_BYTES) {
@@ -1462,7 +1735,7 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
         diagnostic->appliedRepairs.clear();
     }
 
-    const auto parseAndRefine = [outProgram, errorMessage, diagnostic](const QJsonObject &programObject) {
+    const auto parseAndRefine = [outProgram, errorMessage, diagnostic, qualityReport](const QJsonObject &programObject) {
         QJsonObject mutableRoot = programObject;
         KisAiStrokeTypeCheckReport typeReport;
         KisAiStrokeTypeChecker::checkAndCoerceProgram(&mutableRoot, &typeReport);
@@ -1478,8 +1751,11 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
             return false;
         }
 
-        KisAiStrokeQualityReport qualityReport;
-        *outProgram = KisAiStrokeProgramCodec::refineForRendering(*outProgram, &qualityReport);
+        KisAiStrokeQualityReport localQualityReport;
+        *outProgram = KisAiStrokeProgramCodec::refineForRendering(*outProgram, &localQualityReport);
+        if (qualityReport) {
+            *qualityReport = localQualityReport;
+        }
         if (outProgram->operations.isEmpty()) {
             if (errorMessage) {
                 *errorMessage = QStringLiteral("描画可能なストローク操作が1件も含まれていません。");
@@ -1567,6 +1843,11 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
                 }
                 // Fallback extraction on choices content
                 if (extractOperationsFromRawText(content, outProgram, errorMessage, diagnostic)) {
+                    if (qualityReport) {
+                        KisAiStrokeQualityReport rep;
+                        KisAiStrokeProgramCodec::refineForRendering(*outProgram, &rep);
+                        *qualityReport = rep;
+                    }
                     return true;
                 }
             }
@@ -1590,6 +1871,11 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
                         }
                     }
                     if (extractOperationsFromRawText(partText, outProgram, errorMessage, diagnostic)) {
+                        if (qualityReport) {
+                            KisAiStrokeQualityReport rep;
+                            KisAiStrokeProgramCodec::refineForRendering(*outProgram, &rep);
+                            *qualityReport = rep;
+                        }
                         return true;
                     }
                 }
@@ -1626,6 +1912,11 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
 
     // 3. Ultimate Fallback: operation-by-operation extraction from raw text
     if (extractOperationsFromRawText(rawText, outProgram, errorMessage, diagnostic)) {
+        if (qualityReport) {
+            KisAiStrokeQualityReport rep;
+            KisAiStrokeProgramCodec::refineForRendering(*outProgram, &rep);
+            *qualityReport = rep;
+        }
         return true;
     }
 
@@ -2407,6 +2698,16 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
         }
         op.brush.profile = profile;
 
+        // A5: Shading hatch rescue - convert coarse/mechanical hatch to smooth watercolor/brush fill
+        if (op.layer == QLatin1String("Shading") && op.kind == KisAiStrokeOperation::Kind::Hatch) {
+            if (!op.crossHatch && (op.spacing >= 0.02 || op.spacing <= 0.002)) {
+                op.kind = KisAiStrokeOperation::Kind::Fill;
+                op.brush.profile = QStringLiteral("watercolor");
+                op.brush.opacity = qBound<qreal>(0.05, op.brush.opacity * 0.75, 0.40);
+                ++localReport.repairedValues;
+            }
+        }
+
         if (!std::isfinite(op.brush.opacity)) {
             op.brush.opacity = 1.0;
             ++localReport.repairedValues;
@@ -2441,6 +2742,14 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
                    && op.brush.color.blue() == 0) {
             op.brush.color.setRgb(18, 18, 24, op.brush.color.alpha());
             ++localReport.repairedValues;
+        }
+
+        // B3: If shading fill has pure black or near-zero saturation, enrich with hue-shifted shadow tone
+        if (op.layer == QLatin1String("Shading") && (op.kind == KisAiStrokeOperation::Kind::Fill || op.kind == KisAiStrokeOperation::Kind::GradientFill)) {
+            if (op.brush.color.isValid() && op.brush.color.value() < 40 && op.brush.color.saturation() < 25) {
+                op.brush.color = calculateHueShiftedShadow(op.brush.color, true);
+                ++localReport.repairedValues;
+            }
         }
 
         QVector<int> kept;
@@ -2533,7 +2842,11 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             if (op.kind == KisAiStrokeOperation::Kind::GradientFill && op.polygon.size() < 3) {
                 op.polygon.clear(); // Empty gradient geometry deliberately means full canvas.
             } else {
-                renderable = op.polygon.size() >= 3 && polygonArea(op.polygon) > 1.0e-6;
+                const qreal area = polygonArea(op.polygon);
+                renderable = op.polygon.size() >= 3 && area >= 1.0e-4;
+                if (renderable && op.polygon.boundingRect().width() < 0.005 && op.polygon.boundingRect().height() < 0.005) {
+                    renderable = false;
+                }
             }
             if (!std::isfinite(op.spacing))
                 op.spacing = 0.015;
@@ -2595,6 +2908,33 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             break;
         }
         case KisAiStrokeOperation::Kind::MangaLines: {
+            // A5: Manga lines must only be in the FX layer
+            if (op.layer != QLatin1String("FX")) {
+                renderable = false;
+                break;
+            }
+            // A5: Discard manga focus lines if prompt context is static / calm
+            const QString promptLower = program.prompt.toLower();
+            const bool hasActionContext = promptLower.contains(QLatin1String("action")) ||
+                                          promptLower.contains(QLatin1String("speed")) ||
+                                          promptLower.contains(QLatin1String("battle")) ||
+                                          promptLower.contains(QLatin1String("impact")) ||
+                                          promptLower.contains(QLatin1String("manga")) ||
+                                          promptLower.contains(QLatin1String("comic")) ||
+                                          promptLower.contains(QLatin1String("burst")) ||
+                                          promptLower.contains(QLatin1String("dynamic"));
+            const bool hasStaticContext = promptLower.contains(QLatin1String("portrait")) ||
+                                          promptLower.contains(QLatin1String("landscape")) ||
+                                          promptLower.contains(QLatin1String("scenery")) ||
+                                          promptLower.contains(QLatin1String("peaceful")) ||
+                                          promptLower.contains(QLatin1String("calm")) ||
+                                          promptLower.contains(QLatin1String("sunset")) ||
+                                          promptLower.contains(QLatin1String("sleep"));
+            if (!hasActionContext && hasStaticContext) {
+                renderable = false;
+                break;
+            }
+
             op.gradientCenter = clampedPoint(op.gradientCenter, &localReport.repairedValues);
             op.innerRadius = qBound<qreal>(0.01, std::isfinite(op.innerRadius) ? op.innerRadius : 0.15, 0.8);
             op.outerRadius = qBound<qreal>(op.innerRadius + 0.05, std::isfinite(op.outerRadius) ? op.outerRadius : 0.70, 1.5);
@@ -2659,66 +2999,92 @@ qreal KisAiStrokeProgramCodec::qualityScore(const KisAiStrokeProgram &program)
         return 0.0;
 
     QSet<QString> layers;
-    QSet<int> kinds;
-    QRectF occupied;
+    QSet<QString> uniqueColors;
+    qreal totalPolygonArea = 0.0;
+    int continuousStrokes = 0;
+    int totalStrokes = 0;
     int geometryPoints = 0;
 
-    const auto includePoint = [&occupied](const QPointF &point) {
-        const QRectF tiny(point, QSizeF(0.0001, 0.0001));
-        occupied = occupied.isNull() ? tiny : occupied.united(tiny);
-    };
-
     for (const KisAiStrokeOperation &op : program.operations) {
-        layers.insert(normalizeLayerName(op.layer));
-        kinds.insert(static_cast<int>(op.kind));
-        for (const KisAiStrokePoint &point : op.points) {
-            includePoint(point.pos);
-            ++geometryPoints;
+        const QString normLayer = normalizeLayerName(op.layer);
+        layers.insert(normLayer);
+
+        if (op.brush.color.isValid()) {
+            uniqueColors.insert(op.brush.color.name(QColor::HexRgb).toLower());
         }
-        for (const QPointF &point : op.polygon) {
-            includePoint(point);
-            ++geometryPoints;
+        for (const QColor &gc : op.gradientColors) {
+            if (gc.isValid()) {
+                uniqueColors.insert(gc.name(QColor::HexRgb).toLower());
+            }
         }
-        for (const QPointF &point : op.spine) {
-            includePoint(point);
-            ++geometryPoints;
-        }
-        if (op.kind == KisAiStrokeOperation::Kind::GradientFill && op.polygon.isEmpty()) {
-            occupied = QRectF(0.0, 0.0, 1.0, 1.0);
+
+        if (op.kind == KisAiStrokeOperation::Kind::Path) {
+            ++totalStrokes;
+            if (op.points.size() >= 3) {
+                ++continuousStrokes;
+            }
+            geometryPoints += op.points.size();
+        } else if (op.kind == KisAiStrokeOperation::Kind::Fill || op.kind == KisAiStrokeOperation::Kind::GradientFill) {
+            if (op.kind == KisAiStrokeOperation::Kind::GradientFill && op.polygon.isEmpty()) {
+                totalPolygonArea += 1.0;
+                geometryPoints += 4;
+            } else {
+                totalPolygonArea += polygonArea(op.polygon);
+                geometryPoints += op.polygon.size();
+            }
+        } else if (op.kind == KisAiStrokeOperation::Kind::Ribbon) {
+            ++totalStrokes;
+            if (op.spine.size() >= 3) {
+                ++continuousStrokes;
+            }
+            geometryPoints += op.spine.size();
         } else if (op.kind == KisAiStrokeOperation::Kind::Particles) {
-            occupied = occupied.isNull() ? op.bounds : occupied.united(op.bounds);
             geometryPoints += op.particleCount;
         } else if (op.kind == KisAiStrokeOperation::Kind::MangaLines) {
-            const QRectF bounds(op.gradientCenter.x() - op.outerRadius, op.gradientCenter.y() - op.outerRadius,
-                                op.outerRadius * 2.0, op.outerRadius * 2.0);
-            occupied = occupied.isNull() ? bounds : occupied.united(bounds);
             geometryPoints += op.density * 2;
         }
     }
 
-    int essentialLayers = 0;
-    for (const QString &layer : {QStringLiteral("Flats"),
-                                 QStringLiteral("Shading"),
-                                 QStringLiteral("Lineart"),
-                                 QStringLiteral("Highlights")}) {
-        if (layers.contains(layer))
-            ++essentialLayers;
-    }
-    if (layers.contains(QStringLiteral("Background")) && essentialLayers < 4) {
-        ++essentialLayers;
-    }
-    const qreal layerScore = qreal(essentialLayers) / 4.0;
-    const qreal primitiveScore = qMin<qreal>(1.0, qreal(kinds.size()) / 4.0);
-    const qreal operationScore = qMin<qreal>(1.0, qreal(program.operations.size()) / 24.0);
-    const qreal detailScore = qMin<qreal>(1.0, qreal(geometryPoints) / 120.0);
-    const QRectF canvas(0.0, 0.0, 1.0, 1.0);
-    const QRectF clipped = occupied.intersected(canvas);
-    const qreal coverageScore = qBound<qreal>(0.0, clipped.width() * clipped.height(), 1.0);
+    // 1. Layer hierarchy score (0.30)
+    qreal layerHierarchyScore = 0.0;
+    if (layers.contains(QStringLiteral("Flats"))) layerHierarchyScore += 0.35;
+    if (layers.contains(QStringLiteral("Lineart"))) layerHierarchyScore += 0.30;
+    if (layers.contains(QStringLiteral("Shading"))) layerHierarchyScore += 0.20;
+    if (layers.contains(QStringLiteral("Highlights"))) layerHierarchyScore += 0.10;
+    if (layers.contains(QStringLiteral("Background"))) layerHierarchyScore += 0.05;
+    layerHierarchyScore = qBound<qreal>(0.0, layerHierarchyScore, 1.0);
 
-    return qBound<qreal>(0.0,
-                         0.28 * layerScore + 0.18 * primitiveScore + 0.18 * operationScore + 0.18 * detailScore
-                             + 0.18 * coverageScore,
-                         1.0);
+    // 2. Real polygon silhouette area score (0.20)
+    const qreal silhouetteAreaScore = qBound<qreal>(0.0, totalPolygonArea / 0.35, 1.0);
+
+    // 3. Stroke continuity score (0.20): ratio of continuous 3+ point strokes
+    const qreal strokeContinuityScore = (totalStrokes > 0)
+        ? (qreal(continuousStrokes) / qreal(totalStrokes))
+        : (layers.contains(QStringLiteral("Flats")) ? 0.8 : 0.0);
+
+    // 4. Color diversity and harmony score (0.15): 4-16 colors optimal
+    const int colorCount = uniqueColors.size();
+    qreal colorDiversityScore = 0.0;
+    if (colorCount >= 4 && colorCount <= 16) {
+        colorDiversityScore = 1.0;
+    } else if (colorCount > 0 && colorCount < 4) {
+        colorDiversityScore = qreal(colorCount) / 4.0;
+    } else if (colorCount > 16) {
+        colorDiversityScore = qMax<qreal>(0.5, 1.0 - qreal(colorCount - 16) * 0.03);
+    }
+
+    // 5. Operation count and geometric detail score (0.15)
+    const qreal operationCountScore = qBound<qreal>(0.0, qreal(program.operations.size()) / 20.0, 1.0);
+    const qreal detailPointScore = qBound<qreal>(0.0, qreal(geometryPoints) / 100.0, 1.0);
+    const qreal operationScore = 0.5 * operationCountScore + 0.5 * detailPointScore;
+
+    const qreal finalScore = 0.30 * layerHierarchyScore
+                           + 0.20 * silhouetteAreaScore
+                           + 0.20 * strokeContinuityScore
+                           + 0.15 * colorDiversityScore
+                           + 0.15 * operationScore;
+
+    return qBound<qreal>(0.0, finalScore, 1.0);
 }
 
 KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgram(const QString &prompt, const QSize &canvasSize)
@@ -3600,11 +3966,93 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgram(const QSt
 
 bool KisAiStrokeProgramCodec::isVisionModel(const QString &model)
 {
-    // ハードコードされたVision対応モデル名リストは廃止。
-    // 最新モデルへの追従のため、Vision機能付きLLMであることを必須条件（前提）とし、
-    // 空でないモデル名はすべてVision対応として扱います。
-    // 万が一非対応だった場合はリクエスト送信側でテキストのみにフォールバックします。
     return !model.trimmed().isEmpty();
+}
+
+QJsonObject KisAiStrokeProgramCodec::buildGeometryDigest(const KisAiStrokeProgram &program)
+{
+    QJsonObject digest;
+    digest[QStringLiteral("total_operations")] = program.operations.size();
+
+    const QMap<QString, int> layerCounts = countLayerOperations(program);
+    QJsonObject layersObj;
+    for (auto it = layerCounts.constBegin(); it != layerCounts.constEnd(); ++it) {
+        layersObj[it.key()] = it.value();
+    }
+    digest[QStringLiteral("layer_counts")] = layersObj;
+
+    qreal flatsAreaEst = 0.0;
+    QSet<QString> colorSet;
+    qreal minX = 1.0, minY = 1.0, maxX = 0.0, maxY = 0.0;
+    bool hasGeometry = false;
+
+    for (const KisAiStrokeOperation &op : program.operations) {
+        if (op.brush.color.isValid()) {
+            colorSet.insert(op.brush.color.name(QColor::HexRgb).toLower());
+        }
+        for (const QColor &gc : op.gradientColors) {
+            if (gc.isValid()) {
+                colorSet.insert(gc.name(QColor::HexRgb).toLower());
+            }
+        }
+        const QString normLayer = normalizeLayerName(op.layer);
+
+        if (!op.points.isEmpty()) {
+            hasGeometry = true;
+            qreal opMinX = 1.0, opMinY = 1.0, opMaxX = 0.0, opMaxY = 0.0;
+            for (const KisAiStrokePoint &pt : op.points) {
+                opMinX = qMin(opMinX, pt.pos.x());
+                opMaxX = qMax(opMaxX, pt.pos.x());
+                opMinY = qMin(opMinY, pt.pos.y());
+                opMaxY = qMax(opMaxY, pt.pos.y());
+            }
+            minX = qMin(minX, opMinX);
+            minY = qMin(minY, opMinY);
+            maxX = qMax(maxX, opMaxX);
+            maxY = qMax(maxY, opMaxY);
+        }
+        if (!op.polygon.isEmpty()) {
+            hasGeometry = true;
+            qreal opMinX = 1.0, opMinY = 1.0, opMaxX = 0.0, opMaxY = 0.0;
+            for (const QPointF &pt : op.polygon) {
+                opMinX = qMin(opMinX, pt.x());
+                opMaxX = qMax(opMaxX, pt.x());
+                opMinY = qMin(opMinY, pt.y());
+                opMaxY = qMax(opMaxY, pt.y());
+            }
+            minX = qMin(minX, opMinX);
+            minY = qMin(minY, opMinY);
+            maxX = qMax(maxX, opMaxX);
+            maxY = qMax(maxY, opMaxY);
+
+            if (normLayer == QLatin1String("Flats") || normLayer == QLatin1String("Background")) {
+                const qreal w = qMax<qreal>(0.0, opMaxX - opMinX);
+                const qreal h = qMax<qreal>(0.0, opMaxY - opMinY);
+                flatsAreaEst += (w * h * 0.7);
+            }
+        }
+    }
+
+    digest[QStringLiteral("flats_coverage_estimated")] = qBound<qreal>(0.0, flatsAreaEst, 1.0);
+
+    QJsonArray palArr;
+    int count = 0;
+    for (const QString &c : colorSet) {
+        palArr.append(c);
+        if (++count >= 12) break;
+    }
+    digest[QStringLiteral("active_palette")] = palArr;
+
+    if (hasGeometry) {
+        QJsonObject bbox;
+        bbox[QStringLiteral("min_x")] = qBound<qreal>(0.0, minX, 1.0);
+        bbox[QStringLiteral("min_y")] = qBound<qreal>(0.0, minY, 1.0);
+        bbox[QStringLiteral("max_x")] = qBound<qreal>(0.0, maxX, 1.0);
+        bbox[QStringLiteral("max_y")] = qBound<qreal>(0.0, maxY, 1.0);
+        digest[QStringLiteral("bounding_box")] = bbox;
+    }
+
+    return digest;
 }
 
 QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
@@ -3623,7 +4071,10 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     qreal temperature,
     qreal topP,
     int maxTokensOverride,
-    int artStyle)
+    int artStyle,
+    const KisAiStrokeProgram *accumulatedProgram,
+    const QString &previousCritique,
+    const QString &visionDetail)
 {
     const bool reasoning = isReasoningModel(model);
     const bool vision = includeVision && isVisionModel(model) && !imageBase64.trimmed().isEmpty();
@@ -3676,6 +4127,7 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     }
 
     QJsonObject userObj;
+    userObj[QStringLiteral("restated_goal")] = prompt; // Prompt-First principle
     userObj[QStringLiteral("prompt")] = prompt;
     userObj[QStringLiteral("canvas_width")] = canvasSize.width();
     userObj[QStringLiteral("canvas_height")] = canvasSize.height();
@@ -3683,18 +4135,27 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     userObj[QStringLiteral("total_steps")] = totalSteps;
     userObj[QStringLiteral("step_phase")] = phaseName;
     userObj[QStringLiteral("operation_target")] = operationTarget;
+
+    if (accumulatedProgram && !accumulatedProgram->operations.isEmpty()) {
+        userObj[QStringLiteral("accumulated_context")] = buildGeometryDigest(*accumulatedProgram);
+    }
+    if (!previousCritique.trimmed().isEmpty()) {
+        userObj[QStringLiteral("previous_step_critique")] = previousCritique.trimmed();
+    }
+
     userObj[QStringLiteral("directive")] = QStringLiteral(
-        "You are acting as an Autonomous Master Illustration Agent executing Step %1 of %2 in Goal Mode. "
-        "Perform your 4-phase artistic cognitive cycle: "
-        "1. [OBSERVE & CRITIQUE]: Inspect the canvas screenshot (if attached). Provide an insightful 1-2 sentence 'agent_critique' analyzing depth, silhouettes, anatomical harmony, and missing elements. "
+        "Execute Step %1 of %2 in Goal Mode for prompt: '%5'. "
+        "Perform your artistic cognitive cycle: "
+        "1. [OBSERVE & CRITIQUE]: Inspect the canvas screenshot (if attached) and accumulated geometry. Provide a concise 1-2 sentence 'agent_critique' analyzing depth, silhouettes, anatomical harmony, and missing elements. "
         "2. [FOCUS]: Specify 'target_focus_area' (e.g. 'Face & Expression', 'Hair Strands & Volume', 'Form Shading & Ambient Occlusion', 'Specular Highlights & Atmosphere'). "
         "3. [READINESS EVALUATION]: Provide 'readiness_score' from 0.0 (bare outline) to 1.0 (finished presentation). If >= 0.85 and presentation-ready, set 'goal_reached' to true. "
         "4. [ACT]: Generate only the necessary, high-precision operations for phase '%3'. Set 'step_phase' to '%3', 'current_step' to %1, and 'goal_reached' to %4. "
-        "Output strictly valid RFC 8259 JSON without markdown fences or unescaped control characters.")
+        "Output strictly valid RFC 8259 JSON without markdown fences.")
         .arg(step)
         .arg(totalSteps)
         .arg(phaseName)
-        .arg(step >= totalSteps ? QStringLiteral("true") : QStringLiteral("false"));
+        .arg(step >= totalSteps ? QStringLiteral("true") : QStringLiteral("false"))
+        .arg(prompt);
 
     const QString userText = QString::fromUtf8(QJsonDocument(userObj).toJson(QJsonDocument::Compact));
 
@@ -3714,11 +4175,17 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
         if (!imageUrl.startsWith(QLatin1String("data:image/"))) {
             imageUrl = QStringLiteral("data:image/jpeg;base64,") + imageUrl;
         }
+
+        QString detail = visionDetail.trimmed().toLower();
+        if (detail.isEmpty() || detail == QLatin1String("auto")) {
+            detail = (step >= totalSteps) ? QStringLiteral("high") : QStringLiteral("low");
+        }
+
         contentArray.append(QJsonObject{
             {QStringLiteral("type"), QStringLiteral("image_url")},
             {QStringLiteral("image_url"), QJsonObject{
                 {QStringLiteral("url"), imageUrl},
-                {QStringLiteral("detail"), QStringLiteral("low")}
+                {QStringLiteral("detail"), detail}
             }}
         });
         userMsg[QStringLiteral("content")] = contentArray;
@@ -3730,15 +4197,28 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     QJsonObject payload;
     payload[QStringLiteral("model")] = model.trimmed();
     payload[QStringLiteral("messages")] = messages;
+    payload[QStringLiteral("seed")] = static_cast<int>(stableSeed(prompt.simplified()));
 
     if (enableStreaming) {
         payload[QStringLiteral("stream")] = true;
     }
 
     if (enforceJsonFormat) {
-        QJsonObject responseFormat;
-        responseFormat[QStringLiteral("type")] = QStringLiteral("json_object");
-        payload[QStringLiteral("response_format")] = responseFormat;
+        if (supportsJsonSchema(model)) {
+            QJsonObject schemaObj;
+            schemaObj[QStringLiteral("name")] = QStringLiteral("stroke_program");
+            schemaObj[QStringLiteral("strict")] = true;
+            schemaObj[QStringLiteral("schema")] = strokeProgramJsonSchema();
+
+            QJsonObject responseFormat;
+            responseFormat[QStringLiteral("type")] = QStringLiteral("json_schema");
+            responseFormat[QStringLiteral("json_schema")] = schemaObj;
+            payload[QStringLiteral("response_format")] = responseFormat;
+        } else {
+            QJsonObject responseFormat;
+            responseFormat[QStringLiteral("type")] = QStringLiteral("json_object");
+            payload[QStringLiteral("response_format")] = responseFormat;
+        }
     }
 
     const int calculatedTokens = maxTokensOverride > 0

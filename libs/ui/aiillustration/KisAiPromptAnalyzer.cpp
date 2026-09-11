@@ -312,116 +312,105 @@ QString KisAiPromptAnalyzer::generateArtDirection(
     switch (spec.domain) {
     case DomainType::Character: {
         out += QStringLiteral(
-            "[DOMAIN ART DIRECTION: Anime / Manga Character Portrait]\n"
-            "STRICT RULES (ZERO TOLERANCE):\n"
-            "- NEVER use 'hatch' for human skin, facial shading, or hair! Hatching produces disastrous barcode-like vertical stripes.\n"
-            "- NEVER use 'manga_lines' (radial speed lines) in character portraits unless explicitly requested as an action scene!\n"
-            "- Render smooth, beautiful, organic forms using 'fill', 'path', and 'ribbon'.\n"
-            "1. Layer 'Flats' (Seamless Base Volumes & Organic Hair):\n"
-            "   - Skin Base: Complete, smooth coverage of face, neck, and ears with fill (style: 'wash', color: #fff1e8 or #fef3eb).\n"
-            "   - Back Hair Mass: Deep hair silhouette framing the head behind neck with ribbon/fill (color: '%1').\n"
-            "   - Sclera Base: Clean white almond discs (#f8f9fa) inside eye sockets.\n"
-            "   - Iris Base: Rich vivid circular/oval color blocks with fill (color: '%2').\n"
-            "   - Front/Side Hair Masses: Volumetric framing clumps using flowing 'ribbon' with smooth tapering width (color: '%1').\n"
-            "2. Layer 'Shading' (Smooth 3D Facial Planes & Soft Blush - MULTIPLY BLEND):\n"
-            "   - Forehead Bangs Cast Shadow: Soft cast shadow directly beneath front bangs onto forehead (#d89a8c, opacity: 0.35-0.5).\n"
-            "   - Eye Socket AO & Upper Sclera Shadow: Subtle dark shade over top half of eyeballs for spherical depth.\n"
-            "   - Soft Facial Blush: Beautiful warm pinkish wash (#ff9fb2, opacity: 0.25-0.35) across cheek apples and nose bridge.\n"
-            "   - Nose Contour: Delicate subtle shadow under nose tip and alongside bridge (#d88c7d, opacity: 0.4).\n"
-            "   - Lip Tone & AO: Shaded upper lip + delicate ambient shadow under lower lip plump center.\n"
-            "   - Neck Cast Shadow: Smooth shadow under jawline and chin grading gently down the neck.\n"
-            "   - Hair Strand Depth: Deep shadow grooves between hair masses using smooth directional fills, NEVER barcode lines!\n"
-            "3. Layer 'Lineart' (EXQUISITE ANIME DETAIL - Use 1.5 to 3.5 px):\n"
-            "   - Jaw & Face Contour: Ultra-smooth, elegant V-line or soft curve jawline using path with Catmull-Rom splines (brush: 'gpen', color: #231c26).\n"
-            "   - Upper Eyelash Arches: Thick, expressive sweeping curved strokes with tapering ends (brush: 'gpen', color: #1a1622).\n"
-            "   - Lash Flicks & Double Eyelid: Outer eyelash flick + delicate arch line above upper lid.\n"
-            "   - Iris Rim & Pupil: Deep dark pupil at center + crisp circular iris contour.\n"
-            "   - Expressive Lips & Nose: Tiny delicate dot/dash for nose tip + sweet curved mouth line.\n"
-            "   - Flowing Hair Strands: Long, graceful S-curved ribbon and path strokes that follow the hair's natural flow.\n"
-            "4. Layer 'Highlights' & 'FX' (LUMINOUS POLISH):\n"
-            "   - Eye Specular Catchlights: Pure crisp white glints (#ffffff, size: 2-5px) at 10 or 2 o'clock on irises - brings eyes to life!\n"
-            "   - Iris Lower Crescent: Soft radiant glow (#ffffff or bright cyan/gold) on lower rim of iris.\n"
-            "   - Nose & Lip Glints: Tiny pinpoint specular dot on nose tip and lower lip plump center.\n"
-            "   - Angel Halo: Elegant luminous rim highlight arcs across top hair crown.\n"
+            "[DOMAIN ART DIRECTION: Character / Figure Portrait]\n"
+            "GUIDELINES & PRIORITIES:\n"
+            "- Strictly derive character gender, age, skin tone, hairstyle, attire, and emotional expression from the USER REQUEST.\n"
+            "- Avoid mechanical 'hatch' across smooth skin surfaces; use soft 'fill' (brush: watercolor/brush, style: wash) for natural shading.\n"
+            "- Render organic forms using 'fill', 'path', and 'ribbon'.\n"
+            "1. Layer 'Flats' (Base Volumes & Silhouettes):\n"
+            "   - Skin / Body Base: Solid, continuous coverage for head, neck, and exposed anatomy with fill (color derived from subject prompt).\n"
+            "   - Hair Silhouette: Primary hair volume masses framing the head using ribbon/fill (color: '%1' or prompt-specified hue).\n"
+            "   - Eye Sockets & Irises: Almond sclera discs and circular iris color blocks with fill (color: '%2' or prompt-specified hue).\n"
+            "   - Clothing & Adornments: Distinct opaque color masses defining garments and silhouette.\n"
+            "2. Layer 'Shading' (3D Depth & Ambient Occlusion - MULTIPLY BLEND):\n"
+            "   - Cast Shadows: Soft shadows under hair clumps, chin/jawline, and fabric drapery with opacity 0.3-0.5.\n"
+            "   - Form Shadows: Curvature transitions across facial planes, nose bridge, and anatomical landmarks.\n"
+            "   - Contact AO: Deep crevice shadows between overlapping locks and garment folds.\n"
+            "3. Layer 'Lineart' (Anatomical & Clothing Contours - 1.5 to 3.5 px):\n"
+            "   - Expressive Contours: Elegant curved paths using Catmull-Rom splines for jawline, eye contours, and mouth.\n"
+            "   - Hair & Fabric Strands: Flowing tapered paths and ribbons indicating movement and volume.\n"
+            "4. Layer 'Highlights' & 'FX' (Specular Polish):\n"
+            "   - Catchlights: Crisp glints inside eye pupils to convey vitality.\n"
+            "   - Surface Luster: Restrained specular points on focal highlights, jewelry, or metallic surfaces.\n"
         ).arg(spec.hairColor, spec.eyeColor);
         break;
     }
     case DomainType::Landscape: {
         QString skyColorsStr = QStringLiteral("[\"") + spec.skyGradientColors.join(QStringLiteral("\", \"")) + QStringLiteral("\"]");
         out += QStringLiteral(
-            "[DOMAIN ART DIRECTION: Landscape, Scenery & Nature]\n"
-            "STRICT RULES (ZERO TOLERANCE):\n"
-            "- NEVER draw 'manga_lines' (radial speed lines) across the sky in serene landscapes!\n"
-            "- NEVER draw tree canopies or foliage as flat polygonal blocks or sliced wedges!\n"
-            "1. Layer 'Flats' (Depth Horizons & Atmospheric Silhouettes):\n"
-            "   - Sky Gradient: Use 'gradient_fill' with colors %1 (angle_deg: 90) across upper canvas. Leave NO white gaps!\n"
-            "   - Distant Mountain Ridges: Grand undulating mountain silhouettes with fill (style: 'wash') in soft atmospheric haze.\n"
-            "   - Midground Terrain / Earth: Harmonious ground wash and hillside contours.\n"
+            "[DOMAIN ART DIRECTION: Landscape, Scenery & Environment]\n"
+            "GUIDELINES & PRIORITIES:\n"
+            "- Strictly derive environmental theme (time of day, weather, biome, structures) from the USER REQUEST.\n"
+            "- Do not place radial manga focus lines across serene natural skies.\n"
+            "- Avoid rigid polygonal shapes for organic forms like mountain crests, clouds, and trees.\n"
+            "1. Layer 'Flats' (Depth Horizons & Atmospheric Underpainting):\n"
+            "   - Sky / Atmosphere: Use 'gradient_fill' with colors %1 (angle_deg: 90) across background. Leave zero unpainted gaps.\n"
+            "   - Distant Horizons: Soft silhouette masses with fill for mountains, cityscapes, or horizons.\n"
+            "   - Midground & Foreground Terrain: Solid foundational terrain masses setting the camera perspective.\n"
         ).arg(skyColorsStr);
         if (spec.hasSakura) {
             out += QStringLiteral(
-                "   - Sakura Blossom Canopies: Billowing, cloud-like organic foliage clusters with gentle curves using fill (colors #ffb8cd, #ffd6e5, #fff0f5).\n"
+                "   - Foliage / Canopy Masses: Billowing, cloud-like organic clusters using fill.\n"
             );
         }
         out += QStringLiteral(
             "2. Layer 'Shading' (Atmospheric Depth & Form Volumes):\n"
-            "   - Mountain Shading: Majestic shadow slopes across the non-lit face of mountains using smooth wash fills.\n"
-            "   - Cloud Undersides: Soft violet/pinkish shadow bulges beneath puffy clouds (style: 'wash', opacity: 0.4-0.6).\n"
-            "   - Tree Canopy Under-Shadow: Deep organic occlusion beneath lower canopy masses and branch armatures.\n"
-            "3. Layer 'Lineart' (Organic Contours & Tree Anatomy):\n"
-            "   - Tree Trunks & Branches: Graceful twisting organic limbs using ribbon or path with natural tapering (brush: 'gpen', color: #342017).\n"
-            "   - Mountain Crests & Cloud Rims: Crisp sweeping silhouette lines defining ridges.\n"
-            "4. Layer 'Highlights' & 'FX' (Atmospheric Magic):\n"
-            "   - Sunlight Rim Lighting: Luminous golden/warm rim highlights along sun-facing mountain crests and canopy tops.\n"
-            "   - Drifting Petals/Particles: Gentle floating petals using 'particles' (shape: 'petal', count: 15-30) dancing in the wind.\n"
+            "   - Atmospheric Haze & Shadows: Gentle wash fills grading non-lit slopes and cloud undersides.\n"
+            "   - Occlusion: Deep shadow volumes under terrain overhangs and botanical clusters.\n"
+            "3. Layer 'Lineart' (Structural & Natural Contours):\n"
+            "   - Limbs / Structures: Tapered ribbon and path strokes defining organic trunks or architectural outlines.\n"
+            "   - Edge Silhouettes: Crisp sweeping lines defining focal ridges.\n"
+            "4. Layer 'Highlights' & 'FX' (Atmospheric Accents):\n"
+            "   - Key Lighting Rim: Luminous rim highlights along sun-facing crests or canopy crowns.\n"
+            "   - Atmospheric Particles: Gentle floating embers, dust motes, or petals if matching prompt theme.\n"
         );
         break;
     }
     case DomainType::Cyberpunk: {
         out += QStringLiteral(
             "[DOMAIN ART DIRECTION: Cyberpunk City & Sci-Fi Architecture]\n"
-            "1. Layer 'Flats': Dark atmospheric sky (#0a0e17) and monolithic skyscraper silhouette masses (#131b2e, #1a233a).\n"
-            "2. Layer 'Shading': Deep crevice occlusion between building blocks and misty ground wash (style: 'wash').\n"
-            "3. Layer 'Lineart': Sharp architectural edges, perspective vanishing lines, window grid frames (brush: 'gpen').\n"
-            "4. Layer 'Highlights' & 'FX': Luminous neon signs, glowing window matrices, laser light beams, holographic particles (#00f0ff, #ff007f, #ffe600).\n"
+            "1. Layer 'Flats': Atmospheric night sky and architectural silhouette masses derived from user prompt.\n"
+            "2. Layer 'Shading': Deep crevice ambient occlusion between buildings and misty ground wash (style: 'wash').\n"
+            "3. Layer 'Lineart': Sharp perspective lines, structural framework, and window grids (brush: 'gpen').\n"
+            "4. Layer 'Highlights' & 'FX': Vivid neon signs, laser accents, and holographic particles derived from prompt palette.\n"
         );
         break;
     }
     case DomainType::Creature: {
         out += QStringLiteral(
             "[DOMAIN ART DIRECTION: Creature & Animal Art]\n"
-            "1. Layer 'Flats': Organic body volume and fur/scale base silhouette with fill (style: 'wash').\n"
-            "2. Layer 'Shading': Anatomical musculature shadows and fur tone gradations with hatch (style: 'directional').\n"
+            "1. Layer 'Flats': Organic body volume and fur/scale base silhouette with fill (style: 'wash', color derived from subject).\n"
+            "2. Layer 'Shading': Anatomical musculature shadows and tonal gradations with soft wash or directional hatch.\n"
             "3. Layer 'Lineart': Expressive eye contours, ears, snout, paws, and delicate tapering whiskers (brush: 'gpen').\n"
-            "4. Layer 'Highlights': Glistening eye glints, fur rim lighting, wet nose specular highlight (#ffffff).\n"
+            "4. Layer 'Highlights': Glistening eye glints, fur/scale rim lighting, and moist specular highlights.\n"
         );
         break;
     }
     case DomainType::Botanical: {
         out += QStringLiteral(
             "[DOMAIN ART DIRECTION: Botanical & Floral Art]\n"
-            "1. Layer 'Flats': Petal base color masses (#e63946, #ff758f, #ffd6e5) and stem/leaf volumes (#2d6a4f, #52b788).\n"
-            "2. Layer 'Shading': Deep spiral crevice shadows between overlapping petals with fill (style: 'contour').\n"
-            "3. Layer 'Lineart': Graceful curving petal contours, leaf vein networks, thorny stem outlines (brush: 'gpen').\n"
-            "4. Layer 'Highlights': Fresh morning dewdrops with pinpoint specular glints and luminous petal edge rim light.\n"
+            "1. Layer 'Flats': Petal and foliage base color masses with fill, matching user-requested species and tones.\n"
+            "2. Layer 'Shading': Deep spiral crevice shadows between overlapping petals and leaf clusters with fill (style: 'contour').\n"
+            "3. Layer 'Lineart': Graceful curving petal contours, leaf vein networks, and organic stem outlines (brush: 'gpen').\n"
+            "4. Layer 'Highlights': Fresh dewdrops with pinpoint specular glints and luminous petal edge rim light.\n"
         );
         break;
     }
     case DomainType::MangaFx: {
         out += QStringLiteral(
-            "[DOMAIN ART DIRECTION: Manga Effects, Speed Lines & Runes]\n"
+            "[DOMAIN ART DIRECTION: Manga Effects, Speed Lines & Energy]\n"
             "1. Layer 'Flats': Deep atmospheric or energy backdrop wash.\n"
             "2. Layer 'Shading': Dramatic contrast hatching and shadow cast accents.\n"
             "3. Layer 'Lineart': High-impact radial focus lines (with open center), speed strokes, or geometric runic circles.\n"
-            "4. Layer 'Highlights' & 'FX': Vibrant energy sparkles, crackling lightning arcs, magical bloom particles.\n"
+            "4. Layer 'Highlights' & 'FX': Vibrant energy sparkles, crackling lightning arcs, and magical bloom particles.\n"
         );
         break;
     }
     case DomainType::General: {
         out += QStringLiteral(
             "[DOMAIN ART DIRECTION: Painterly Digital Art]\n"
-            "1. Layer 'Flats': Solid opaque foundation blocking every major element. Ensure zero white gaps.\n"
-            "2. Layer 'Shading': 3D form shadows and contact ambient occlusion with hatch or wash.\n"
+            "1. Layer 'Flats': Solid opaque foundation blocking every major element strictly from user prompt. Ensure zero white gaps.\n"
+            "2. Layer 'Shading': 3D form shadows and contact ambient occlusion with soft wash or directional fill.\n"
             "3. Layer 'Lineart': Structural contours with Catmull-Rom spline curves and tapering pressure dynamics.\n"
             "4. Layer 'Highlights' & 'FX': Strategic focal lighting, specular points, and atmospheric particles.\n"
         );
