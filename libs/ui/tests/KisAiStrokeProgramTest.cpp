@@ -2103,6 +2103,62 @@ void KisAiStrokeProgramTest::testSchemaAliasesAndGoalModeArtStyle()
     QVERIFY(guidance5StepP3.contains(QStringLiteral("PHASE 3 MISSION")));
 }
 
+void KisAiStrokeProgramTest::testAgentCritiqueAndReadinessParsing()
+{
+    const QString agentJson = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"agent_critique\": \"Initial face proportions are solid, but hair volume lacks flow and eye highlights are missing.\",\n"
+        "  \"target_focus_area\": \"HairFlow & Catchlights\",\n"
+        "  \"readiness_score\": 0.78,\n"
+        "  \"recommended_action\": \"add_strands_and_highlights\",\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"points\": [[0.2, 0.3], [0.5, 0.6]],\n"
+        "      \"brush\": {\"color\": \"#333333\", \"size\": 0.01}\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+
+    KisAiStrokeProgram prog;
+    QString err;
+    QVERIFY(KisAiStrokeProgramCodec::parseResponse(agentJson.toUtf8(), &prog, &err));
+    QCOMPARE(prog.agentCritique, QStringLiteral("Initial face proportions are solid, but hair volume lacks flow and eye highlights are missing."));
+    QCOMPARE(prog.targetFocusArea, QStringLiteral("HairFlow & Catchlights"));
+    QVERIFY(qAbs(prog.readinessScore - 0.78) < 1e-4);
+    QCOMPARE(prog.recommendedAction, QStringLiteral("add_strands_and_highlights"));
+    QCOMPARE(prog.operations.size(), 1);
+}
+
+void KisAiStrokeProgramTest::testSanitizeUnescapedControlCharsInStrings()
+{
+    const QString rawBroken = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"agent_critique\": \"Line 1 critique\nLine 2 with \t tabs\",\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"points\": [[0.1, 0.1], [0.2, 0.2]],\n"
+        "      \"brush\": {\"color\": \"#000000\"}\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+
+    KisAiJsonDiagnostic diag;
+    const QString repaired = KisAiStrokeProgramCodec::repairJsonSyntax(rawBroken, &diag);
+    QJsonParseError parseErr;
+    const QJsonDocument doc = QJsonDocument::fromJson(repaired.toUtf8(), &parseErr);
+    QCOMPARE(parseErr.error, QJsonParseError::NoError);
+    QVERIFY(doc.isObject());
+    const QString critique = doc.object().value(QStringLiteral("agent_critique")).toString();
+    QVERIFY(critique.contains(QStringLiteral("Line 1 critique")));
+    QVERIFY(critique.contains(QStringLiteral("Line 2 with")));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

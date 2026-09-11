@@ -44,6 +44,11 @@ private Q_SLOTS:
     void testQualityUtilsHueShiftedHarmonies();
     void testQualityUtilsProgramTrapping();
     void testRenderCalligraphyAndCharcoalBrush();
+    void testSynthesizeHairClump();
+    void testSynthesizeFoliageClusters();
+    void testDualShadowSeparation();
+    void testFinishingFiltersBloomAndChromaticAberration();
+    void testFinishingFiltersVignette();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

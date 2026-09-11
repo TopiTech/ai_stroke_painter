@@ -61,6 +61,8 @@ private Q_SLOTS:
     void testNewBrushProfilesNormalization();
     void testSignedLeadingDotAndTypeCheckerEdgeCases();
     void testSchemaAliasesAndGoalModeArtStyle();
+    void testAgentCritiqueAndReadinessParsing();
+    void testSanitizeUnescapedControlCharsInStrings();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

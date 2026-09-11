@@ -707,6 +707,21 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_goalPhaseLabel->setWordWrap(true);
     inspectorLayout->addWidget(m_goalPhaseLabel);
 
+    m_agentFocusLabel = new QLabel(i18n("🎯 着目領域: 待機中"), m_goalInspectorCard);
+    m_agentFocusLabel->setStyleSheet(QStringLiteral("font-weight: 600; color: #a5b4fc; font-size: 11px;"));
+    m_agentFocusLabel->setWordWrap(true);
+    inspectorLayout->addWidget(m_agentFocusLabel);
+
+    m_readinessBar = new QProgressBar(m_goalInspectorCard);
+    m_readinessBar->setRange(0, 100);
+    m_readinessBar->setValue(0);
+    m_readinessBar->setFormat(i18n("自律完成度: %p%"));
+    m_readinessBar->setAlignment(Qt::AlignCenter);
+    m_readinessBar->setStyleSheet(QStringLiteral(
+        "QProgressBar { background: #0d1117; border: 1px solid #273142; border-radius: 4px; height: 16px; text-align: center; color: #f8fafc; font-size: 10px; font-weight: 600; }"
+        "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #38bdf8, stop:1 #818cf8); border-radius: 3px; }"));
+    inspectorLayout->addWidget(m_readinessBar);
+
     m_critiqueLabel = new QLabel(i18n("AIの視覚批評・自己分析がここに表示されます。"), m_goalInspectorCard);
     m_critiqueLabel->setWordWrap(true);
     m_critiqueLabel->setStyleSheet(QStringLiteral(
@@ -2091,6 +2106,12 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
         if (m_goalPhaseLabel) {
             m_goalPhaseLabel->setText(i18n("🎯 ステップ 1/%1 開始準備中…", m_goalTotalSteps));
         }
+        if (m_agentFocusLabel) {
+            m_agentFocusLabel->setText(i18n("🎯 着目領域: 構図立案・ベース構築"));
+        }
+        if (m_readinessBar) {
+            m_readinessBar->setValue(0);
+        }
         if (m_critiqueLabel) {
             m_critiqueLabel->setText(i18n("作画計画を策定中…"));
         }
@@ -2167,6 +2188,12 @@ void KisAiIllustrationDocker::executeGoalStep()
 
         if (m_goalPhaseLabel) {
             m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
+        }
+        if (m_agentFocusLabel) {
+            m_agentFocusLabel->setText(i18n("🎯 着目領域: %1", program.stepPhase));
+        }
+        if (m_readinessBar) {
+            m_readinessBar->setValue(qRound(qreal(m_goalCurrentStep) / m_goalTotalSteps * 100.0));
         }
         if (m_critiqueLabel) {
             m_critiqueLabel->setText(program.visualCritique.isEmpty()
@@ -2539,15 +2566,32 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     if (m_goalPhaseLabel) {
         m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
     }
+    if (m_agentFocusLabel) {
+        if (!program.targetFocusArea.isEmpty()) {
+            m_agentFocusLabel->setText(i18n("🎯 着目領域: %1", program.targetFocusArea));
+        } else {
+            m_agentFocusLabel->setText(i18n("🎯 着目領域: 全体構成"));
+        }
+    }
+    if (m_readinessBar) {
+        m_readinessBar->setValue(qRound(program.readinessScore * 100.0));
+    }
     if (m_critiqueLabel) {
-        if (!program.visualCritique.isEmpty()) {
-            m_critiqueLabel->setText(i18n("👀 AI視覚批評: %1", program.visualCritique));
+        const QString critique = !program.agentCritique.isEmpty() ? program.agentCritique : program.visualCritique;
+        if (!critique.isEmpty()) {
+            m_critiqueLabel->setText(i18n("👀 AI視覚批評: %1", critique));
         } else {
             m_critiqueLabel->setText(i18n("ステップ %1 の作画が完了しました。", m_goalCurrentStep));
         }
     }
 
-    if (m_goalCurrentStep >= m_goalTotalSteps) {
+    const bool agentEarlyFinish = (program.readinessScore >= 0.85 && program.goalReached && m_goalCurrentStep >= 2);
+    if (agentEarlyFinish) {
+        logDebug(QStringLiteral("GOAL_AGENT"), QStringLiteral("Autonomous Agent achieved target readiness (%1 >= 0.85). Early completion triggered.")
+            .arg(program.readinessScore));
+    }
+
+    if (m_goalCurrentStep >= m_goalTotalSteps || agentEarlyFinish) {
         finishGoalMode(true);
     } else if (m_pausePerStepCheck && m_pausePerStepCheck->isChecked()) {
         m_waitingForUserStepAdvance = true;
@@ -2611,7 +2655,8 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
         }
         if (m_goalPhaseLabel) {
             if (success) {
-                m_goalPhaseLabel->setText(i18n("🎯 Goal作画 完了 (全 %1 段階)", m_goalCurrentStep));
+                m_goalPhaseLabel->setText(i18n("🎯 Goal自律作画 完了 (全 %1 段階, 完成度 %2%)",
+                    m_goalCurrentStep, m_readinessBar ? m_readinessBar->value() : 100));
             } else {
                 m_goalPhaseLabel->setText(i18n("🎯 Goal作画 中断 (ステップ %1/%2)", m_goalCurrentStep, m_goalTotalSteps));
             }

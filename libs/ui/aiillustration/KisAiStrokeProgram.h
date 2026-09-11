@@ -114,6 +114,10 @@ struct KRITAUI_EXPORT KisAiStrokeProgram
     int totalSteps {1};
     QString stepPhase {QStringLiteral("complete")}; // blocking, shading, lineart, finishing, complete
     QString visualCritique;
+    QString agentCritique;                          // Autonomous illustration agent visual critique & assessment
+    QString targetFocusArea;                        // Current agent compositional focus area
+    qreal readinessScore {1.0};                     // Agent self-scored visual completion readiness in [0.0, 1.0]
+    QString recommendedAction;                      // Agent next proposed action or refinement
     bool goalReached {true};
     qreal completionScore {1.0};
     QSize canvasSize {1024, 1024};

@@ -105,6 +105,65 @@ public:
     );
 #endif
 
+    /**
+     * Expand high-level procedural operations into rich organic stroke primitives (Phase 3).
+     * Converts single hair ribbons into flowing strand clumps + flyaways + angel halo,
+     * and canopy polygons into layered petal/foliage clusters.
+     */
+    static QVector<KisAiStrokeOperation> expandProceduralOperations(
+        const QVector<KisAiStrokeOperation> &operations,
+        const QSize &canvasSize
+    );
+
+    /**
+     * Generate an isolated luminous bloom halo map on a transparent canvas (Phase 4).
+     */
+    static QImage generateBloomMap(
+        const QImage &image,
+        qreal intensity = 0.40,
+        int radius = 6
+    );
+
+    /**
+     * Apply luminous bloom diffusion to highlights and FX (Phase 4).
+     */
+    static void applyBloomEffect(
+        QImage &image,
+        qreal intensity = 0.40,
+        int radius = 6
+    );
+
+    /**
+     * Apply subtle optical chromatic aberration lens fringing (Phase 4).
+     */
+    static void applyChromaticAberration(
+        QImage &image,
+        int shiftPx = 1
+    );
+
+    /**
+     * Apply smooth cinematic vignette to guide viewer focus toward center (Phase 4).
+     */
+    static void applyVignette(
+        QImage &image,
+        qreal strength = 0.12
+    );
+
+    /**
+     * Apply full professional post-processing finishing suite (Phase 4).
+     */
+    static void applyFinishingPostProcess(
+        QImage &image
+    );
+
+    /**
+     * Fast 2-pass separable box blur for form shading diffusion and organic transitions.
+     */
+    static void applySoftEdgeDiffusion(
+        QImage &image,
+        int radius
+    );
+
 private:
     static QImage renderOperationsToImage(
         const QVector<KisAiStrokeOperation> &operations,
@@ -157,11 +216,6 @@ private:
         QPainter &painter,
         const KisAiStrokeOperation &op,
         const QSize &canvasSize
-    );
-
-    static void applySoftEdgeDiffusion(
-        QImage &image,
-        int radius
     );
 };
 

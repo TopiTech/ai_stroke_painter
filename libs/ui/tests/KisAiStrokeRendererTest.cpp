@@ -966,4 +966,110 @@ void KisAiStrokeRendererTest::testRenderCalligraphyAndCharcoalBrush()
     QVERIFY(img.pixelColor(100, 160).alpha() > 100); // Bristle brush line
 }
 
+void KisAiStrokeRendererTest::testSynthesizeHairClump()
+{
+    KisAiStrokeOperation ribbonOp;
+    ribbonOp.kind = KisAiStrokeOperation::Kind::Ribbon;
+    ribbonOp.id = QStringLiteral("hair_ribbon");
+    ribbonOp.layer = QStringLiteral("Flats");
+    ribbonOp.spine = {QPointF(0.3, 0.2), QPointF(0.4, 0.4), QPointF(0.35, 0.6), QPointF(0.3, 0.8)};
+    ribbonOp.brush.color = QColor(120, 60, 40);
+    ribbonOp.brush.size = 0.05;
+
+    const auto clump = KisAiStrokeQualityUtils::synthesizeHairClump(ribbonOp, QSize(400, 400), 12345);
+    QCOMPARE(clump.mainMass.kind, KisAiStrokeOperation::Kind::Ribbon);
+    QVERIFY(clump.strands.size() >= 4);
+    QVERIFY(clump.flyaways.size() >= 1);
+    QVERIFY(!clump.highlightHalo.points.isEmpty());
+    QCOMPARE(clump.highlightHalo.layer, QStringLiteral("Highlights"));
+
+    // Check procedural expansion in renderer
+    QVector<KisAiStrokeOperation> ops = {ribbonOp};
+    ops.first().brush.profile = QStringLiteral("hair");
+    const QVector<KisAiStrokeOperation> expanded = KisAiStrokeRenderer::expandProceduralOperations(ops, QSize(400, 400));
+    QVERIFY(expanded.size() > 1);
+}
+
+void KisAiStrokeRendererTest::testSynthesizeFoliageClusters()
+{
+    KisAiStrokeOperation fillOp;
+    fillOp.kind = KisAiStrokeOperation::Kind::Fill;
+    fillOp.id = QStringLiteral("tree_canopy");
+    fillOp.layer = QStringLiteral("Flats");
+    fillOp.polygon = {QPointF(0.2, 0.2), QPointF(0.8, 0.2), QPointF(0.9, 0.6), QPointF(0.5, 0.8), QPointF(0.1, 0.6)};
+    fillOp.brush.color = QColor(255, 180, 200); // Sakura pink
+    fillOp.brush.profile = QStringLiteral("watercolor");
+
+    const QVector<KisAiStrokeOperation> clusters = KisAiStrokeQualityUtils::synthesizeFoliageClusters(fillOp, QSize(400, 400), 54321);
+    QVERIFY(clusters.size() >= 4); // base wash + multiple clusters + petals
+
+    bool hasDriftingPetals = false;
+    for (const KisAiStrokeOperation &op : clusters) {
+        if (op.kind == KisAiStrokeOperation::Kind::Particles && op.layer == QLatin1String("FX")) {
+            hasDriftingPetals = true;
+            break;
+        }
+    }
+    QVERIFY(hasDriftingPetals);
+}
+
+void KisAiStrokeRendererTest::testDualShadowSeparation()
+{
+    const QSize canvasSize(1000, 1000);
+
+    // Cast shadow: narrow elongated bangs shadow (e.g. 200px wide, 15px tall -> aspect ratio ~13.3)
+    const QPolygonF castPoly = {QPointF(0.2, 0.2), QPointF(0.4, 0.2), QPointF(0.4, 0.215), QPointF(0.2, 0.215)};
+    QVERIFY(KisAiStrokeQualityUtils::isCastShadow(castPoly, canvasSize));
+
+    // Form shadow: large rounded cheek shadow (e.g. 300px wide, 300px tall -> aspect ratio 1.0, area ~9%)
+    const QPolygonF formPoly = {QPointF(0.3, 0.3), QPointF(0.6, 0.3), QPointF(0.6, 0.6), QPointF(0.3, 0.6)};
+    QVERIFY(!KisAiStrokeQualityUtils::isCastShadow(formPoly, canvasSize));
+}
+
+void KisAiStrokeRendererTest::testFinishingFiltersBloomAndChromaticAberration()
+{
+    QImage img(100, 100, QImage::Format_ARGB32_Premultiplied);
+    img.fill(Qt::black);
+
+    // Draw bright white center square (lum = 255)
+    QPainter p(&img);
+    p.fillRect(40, 40, 20, 20, Qt::white);
+    p.end();
+
+    // Before bloom, pixel (36, 50) is pitch black
+    QCOMPARE(qRed(img.pixel(36, 50)), 0);
+
+    // Apply bloom
+    KisAiStrokeRenderer::applyBloomEffect(img, 0.6, 6);
+
+    // Pixel (36, 50) near bright center (4 pixels away) should now have diffused glow
+    QVERIFY(qRed(img.pixel(36, 50)) > 0);
+
+    // Test chromatic aberration
+    KisAiStrokeRenderer::applyChromaticAberration(img, 2);
+    // At boundary (38, 50), red and blue channels should disperse
+    const QRgb cEdge = img.pixel(38, 50);
+    QVERIFY(qRed(cEdge) != qBlue(cEdge));
+}
+
+void KisAiStrokeRendererTest::testFinishingFiltersVignette()
+{
+    QImage img(100, 100, QImage::Format_ARGB32_Premultiplied);
+    img.fill(Qt::white);
+
+    KisAiStrokeRenderer::applyVignette(img, 0.25);
+
+    // Center pixel (50, 50) should remain pristine white (distance from center = 0)
+    const QRgb cCenter = img.pixel(50, 50);
+    QCOMPARE(qRed(cCenter), 255);
+    QCOMPARE(qGreen(cCenter), 255);
+    QCOMPARE(qBlue(cCenter), 255);
+
+    // Corner pixel (0, 0) should be darkened by vignette
+    const QRgb cCorner = img.pixel(0, 0);
+    QVERIFY(qRed(cCorner) < 250);
+    QVERIFY(qGreen(cCorner) < 250);
+    QVERIFY(qBlue(cCorner) < 250);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

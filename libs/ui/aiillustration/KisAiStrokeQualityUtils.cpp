@@ -44,6 +44,21 @@ QPointF normalizeVector(const QPointF &v)
     return QPointF(v.x() / len, v.y() / len);
 }
 
+QPointF scalePoint(const QPointF &normPt, const QSize &canvasSize)
+{
+    return QPointF(normPt.x() * canvasSize.width(), normPt.y() * canvasSize.height());
+}
+
+QPolygonF scalePolygon(const QPolygonF &normPoly, const QSize &canvasSize)
+{
+    QPolygonF res;
+    res.reserve(normPoly.size());
+    for (const QPointF &pt : normPoly) {
+        res.append(scalePoint(pt, canvasSize));
+    }
+    return res;
+}
+
 qreal effectiveWidthPx(const KisAiStrokeBrush &brush, qreal pressure, const QSize &canvasSize)
 {
     const qreal baseDim = qMin(canvasSize.width(), canvasSize.height());
@@ -821,4 +836,241 @@ KisAiStrokeProgram KisAiStrokeQualityUtils::applyTrapping(
     }
 
     return trapped;
+}
+
+KisAiStrokeQualityUtils::HairClumpSynthesis KisAiStrokeQualityUtils::synthesizeHairClump(
+    const KisAiStrokeOperation &ribbonOp,
+    const QSize &canvasSize,
+    quint32 seed)
+{
+    HairClumpSynthesis out;
+    out.mainMass = ribbonOp;
+
+    const QVector<QPointF> &spine = ribbonOp.spine;
+    if (spine.size() < 2 || canvasSize.width() <= 0 || canvasSize.height() <= 0) {
+        return out;
+    }
+
+    QRandomGenerator rng(seed);
+    const qreal baseDim = qMax<qreal>(1.0, qMin(canvasSize.width(), canvasSize.height()));
+    const qreal avgWidth = ((ribbonOp.widthStart + ribbonOp.widthMid + ribbonOp.widthEnd) / 3.0) * baseDim;
+
+    // 1. Generate internal flowing hair strands (Lineart / Shading)
+    const int strandCount = qBound(3, qRound(avgWidth * 0.15) + 3, 7);
+    const QColor strandColor = calculateHueShiftedShadow(ribbonOp.brush.color, QColor(30, 25, 45), 0.40);
+
+    for (int s = 0; s < strandCount; ++s) {
+        const qreal lateralOffset = ((qreal(s) / qMax(1, strandCount - 1)) - 0.5) * 1.6; // [-0.8, 0.8]
+        const qreal offsetPx = lateralOffset * (avgWidth * 0.40);
+
+        KisAiStrokeOperation strandOp;
+        strandOp.kind = KisAiStrokeOperation::Kind::Path;
+        strandOp.id = QStringLiteral("%1_strand_%2").arg(ribbonOp.id).arg(s);
+        strandOp.layer = QStringLiteral("Lineart");
+        strandOp.brush.profile = QStringLiteral("gpen");
+        strandOp.brush.color = strandColor;
+        strandOp.brush.size = qMax<qreal>(0.0012, (avgWidth * 0.12) / baseDim);
+        strandOp.brush.opacity = 0.65 + rng.generateDouble() * 0.25;
+
+        strandOp.points.reserve(spine.size());
+        for (int i = 0; i < spine.size(); ++i) {
+            const QPointF curr = scalePoint(spine.at(i), canvasSize);
+            QPointF tangent;
+            if (i == 0) {
+                tangent = scalePoint(spine.at(1), canvasSize) - curr;
+            } else if (i == spine.size() - 1) {
+                tangent = curr - scalePoint(spine.at(i - 1), canvasSize);
+            } else {
+                tangent = scalePoint(spine.at(i + 1), canvasSize) - scalePoint(spine.at(i - 1), canvasSize);
+            }
+            const qreal tLen = std::hypot(tangent.x(), tangent.y());
+            const QPointF normal = (tLen > 1.0e-5) ? QPointF(-tangent.y() / tLen, tangent.x() / tLen) : QPointF(0, 1);
+
+            // Subtle wave along strand
+            const qreal wave = std::sin(qreal(i) * 1.2 + s * 1.5) * (avgWidth * 0.08);
+            const QPointF displacedPx = curr + normal * (offsetPx + wave);
+
+            const qreal normX = clamp01(displacedPx.x() / canvasSize.width());
+            const qreal normY = clamp01(displacedPx.y() / canvasSize.height());
+            const qreal t = qreal(i) / qMax(1, spine.size() - 1);
+            const qreal pressure = std::sin(t * PI) * 0.85 + 0.15;
+            strandOp.points.append(KisAiStrokePoint(normX, normY, pressure));
+        }
+
+        if (strandOp.points.size() >= 2) {
+            out.strands.append(strandOp);
+        }
+    }
+
+    // 2. Generate delicate flyaway hairs branching off the clump
+    const int flyawayCount = qBound(1, qRound(avgWidth * 0.08), 3);
+    for (int f = 0; f < flyawayCount; ++f) {
+        KisAiStrokeOperation flyOp;
+        flyOp.kind = KisAiStrokeOperation::Kind::Path;
+        flyOp.id = QStringLiteral("%1_flyaway_%2").arg(ribbonOp.id).arg(f);
+        flyOp.layer = QStringLiteral("Lineart");
+        flyOp.brush.profile = QStringLiteral("gpen");
+        flyOp.brush.color = ribbonOp.brush.color;
+        flyOp.brush.size = qMax<qreal>(0.0010, (avgWidth * 0.08) / baseDim);
+        flyOp.brush.opacity = 0.50;
+
+        const int startIdx = qBound(0, qRound(spine.size() * (0.3 + f * 0.25)), spine.size() - 2);
+        const qreal dirSign = (f % 2 == 0) ? 1.0 : -1.0;
+
+        for (int i = startIdx; i < spine.size(); ++i) {
+            const QPointF curr = scalePoint(spine.at(i), canvasSize);
+            const qreal progress = qreal(i - startIdx) / qMax(1, spine.size() - 1 - startIdx);
+            const qreal flarePx = dirSign * (avgWidth * 0.55) * progress * (1.0 + rng.generateDouble() * 0.3);
+
+            QPointF tangent = (i < spine.size() - 1)
+                ? (scalePoint(spine.at(i + 1), canvasSize) - curr)
+                : (curr - scalePoint(spine.at(i - 1), canvasSize));
+            const qreal tLen = std::hypot(tangent.x(), tangent.y());
+            const QPointF normal = (tLen > 1.0e-5) ? QPointF(-tangent.y() / tLen, tangent.x() / tLen) : QPointF(0, 1);
+
+            const QPointF displacedPx = curr + normal * flarePx;
+            const qreal normX = clamp01(displacedPx.x() / canvasSize.width());
+            const qreal normY = clamp01(displacedPx.y() / canvasSize.height());
+            const qreal pressure = (1.0 - progress) * 0.6 + 0.1;
+            flyOp.points.append(KisAiStrokePoint(normX, normY, pressure));
+        }
+
+        if (flyOp.points.size() >= 2) {
+            out.flyaways.append(flyOp);
+        }
+    }
+
+    // 3. Angel Halo highlight arc across the mid-upper ridge
+    if (spine.size() >= 3) {
+        out.highlightHalo.kind = KisAiStrokeOperation::Kind::Path;
+        out.highlightHalo.id = QStringLiteral("%1_halo").arg(ribbonOp.id);
+        out.highlightHalo.layer = QStringLiteral("Highlights");
+        out.highlightHalo.brush.profile = QStringLiteral("airbrush");
+        out.highlightHalo.brush.color = calculateHueShiftedHighlight(ribbonOp.brush.color, QColor(255, 252, 240), 0.70);
+        out.highlightHalo.brush.size = qMax<qreal>(0.004, (avgWidth * 0.35) / baseDim);
+        out.highlightHalo.brush.opacity = 0.55;
+
+        int hStart = qMax(0, qRound(spine.size() * 0.25));
+        int hEnd = qMin(spine.size() - 1, qRound(spine.size() * 0.55));
+        if (hEnd <= hStart && hStart + 1 < spine.size()) {
+            hEnd = hStart + 1;
+        }
+        for (int i = hStart; i <= hEnd; ++i) {
+            out.highlightHalo.points.append(KisAiStrokePoint(spine.at(i).x(), spine.at(i).y(), 0.9));
+        }
+    }
+
+    return out;
+}
+
+QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::synthesizeFoliageClusters(
+    const KisAiStrokeOperation &fillOp,
+    const QSize &canvasSize,
+    quint32 seed)
+{
+    QVector<KisAiStrokeOperation> out;
+    if (fillOp.polygon.size() < 3 || canvasSize.width() <= 0 || canvasSize.height() <= 0) {
+        out.append(fillOp);
+        return out;
+    }
+
+    QRandomGenerator rng(seed);
+    const QPolygonF pixelPoly = scalePolygon(fillOp.polygon, canvasSize);
+    const QRectF b = pixelPoly.boundingRect();
+    if (b.width() < 10 || b.height() < 10) {
+        out.append(fillOp);
+        return out;
+    }
+
+    // 1. Soft atmospheric base wash
+    KisAiStrokeOperation baseWash = fillOp;
+    baseWash.id = fillOp.id + QStringLiteral("_base_wash");
+    baseWash.fillStyle = QStringLiteral("wash");
+    baseWash.brush.opacity = qBound<qreal>(0.0, fillOp.brush.opacity * 0.85, 1.0);
+    out.append(baseWash);
+
+    // 2. Clustered billowing petal/leaf masses inside the canopy
+    const int clusterCount = qBound(4, qRound(std::hypot(b.width(), b.height()) * 0.08), 16);
+    const QColor baseColor = fillOp.brush.color;
+    const QColor shadowColor = calculateHueShiftedShadow(baseColor, QColor(40, 25, 55), 0.35);
+    const QColor highlightColor = calculateHueShiftedHighlight(baseColor, QColor(255, 250, 245), 0.45);
+
+    for (int c = 0; c < clusterCount; ++c) {
+        QPointF centerPx;
+        for (int attempt = 0; attempt < 15; ++attempt) {
+            const qreal cx = b.left() + (0.15 + rng.generateDouble() * 0.70) * b.width();
+            const qreal cy = b.top() + (0.15 + rng.generateDouble() * 0.70) * b.height();
+            const QPointF cand(cx, cy);
+            if (pixelPoly.containsPoint(cand, Qt::OddEvenFill)) {
+                centerPx = cand;
+                break;
+            }
+        }
+        if (centerPx.isNull()) {
+            centerPx = b.center();
+        }
+
+        const qreal clusterRadiusPx = (b.width() * 0.12 + rng.generateDouble() * b.width() * 0.18);
+        const bool isLowerShadow = (centerPx.y() > b.center().y());
+
+        QPolygonF clusterNormPoly;
+        const int petalVerts = 10;
+        for (int v = 0; v < petalVerts; ++v) {
+            const qreal angle = (2.0 * PI * v) / petalVerts;
+            const qreal rPerturb = 0.80 + rng.generateDouble() * 0.40;
+            const qreal px = centerPx.x() + std::cos(angle) * clusterRadiusPx * rPerturb;
+            const qreal py = centerPx.y() + std::sin(angle) * (clusterRadiusPx * 0.75) * rPerturb;
+            clusterNormPoly.append(QPointF(clamp01(px / canvasSize.width()),
+                                          clamp01(py / canvasSize.height())));
+        }
+
+        KisAiStrokeOperation clusterOp;
+        clusterOp.kind = KisAiStrokeOperation::Kind::Fill;
+        clusterOp.id = QStringLiteral("%1_cluster_%2").arg(fillOp.id).arg(c);
+        clusterOp.layer = isLowerShadow ? QStringLiteral("Shading") : fillOp.layer;
+        clusterOp.polygon = clusterNormPoly;
+        clusterOp.smooth = true;
+        clusterOp.fillStyle = QStringLiteral("wash");
+        clusterOp.brush.profile = QStringLiteral("watercolor");
+        clusterOp.brush.color = isLowerShadow ? shadowColor : (c % 2 == 0 ? highlightColor : baseColor);
+        clusterOp.brush.opacity = 0.65 + rng.generateDouble() * 0.30;
+        out.append(clusterOp);
+    }
+
+    // 3. Edge-drifting petal particles
+    KisAiStrokeOperation petalParticles;
+    petalParticles.kind = KisAiStrokeOperation::Kind::Particles;
+    petalParticles.id = fillOp.id + QStringLiteral("_drifting_petals");
+    petalParticles.layer = QStringLiteral("FX");
+    petalParticles.bounds = QRectF(clamp01((b.left() - b.width() * 0.1) / canvasSize.width()),
+                                   clamp01((b.top() - b.height() * 0.05) / canvasSize.height()),
+                                   clamp01((b.width() * 1.3) / canvasSize.width()),
+                                   clamp01((b.height() * 1.3) / canvasSize.height()));
+    petalParticles.particleShape = QStringLiteral("petal");
+    petalParticles.particleCount = qBound(8, qRound(clusterCount * 1.8), 35);
+    petalParticles.brush.color = highlightColor;
+    petalParticles.brush.size = 0.006;
+    petalParticles.brush.opacity = 0.85;
+    out.append(petalParticles);
+
+    return out;
+}
+
+bool KisAiStrokeQualityUtils::isCastShadow(
+    const QPolygonF &polygon,
+    const QSize &canvasSize)
+{
+    if (polygon.size() < 3 || canvasSize.width() <= 0 || canvasSize.height() <= 0) return false;
+    const QPolygonF pixelPoly = scalePolygon(polygon, canvasSize);
+    const QRectF b = pixelPoly.boundingRect();
+    if (b.width() <= 0.0 || b.height() <= 0.0) return false;
+    const qreal area = b.width() * b.height();
+    const qreal canvasArea = qreal(canvasSize.width()) * canvasSize.height();
+    if (canvasArea <= 0.0) return false;
+
+    const qreal aspect = b.height() > 0 ? b.width() / b.height() : 1.0;
+    if (area < canvasArea * 0.015 || aspect > 4.0 || aspect < 0.25) {
+        return true;
+    }
+    return false;
 }

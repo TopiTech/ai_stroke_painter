@@ -707,8 +707,24 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
 
         // If a string was left open at EOF, close it safely
         if (inStr) {
+            QString cleanLiteral;
+            cleanLiteral.reserve(currentStr.size() + 16);
+            for (int cIdx = 0; cIdx < currentStr.size(); ++cIdx) {
+                const QChar sc = currentStr.at(cIdx);
+                if (sc == QLatin1Char('\n')) {
+                    cleanLiteral.append(QStringLiteral("\\n"));
+                } else if (sc == QLatin1Char('\r')) {
+                    cleanLiteral.append(QStringLiteral("\\r"));
+                } else if (sc == QLatin1Char('\t')) {
+                    cleanLiteral.append(QStringLiteral("\\t"));
+                } else if (sc.unicode() < 0x20) {
+                    // Strip ASCII control bytes
+                } else {
+                    cleanLiteral.append(sc);
+                }
+            }
             const int maskIndex = maskedStrings.size();
-            maskedStrings.append(currentStr);
+            maskedStrings.append(cleanLiteral);
             masked.append(QStringLiteral("\"__AI_STR_MASK_%1__\"").arg(maskIndex));
         }
 
@@ -1779,12 +1795,16 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
     outProgram->prompt = findField(rootObj, {QStringLiteral("prompt")}).toString();
     outProgram->title = findField(rootObj, {QStringLiteral("title")}, QStringLiteral("AI Artwork")).toString(QStringLiteral("AI Artwork"));
     outProgram->seed = toIntField(findField(rootObj, {QStringLiteral("seed")}), 42);
-    outProgram->visualCritique = findField(rootObj, {QStringLiteral("visual_critique")}).toString();
+    outProgram->visualCritique = findField(rootObj, {QStringLiteral("visual_critique"), QStringLiteral("critique")}).toString();
+    outProgram->agentCritique = findField(rootObj, {QStringLiteral("agent_critique"), QStringLiteral("visual_critique"), QStringLiteral("critique")}).toString();
+    outProgram->targetFocusArea = findField(rootObj, {QStringLiteral("target_focus_area"), QStringLiteral("focus_area"), QStringLiteral("focus")}).toString();
     outProgram->stepPhase = findField(rootObj, {QStringLiteral("step_phase")}, QStringLiteral("complete")).toString(QStringLiteral("complete"));
     outProgram->currentStep = toIntField(findField(rootObj, {QStringLiteral("current_step")}), 1);
     outProgram->totalSteps = toIntField(findField(rootObj, {QStringLiteral("total_steps")}), 1);
     outProgram->goalReached = toBoolField(findField(rootObj, {QStringLiteral("goal_reached")}), true);
     outProgram->completionScore = toDoubleField(findField(rootObj, {QStringLiteral("completion_score")}), 1.0);
+    outProgram->readinessScore = clamp01(toDoubleField(findField(rootObj, {QStringLiteral("readiness_score"), QStringLiteral("readiness"), QStringLiteral("completion_score")}), 1.0));
+    outProgram->recommendedAction = findField(rootObj, {QStringLiteral("recommended_action"), QStringLiteral("action")}).toString();
 
     const QJsonValue cVal = findField(rootObj, {QStringLiteral("canvas_size"), QStringLiteral("canvas")});
     if (!cVal.isUndefined()) {
@@ -3582,10 +3602,13 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     userObj[QStringLiteral("step_phase")] = phaseName;
     userObj[QStringLiteral("operation_target")] = operationTarget;
     userObj[QStringLiteral("directive")] = QStringLiteral(
-        "You are executing Step %1 of %2 in autonomous Goal Mode. "
-        "Review the canvas screenshot (if attached) and write a 1-2 sentence 'visual_critique' assessing progress and setting direction for this step. "
-        "Generate only the operations required for this phase. Set 'step_phase' to '%3', 'current_step' to %1, and 'goal_reached' to %4. "
-        "Output strictly valid RFC 8259 JSON adhering to schema without markdown fences or comments.")
+        "You are acting as an Autonomous Master Illustration Agent executing Step %1 of %2 in Goal Mode. "
+        "Perform your 4-phase artistic cognitive cycle: "
+        "1. [OBSERVE & CRITIQUE]: Inspect the canvas screenshot (if attached). Provide an insightful 1-2 sentence 'agent_critique' analyzing depth, silhouettes, anatomical harmony, and missing elements. "
+        "2. [FOCUS]: Specify 'target_focus_area' (e.g. 'Face & Expression', 'Hair Strands & Volume', 'Form Shading & Ambient Occlusion', 'Specular Highlights & Atmosphere'). "
+        "3. [READINESS EVALUATION]: Provide 'readiness_score' from 0.0 (bare outline) to 1.0 (finished presentation). If >= 0.85 and presentation-ready, set 'goal_reached' to true. "
+        "4. [ACT]: Generate only the necessary, high-precision operations for phase '%3'. Set 'step_phase' to '%3', 'current_step' to %1, and 'goal_reached' to %4. "
+        "Output strictly valid RFC 8259 JSON without markdown fences or unescaped control characters.")
         .arg(step)
         .arg(totalSteps)
         .arg(phaseName)

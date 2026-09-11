@@ -192,7 +192,9 @@ private:
     QComboBox *m_artStyleCombo {nullptr};
     QFrame *m_goalInspectorCard {nullptr};
     QLabel *m_goalPhaseLabel {nullptr};
+    QLabel *m_agentFocusLabel {nullptr};
     QLabel *m_critiqueLabel {nullptr};
+    QProgressBar *m_readinessBar {nullptr};
     QPushButton *m_nextStepButton {nullptr};
     QPushButton *m_finishGoalButton {nullptr};
 

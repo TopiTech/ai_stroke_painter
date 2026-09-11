@@ -195,6 +195,46 @@ public:
         const KisAiStrokeProgram &program,
         qreal trappingPx = 1.5
     );
+
+    // =========================================================================
+    // 6. Algorithmic Detail Synthesizers (Phase 3)
+    // =========================================================================
+
+    struct HairClumpSynthesis {
+        KisAiStrokeOperation mainMass;
+        QVector<KisAiStrokeOperation> strands;
+        QVector<KisAiStrokeOperation> flyaways;
+        KisAiStrokeOperation highlightHalo;
+    };
+
+    /**
+     * Synthesize rich organic hair details from a single spine ribbon operation.
+     * Generates flowing internal strands, flyaway wisps, and specular angel halo highlights.
+     */
+    static HairClumpSynthesis synthesizeHairClump(
+        const KisAiStrokeOperation &ribbonOp,
+        const QSize &canvasSize,
+        quint32 seed = 42
+    );
+
+    /**
+     * Synthesize multi-layered foliage and petal clusters from a rough canopy volume polygon.
+     * Generates organic cloud-like clusters, ambient occlusion under-shading, and drifting petals.
+     */
+    static QVector<KisAiStrokeOperation> synthesizeFoliageClusters(
+        const KisAiStrokeOperation &fillOp,
+        const QSize &canvasSize,
+        quint32 seed = 42
+    );
+
+    /**
+     * Determine if a shading polygon is a sharp Cast Shadow (e.g. bangs, folds)
+     * or a soft Form Shadow (e.g. cheek curve, torso roundness).
+     */
+    static bool isCastShadow(
+        const QPolygonF &polygon,
+        const QSize &canvasSize
+    );
 };
 
 #endif // KIS_AI_STROKE_QUALITY_UTILS_H
