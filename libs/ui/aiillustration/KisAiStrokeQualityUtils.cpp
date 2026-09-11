@@ -722,7 +722,8 @@ QColor KisAiStrokeQualityUtils::calculateHueShiftedShadow(
         }
 
         if (targetHue < 0.0f) targetHue += 1.0f;
-        if (targetHue > 1.0f) targetHue -= 1.0f;
+        if (targetHue >= 1.0f) targetHue -= 1.0f;
+        targetHue = qBound(0.0f, targetHue, 0.9999f);
     }
 
     const float depth = static_cast<float>(qBound<qreal>(0.1, shadowDepth, 0.8));
@@ -776,7 +777,8 @@ QColor KisAiStrokeQualityUtils::calculateHueShiftedHighlight(
         }
 
         if (targetHue < 0.0f) targetHue += 1.0f;
-        if (targetHue > 1.0f) targetHue -= 1.0f;
+        if (targetHue >= 1.0f) targetHue -= 1.0f;
+        targetHue = qBound(0.0f, targetHue, 0.9999f);
     }
 
     const float boost = static_cast<float>(qBound<qreal>(0.1, intensity, 0.9));
@@ -1069,8 +1071,5 @@ bool KisAiStrokeQualityUtils::isCastShadow(
     if (canvasArea <= 0.0) return false;
 
     const qreal aspect = b.height() > 0 ? b.width() / b.height() : 1.0;
-    if (area < canvasArea * 0.015 || aspect > 4.0 || aspect < 0.25) {
-        return true;
-    }
-    return false;
+    return (area < canvasArea * 0.015 || aspect > 4.0 || aspect < 0.25);
 }

@@ -337,6 +337,33 @@ void KisAiStrokeProgramTest::testColorAndBrushParsing()
     QCOMPARE(program.operations[1].brush.color.green(), 0);
     QCOMPARE(program.operations[1].brush.color.blue(), 128);
     QCOMPARE(program.operations[1].brush.color.alpha(), 128);
+
+    // 4-digit hex RGBA tests (#RGBA and RGBA)
+    const QColor hex4WithHash = KisAiStrokeProgramCodec::parseColor(QStringLiteral("#f08c"));
+    QCOMPARE(hex4WithHash.red(), 0xff);
+    QCOMPARE(hex4WithHash.green(), 0x00);
+    QCOMPARE(hex4WithHash.blue(), 0x88);
+    QCOMPARE(hex4WithHash.alpha(), 0xcc);
+
+    const QColor hex4NoHash = KisAiStrokeProgramCodec::parseColor(QStringLiteral("f08c"));
+    QCOMPARE(hex4NoHash.red(), 0xff);
+    QCOMPARE(hex4NoHash.green(), 0x00);
+    QCOMPARE(hex4NoHash.blue(), 0x88);
+    QCOMPARE(hex4NoHash.alpha(), 0xcc);
+
+    // TypeChecker color validation with 4-digit RGBA hex
+    QVERIFY(KisAiStrokeTypeChecker::isValidColorString(QStringLiteral("#f08c")));
+    QVERIFY(KisAiStrokeTypeChecker::isValidColorString(QStringLiteral("f08c")));
+    QVERIFY(KisAiStrokeTypeChecker::isValidColorString(QStringLiteral("#ff0080")));
+    QVERIFY(KisAiStrokeTypeChecker::isValidColorString(QStringLiteral("ff0080")));
+
+    // TypeChecker checkBrushObject color normalization for 4-char hex
+    QJsonObject brushObj;
+    brushObj[QStringLiteral("profile")] = QStringLiteral("gpen");
+    brushObj[QStringLiteral("color")] = QStringLiteral("f08c");
+    int coerced = 0;
+    QVERIFY(KisAiStrokeTypeChecker::checkBrushObject(&brushObj, nullptr, &coerced));
+    QCOMPARE(brushObj.value(QStringLiteral("color")).toString(), QStringLiteral("#f08c"));
 }
 
 void KisAiStrokeProgramTest::testStableSeed()

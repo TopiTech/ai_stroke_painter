@@ -1570,10 +1570,10 @@ void KisAiStrokeRenderer::applySoftEdgeDiffusion(QImage &image, int radius)
         }
 
         for (int x = 0; x < w; ++x) {
-            dstRow[x] = qRgba(qRound(sumR * invDiv),
-                              qRound(sumG * invDiv),
-                              qRound(sumB * invDiv),
-                              qRound(sumA * invDiv));
+            dstRow[x] = qRgba(qBound(0, qRound(sumR * invDiv), 255),
+                              qBound(0, qRound(sumG * invDiv), 255),
+                              qBound(0, qRound(sumB * invDiv), 255),
+                              qBound(0, qRound(sumA * invDiv), 255));
 
             const int xRemove = qBound(0, x - radius, w - 1);
             const int xAdd = qBound(0, x + radius + 1, w - 1);
@@ -1603,10 +1603,10 @@ void KisAiStrokeRenderer::applySoftEdgeDiffusion(QImage &image, int radius)
 
         for (int y = 0; y < h; ++y) {
             reinterpret_cast<QRgb *>(image.scanLine(y))[x] =
-                qRgba(qRound(sumR * invDiv),
-                      qRound(sumG * invDiv),
-                      qRound(sumB * invDiv),
-                      qRound(sumA * invDiv));
+                qRgba(qBound(0, qRound(sumR * invDiv), 255),
+                      qBound(0, qRound(sumG * invDiv), 255),
+                      qBound(0, qRound(sumB * invDiv), 255),
+                      qBound(0, qRound(sumA * invDiv), 255));
 
             const int yRemove = qBound(0, y - radius, h - 1);
             const int yAdd = qBound(0, y + radius + 1, h - 1);

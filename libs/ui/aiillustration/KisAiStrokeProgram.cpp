@@ -186,8 +186,6 @@ QColor KisAiStrokeProgramCodec::parseColor(const QString &colorStr, const QColor
         } else {
             s = cleanHex;
         }
-    } else if (s.startsWith(QLatin1Char('#'))) {
-        s = s.mid(1);
     }
 
     if (s.length() == 3) {

@@ -133,7 +133,7 @@ bool KisAiStrokeTypeChecker::isValidColorString(const QString &str)
 
     if (!trimmed.startsWith(QLatin1Char('#'))) {
         const int len = trimmed.length();
-        if (len == 3 || len == 6 || len == 8) {
+        if (len == 3 || len == 4 || len == 6 || len == 8) {
             static const QRegularExpression hexNoPrefix(QStringLiteral("^[0-9a-fA-F]+$"));
             if (hexNoPrefix.match(trimmed).hasMatch()) {
                 trimmed = QLatin1Char('#') + trimmed;
@@ -143,7 +143,7 @@ bool KisAiStrokeTypeChecker::isValidColorString(const QString &str)
 
     if (trimmed.startsWith(QLatin1Char('#'))) {
         const int len = trimmed.length();
-        if (len == 4 || len == 7 || len == 9) {
+        if (len == 4 || len == 5 || len == 7 || len == 9) {
             static const QRegularExpression hexRe(QStringLiteral("^#[0-9a-fA-F]+$"));
             return hexRe.match(trimmed).hasMatch();
         }
@@ -184,7 +184,7 @@ bool KisAiStrokeTypeChecker::checkBrushObject(QJsonObject *brushObj, QString *ou
             if (normalized.startsWith(QLatin1String("rgb"), Qt::CaseInsensitive)) {
                 const QColor parsed = KisAiStrokeProgramCodec::parseColor(normalized);
                 normalized = parsed.name();
-            } else if (!normalized.startsWith(QLatin1Char('#')) && (normalized.length() == 3 || normalized.length() == 6 || normalized.length() == 8)) {
+            } else if (!normalized.startsWith(QLatin1Char('#')) && (normalized.length() == 3 || normalized.length() == 4 || normalized.length() == 6 || normalized.length() == 8)) {
                 normalized = QLatin1Char('#') + normalized;
             }
             if (!cVal.isString() || normalized != cVal.toString()) {

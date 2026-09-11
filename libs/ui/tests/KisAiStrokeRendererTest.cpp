@@ -899,6 +899,20 @@ void KisAiStrokeRendererTest::testQualityUtilsHueShiftedHarmonies()
     const QColor grayShadow = KisAiStrokeQualityUtils::calculateHueShiftedShadow(gray);
     QVERIFY(grayShadow.blue() >= grayShadow.green());
     QVERIFY(grayShadow.green() >= grayShadow.red());
+
+    // Boundary test: hue near 1.0 boundary does not generate out-of-range hsl or warnings
+    const QColor boundaryColor = QColor::fromHslF(0.999f, 0.8f, 0.5f);
+    const QColor boundaryShadow = KisAiStrokeQualityUtils::calculateHueShiftedShadow(boundaryColor, QColor());
+    QVERIFY(boundaryShadow.isValid());
+    float bshH = 0.0f, bshS = 0.0f, bshL = 0.0f;
+    boundaryShadow.getHslF(&bshH, &bshS, &bshL);
+    QVERIFY(bshH >= 0.0f && bshH < 1.0f);
+
+    const QColor boundaryHighlight = KisAiStrokeQualityUtils::calculateHueShiftedHighlight(boundaryColor, QColor());
+    QVERIFY(boundaryHighlight.isValid());
+    float bhlH = 0.0f, bhlS = 0.0f, bhlL = 0.0f;
+    boundaryHighlight.getHslF(&bhlH, &bhlS, &bhlL);
+    QVERIFY(bhlH >= 0.0f && bhlH < 1.0f);
 }
 
 void KisAiStrokeRendererTest::testQualityUtilsProgramTrapping()
