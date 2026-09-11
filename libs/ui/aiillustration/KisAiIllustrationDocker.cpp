@@ -592,6 +592,13 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_jsonModeCombo->setAccessibleName(i18n("JSON response mode"));
     m_jsonModeCombo->setToolTip(i18n("APIの response_format (json_schema / json_object) を利用するかどうか"));
 
+    m_visionQualityCombo = new QComboBox(m_detailsContainer);
+    m_visionQualityCombo->addItem(i18n("自動 (Auto)"), QStringLiteral("auto"));
+    m_visionQualityCombo->addItem(i18n("高画質 (High)"), QStringLiteral("high"));
+    m_visionQualityCombo->addItem(i18n("低解像度 (Low)"), QStringLiteral("low"));
+    m_visionQualityCombo->setAccessibleName(i18n("Vision detail quality"));
+    m_visionQualityCombo->setToolTip(i18n("Vision LLMに送信するキャンバス画像の詳細度 (auto, high, low)"));
+
     m_compositionPlanCheck = new QCheckBox(i18n("2段階構図生成 (Composition Plan)"), m_detailsContainer);
     m_compositionPlanCheck->setChecked(false);
     m_compositionPlanCheck->setToolTip(i18n("複雑な構図向けに、事前に構図計画を策定してから実ストロークを生成します。"));
@@ -622,6 +629,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     remoteForm->addRow(i18n("タイムアウト"), m_timeoutSecSpin);
     remoteForm->addRow(i18n("自動リトライ"), m_maxRetriesSpin);
     remoteForm->addRow(i18n("JSONモード"), m_jsonModeCombo);
+    remoteForm->addRow(i18n("Vision画質"), m_visionQualityCombo);
     remoteForm->addRow(QString(), m_compositionPlanCheck);
     remoteForm->addRow(i18n("推論エフォート"), m_reasoningEffortCombo);
     remoteForm->addRow(i18n("追加指示"), m_customInstructionsEdit);
@@ -917,10 +925,13 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     connect(m_pausePerStepCheck, &QCheckBox::toggled, this, [this] { saveSettings(); });
     connect(m_temperatureSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] { saveSettings(); });
     connect(m_topPSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] { saveSettings(); });
+    connect(m_trappingPxSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] { saveSettings(); });
     connect(m_maxTokensSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
     connect(m_maxRetriesSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
     connect(m_timeoutSecSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
     connect(m_jsonModeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
+    connect(m_visionQualityCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
+    connect(m_compositionPlanCheck, &QCheckBox::toggled, this, [this] { saveSettings(); });
     connect(m_reasoningEffortCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
     connect(m_customInstructionsEdit, &QPlainTextEdit::textChanged, this, [this] { saveSettings(); });
 
@@ -930,6 +941,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 KisAiIllustrationDocker::~KisAiIllustrationDocker()
 {
     cancelRetry();
+    stopAllRequestTimers();
     clearInFlightApiKey();
     saveSettings();
     if (!m_goalApiKey.isEmpty()) {
@@ -1185,11 +1197,73 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     const qreal topP = m_topPSpin ? m_topPSpin->value() : 1.0;
     const int maxTokens = m_maxTokensSpin ? m_maxTokensSpin->value() : 0;
     const QString reasoningEffort = m_reasoningEffortCombo ? m_reasoningEffortCombo->currentData().toString() : QString();
-    const QString customInstructions = m_customInstructionsEdit ? m_customInstructionsEdit->toPlainText() : QString();
+    QString customInstructions = m_customInstructionsEdit ? m_customInstructionsEdit->toPlainText() : QString();
+    if (!m_compositionDirectives.isEmpty()) {
+        if (!customInstructions.isEmpty()) {
+            customInstructions += QStringLiteral("\n\n");
+        }
+        customInstructions += QStringLiteral("[COMPOSITION BLUEPRINT DIRECTIVES]\n") + m_compositionDirectives;
+        m_compositionDirectives.clear();
+    }
     const int artStyle = m_artStyleCombo ? m_artStyleCombo->currentData().toInt() : 0;
 
     const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
     const QSize canvasSize = effectiveCanvasSize();
+
+    // If Composition Plan is enabled and not yet fetched, do Step 1 first
+    const bool useCompositionPlan = m_compositionPlanCheck && m_compositionPlanCheck->isChecked()
+                                    && !m_isSelfCorrectionRetry && !m_retryInFlight
+                                    && m_compositionDirectives.isEmpty() && !m_waitingForCompositionPlan;
+
+    if (useCompositionPlan) {
+        m_waitingForCompositionPlan = true;
+        m_lastFailedPrompt = prompt;
+        const QJsonObject planPayload = KisAiStrokeProgramCodec::buildCompositionPlanPayload(
+            model, prompt, canvasSize, artStyle);
+
+        logDebug(QStringLiteral("COMP_PLAN_REQ"),
+                 QStringLiteral("POST Composition Plan (model=%1, prompt=\"%2\")")
+                     .arg(model, prompt.left(60)));
+
+        m_activeRequestEndpoint = endpoint;
+        m_isStreamingRequest = false;
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
+        m_requestWasCancelled = false;
+        m_requestTimedOut = false;
+        m_responseTooLarge = false;
+        m_responseBuffer.clear();
+        m_requestElapsedTimer.start();
+
+        m_reply = m_networkManager->post(request, QJsonDocument(planPayload).toJson(QJsonDocument::Compact));
+        m_reply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
+
+        m_inFlightApiKey = apiKey;
+        if (m_saveApiKeyCheck && !m_saveApiKeyCheck->isChecked()) {
+            m_apiKeyEditor->clear();
+        }
+
+        setBusy(true);
+        setStatus(i18n("構図計画 (Composition Plan) を策定しています…"));
+
+        connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] { appendReplyData(m_reply.data()); });
+        connect(m_reply.data(), &QNetworkReply::finished, this, [this] { finishLlmStrokesRequest(); });
+
+        if (!m_activityTimer) {
+            m_activityTimer = new QTimer(this);
+            m_activityTimer->setSingleShot(true);
+            connect(m_activityTimer, &QTimer::timeout, this, [this] {
+                if (m_reply) {
+                    m_requestTimedOut = true;
+                    m_reply->abort();
+                }
+            });
+        }
+        const int timeoutSec = m_timeoutSecSpin ? m_timeoutSecSpin->value() : 90;
+        m_activityTimer->start(qBound(10'000, timeoutSec * 1000, MAX_REQUEST_TIMEOUT_MS));
+        return;
+    }
+
     const QJsonObject payload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
         model,
         prompt,
@@ -1289,10 +1363,34 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     if (requestWasCancelled) {
         cancelRetry();
         clearInFlightApiKey();
+        m_waitingForCompositionPlan = false;
+        m_compositionDirectives.clear();
         logDebug(QStringLiteral("LLM_CANCEL"), QStringLiteral("ユーザーにより生成が中止されました。"));
         setStatus(i18n("LLM ストローク生成を中止しました。"));
         m_streamedContent.clear();
         m_sseBuffer.clear();
+        return;
+    }
+    if (m_waitingForCompositionPlan) {
+        m_waitingForCompositionPlan = false;
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
+
+        QString directives;
+        QString parseErr;
+        if (requestSucceeded && KisAiStrokeProgramCodec::parseCompositionPlan(rawResponse, &directives, &parseErr)) {
+            m_compositionDirectives = directives;
+            logDebug(QStringLiteral("COMP_PLAN_SUCCESS"),
+                     QStringLiteral("構図計画策定完了: %1").arg(directives));
+            setStatus(i18n("構図計画を反映し、ストロークを生成しています…"));
+        } else {
+            logDebug(QStringLiteral("COMP_PLAN_FALLBACK"),
+                     QStringLiteral("構図計画の取得をスキップし直接生成に移行します (%1)").arg(parseErr));
+            setStatus(i18n("構図計画をスキップし、ストロークを生成しています…"));
+            m_compositionDirectives.clear();
+        }
+
+        generateLlmStrokes(m_lastFailedPrompt);
         return;
     }
     if (requestTimedOut) {
@@ -1695,6 +1793,8 @@ void KisAiIllustrationDocker::cancelRemoteRequest()
 {
     cancelRetry();
     stopAllRequestTimers();
+    m_waitingForCompositionPlan = false;
+    m_compositionDirectives.clear();
     m_streamedContent.clear();
     m_sseBuffer.clear();
 
@@ -1837,21 +1937,22 @@ void KisAiIllustrationDocker::updateModeUi()
 
     const bool isStrokeMode = (isLlm || newMode == GenerationMode::LocalStrokes);
     if (m_remoteForm) {
-        m_remoteForm->setRowVisible(0, needsRemote);
-        m_remoteForm->setRowVisible(1, needsRemote);
-        m_remoteForm->setRowVisible(2, needsRemote);
-        m_remoteForm->setRowVisible(3, needsRemote); // Save API Key checkbox
-        m_remoteForm->setRowVisible(4, isLlm);       // Stroke Budget
-        m_remoteForm->setRowVisible(5, isLlm);       // Temperature
-        m_remoteForm->setRowVisible(6, isLlm);       // Top-P
-        m_remoteForm->setRowVisible(7, isStrokeMode);// Trapping px
-        m_remoteForm->setRowVisible(8, isLlm);       // Max Tokens
-        m_remoteForm->setRowVisible(9, needsRemote); // Timeout
-        m_remoteForm->setRowVisible(10, isLlm);      // Auto-retries
-        m_remoteForm->setRowVisible(11, isLlm);      // JSON Mode
-        m_remoteForm->setRowVisible(12, isLlm);      // Composition Plan
-        m_remoteForm->setRowVisible(13, isLlm);      // Reasoning Effort
-        m_remoteForm->setRowVisible(14, isLlm);      // Custom Instructions
+        m_remoteForm->setRowVisible(0, needsRemote);  // Endpoint
+        m_remoteForm->setRowVisible(1, needsRemote);  // Model
+        m_remoteForm->setRowVisible(2, needsRemote);  // API Key
+        m_remoteForm->setRowVisible(3, needsRemote);  // Save API Key checkbox
+        m_remoteForm->setRowVisible(4, isLlm);        // Stroke Budget
+        m_remoteForm->setRowVisible(5, isLlm);        // Temperature
+        m_remoteForm->setRowVisible(6, isLlm);        // Top-P
+        m_remoteForm->setRowVisible(7, isStrokeMode); // Trapping px
+        m_remoteForm->setRowVisible(8, isLlm);        // Max Tokens
+        m_remoteForm->setRowVisible(9, needsRemote);  // Timeout
+        m_remoteForm->setRowVisible(10, isLlm);       // Auto-retries
+        m_remoteForm->setRowVisible(11, isLlm);       // JSON Mode
+        m_remoteForm->setRowVisible(12, isLlm);       // Vision Quality
+        m_remoteForm->setRowVisible(13, isLlm);       // Composition Plan
+        m_remoteForm->setRowVisible(14, isLlm);       // Reasoning Effort
+        m_remoteForm->setRowVisible(15, isLlm);       // Custom Instructions
     }
 
     if (m_testConnectionButton) {
@@ -2372,7 +2473,7 @@ void KisAiIllustrationDocker::executeGoalStep()
             static_cast<int>(artStyle),
             accumProg,
             m_lastGoalCritique,
-            QStringLiteral("auto")
+            m_visionQualityCombo ? m_visionQualityCombo->currentData().toString() : QStringLiteral("auto")
         );
 
         logDebug(QStringLiteral("GOAL_REQ"), QStringLiteral(
@@ -3102,6 +3203,26 @@ void KisAiIllustrationDocker::loadSettings()
         }
     }
 
+    // トラッピング幅
+    if (m_trappingPxSpin) {
+        const qreal trapVal = settings.value(QStringLiteral("AIIllustration/trappingPx"), 1.5).toDouble();
+        m_trappingPxSpin->setValue(qBound(m_trappingPxSpin->minimum(), trapVal, m_trappingPxSpin->maximum()));
+    }
+
+    // 2段階構図生成
+    if (m_compositionPlanCheck) {
+        m_compositionPlanCheck->setChecked(settings.value(QStringLiteral("AIIllustration/compositionPlanEnabled"), false).toBool());
+    }
+
+    // Vision 画質
+    if (m_visionQualityCombo) {
+        const QString vq = settings.value(QStringLiteral("AIIllustration/visionQuality"), QStringLiteral("auto")).toString();
+        const int idx = m_visionQualityCombo->findData(vq);
+        if (idx >= 0) {
+            m_visionQualityCombo->setCurrentIndex(idx);
+        }
+    }
+
     // AI 詳細設定
     if (m_temperatureSpin) m_temperatureSpin->setValue(qBound(m_temperatureSpin->minimum(), settings.value(QStringLiteral("AIIllustration/temperature"), 0.70).toDouble(), m_temperatureSpin->maximum()));
     if (m_topPSpin) m_topPSpin->setValue(qBound(m_topPSpin->minimum(), settings.value(QStringLiteral("AIIllustration/topP"), 1.0).toDouble(), m_topPSpin->maximum()));
@@ -3205,6 +3326,9 @@ void KisAiIllustrationDocker::saveSettings()
     if (m_maxRetriesSpin) settings.setValue(QStringLiteral("AIIllustration/maxRetries"), m_maxRetriesSpin->value());
     if (m_timeoutSecSpin) settings.setValue(QStringLiteral("AIIllustration/timeoutSec"), m_timeoutSecSpin->value());
     if (m_jsonModeCombo) settings.setValue(QStringLiteral("AIIllustration/jsonMode"), m_jsonModeCombo->currentIndex());
+    if (m_trappingPxSpin) settings.setValue(QStringLiteral("AIIllustration/trappingPx"), m_trappingPxSpin->value());
+    if (m_compositionPlanCheck) settings.setValue(QStringLiteral("AIIllustration/compositionPlanEnabled"), m_compositionPlanCheck->isChecked());
+    if (m_visionQualityCombo) settings.setValue(QStringLiteral("AIIllustration/visionQuality"), m_visionQualityCombo->currentData().toString());
     if (m_reasoningEffortCombo) settings.setValue(QStringLiteral("AIIllustration/reasoningEffort"), m_reasoningEffortCombo->currentData().toString());
     if (m_customInstructionsEdit) settings.setValue(QStringLiteral("AIIllustration/customInstructions"), m_customInstructionsEdit->toPlainText());
 }

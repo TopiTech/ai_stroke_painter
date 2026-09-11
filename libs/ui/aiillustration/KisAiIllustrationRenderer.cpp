@@ -181,7 +181,7 @@ void drawPromptMotif(QPainter &painter, const QRectF &bounds, const QString &pro
     figure.closeSubpath();
     painter.drawPath(figure);
 }
-}
+} // namespace
 
 QString KisAiIllustrationRenderer::normalizedPrompt(const QString &prompt)
 {

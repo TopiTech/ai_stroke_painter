@@ -434,6 +434,13 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
         }
     }
 
+    if (layerBuckets.isEmpty()) {
+        if (statusMessage) {
+            *statusMessage = i18n("描画可能なストローク操作がありませんでした。");
+        }
+        return false;
+    }
+
     // Guard against deadlocks: if the user is currently drawing a brush stroke or
     // the image scheduler is processing background stroke jobs, calling beginMacro()
     // directly would invoke KisLegacyUndoAdapter's barrierLock() which deadlocks
@@ -1592,8 +1599,9 @@ void KisAiStrokeRenderer::applySoftEdgeDiffusion(QImage &image, int radius)
         image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     }
 
+    const int boundedRadius = qBound(1, radius, qMax(1, qMin(w - 1, h - 1)));
     QImage temp(image.size(), image.format());
-    const int diameter = radius * 2 + 1;
+    const int diameter = boundedRadius * 2 + 1;
     const qreal invDiv = 1.0 / diameter;
 
     // Horizontal pass
@@ -1605,7 +1613,7 @@ void KisAiStrokeRenderer::applySoftEdgeDiffusion(QImage &image, int radius)
         int sumR = 0;
         int sumG = 0;
         int sumB = 0;
-        for (int i = -radius; i <= radius; ++i) {
+        for (int i = -boundedRadius; i <= boundedRadius; ++i) {
             const int cx = qBound(0, i, w - 1);
             const QRgb c = srcRow[cx];
             sumA += qAlpha(c);
@@ -1620,8 +1628,8 @@ void KisAiStrokeRenderer::applySoftEdgeDiffusion(QImage &image, int radius)
                               qBound(0, qRound(sumB * invDiv), 255),
                               qBound(0, qRound(sumA * invDiv), 255));
 
-            const int xRemove = qBound(0, x - radius, w - 1);
-            const int xAdd = qBound(0, x + radius + 1, w - 1);
+            const int xRemove = qBound(0, x - boundedRadius, w - 1);
+            const int xAdd = qBound(0, x + boundedRadius + 1, w - 1);
             const QRgb cRem = srcRow[xRemove];
             const QRgb cAdd = srcRow[xAdd];
             sumA += qAlpha(cAdd) - qAlpha(cRem);
@@ -1637,7 +1645,7 @@ void KisAiStrokeRenderer::applySoftEdgeDiffusion(QImage &image, int radius)
         int sumR = 0;
         int sumG = 0;
         int sumB = 0;
-        for (int i = -radius; i <= radius; ++i) {
+        for (int i = -boundedRadius; i <= boundedRadius; ++i) {
             const int cy = qBound(0, i, h - 1);
             const QRgb c = reinterpret_cast<const QRgb *>(temp.constScanLine(cy))[x];
             sumA += qAlpha(c);
@@ -1653,8 +1661,8 @@ void KisAiStrokeRenderer::applySoftEdgeDiffusion(QImage &image, int radius)
                       qBound(0, qRound(sumB * invDiv), 255),
                       qBound(0, qRound(sumA * invDiv), 255));
 
-            const int yRemove = qBound(0, y - radius, h - 1);
-            const int yAdd = qBound(0, y + radius + 1, h - 1);
+            const int yRemove = qBound(0, y - boundedRadius, h - 1);
+            const int yAdd = qBound(0, y + boundedRadius + 1, h - 1);
             const QRgb cRem = reinterpret_cast<const QRgb *>(temp.constScanLine(yRemove))[x];
             const QRgb cAdd = reinterpret_cast<const QRgb *>(temp.constScanLine(yAdd))[x];
             sumA += qAlpha(cAdd) - qAlpha(cRem);

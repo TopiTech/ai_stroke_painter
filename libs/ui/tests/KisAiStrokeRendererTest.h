@@ -56,6 +56,7 @@ private Q_SLOTS:
     void testPxBrushSizeSurvivesSupersampling();
     void testHatchErasersAreShapeBounded();
     void testTrappingWidthAndScreenBlending();
+    void testSoftEdgeDiffusionRadiusBounded();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

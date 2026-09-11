@@ -1356,4 +1356,33 @@ void KisAiStrokeRendererTest::testTrappingWidthAndScreenBlending()
     QVERIFY(qGreen(centerPixel) > 50);
 }
 
+void KisAiStrokeRendererTest::testSoftEdgeDiffusionRadiusBounded()
+{
+    // Test null image safety
+    QImage nullImg;
+    KisAiStrokeRenderer::applySoftEdgeDiffusion(nullImg, 5);
+    QVERIFY(nullImg.isNull());
+
+    // Test tiny 2x2 image with oversized radius (e.g. 50)
+    QImage tinyImg(2, 2, QImage::Format_ARGB32_Premultiplied);
+    tinyImg.fill(Qt::transparent);
+    tinyImg.setPixelColor(0, 0, QColor(255, 0, 0, 255));
+    KisAiStrokeRenderer::applySoftEdgeDiffusion(tinyImg, 50);
+    QCOMPARE(tinyImg.size(), QSize(2, 2));
+    QVERIFY(tinyImg.pixelColor(0, 0).isValid());
+
+    // Test normal image diffusion
+    QImage normImg(32, 32, QImage::Format_ARGB32_Premultiplied);
+    normImg.fill(Qt::transparent);
+    for (int y = 14; y <= 17; ++y) {
+        for (int x = 14; x <= 17; ++x) {
+            normImg.setPixelColor(x, y, QColor(200, 100, 50, 255));
+        }
+    }
+    QCOMPARE(normImg.pixelColor(10, 10).alpha(), 0);
+
+    KisAiStrokeRenderer::applySoftEdgeDiffusion(normImg, 3);
+    QVERIFY(normImg.pixelColor(13, 13).alpha() > 0);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

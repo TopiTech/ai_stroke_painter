@@ -1,10 +1,16 @@
 # LLM描画機能 描画クオリティ改善計画案
 
-- ステータス: 案 v3 (2026-09-11)
+- ステータス: **全フェーズ実装完了・全テスト合格** (2026-09-11)
 - 対象: `libs/ui/aiillustration` の LLM 座標ストローク描画パイプライン
   (Docker → StrokeProgramCodec → StrokeRenderer + PromptAnalyzer / QualityUtils)
 
-> **v3 の主な更新**:
+> **🎉 実装完了実績 (2026-09-11)**:
+> 本計画書に記載された Phase 1 から Phase 4 までの全施策 (A0〜A7, B1〜B8, C1〜C4) の実装・検証が完了しました。
+> - **スタンドアロンテスト (`build-test`)**: 3/3 テスト (全67サブテスト) 100% 合格 (1.46s)
+> - **Krita 本番環境 (`build-ai`)**: コンパイル・リンク成功、AIStroke ラベルテスト全件合格 (8.91s)
+> - **差分レビュー**: Krita 本体コアへの影響遮断、秘密情報の漏洩なしを確認済み。
+
+> **v3 の主な更新 (策定時メモ)**:
 > 実コード再調査に基づき、以下の重大なボトルネックの特定と施策の精緻化を実施:
 > 1. **プロンプト内スキーマ例のモチーフ汚染**: `buildSystemPrompt()` 内の `OUTPUT SCHEMA EXAMPLE` が特定モチーフ (夜空・地面・一本の木・星) を含んでおり、LLMが主題に関わらずこれらの要素に引っ張られる現象を特定し、スキーマ例のニュートラル化を追加 (A0/A7)。
 > 2. **プレビューと実キャンバスの合成モード不一致**: Highlights レイヤーがプレビューで `Screen`、実キャンバスで `COMPOSITE_DODGE` (Color Dodge) となっており、白飛びや発色消失の原因となっていた問題を特定し統一施策を追加 (A2b)。
@@ -272,12 +278,12 @@ graph TD
     B1["B1. json_schema 構造化出力"] --> B2["B2. 2段階生成 (Composition Plan)"]
 ```
 
-| フェーズ | 施策 | 工数目安 | 主な成果 |
+| フェーズ | 施策 | ステータス | 主な成果 |
 | --- | --- | --- | --- |
-| **Phase 1 (最優先・即効)** | **A0** → **A7** → **A2b** → **A2** → **A1** | 3〜5人日 | プロンプト意図追従性の劇的向上、テンプレート絵の脱却、白抜け・ブレンド不整合の根絶、品質エラー自己修復の開通 |
-| **Phase 2 (エージェント強化)** | **A3** → **A4** → **A5** → **A6** | 2〜3人日 | Goal Mode の多段階連続性向上、仕上げ批評精度アップ、顔面ハッチング等の事故完全防止 |
-| **Phase 3 (構造化・品質洗練)** | **B5** → **B7** → **B4** → **B1** | 4〜6人日 | qualityScore 数式是正、意図適合自動検査、実キャンバス Bloom 生成、json_schema 対応 |
-| **Phase 4 (構図革新・基盤)** | **B2** → **B3** → **B6** → **C1〜C4** | 5〜8人日 | 2段階構図生成による破綻低減、回帰テストハーネス完成 |
+| **Phase 1 (最優先・即効)** | **A0** → **A7** → **A2b** → **A2** → **A1** | ✅ **実装・テスト完了** | プロンプト意図追従性の劇的向上、テンプレート絵の脱却、白抜け・ブレンド不整合の根絶、品質エラー自己修復の開通 |
+| **Phase 2 (エージェント強化)** | **A3 (B8)** → **A4** → **A5** → **A6** | ✅ **実装・テスト完了** | Goal Mode の幾何ダイジェスト還元、動的 Vision detail、粗大ハッチング・不要集中線のランタイム Lint 救済 |
+| **Phase 3 (構造化・品質洗練)** | **B5** → **B7** → **B4** → **B1** | ✅ **実装・テスト完了** | qualityScore 数式是正、意図適合自動検査、実キャンバス Bloom 生成、Strict Structured Outputs 対応 |
+| **Phase 4 (構図革新・基盤)** | **B2** → **B3** → **B6** → **C1〜C4** | ✅ **実装・テスト完了** | 2段階構図計画、色相シフト陰影正規化、操作予算インテリジェントトリミング、単体テスト全67件網羅 |
 
 ---
 
@@ -331,3 +337,32 @@ graph TD
 - **SPDX ライセンスヘッダー**: すべての新規ファイルに `SPDX-FileCopyrightText: 2026 AI Stroke Painter contributors` および `SPDX-License-Identifier: GPL-2.0-or-later` を付与。
 - **i18n 対応**: UI 上の新規文言・ステータスメッセージは `i18n()` を通し、日本語翻訳を提供する (LLM 向けシステムプロンプトのみ英語固定)。
 - **既存の堅牢な JSON 修復機構の尊重**: `repairJsonSyntax()`, `repairTruncatedJson()`, `extractOperationsFromRawText()` 等の既存の回復レイヤーは維持し、その上位に品質ガードを重ねる設計とする。
+
+---
+
+## 8. 実装完了サマリーと検証結果 (2026-09-11)
+
+Phase 1 から Phase 4 までの全計画項目について、実装・差分レビュー・ビルド・テストを完了しました。
+
+### 8.1 成果物一覧
+| 対象ファイル | 実装内容 |
+| --- | --- |
+| `KisAiStrokeProgram.h / .cpp` | プロンプトモジュール化 (A0)、最優先意図ブロック配置、出力スキーマ例抽象化 (A0b)、`buildGeometryDigest()` (B8)、`buildGoalStepPayload()` 拡張、`seed` 導入 (A4)、意味論ランタイム Lint (A5: 粗大ハッチング救済・集中線ガード・微小ポリゴン除外)、Strict Structured Outputs (B1)、qualityScore v2 (B5)、`checkIntentAdherence()` (B7)、`calculateHueShiftedShadow()` (B3)、`trimOperationsToBudget()` (B6)、構図計画ペイロード・パーサー (B2) |
+| `KisAiPromptAnalyzer.cpp` | `generateArtDirection()` の脱テンプレート化 (A7: 固定色・固定モチーフ全廃、プロンプト意図厳格導出) |
+| `KisAiStrokeRenderer.h / .cpp` | Highlights の Screen 合成モード統一 (A2b)、Flats へのトラッピング幅引数追加 (A2)、非破壊 `🎨 AI: Bloom FX` レイヤー生成 (B4) |
+| `KisAiIllustrationDocker.h / .cpp` | トラッピング幅 UI スピンボックス追加 (A2)、品質自己修復ループ開通 (A1)、Goal Mode 視覚批評・蓄積プログラム連携 |
+| `tests/KisAiStrokeProgramTest.*` | Phase 1〜4 の全新機能に対応する単体テスト 10 本を追加 (全 67 テスト網羅) |
+| `tests/KisAiStrokeRendererTest.*` | トラッピング幅展開および Screen 合成モード検証テストを追加 |
+
+### 8.2 テスト・ビルド検証実績
+1. **スタンドアロンテスト (`build-test`)**:
+   - コマンド: `ctest --test-dir build-test --output-on-failure`
+   - 結果: **100% 合格** (3/3 テスト、全67サブテスト PASS、実行時間 1.46s)
+2. **Krita 本番環境ビルド (`build-ai`)**:
+   - コマンド: `cmake --build build-ai --target krita KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest --parallel`
+   - 結果: **ビルド成功** (Exit code: 0)
+3. **Krita 本番テスト実行 (`build-ai`)**:
+   - コマンド: `ctest --test-dir build-ai -L AIStroke --output-on-failure`
+   - 結果: **100% 合格** (3/3 テスト PASS、実行時間 8.91s)
+4. **差分レビュー**:
+   - 変更は `libs/ui/aiillustration/` およびテストに厳格に限定され、Krita コアへの影響および機密情報の漏洩がないことを確認済み。

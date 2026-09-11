@@ -1591,42 +1591,113 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::trimOperationsToBudget(
         return program;
     }
 
-    KisAiStrokeProgram trimmed = program;
-    trimmed.operations.clear();
+    auto calcScore = [](const KisAiStrokeOperation &op) -> qreal {
+        if (op.polygon.size() > 0) {
+            return polygonArea(op.polygon);
+        }
+        if (!op.points.isEmpty()) {
+            return op.points.size() * 0.01;
+        }
+        if (!op.spine.isEmpty()) {
+            return op.spine.size() * 0.01;
+        }
+        if (op.kind == KisAiStrokeOperation::Kind::Particles) {
+            return op.bounds.isValid() ? (op.bounds.width() * op.bounds.height() + op.particleCount * 0.001) : 0.05;
+        }
+        return 0.01;
+    };
 
     QMap<QString, QVector<KisAiStrokeOperation>> byLayer;
     for (const KisAiStrokeOperation &op : program.operations) {
         byLayer[normalizeLayerName(op.layer)].append(op);
     }
-
-    const int flatsBudget = qMax(1, static_cast<int>(maxOperations * 0.35));
-    const int lineartBudget = qMax(1, static_cast<int>(maxOperations * 0.30));
-    const int shadingBudget = qMax(1, static_cast<int>(maxOperations * 0.20));
-    const int highlightsBudget = qMax(1, static_cast<int>(maxOperations * 0.10));
-    const int fxBudget = maxOperations - (flatsBudget + lineartBudget + shadingBudget + highlightsBudget);
-
-    auto takeBest = [](QVector<KisAiStrokeOperation> &ops, int budget) -> QVector<KisAiStrokeOperation> {
-        if (ops.size() <= budget) {
-            return ops;
-        }
-        std::stable_sort(ops.begin(), ops.end(), [](const KisAiStrokeOperation &a, const KisAiStrokeOperation &b) {
-            const qreal scoreA = a.polygon.size() > 0 ? polygonArea(a.polygon) : (a.points.size() * 0.01);
-            const qreal scoreB = b.polygon.size() > 0 ? polygonArea(b.polygon) : (b.points.size() * 0.01);
-            return scoreA > scoreB;
+    for (auto it = byLayer.begin(); it != byLayer.end(); ++it) {
+        std::stable_sort(it.value().begin(), it.value().end(), [&](const KisAiStrokeOperation &a, const KisAiStrokeOperation &b) {
+            return calcScore(a) > calcScore(b);
         });
-        return ops.mid(0, budget);
-    };
+    }
 
     QVector<KisAiStrokeOperation> selected;
-    if (byLayer.contains(QStringLiteral("Background"))) {
-        selected.append(byLayer[QStringLiteral("Background")]);
-    }
-    selected.append(takeBest(byLayer[QStringLiteral("Flats")], flatsBudget));
-    selected.append(takeBest(byLayer[QStringLiteral("Shading")], shadingBudget));
-    selected.append(takeBest(byLayer[QStringLiteral("Lineart")], lineartBudget));
-    selected.append(takeBest(byLayer[QStringLiteral("Highlights")], highlightsBudget));
-    selected.append(takeBest(byLayer[QStringLiteral("FX")], qMax(0, fxBudget)));
+    int remainingBudget = maxOperations;
 
+    // 1. Background layer: preserve up to 2 operations
+    if (byLayer.contains(QStringLiteral("Background"))) {
+        const auto &bgOps = byLayer[QStringLiteral("Background")];
+        const int bgCount = qMin(bgOps.size(), qMin(2, remainingBudget));
+        selected.append(bgOps.mid(0, bgCount));
+        remainingBudget -= bgCount;
+    }
+
+    // 2. Dynamic layer budget allocation
+    static const QStringList standardLayers = {
+        QStringLiteral("Flats"),
+        QStringLiteral("Lineart"),
+        QStringLiteral("Shading"),
+        QStringLiteral("Highlights"),
+        QStringLiteral("FX")
+    };
+
+    auto getLayerWeight = [](const QString &layer) -> qreal {
+        if (layer == QLatin1String("Flats")) return 0.35;
+        if (layer == QLatin1String("Lineart")) return 0.30;
+        if (layer == QLatin1String("Shading")) return 0.20;
+        if (layer == QLatin1String("Highlights")) return 0.10;
+        if (layer == QLatin1String("FX")) return 0.10;
+        return 0.05;
+    };
+
+    QMap<QString, int> layerAllocations;
+
+    // Guarantee at least 1 op to each present standard layer if budget permits
+    for (const QString &l : standardLayers) {
+        if (byLayer.contains(l) && !byLayer[l].isEmpty() && remainingBudget > 0) {
+            layerAllocations[l] = 1;
+            remainingBudget--;
+        }
+    }
+
+    // Allocate remaining budget iteratively to the layer with highest-scoring next candidate operation
+    while (remainingBudget > 0) {
+        QString bestLayer;
+        qreal bestMetric = -1.0;
+        for (auto it = byLayer.cbegin(); it != byLayer.cend(); ++it) {
+            const QString &l = it.key();
+            if (l == QLatin1String("Background")) continue;
+            const int currentAlloc = layerAllocations.value(l, 0);
+            const int available = it.value().size();
+            if (currentAlloc < available) {
+                const auto &candidateOp = it.value().at(currentAlloc);
+                const qreal metric = calcScore(candidateOp) * getLayerWeight(l);
+                if (metric > bestMetric) {
+                    bestMetric = metric;
+                    bestLayer = l;
+                }
+            }
+        }
+        if (bestLayer.isEmpty()) {
+            break;
+        }
+        layerAllocations[bestLayer]++;
+        remainingBudget--;
+    }
+
+    auto appendLayerOps = [&](const QString &l) {
+        if (layerAllocations.contains(l) && byLayer.contains(l)) {
+            const int count = layerAllocations[l];
+            selected.append(byLayer[l].mid(0, count));
+        }
+    };
+
+    for (const QString &l : standardLayers) {
+        appendLayerOps(l);
+    }
+    for (auto it = byLayer.cbegin(); it != byLayer.cend(); ++it) {
+        if (it.key() != QLatin1String("Background") && !standardLayers.contains(it.key())) {
+            appendLayerOps(it.key());
+        }
+    }
+
+    KisAiStrokeProgram trimmed = program;
     trimmed.operations = selected;
     return refineForRendering(trimmed);
 }
@@ -1684,22 +1755,48 @@ bool KisAiStrokeProgramCodec::parseCompositionPlan(
     QString *errorMessage)
 {
     if (outDirectives) outDirectives->clear();
-    const QString raw = QString::fromUtf8(responseBytes);
-    const QString jsonStr = sanitizeAndExtractJson(raw);
+    const QString raw = QString::fromUtf8(responseBytes).trimmed();
 
     QJsonParseError parseErr;
-    const QJsonDocument doc = QJsonDocument::fromJson(jsonStr.toUtf8(), &parseErr);
+    QJsonDocument doc = QJsonDocument::fromJson(responseBytes, &parseErr);
+    if (!doc.isObject()) {
+        const QString jsonStr = sanitizeAndExtractJson(raw);
+        doc = QJsonDocument::fromJson(jsonStr.toUtf8(), &parseErr);
+    }
     if (!doc.isObject()) {
         if (errorMessage) *errorMessage = QStringLiteral("Failed to parse composition plan JSON: %1").arg(parseErr.errorString());
         return false;
     }
 
-    const QJsonObject root = doc.object();
-    QString directives;
-    if (root.contains(QStringLiteral("artistic_directives"))) {
-        directives = root.value(QStringLiteral("artistic_directives")).toString().trimmed();
+    QJsonObject target = doc.object();
+    if (target.contains(QStringLiteral("choices"))) {
+        const QJsonArray choices = target.value(QStringLiteral("choices")).toArray();
+        if (!choices.isEmpty()) {
+            const QJsonObject firstChoice = choices.at(0).toObject();
+            const QString content = firstChoice.value(QStringLiteral("message")).toObject().value(QStringLiteral("content")).toString();
+            if (!content.isEmpty()) {
+                const QString innerJson = sanitizeAndExtractJson(content);
+                QJsonParseError innerErr;
+                const QJsonDocument innerDoc = QJsonDocument::fromJson(innerJson.toUtf8(), &innerErr);
+                if (innerDoc.isObject()) {
+                    target = innerDoc.object();
+                }
+            }
+        }
     }
-    const QJsonObject focal = root.value(QStringLiteral("focal_point")).toObject();
+
+    QString directives;
+    if (target.contains(QStringLiteral("artistic_directives"))) {
+        directives = target.value(QStringLiteral("artistic_directives")).toString().trimmed();
+    }
+    if (target.contains(QStringLiteral("composition_type"))) {
+        const QString compType = target.value(QStringLiteral("composition_type")).toString().trimmed();
+        if (!compType.isEmpty()) {
+            if (!directives.isEmpty()) directives += QStringLiteral(" ");
+            directives += QStringLiteral("[%1]").arg(compType);
+        }
+    }
+    const QJsonObject focal = target.value(QStringLiteral("focal_point")).toObject();
     if (!focal.isEmpty()) {
         directives += QStringLiteral(" [Focal point at (%1, %2)]")
                           .arg(QString::number(focal.value(QStringLiteral("x")).toDouble(0.5), 'f', 2))

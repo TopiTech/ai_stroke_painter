@@ -128,6 +128,10 @@ private:
     bool m_isStreamingRequest {false};
     QString m_activeRequestEndpoint;
 
+    // Composition Plan (2-step generation) state
+    bool m_waitingForCompositionPlan {false};
+    QString m_compositionDirectives;
+
     // Connection test state
     QPointer<QNetworkReply> m_testReply;
     QByteArray m_testResponseBuffer;

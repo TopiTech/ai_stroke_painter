@@ -78,6 +78,8 @@ private Q_SLOTS:
     void testTrimOperationsToBudget();
     void testGoalModeGeometryDigest();
     void testPromptFirstPriorityBlock();
+    void testCompositionPlanOpenAiChoicesUnwrapping();
+    void testTrimOperationsPreservesRibbonAndParticles();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

@@ -644,10 +644,11 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
             if (cVal.isArray()) {
                 QJsonArray cArr = cVal.toArray();
                 if (cArr.size() >= 2) {
-                    qreal cx = 0.5, cy = 0.5;
-                    coerceToNumber(cArr.at(0), &cx);
-                    coerceToNumber(cArr.at(1), &cy);
-                    (*opObj)[QStringLiteral("center")] = QJsonArray({cx, cy});
+                    qreal centerX = 0.5;
+                    qreal centerY = 0.5;
+                    coerceToNumber(cArr.at(0), &centerX);
+                    coerceToNumber(cArr.at(1), &centerY);
+                    (*opObj)[QStringLiteral("center")] = QJsonArray({centerX, centerY});
                 }
             }
         }

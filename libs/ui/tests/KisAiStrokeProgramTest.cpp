@@ -2690,7 +2690,79 @@ void KisAiStrokeProgramTest::testPromptFirstPriorityBlock()
     QVERIFY(systemText.contains(QStringLiteral("=== MASTER DRAWING WORKFLOW (MANDATORY) ===")));
 }
 
+void KisAiStrokeProgramTest::testCompositionPlanOpenAiChoicesUnwrapping()
+{
+    // Verify unwrapping OpenAI response choices[0].message.content with markdown fences
+    const QByteArray openAiPayload = QByteArrayLiteral(
+        "{\n"
+        "  \"id\": \"chatcmpl-123\",\n"
+        "  \"choices\": [{\n"
+        "    \"message\": {\n"
+        "      \"role\": \"assistant\",\n"
+        "      \"content\": \"```json\\n{\\n  \\\"composition_type\\\": \\\"golden_spiral\\\",\\n  \\\"focal_point\\\": {\\\"x\\\": 0.38, \\\"y\\\": 0.62},\\n  \\\"primary_palette\\\": [\\\"#2b1055\\\", \\\"#7597de\\\"],\\n  \\\"artistic_directives\\\": \\\"Create high-contrast dynamic lighting with spiral flow.\\\"\\n}\\n```\"\n"
+        "    }\n"
+        "  }]\n"
+        "}"
+    );
+
+    QString directives;
+    QString error;
+    const bool ok = KisAiStrokeProgramCodec::parseCompositionPlan(openAiPayload, &directives, &error);
+    QVERIFY2(ok, qPrintable(error));
+    QVERIFY(directives.contains(QStringLiteral("Create high-contrast dynamic lighting")));
+    QVERIFY(directives.contains(QStringLiteral("Focal point at (0.38, 0.62)")));
+    QVERIFY(directives.contains(QStringLiteral("golden_spiral")));
+}
+
+void KisAiStrokeProgramTest::testTrimOperationsPreservesRibbonAndParticles()
+{
+    // Verify intelligent trimming preserves Ribbon and Particles when they contain geometric content
+    KisAiStrokeProgram prog;
+    prog.prompt = QStringLiteral("Magic sparkle effect");
+    prog.canvasSize = QSize(800, 600);
+
+    // Add ribbon operation with spine
+    KisAiStrokeOperation ribbon;
+    ribbon.kind = KisAiStrokeOperation::Kind::Ribbon;
+    ribbon.layer = QStringLiteral("FX");
+    for (int i = 0; i < 10; ++i) {
+        ribbon.spine.append(QPointF(0.1 + i * 0.08, 0.2 + (i % 2) * 0.1));
+    }
+    prog.operations.append(ribbon);
+
+    // Add particles operation with bounds and count
+    KisAiStrokeOperation particles;
+    particles.kind = KisAiStrokeOperation::Kind::Particles;
+    particles.layer = QStringLiteral("FX");
+    particles.bounds = QRectF(0.2, 0.2, 0.5, 0.5);
+    particles.particleCount = 50;
+    prog.operations.append(particles);
+
+    // Add many small low-priority operations in Details/FX
+    for (int i = 0; i < 20; ++i) {
+        KisAiStrokeOperation smallOp;
+        smallOp.kind = KisAiStrokeOperation::Kind::Fill;
+        smallOp.layer = QStringLiteral("Details");
+        smallOp.polygon << QPointF(0.01, 0.01) << QPointF(0.011, 0.01) << QPointF(0.01, 0.011);
+        prog.operations.append(smallOp);
+    }
+
+    // Trim to budget of 5 operations
+    const KisAiStrokeProgram trimmed = KisAiStrokeProgramCodec::trimOperationsToBudget(prog, 5);
+    QVERIFY(trimmed.operations.size() <= 5);
+
+    bool hasRibbon = false;
+    bool hasParticles = false;
+    for (const auto &op : trimmed.operations) {
+        if (op.kind == KisAiStrokeOperation::Kind::Ribbon) hasRibbon = true;
+        if (op.kind == KisAiStrokeOperation::Kind::Particles) hasParticles = true;
+    }
+    QVERIFY(hasRibbon);
+    QVERIFY(hasParticles);
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
+
 
 
 
