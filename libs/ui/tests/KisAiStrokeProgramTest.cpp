@@ -2761,6 +2761,176 @@ void KisAiStrokeProgramTest::testTrimOperationsPreservesRibbonAndParticles()
     QVERIFY(hasParticles);
 }
 
+void KisAiStrokeProgramTest::testQualityScoreWithHatch()
+{
+    KisAiStrokeProgram prog;
+    prog.prompt = QStringLiteral("Manga hatching sketch");
+    prog.canvasSize = QSize(1000, 1000);
+
+    // Add Hatch operation with a polygon on Shading layer
+    KisAiStrokeOperation hatchOp;
+    hatchOp.kind = KisAiStrokeOperation::Kind::Hatch;
+    hatchOp.layer = QStringLiteral("Shading");
+    hatchOp.polygon << QPointF(0.1, 0.1) << QPointF(0.5, 0.1) << QPointF(0.5, 0.5) << QPointF(0.1, 0.5);
+    hatchOp.brush.color = QColor(20, 20, 20);
+    hatchOp.angleDeg = 45.0;
+    hatchOp.spacing = 0.02;
+    prog.operations.append(hatchOp);
+
+    // Also add lineart and flats
+    KisAiStrokeOperation flatsOp;
+    flatsOp.kind = KisAiStrokeOperation::Kind::Fill;
+    flatsOp.layer = QStringLiteral("Flats");
+    flatsOp.polygon << QPointF(0.0, 0.0) << QPointF(1.0, 0.0) << QPointF(1.0, 1.0) << QPointF(0.0, 1.0);
+    flatsOp.brush.color = QColor(240, 240, 230);
+    prog.operations.append(flatsOp);
+
+    KisAiStrokeOperation lineOp;
+    lineOp.kind = KisAiStrokeOperation::Kind::Path;
+    lineOp.layer = QStringLiteral("Lineart");
+    lineOp.points.append(KisAiStrokePoint(0.1, 0.1, 0.8));
+    lineOp.points.append(KisAiStrokePoint(0.5, 0.5, 0.8));
+    lineOp.points.append(KisAiStrokePoint(0.9, 0.9, 0.8));
+    lineOp.brush.color = QColor(10, 10, 10);
+    prog.operations.append(lineOp);
+
+    const qreal scoreWithHatch = KisAiStrokeProgramCodec::qualityScore(prog);
+    QVERIFY(scoreWithHatch > 0.4);
+
+    // If Hatch polygon was ignored, silhouette and point metrics would be lower.
+    // Ensure Hatch contributes positively.
+    KisAiStrokeProgram progNoHatch = prog;
+    progNoHatch.operations.removeFirst(); // remove Hatch
+    const qreal scoreNoHatch = KisAiStrokeProgramCodec::qualityScore(progNoHatch);
+    QVERIFY(scoreWithHatch > scoreNoHatch);
+}
+
+void KisAiStrokeProgramTest::testTrimOperationsPreservesOriginalOrderWithinLayers()
+{
+    // Verify that when trimOperationsToBudget selects the top-scoring operations,
+    // their relative chronological execution order within each layer is preserved.
+    KisAiStrokeProgram prog;
+    prog.prompt = QStringLiteral("Layer order test");
+    prog.canvasSize = QSize(1000, 1000);
+
+    // Add 3 operations to "Flats", with specific IDs and varied scores/sizes
+    KisAiStrokeOperation op1;
+    op1.id = QStringLiteral("first_small_bg");
+    op1.layer = QStringLiteral("Flats");
+    op1.kind = KisAiStrokeOperation::Kind::Fill;
+    op1.polygon << QPointF(0.1, 0.1) << QPointF(0.3, 0.1) << QPointF(0.3, 0.3); // area ~ 0.02
+    prog.operations.append(op1);
+
+    KisAiStrokeOperation op2;
+    op2.id = QStringLiteral("second_huge_main");
+    op2.layer = QStringLiteral("Flats");
+    op2.kind = KisAiStrokeOperation::Kind::Fill;
+    op2.polygon << QPointF(0.0, 0.0) << QPointF(0.8, 0.0) << QPointF(0.8, 0.8) << QPointF(0.0, 0.8); // area 0.64
+    prog.operations.append(op2);
+
+    KisAiStrokeOperation op3;
+    op3.id = QStringLiteral("third_medium_overlay");
+    op3.layer = QStringLiteral("Flats");
+    op3.kind = KisAiStrokeOperation::Kind::Fill;
+    op3.polygon << QPointF(0.2, 0.2) << QPointF(0.6, 0.2) << QPointF(0.6, 0.6) << QPointF(0.2, 0.6); // area 0.16
+    prog.operations.append(op3);
+
+    // Trim to budget of 2 operations.
+    // The top 2 scoring operations are op2 (huge) and op3 (medium).
+    // In chronological order, op2 came before op3!
+    const KisAiStrokeProgram trimmed = KisAiStrokeProgramCodec::trimOperationsToBudget(prog, 2);
+    QCOMPARE(trimmed.operations.size(), 2);
+
+    // op2 must be before op3 because op2 was defined before op3 in original operations!
+    QCOMPARE(trimmed.operations.at(0).id, QStringLiteral("second_huge_main"));
+    QCOMPARE(trimmed.operations.at(1).id, QStringLiteral("third_medium_overlay"));
+}
+
+void KisAiStrokeProgramTest::testExtractOperationsQualityReportPassthrough()
+{
+    // Verify fallback extraction populates the KisAiStrokeQualityReport
+    const QString mangledResponse = QStringLiteral(
+        "I couldn't generate full json but here is a stroke:\n"
+        "{\"kind\": \"fill\", \"layer\": \"Flats\", \"polygon\": [[0.1, 0.1], [0.5, 0.1], [0.5, 0.5]], "
+        "\"brush\": {\"color\": \"#ff0055\"}}\n"
+        "And another:\n"
+        "{\"kind\": \"path\", \"layer\": \"Lineart\", \"points\": [[0.1, 0.1], [0.5, 0.5], [0.9, 0.9]], "
+        "\"brush\": {\"color\": \"#111111\"}}\n"
+        "Hope this helps!"
+    );
+
+    KisAiStrokeProgram prog;
+    QString error;
+    KisAiJsonDiagnostic diag;
+    KisAiStrokeQualityReport report;
+    const bool ok = KisAiStrokeProgramCodec::extractOperationsFromRawText(
+        mangledResponse, &prog, &error, &diag, &report
+    );
+
+    QVERIFY2(ok, qPrintable(error));
+    QCOMPARE(prog.operations.size(), 2);
+    QVERIFY(report.outputOperations >= 2);
+    QVERIFY(report.score > 0.0);
+
+    // Also test parseResponse passthrough when fallback is triggered
+    KisAiStrokeProgram prog2;
+    KisAiStrokeQualityReport report2;
+    const bool ok2 = KisAiStrokeProgramCodec::parseResponse(
+        mangledResponse.toUtf8(), &prog2, &error, &diag, &report2
+    );
+    QVERIFY2(ok2, qPrintable(error));
+    QCOMPARE(prog2.operations.size(), 2);
+    QVERIFY(report2.outputOperations >= 2);
+    QVERIFY(report2.score > 0.0);
+}
+
+void KisAiStrokeProgramTest::testTypeCheckerParticleAndMangaLinesAliases()
+{
+    // 1. Test particle_count and particle_shape aliases and string-to-int coercion
+    QJsonObject particleOp;
+    particleOp[QStringLiteral("kind")] = QStringLiteral("particles");
+    particleOp[QStringLiteral("layer")] = QStringLiteral("FX");
+    particleOp[QStringLiteral("particle_shape")] = QStringLiteral("sparkle");
+    particleOp[QStringLiteral("particle_count")] = QStringLiteral("42");
+    particleOp[QStringLiteral("rect")] = QJsonArray({0.2, 0.2, 0.8, 0.8});
+
+    QJsonObject root;
+    root[QStringLiteral("schema_version")] = 2;
+    root[QStringLiteral("operations")] = QJsonArray({particleOp});
+
+    KisAiStrokeTypeCheckReport report;
+    KisAiStrokeTypeChecker::checkAndCoerceProgram(&root, &report);
+
+    const QJsonObject coercedParticle = root[QStringLiteral("operations")].toArray().at(0).toObject();
+    QCOMPARE(coercedParticle.value(QStringLiteral("shape")).toString(), QStringLiteral("sparkle"));
+    QCOMPARE(coercedParticle.value(QStringLiteral("count")).toInt(), 42);
+    QVERIFY(coercedParticle.contains(QStringLiteral("bounds")));
+
+    // 2. Test manga_lines inner_radius, outer_radius, jitter string coercions
+    QJsonObject mangaOp;
+    mangaOp[QStringLiteral("kind")] = QStringLiteral("manga_lines");
+    mangaOp[QStringLiteral("layer")] = QStringLiteral("FX");
+    mangaOp[QStringLiteral("center_pt")] = QJsonArray({QStringLiteral("0.4"), QStringLiteral("0.6")});
+    mangaOp[QStringLiteral("inner")] = QStringLiteral("0.25");
+    mangaOp[QStringLiteral("outer")] = QStringLiteral("0.85");
+    mangaOp[QStringLiteral("jitter")] = QStringLiteral("0.15");
+    mangaOp[QStringLiteral("density")] = QStringLiteral("60");
+
+    QJsonObject root2;
+    root2[QStringLiteral("schema_version")] = 2;
+    root2[QStringLiteral("operations")] = QJsonArray({mangaOp});
+
+    KisAiStrokeTypeCheckReport report2;
+    KisAiStrokeTypeChecker::checkAndCoerceProgram(&root2, &report2);
+
+    const QJsonObject coercedManga = root2[QStringLiteral("operations")].toArray().at(0).toObject();
+    QVERIFY(coercedManga.contains(QStringLiteral("center")));
+    QCOMPARE(coercedManga.value(QStringLiteral("inner_radius")).toDouble(), 0.25);
+    QCOMPARE(coercedManga.value(QStringLiteral("outer_radius")).toDouble(), 0.85);
+    QCOMPARE(coercedManga.value(QStringLiteral("line_length_jitter")).toDouble(), 0.15);
+    QCOMPARE(coercedManga.value(QStringLiteral("density")).toInt(), 60);
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

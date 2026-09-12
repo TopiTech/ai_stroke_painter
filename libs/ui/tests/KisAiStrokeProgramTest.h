@@ -80,6 +80,10 @@ private Q_SLOTS:
     void testPromptFirstPriorityBlock();
     void testCompositionPlanOpenAiChoicesUnwrapping();
     void testTrimOperationsPreservesRibbonAndParticles();
+    void testQualityScoreWithHatch();
+    void testTrimOperationsPreservesOriginalOrderWithinLayers();
+    void testExtractOperationsQualityReportPassthrough();
+    void testTypeCheckerParticleAndMangaLinesAliases();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

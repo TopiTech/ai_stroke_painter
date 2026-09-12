@@ -1334,7 +1334,8 @@ bool KisAiStrokeProgramCodec::parseSseStreamChunk(
 bool KisAiStrokeProgramCodec::extractOperationsFromRawText(const QString &rawText,
                                                            KisAiStrokeProgram *outProgram,
                                                            QString *errorMessage,
-                                                           KisAiJsonDiagnostic *diagnostic)
+                                                           KisAiJsonDiagnostic *diagnostic,
+                                                           KisAiStrokeQualityReport *qualityReport)
 {
     Q_UNUSED(diagnostic);
     if (!outProgram) {
@@ -1456,8 +1457,11 @@ bool KisAiStrokeProgramCodec::extractOperationsFromRawText(const QString &rawTex
         return false;
     }
 
-    KisAiStrokeQualityReport qualityReport;
-    *outProgram = KisAiStrokeProgramCodec::refineForRendering(*outProgram, &qualityReport);
+    KisAiStrokeQualityReport rep;
+    *outProgram = KisAiStrokeProgramCodec::refineForRendering(*outProgram, &rep);
+    if (qualityReport) {
+        *qualityReport = rep;
+    }
     return !outProgram->operations.isEmpty();
 }
 
@@ -1608,24 +1612,38 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::trimOperationsToBudget(
         return 0.01;
     };
 
-    QMap<QString, QVector<KisAiStrokeOperation>> byLayer;
-    for (const KisAiStrokeOperation &op : program.operations) {
-        byLayer[normalizeLayerName(op.layer)].append(op);
+    QMap<QString, QVector<QPair<KisAiStrokeOperation, int>>> byLayer;
+    for (int i = 0; i < program.operations.size(); ++i) {
+        const KisAiStrokeOperation &op = program.operations.at(i);
+        byLayer[normalizeLayerName(op.layer)].append(qMakePair(op, i));
     }
     for (auto it = byLayer.begin(); it != byLayer.end(); ++it) {
-        std::stable_sort(it.value().begin(), it.value().end(), [&](const KisAiStrokeOperation &a, const KisAiStrokeOperation &b) {
-            return calcScore(a) > calcScore(b);
+        std::stable_sort(it.value().begin(), it.value().end(), [&](const QPair<KisAiStrokeOperation, int> &a, const QPair<KisAiStrokeOperation, int> &b) {
+            return calcScore(a.first) > calcScore(b.first);
         });
     }
 
     QVector<KisAiStrokeOperation> selected;
     int remainingBudget = maxOperations;
 
+    auto selectLayerOps = [](const QVector<QPair<KisAiStrokeOperation, int>> &ops, int count) -> QVector<KisAiStrokeOperation> {
+        QVector<QPair<KisAiStrokeOperation, int>> chosen = ops.mid(0, count);
+        std::sort(chosen.begin(), chosen.end(), [](const QPair<KisAiStrokeOperation, int> &a, const QPair<KisAiStrokeOperation, int> &b) {
+            return a.second < b.second;
+        });
+        QVector<KisAiStrokeOperation> res;
+        res.reserve(chosen.size());
+        for (const auto &item : chosen) {
+            res.append(item.first);
+        }
+        return res;
+    };
+
     // 1. Background layer: preserve up to 2 operations
     if (byLayer.contains(QStringLiteral("Background"))) {
         const auto &bgOps = byLayer[QStringLiteral("Background")];
         const int bgCount = qMin(bgOps.size(), qMin(2, remainingBudget));
-        selected.append(bgOps.mid(0, bgCount));
+        selected.append(selectLayerOps(bgOps, bgCount));
         remainingBudget -= bgCount;
     }
 
@@ -1667,7 +1685,7 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::trimOperationsToBudget(
             const int currentAlloc = layerAllocations.value(l, 0);
             const int available = it.value().size();
             if (currentAlloc < available) {
-                const auto &candidateOp = it.value().at(currentAlloc);
+                const auto &candidateOp = it.value().at(currentAlloc).first;
                 const qreal metric = calcScore(candidateOp) * getLayerWeight(l);
                 if (metric > bestMetric) {
                     bestMetric = metric;
@@ -1685,7 +1703,7 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::trimOperationsToBudget(
     auto appendLayerOps = [&](const QString &l) {
         if (layerAllocations.contains(l) && byLayer.contains(l)) {
             const int count = layerAllocations[l];
-            selected.append(byLayer[l].mid(0, count));
+            selected.append(selectLayerOps(byLayer[l], count));
         }
     };
 
@@ -1940,12 +1958,7 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
                     }
                 }
                 // Fallback extraction on choices content
-                if (extractOperationsFromRawText(content, outProgram, errorMessage, diagnostic)) {
-                    if (qualityReport) {
-                        KisAiStrokeQualityReport rep;
-                        KisAiStrokeProgramCodec::refineForRendering(*outProgram, &rep);
-                        *qualityReport = rep;
-                    }
+                if (extractOperationsFromRawText(content, outProgram, errorMessage, diagnostic, qualityReport)) {
                     return true;
                 }
             }
@@ -1968,12 +1981,7 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
                             return true;
                         }
                     }
-                    if (extractOperationsFromRawText(partText, outProgram, errorMessage, diagnostic)) {
-                        if (qualityReport) {
-                            KisAiStrokeQualityReport rep;
-                            KisAiStrokeProgramCodec::refineForRendering(*outProgram, &rep);
-                            *qualityReport = rep;
-                        }
+                    if (extractOperationsFromRawText(partText, outProgram, errorMessage, diagnostic, qualityReport)) {
                         return true;
                     }
                 }
@@ -2009,12 +2017,7 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
     }
 
     // 3. Ultimate Fallback: operation-by-operation extraction from raw text
-    if (extractOperationsFromRawText(rawText, outProgram, errorMessage, diagnostic)) {
-        if (qualityReport) {
-            KisAiStrokeQualityReport rep;
-            KisAiStrokeProgramCodec::refineForRendering(*outProgram, &rep);
-            *qualityReport = rep;
-        }
+    if (extractOperationsFromRawText(rawText, outProgram, errorMessage, diagnostic, qualityReport)) {
         return true;
     }
 
@@ -3138,6 +3141,13 @@ qreal KisAiStrokeProgramCodec::qualityScore(const KisAiStrokeProgram &program)
             geometryPoints += op.spine.size();
         } else if (op.kind == KisAiStrokeOperation::Kind::Particles) {
             geometryPoints += op.particleCount;
+        } else if (op.kind == KisAiStrokeOperation::Kind::Hatch) {
+            if (!op.polygon.isEmpty()) {
+                totalPolygonArea += polygonArea(op.polygon);
+                geometryPoints += op.polygon.size();
+            } else if (!op.points.isEmpty()) {
+                geometryPoints += op.points.size();
+            }
         } else if (op.kind == KisAiStrokeOperation::Kind::MangaLines) {
             geometryPoints += op.density * 2;
         }

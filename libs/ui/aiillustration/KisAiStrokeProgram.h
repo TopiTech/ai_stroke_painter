@@ -287,7 +287,8 @@ public:
         const QString &rawText,
         KisAiStrokeProgram *outProgram,
         QString *errorMessage = nullptr,
-        KisAiJsonDiagnostic *diagnostic = nullptr
+        KisAiJsonDiagnostic *diagnostic = nullptr,
+        KisAiStrokeQualityReport *qualityReport = nullptr
     );
 
     /**

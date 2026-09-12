@@ -592,6 +592,14 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
         (*opObj)[QStringLiteral("spine")] = spine;
         if (report) report->coercedValues += spineCoerced;
     } else if (kindStr == QLatin1String("particles")) {
+        if (!opObj->contains(QStringLiteral("shape")) && opObj->contains(QStringLiteral("particle_shape"))) {
+            (*opObj)[QStringLiteral("shape")] = opObj->value(QStringLiteral("particle_shape"));
+            if (report) ++report->coercedValues;
+        }
+        if (!opObj->contains(QStringLiteral("count")) && opObj->contains(QStringLiteral("particle_count"))) {
+            (*opObj)[QStringLiteral("count")] = opObj->value(QStringLiteral("particle_count"));
+            if (report) ++report->coercedValues;
+        }
         if (!opObj->contains(QStringLiteral("bounds"))) {
             if (opObj->contains(QStringLiteral("rect"))) {
                 (*opObj)[QStringLiteral("bounds")] = opObj->value(QStringLiteral("rect"));
@@ -650,6 +658,45 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
                     coerceToNumber(cArr.at(1), &centerY);
                     (*opObj)[QStringLiteral("center")] = QJsonArray({centerX, centerY});
                 }
+            }
+        }
+        if (!opObj->contains(QStringLiteral("inner_radius")) && opObj->contains(QStringLiteral("inner"))) {
+            (*opObj)[QStringLiteral("inner_radius")] = opObj->value(QStringLiteral("inner"));
+            if (report) ++report->coercedValues;
+        }
+        if (opObj->contains(QStringLiteral("inner_radius"))) {
+            qreal inR = 0.15;
+            if (coerceToNumber(opObj->value(QStringLiteral("inner_radius")), &inR)) {
+                (*opObj)[QStringLiteral("inner_radius")] = qBound(0.0, inR, 1.0);
+            } else {
+                (*opObj)[QStringLiteral("inner_radius")] = 0.15;
+                if (report) ++report->coercedValues;
+            }
+        }
+        if (!opObj->contains(QStringLiteral("outer_radius")) && opObj->contains(QStringLiteral("outer"))) {
+            (*opObj)[QStringLiteral("outer_radius")] = opObj->value(QStringLiteral("outer"));
+            if (report) ++report->coercedValues;
+        }
+        if (opObj->contains(QStringLiteral("outer_radius"))) {
+            qreal outR = 0.70;
+            if (coerceToNumber(opObj->value(QStringLiteral("outer_radius")), &outR)) {
+                (*opObj)[QStringLiteral("outer_radius")] = qBound(0.01, outR, 2.0);
+            } else {
+                (*opObj)[QStringLiteral("outer_radius")] = 0.70;
+                if (report) ++report->coercedValues;
+            }
+        }
+        if (!opObj->contains(QStringLiteral("line_length_jitter")) && opObj->contains(QStringLiteral("jitter"))) {
+            (*opObj)[QStringLiteral("line_length_jitter")] = opObj->value(QStringLiteral("jitter"));
+            if (report) ++report->coercedValues;
+        }
+        if (opObj->contains(QStringLiteral("line_length_jitter"))) {
+            qreal jit = 0.20;
+            if (coerceToNumber(opObj->value(QStringLiteral("line_length_jitter")), &jit)) {
+                (*opObj)[QStringLiteral("line_length_jitter")] = qBound(0.0, jit, 1.0);
+            } else {
+                (*opObj)[QStringLiteral("line_length_jitter")] = 0.20;
+                if (report) ++report->coercedValues;
             }
         }
         if (opObj->contains(QStringLiteral("density"))) {

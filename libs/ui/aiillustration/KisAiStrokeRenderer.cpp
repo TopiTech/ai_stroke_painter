@@ -404,8 +404,9 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
     const qreal minDim = qMin(canvasSize.width(), canvasSize.height());
     const qreal effectiveTrapping = trappingPx < 0.0 ? qMax<qreal>(1.0, minDim / 1000.0 * 1.5) : trappingPx;
     KisAiStrokeProgram activeProgram = program;
+    activeProgram.canvasSize = canvasSize;
     if (effectiveTrapping > 0.0) {
-        activeProgram = KisAiStrokeQualityUtils::applyTrapping(program, effectiveTrapping);
+        activeProgram = KisAiStrokeQualityUtils::applyTrapping(activeProgram, effectiveTrapping);
     }
 
     const QStringList layerOrder = {QStringLiteral("Background"),
