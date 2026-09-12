@@ -195,7 +195,9 @@ private:
     QSpinBox *m_timeoutSecSpin {nullptr};
     QComboBox *m_jsonModeCombo {nullptr};
     QComboBox *m_visionQualityCombo {nullptr};
+    QComboBox *m_strokeProtocolCombo {nullptr};
     QCheckBox *m_compositionPlanCheck {nullptr};
+    QCheckBox *m_suppressParticlesCheck {nullptr};
     QComboBox *m_reasoningEffortCombo {nullptr};
     QPlainTextEdit *m_customInstructionsEdit {nullptr};
 

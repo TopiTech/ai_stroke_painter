@@ -1459,4 +1459,122 @@ void KisAiStrokeRendererTest::testFaceExclusionMaskSuppressesParticles()
     QVERIFY(faceCenter.blue() > 150);
 }
 
+void KisAiStrokeRendererTest::testUniteOverlappingHairFlats()
+{
+    // V3 Phase 0.2: Overlapping hair Flats patches ("bubble" artifact) must
+    // fuse into one silhouette, while a disjoint mass (e.g. twin-tail) survives.
+    auto makeHairPatch = [](const QString &id, const QPolygonF &poly) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Fill;
+        op.id = id;
+        op.layer = QStringLiteral("Flats");
+        op.brush.color = QColor(43, 58, 103);
+        op.polygon = poly;
+        return op;
+    };
+    const QPolygonF patchA = {QPointF(0.30, 0.20), QPointF(0.55, 0.20), QPointF(0.55, 0.45), QPointF(0.30, 0.45)};
+    const QPolygonF patchB = {QPointF(0.45, 0.30), QPointF(0.70, 0.30), QPointF(0.70, 0.55), QPointF(0.45, 0.55)};
+    const QPolygonF farTail = {QPointF(0.80, 0.60), QPointF(0.95, 0.60), QPointF(0.95, 0.90), QPointF(0.80, 0.90)};
+
+    QVector<KisAiStrokeOperation> ops;
+    ops.append(makeHairPatch(QStringLiteral("hair_patch_a"), patchA));
+    ops.append(makeHairPatch(QStringLiteral("hair_patch_b"), patchB));
+    ops.append(makeHairPatch(QStringLiteral("hair_tail_far"), farTail));
+
+    const QVector<KisAiStrokeOperation> united =
+        KisAiStrokeQualityUtils::uniteOverlappingHairFlats(ops);
+    // A+B fused, far tail untouched.
+    QCOMPARE(united.size(), 2);
+    int hairOps = 0;
+    for (const KisAiStrokeOperation &op : united) {
+        if (op.id.contains(QStringLiteral("hair")))
+            ++hairOps;
+    }
+    QCOMPARE(hairOps, 2);
+
+    // The fused mass must cover both source patches.
+    const KisAiStrokeOperation *fused = nullptr;
+    for (const KisAiStrokeOperation &op : united) {
+        if (op.id != QStringLiteral("hair_tail_far")) {
+            fused = &op;
+            break;
+        }
+    }
+    QVERIFY(fused != nullptr);
+    const QRectF bounds = fused->polygon.boundingRect();
+    QVERIFY(bounds.left() <= 0.31);
+    QVERIFY(bounds.right() >= 0.69);
+    QVERIFY(bounds.top() <= 0.21);
+    QVERIFY(bounds.bottom() >= 0.54);
+
+    // Zero or one hair candidate is a no-op passthrough.
+    QVector<KisAiStrokeOperation> single;
+    single.append(makeHairPatch(QStringLiteral("hair_solo"), patchA));
+    QCOMPARE(KisAiStrokeQualityUtils::uniteOverlappingHairFlats(single).size(), 1);
+}
+
+void KisAiStrokeRendererTest::testGoalModeSingleArtboard()
+{
+    // V3 Phase 3.1: Verify single artboard layer structure coherence
+    // All operations in a multi-step program must resolve strictly to the 6 standard layer buckets.
+    KisAiStrokeProgram step1;
+    step1.schemaVersion = 2;
+    step1.currentStep = 1;
+    step1.totalSteps = 3;
+    step1.canvasSize = QSize(512, 512);
+
+    KisAiStrokeOperation bg;
+    bg.kind = KisAiStrokeOperation::Kind::Fill;
+    bg.id = QStringLiteral("bg_fill");
+    bg.layer = QStringLiteral("Background");
+    bg.polygon = {QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)};
+    bg.brush.color = QColor(20, 30, 50);
+    step1.operations.append(bg);
+
+    KisAiStrokeOperation flat;
+    flat.kind = KisAiStrokeOperation::Kind::Fill;
+    flat.id = QStringLiteral("char_flat");
+    flat.layer = QStringLiteral("Flats");
+    flat.polygon = {QPointF(0.2, 0.2), QPointF(0.8, 0.2), QPointF(0.8, 0.8), QPointF(0.2, 0.8)};
+    flat.brush.color = QColor(255, 220, 190);
+    step1.operations.append(flat);
+
+    KisAiStrokeProgram step2;
+    step2.schemaVersion = 2;
+    step2.currentStep = 2;
+    step2.totalSteps = 3;
+    step2.canvasSize = QSize(512, 512);
+
+    KisAiStrokeOperation shade;
+    shade.kind = KisAiStrokeOperation::Kind::Fill;
+    shade.id = QStringLiteral("char_shade");
+    shade.layer = QStringLiteral("Shading");
+    shade.polygon = {QPointF(0.4, 0.2), QPointF(0.8, 0.2), QPointF(0.8, 0.8), QPointF(0.4, 0.8)};
+    shade.brush.color = QColor(200, 160, 140);
+    step2.operations.append(shade);
+
+    const KisAiStrokeProgram merged = KisAiStrokeProgramCodec::mergePrograms(step1, step2);
+    QCOMPARE(merged.currentStep, 2);
+    QCOMPARE(merged.totalSteps, 3);
+
+    // Verify operations can render cleanly to an image representation
+    const QImage rendered = KisAiStrokeRenderer::renderProgramToImage(merged, QSize(512, 512));
+    QVERIFY(!rendered.isNull());
+    QCOMPARE(rendered.size(), QSize(512, 512));
+
+    // Verify all merged operations strictly conform to standard layer names
+    const QStringList allowedLayers = {
+        QStringLiteral("Background"),
+        QStringLiteral("Flats"),
+        QStringLiteral("Shading"),
+        QStringLiteral("Lineart"),
+        QStringLiteral("Highlights"),
+        QStringLiteral("FX")
+    };
+    for (const auto &op : merged.operations) {
+        const QString norm = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
+        QVERIFY2(allowedLayers.contains(norm), qPrintable(QStringLiteral("Invalid layer: %1").arg(norm)));
+    }
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

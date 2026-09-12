@@ -196,6 +196,40 @@ public:
         qreal trappingPx = 1.5
     );
 
+    /**
+     * V3 Phase 0.2: Unite overlapping hair Flats fills into continuous
+     * silhouettes. LLMs often emit hair as dozens of small overlapping
+     * circles ("bubble/afro" artifact); intersecting candidates are merged
+     * via boolean union while isolated ones are preserved untouched.
+     */
+    static QVector<KisAiStrokeOperation> uniteOverlappingHairFlats(
+        const QVector<KisAiStrokeOperation> &operations
+    );
+
+    /**
+     * V3 Phase 2: Normalize Lineart stroke weights into a 3-tier hierarchy
+     * (outer contours 0.008 / structure 0.005 / details 0.003, closed +0.001).
+     * Opt-in pass used by the LayoutEngine; refineForRendering() never calls
+     * it implicitly so hand-tuned LLM sizes survive. Returns adjusted count.
+     */
+    static int applyLineartHierarchy(
+        QVector<KisAiStrokeOperation> &operations
+    );
+
+    /**
+     * V3 Phase 2: Map a brush profile to its Krita preset counterpart
+     * (e.g. gpen -> Pencil-2) for the native rasterization path.
+     */
+    static QString brushPresetName(const QString &profile);
+
+    /**
+     * Fill empty brush.presetHint fields from the profile mapping.
+     * Returns the number of hints assigned.
+     */
+    static int assignBrushPresetHints(
+        KisAiStrokeProgram &program
+    );
+
     // =========================================================================
     // 6. Algorithmic Detail Synthesizers (Phase 3)
     // =========================================================================

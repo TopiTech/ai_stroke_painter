@@ -9,6 +9,8 @@
 #include "KisAiPromptAnalyzer.h"
 #include "KisAiStrokeProgram.h"
 #include "KisAiStrokeRenderer.h"
+#include "KisAiSceneSpec.h"
+#include "KisAiLayoutEngine.h"
 #include "KisDocument.h"
 #include "KisMainWindow.h"
 #include "KisPart.h"
@@ -599,9 +601,20 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_visionQualityCombo->setAccessibleName(i18n("Vision detail quality"));
     m_visionQualityCombo->setToolTip(i18n("Vision LLMに送信するキャンバス画像の詳細度 (auto, high, low)"));
 
+    // V3 Phase 1: Generation Mode (v3 SceneSpec / v2 StrokeProgram)
+    m_strokeProtocolCombo = new QComboBox(m_detailsContainer);
+    m_strokeProtocolCombo->addItem(i18n("v3 SceneSpec 意味生成 (推奨・黄金比保証)"), 0);
+    m_strokeProtocolCombo->addItem(i18n("v2 StrokeProgram 座標生成 (互換)"), 1);
+    m_strokeProtocolCombo->setToolTip(i18n("LLMに意味・光・表情のみを出力させ決定論的幾何エンジンで描画するか(v3)、従来通り座標を出力させるか(v2)を指定します。"));
+
     m_compositionPlanCheck = new QCheckBox(i18n("2段階構図生成 (Composition Plan)"), m_detailsContainer);
     m_compositionPlanCheck->setChecked(false);
     m_compositionPlanCheck->setToolTip(i18n("複雑な構図向けに、事前に構図計画を策定してから実ストロークを生成します。"));
+
+    // V3 Phase 0.1: FX particle suppression toggle (default ON).
+    m_suppressParticlesCheck = new QCheckBox(i18n("点々・パーティクルを抑制 (推奨)"), m_detailsContainer);
+    m_suppressParticlesCheck->setChecked(true);
+    m_suppressParticlesCheck->setToolTip(i18n("顔や画面全体を覆う点描ノイズ・吹雪状パーティクルの生成と多重蓄積を抑止します。星空・雪・花びら等が必要な場合のみOFFにしてください。"));
 
     m_reasoningEffortCombo = new QComboBox(m_detailsContainer);
     m_reasoningEffortCombo->addItem(i18n("指定なし (デフォルト)"), QStringLiteral(""));
@@ -630,7 +643,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     remoteForm->addRow(i18n("自動リトライ"), m_maxRetriesSpin);
     remoteForm->addRow(i18n("JSONモード"), m_jsonModeCombo);
     remoteForm->addRow(i18n("Vision画質"), m_visionQualityCombo);
+    remoteForm->addRow(i18n("作画プロトコル"), m_strokeProtocolCombo);
     remoteForm->addRow(QString(), m_compositionPlanCheck);
+    remoteForm->addRow(QString(), m_suppressParticlesCheck);
     remoteForm->addRow(i18n("推論エフォート"), m_reasoningEffortCombo);
     remoteForm->addRow(i18n("追加指示"), m_customInstructionsEdit);
     detailsLayout->addLayout(remoteForm);
@@ -931,7 +946,13 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     connect(m_timeoutSecSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
     connect(m_jsonModeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
     connect(m_visionQualityCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
+    connect(m_strokeProtocolCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
     connect(m_compositionPlanCheck, &QCheckBox::toggled, this, [this] { saveSettings(); });
+    connect(m_suppressParticlesCheck, &QCheckBox::toggled, this, [this] {
+        KisAiStrokeProgramCodec::setParticleSuppressionEnabled(
+            m_suppressParticlesCheck ? m_suppressParticlesCheck->isChecked() : true);
+        saveSettings();
+    });
     connect(m_reasoningEffortCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
     connect(m_customInstructionsEdit, &QPlainTextEdit::textChanged, this, [this] { saveSettings(); });
 
@@ -1264,25 +1285,31 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         return;
     }
 
-    const QJsonObject payload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
-        model,
-        prompt,
-        canvasSize,
-        strokeBudget,
-        reasoningEffort,
-        customInstructions,
-        true, // enableStreaming
-        enforceJson,
-        temperature,
-        topP,
-        maxTokens,
-        artStyle
-    );
+    const int strokeProtocol = m_strokeProtocolCombo ? m_strokeProtocolCombo->currentData().toInt() : 0;
+    const bool useSceneSpec = (strokeProtocol == 0) && !useCompositionPlan && !m_isSelfCorrectionRetry;
+
+    const QJsonObject payload = useSceneSpec
+        ? KisAiSceneSpecCodec::buildSceneSpecPayload(model, prompt, canvasSize, artStyle)
+        : KisAiStrokeProgramCodec::buildChatCompletionsPayload(
+            model,
+            prompt,
+            canvasSize,
+            strokeBudget,
+            reasoningEffort,
+            customInstructions,
+            true, // enableStreaming
+            enforceJson,
+            temperature,
+            topP,
+            maxTokens,
+            artStyle
+        );
 
     logDebug(QStringLiteral("LLM_REQ"),
-             QStringLiteral("POST %1 (model=%2, stream=true, budget=%3, temp=%4, top_p=%5, prompt=\"%6\")")
+             QStringLiteral("POST %1 (model=%2, mode=%3, budget=%4, temp=%5, top_p=%6, prompt=\"%7\")")
                  .arg(KisAiIllustrationRenderer::displayEndpoint(endpoint),
                       model,
+                      useSceneSpec ? QStringLiteral("v3_scenespec") : QStringLiteral("v2_strokeprog"),
                       QString::number(strokeBudget),
                       QString::number(temperature, 'f', 2),
                       QString::number(topP, 'f', 2),
@@ -3214,12 +3241,31 @@ void KisAiIllustrationDocker::loadSettings()
         m_compositionPlanCheck->setChecked(settings.value(QStringLiteral("AIIllustration/compositionPlanEnabled"), false).toBool());
     }
 
+    // V3 Phase 0.1: 点々・パーティクル抑制 (既定ON)
+    {
+        const bool suppress = settings.value(QStringLiteral("AIIllustration/suppressParticles"), true).toBool();
+        KisAiStrokeProgramCodec::setParticleSuppressionEnabled(suppress);
+        if (m_suppressParticlesCheck) {
+            const QSignalBlocker blocker(m_suppressParticlesCheck);
+            m_suppressParticlesCheck->setChecked(suppress);
+        }
+    }
+
     // Vision 画質
     if (m_visionQualityCombo) {
         const QString vq = settings.value(QStringLiteral("AIIllustration/visionQuality"), QStringLiteral("auto")).toString();
         const int idx = m_visionQualityCombo->findData(vq);
         if (idx >= 0) {
             m_visionQualityCombo->setCurrentIndex(idx);
+        }
+    }
+
+    // V3 作画プロトコル (0: v3 SceneSpec 既定, 1: v2 StrokeProgram)
+    if (m_strokeProtocolCombo) {
+        const int protocol = settings.value(QStringLiteral("AIIllustration/strokeProtocol"), 0).toInt();
+        const int idx = m_strokeProtocolCombo->findData(protocol);
+        if (idx >= 0) {
+            m_strokeProtocolCombo->setCurrentIndex(idx);
         }
     }
 
@@ -3328,7 +3374,12 @@ void KisAiIllustrationDocker::saveSettings()
     if (m_jsonModeCombo) settings.setValue(QStringLiteral("AIIllustration/jsonMode"), m_jsonModeCombo->currentIndex());
     if (m_trappingPxSpin) settings.setValue(QStringLiteral("AIIllustration/trappingPx"), m_trappingPxSpin->value());
     if (m_compositionPlanCheck) settings.setValue(QStringLiteral("AIIllustration/compositionPlanEnabled"), m_compositionPlanCheck->isChecked());
+    if (m_suppressParticlesCheck) {
+        settings.setValue(QStringLiteral("AIIllustration/suppressParticles"), m_suppressParticlesCheck->isChecked());
+        KisAiStrokeProgramCodec::setParticleSuppressionEnabled(m_suppressParticlesCheck->isChecked());
+    }
     if (m_visionQualityCombo) settings.setValue(QStringLiteral("AIIllustration/visionQuality"), m_visionQualityCombo->currentData().toString());
+    if (m_strokeProtocolCombo) settings.setValue(QStringLiteral("AIIllustration/strokeProtocol"), m_strokeProtocolCombo->currentData().toInt());
     if (m_reasoningEffortCombo) settings.setValue(QStringLiteral("AIIllustration/reasoningEffort"), m_reasoningEffortCombo->currentData().toString());
     if (m_customInstructionsEdit) settings.setValue(QStringLiteral("AIIllustration/customInstructions"), m_customInstructionsEdit->toPlainText());
 }

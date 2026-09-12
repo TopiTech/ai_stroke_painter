@@ -6,6 +6,8 @@
 #include "KisAiStrokeProgram.h"
 #include "KisAiPromptAnalyzer.h"
 #include "KisAiStrokeTypeChecker.h"
+#include "KisAiSceneSpec.h"
+#include "KisAiLayoutEngine.h"
 
 QString KisAiJsonDiagnostic::formatForLog() const
 {
@@ -41,6 +43,12 @@ namespace
 // Threshold above which coordinates are interpreted as pixel values
 // rather than normalized [0.0, 1.0] values.
 constexpr qreal kPixelCoordinateThreshold = 1.5;
+
+// V3 Phase 0.1: Particle suppression policy state. Enabled by default so
+// headless / test pipelines also benefit; the Docker checkbox toggles it.
+bool g_particleSuppressionEnabled = true;
+constexpr int kMaxParticlesOperations = 3;
+constexpr int kMaxMergedParticlesOperations = 2;
 
 qreal clamp01(qreal v)
 {
@@ -241,6 +249,11 @@ QColor KisAiStrokeProgramCodec::parseColor(const QString &colorStr, const QColor
     }
 
     return fallback;
+}
+
+QJsonObject KisAiStrokeProgramCodec::sceneSpecJsonSchema()
+{
+    return KisAiSceneSpecCodec::sceneSpecJsonSchema();
 }
 
 QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
@@ -449,7 +462,7 @@ QString KisAiStrokeProgramCodec::buildOperationKindsSection()
         "0.002-0.01, opacity: 0.0-1.0 }.\n"
         "- 'anime_eye': Procedural high-fidelity anime eye assembly (sclera, iris gradient, pupil, eyelash curves, double eyelid, catchlights). "
         "center [cx, cy], size [w, h], iris_color '#hex', secondary_color '#hex', style ('sparkle'/'dual_dot'/'gradient'), expression ('open'/'smile'/'half'), is_right (true/false).\n"
-        "- 'particles': Atmospheric particles (STRICT: ONLY use when explicitly requested like starry sky, blizzard, petals). NEVER spray over faces. Bounds [x1, y1, x2, y2], count (8-24), shape "
+        "- 'particles': Atmospheric particles (STRICT: ONLY use when explicitly requested like starry sky, blizzard, petals; otherwise emit ZERO particle operations). NEVER spray over faces. Emit particles in at most one response; when continuing a previous step that already placed them, emit none. Bounds [x1, y1, x2, y2], count (8-24), shape "
         "('petal'/'sparkle'/'star'/'dot'), brush { 'color': '#hex' }.\n"
         "- 'manga_lines': Radial speed/focus lines toward a center. center [cx, cy], inner_radius (0.05-0.3), outer_radius (0.5-1.0), density (16-80), brush { 'profile': 'gpen', 'color': '#hex', 'size': 0.002-0.01, opacity: 0.0-1.0 }."
     );
@@ -1888,6 +1901,25 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
         return true;
     };
 
+    const auto tryParseSceneSpec = [outProgram, errorMessage, diagnostic, qualityReport](const QJsonObject &obj) -> bool {
+        if (obj.contains(QStringLiteral("subject")) || obj.contains(QStringLiteral("head"))) {
+            KisAiSceneSpec spec;
+            QStringList warnings;
+            if (KisAiSceneSpecCodec::parseSceneSpecObject(obj, &spec, &warnings)) {
+                const QSize canvas = outProgram->canvasSize.isValid() ? outProgram->canvasSize : QSize(1024, 1024);
+                *outProgram = KisAiLayoutEngine::generateProgram(spec, canvas);
+                if (diagnostic && !warnings.isEmpty()) {
+                    diagnostic->appliedRepairs.append(warnings.join(QStringLiteral("; ")));
+                }
+                if (qualityReport) {
+                    qualityReport->score = outProgram->completionScore;
+                }
+                return !outProgram->operations.isEmpty();
+            }
+        }
+        return false;
+    };
+
     // Helper: search recursively for an object that contains operations/strokes or is a StrokeProgram
     std::function<QJsonObject(const QJsonObject &, int)> findProgramEnvelope;
     findProgramEnvelope = [&findProgramEnvelope](const QJsonObject &obj, int depth) -> QJsonObject {
@@ -1932,6 +1964,11 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
             return false;
         }
 
+        // Direct SceneSpec check: meaning-only specification without explicit operations
+        if (tryParseSceneSpec(root)) {
+            return true;
+        }
+
         // Direct StrokeProgram check: if root explicitly has operations or strokes, parse directly
         if (root.contains(QStringLiteral("operations")) || root.contains(QStringLiteral("strokes")) || root.contains(QStringLiteral("schema_version"))) {
             return parseAndRefine(root);
@@ -1955,6 +1992,9 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
                 QJsonParseError parseErr;
                 const QJsonDocument programDoc = QJsonDocument::fromJson(cleanJson.toUtf8(), &parseErr);
                 if (!programDoc.isNull() && programDoc.isObject()) {
+                    if (tryParseSceneSpec(programDoc.object())) {
+                        return true;
+                    }
                     const QJsonObject innerEnv = findProgramEnvelope(programDoc.object(), 0);
                     if (!innerEnv.isEmpty() && parseAndRefine(innerEnv)) {
                         return true;
@@ -2236,6 +2276,23 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
     outProgram->seed = toIntField(findField(rootObj, {QStringLiteral("seed")}), 42);
     outProgram->visualCritique = findField(rootObj, {QStringLiteral("visual_critique"), QStringLiteral("critique")}).toString();
     outProgram->agentCritique = findField(rootObj, {QStringLiteral("agent_critique"), QStringLiteral("visual_critique"), QStringLiteral("critique")}).toString();
+    outProgram->critiqueRegions.clear();
+    const QJsonValue regVal = findField(rootObj, {QStringLiteral("regions"), QStringLiteral("critique_regions"), QStringLiteral("region_actions")});
+    if (regVal.isArray()) {
+        const QJsonArray regArr = regVal.toArray();
+        for (const QJsonValue &item : regArr) {
+            if (!item.isObject()) continue;
+            const QJsonObject rObj = item.toObject();
+            KisAiCritiqueRegion reg;
+            reg.area = rObj.value(QStringLiteral("area")).toString().trimmed().toLower();
+            reg.issue = rObj.value(QStringLiteral("issue")).toString().trimmed();
+            reg.action = rObj.value(QStringLiteral("action")).toString().trimmed().toLower();
+            reg.priority = qBound(1, rObj.value(QStringLiteral("priority")).toInt(1), 5);
+            if (!reg.area.isEmpty()) {
+                outProgram->critiqueRegions.append(reg);
+            }
+        }
+    }
     outProgram->targetFocusArea = findField(rootObj, {QStringLiteral("target_focus_area"), QStringLiteral("focus_area"), QStringLiteral("focus")}).toString();
     outProgram->stepPhase = findField(rootObj, {QStringLiteral("step_phase")}, QStringLiteral("complete")).toString(QStringLiteral("complete"));
     outProgram->currentStep = toIntField(findField(rootObj, {QStringLiteral("current_step")}), 1);
@@ -3117,6 +3174,51 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             refined.operations.append(op);
         } else {
             ++localReport.droppedOperations;
+        }
+    }
+
+    // V3 Phase 0.1: Cap 'particles' operations per program so a single model
+    // response can never blanket the canvas with stipple-noise layers.
+    if (g_particleSuppressionEnabled) {
+        int keptParticles = 0;
+        QVector<KisAiStrokeOperation> capped;
+        capped.reserve(refined.operations.size());
+        for (const KisAiStrokeOperation &op : refined.operations) {
+            if (op.kind != KisAiStrokeOperation::Kind::Particles) {
+                capped.append(op);
+                continue;
+            }
+            if (keptParticles < kMaxParticlesOperations) {
+                capped.append(op);
+                ++keptParticles;
+            } else {
+                ++localReport.droppedOperations;
+            }
+        }
+        if (capped.size() != refined.operations.size()) {
+            localReport.warnings.append(
+                QStringLiteral("Excess 'particles' operations were dropped to prevent stipple-noise accumulation."));
+        }
+        refined.operations = capped;
+    }
+
+    // V3 Phase 0.3: Eye-pair symmetry lint. A single asymmetric eye pair is the
+    // most visible face defect, so flag it for the quality self-correction loop.
+    {
+        QVector<const KisAiStrokeOperation *> eyes;
+        for (const KisAiStrokeOperation &op : refined.operations) {
+            if (op.kind == KisAiStrokeOperation::Kind::AnimeEye)
+                eyes.append(&op);
+        }
+        if (eyes.size() == 2) {
+            const qreal mirrorError = qAbs((eyes.at(0)->eyeCenter.x() + eyes.at(1)->eyeCenter.x()) * 0.5 - 0.5);
+            const qreal yError = qAbs(eyes.at(0)->eyeCenter.y() - eyes.at(1)->eyeCenter.y());
+            const qreal sizeError = qAbs(eyes.at(0)->eyeSize.width() - eyes.at(1)->eyeSize.width())
+                + qAbs(eyes.at(0)->eyeSize.height() - eyes.at(1)->eyeSize.height());
+            if (mirrorError > 0.08 || yError > 0.06 || sizeError > 0.06) {
+                localReport.warnings.append(
+                    QStringLiteral("Eye pair is asymmetric; check gaze alignment and matching eye sizes."));
+            }
         }
     }
 
@@ -4315,6 +4417,18 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     if (accumulatedProgram && !accumulatedProgram->operations.isEmpty()) {
         userObj[QStringLiteral("accumulated_context")] = buildGeometryDigest(*accumulatedProgram);
     }
+    if (accumulatedProgram && !accumulatedProgram->critiqueRegions.isEmpty()) {
+        QJsonArray regArr;
+        for (const auto &reg : accumulatedProgram->critiqueRegions) {
+            QJsonObject rObj;
+            rObj[QStringLiteral("area")] = reg.area;
+            rObj[QStringLiteral("issue")] = reg.issue;
+            rObj[QStringLiteral("action")] = reg.action;
+            rObj[QStringLiteral("priority")] = reg.priority;
+            regArr.append(rObj);
+        }
+        userObj[QStringLiteral("previous_step_critique_regions")] = regArr;
+    }
     if (!previousCritique.trimmed().isEmpty()) {
         userObj[QStringLiteral("previous_step_critique")] = previousCritique.trimmed();
     }
@@ -4322,7 +4436,9 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     userObj[QStringLiteral("directive")] = QStringLiteral(
         "Execute Step %1 of %2 in Goal Mode for prompt: '%5'. "
         "Perform your artistic cognitive cycle: "
-        "1. [OBSERVE & CRITIQUE]: Inspect the canvas screenshot (if attached) and accumulated geometry. Provide a concise 1-2 sentence 'agent_critique' analyzing depth, silhouettes, anatomical harmony, and missing elements. "
+        "1. [OBSERVE & CRITIQUE]: Inspect the canvas screenshot (if attached) and accumulated geometry. "
+        "Provide concise 'agent_critique' and structured 'regions' array: "
+        "[{\"area\": \"left_eye|right_eye|hair|face_skin|shading|highlights|background|fx\", \"issue\": \"defect description\", \"action\": \"repaint|soften|remove|keep\", \"priority\": 1-5}]. "
         "2. [FOCUS]: Specify 'target_focus_area' (e.g. 'Face & Expression', 'Hair Strands & Volume', 'Form Shading & Ambient Occlusion', 'Specular Highlights & Atmosphere'). "
         "3. [READINESS EVALUATION]: Provide 'readiness_score' from 0.0 (bare outline) to 1.0 (finished presentation). If >= 0.85 and presentation-ready, set 'goal_reached' to true. "
         "4. [ACT]: Generate only the necessary, high-precision operations for phase '%3'. Set 'step_phase' to '%3', 'current_step' to %1, and 'goal_reached' to %4. "
@@ -4571,6 +4687,21 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgramStep(
     return refineForRendering(stepProg, &report);
 }
 
+void KisAiStrokeProgramCodec::setParticleSuppressionEnabled(bool enabled)
+{
+    g_particleSuppressionEnabled = enabled;
+}
+
+bool KisAiStrokeProgramCodec::isParticleSuppressionEnabled()
+{
+    return g_particleSuppressionEnabled;
+}
+
+int KisAiStrokeProgramCodec::maxParticlesOperations()
+{
+    return kMaxParticlesOperations;
+}
+
 KisAiStrokeProgram KisAiStrokeProgramCodec::mergePrograms(
     const KisAiStrokeProgram &base,
     const KisAiStrokeProgram &extension)
@@ -4586,7 +4717,34 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::mergePrograms(
         merged.title = extension.title;
     }
 
-    merged.operations.append(extension.operations);
+    // V3 Phase 0.1: Block Goal Mode particle accumulation. If the base already
+    // carries atmospheric particles, further steps must not pile more of them
+    // on top (blizzard-noise). Otherwise cap freshly merged particle ops.
+    const bool baseHasParticles = std::any_of(base.operations.cbegin(), base.operations.cend(),
+                                              [](const KisAiStrokeOperation &op) {
+                                                  return op.kind == KisAiStrokeOperation::Kind::Particles;
+                                              });
+    int mergedParticleCount = 0;
+    for (const KisAiStrokeOperation &op : base.operations) {
+        if (op.kind == KisAiStrokeOperation::Kind::Particles)
+            ++mergedParticleCount;
+    }
+    for (const KisAiStrokeOperation &op : extension.operations) {
+        if (op.kind != KisAiStrokeOperation::Kind::Particles) {
+            merged.operations.append(op);
+            continue;
+        }
+        if (!g_particleSuppressionEnabled) {
+            merged.operations.append(op);
+            continue;
+        }
+        if (baseHasParticles)
+            continue;
+        if (mergedParticleCount >= kMaxMergedParticlesOperations)
+            continue;
+        merged.operations.append(op);
+        ++mergedParticleCount;
+    }
     merged.currentStep = qMax(base.currentStep, extension.currentStep);
     merged.totalSteps = qMax(base.totalSteps, extension.totalSteps);
     if (!extension.stepPhase.isEmpty()) {

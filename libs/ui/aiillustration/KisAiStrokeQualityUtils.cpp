@@ -882,6 +882,142 @@ KisAiStrokeProgram KisAiStrokeQualityUtils::applyTrapping(
     return trapped;
 }
 
+QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::uniteOverlappingHairFlats(
+    const QVector<KisAiStrokeOperation> &operations)
+{
+    QVector<KisAiStrokeOperation> others;
+    QVector<KisAiStrokeOperation> hairCandidates;
+    others.reserve(operations.size());
+    for (const KisAiStrokeOperation &op : operations) {
+        const bool isHairFill = op.kind == KisAiStrokeOperation::Kind::Fill
+            && KisAiStrokeProgramCodec::normalizeLayerName(op.layer) == QLatin1String("Flats")
+            && op.id.contains(QLatin1String("hair"), Qt::CaseInsensitive)
+            && op.polygon.size() >= 3;
+        if (isHairFill)
+            hairCandidates.append(op);
+        else
+            others.append(op);
+    }
+    if (hairCandidates.size() < 2)
+        return operations;
+
+    // Greedy boolean union: repeatedly merge the first path intersecting any
+    // other candidate. Non-intersecting silhouettes (e.g. twin-tails) survive
+    // as independent masses with their own colors.
+    QVector<QPainterPath> masses;
+    QVector<KisAiStrokeOperation> massOwners;
+    masses.reserve(hairCandidates.size());
+    for (const KisAiStrokeOperation &op : hairCandidates) {
+        QPainterPath path;
+        path.addPolygon(op.polygon);
+        bool absorbed = false;
+        for (int i = 0; i < masses.size(); ++i) {
+            if (masses.at(i).intersects(path)) {
+                masses[i] = masses.at(i).united(path);
+                // Keep the visual identity of the larger contributor.
+                if (op.polygon.boundingRect().width() * op.polygon.boundingRect().height()
+                    > massOwners.at(i).polygon.boundingRect().width()
+                        * massOwners.at(i).polygon.boundingRect().height()) {
+                    KisAiStrokeOperation owner = op;
+                    owner.polygon = masses.at(i).toFillPolygon();
+                    massOwners[i] = owner;
+                } else {
+                    massOwners[i].polygon = masses.at(i).toFillPolygon();
+                }
+                absorbed = true;
+                break;
+            }
+        }
+        if (!absorbed) {
+            masses.append(path);
+            massOwners.append(op);
+        }
+    }
+
+    QVector<KisAiStrokeOperation> result;
+    result.reserve(others.size() + massOwners.size());
+    // Preserve original relative order: hair masses rejoin at the position of
+    // their first contributing candidate.
+    int massCursor = 0;
+    bool massesEmitted = false;
+    for (const KisAiStrokeOperation &op : operations) {
+        const bool isHairFill = op.kind == KisAiStrokeOperation::Kind::Fill
+            && KisAiStrokeProgramCodec::normalizeLayerName(op.layer) == QLatin1String("Flats")
+            && op.id.contains(QLatin1String("hair"), Qt::CaseInsensitive)
+            && op.polygon.size() >= 3;
+        if (isHairFill) {
+            if (!massesEmitted) {
+                for (; massCursor < massOwners.size(); ++massCursor)
+                    result.append(massOwners.at(massCursor));
+                massesEmitted = true;
+            }
+            continue;
+        }
+        result.append(op);
+    }
+    return result;
+}
+
+int KisAiStrokeQualityUtils::applyLineartHierarchy(
+    QVector<KisAiStrokeOperation> &operations)
+{
+    int adjusted = 0;
+    for (KisAiStrokeOperation &op : operations) {
+        if (op.kind != KisAiStrokeOperation::Kind::Path)
+            continue;
+        if (KisAiStrokeProgramCodec::normalizeLayerName(op.layer) != QLatin1String("Lineart"))
+            continue;
+        if (op.brush.sizeMode.compare(QLatin1String("px"), Qt::CaseInsensitive) == 0)
+            continue; // absolute sizes are authorial intent
+        if (op.points.size() < 2)
+            continue;
+        qreal length = 0.0;
+        for (int i = 1; i < op.points.size(); ++i) {
+            const QPointF d = op.points.at(i).pos - op.points.at(i - 1).pos;
+            length += std::hypot(d.x(), d.y());
+        }
+        qreal tier = 0.003;
+        if (length >= 1.0)
+            tier = 0.008;
+        else if (length >= 0.35)
+            tier = 0.005;
+        if (op.closed)
+            tier = qMin<qreal>(0.009, tier + 0.001);
+        if (qAbs(op.brush.size - tier) > 1.0e-6) {
+            op.brush.size = tier;
+            ++adjusted;
+        }
+    }
+    return adjusted;
+}
+
+QString KisAiStrokeQualityUtils::brushPresetName(const QString &profile)
+{
+    const QString p = profile.trimmed().toLower();
+    if (p == QLatin1String("gpen") || p == QLatin1String("pencil"))
+        return QStringLiteral("Pencil-2");
+    if (p == QLatin1String("airbrush"))
+        return QStringLiteral("Airbrush Soft");
+    if (p == QLatin1String("crayon") || p == QLatin1String("charcoal") || p == QLatin1String("splatter"))
+        return QStringLiteral("Chalk Soft");
+    if (p == QLatin1String("watercolor"))
+        return QStringLiteral("Watercolor Soft");
+    return QStringLiteral("Basic-5 Size");
+}
+
+int KisAiStrokeQualityUtils::assignBrushPresetHints(
+    KisAiStrokeProgram &program)
+{
+    int assigned = 0;
+    for (KisAiStrokeOperation &op : program.operations) {
+        if (!op.brush.presetHint.trimmed().isEmpty())
+            continue;
+        op.brush.presetHint = brushPresetName(op.brush.profile);
+        ++assigned;
+    }
+    return assigned;
+}
+
 KisAiStrokeQualityUtils::HairClumpSynthesis KisAiStrokeQualityUtils::synthesizeHairClump(
     const KisAiStrokeOperation &ribbonOp,
     const QSize &canvasSize,

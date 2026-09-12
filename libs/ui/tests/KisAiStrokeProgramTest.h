@@ -86,6 +86,18 @@ private Q_SLOTS:
     void testTypeCheckerParticleAndMangaLinesAliases();
     void testAnimeEyeParsingAndRefinement();
     void testDotNoiseSuppression();
+    void testParticleAccumulationBlockedInMerge();
+    void testParticlesOperationCapInRefine();
+    void testEyePairSymmetryLint();
+    void testSceneSpecSchemaStrict();
+    void testSceneSpecParsingAndDefault();
+    void testHeadRigSymmetryAndHairMass();
+    void testLayoutEngineGeneratesProgram();
+    void testLightRigConsistency();
+    void testFourLayerShadingPresent();
+    void testLineartHierarchy();
+    void testBrushPresetMapping();
+    void testStructuredCritiqueParsing();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

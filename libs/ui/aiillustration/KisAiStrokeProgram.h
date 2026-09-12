@@ -113,6 +113,14 @@ struct KRITAUI_EXPORT KisAiStrokeOperation
     bool eyeIsRight {false};
 };
 
+struct KRITAUI_EXPORT KisAiCritiqueRegion
+{
+    QString area;      // left_eye, right_eye, hair, face_skin, mouth, shading, highlights, background, fx
+    QString issue;     // concise defect description
+    QString action;    // repaint, soften, remove, keep
+    int priority {1};  // 1 (low) to 5 (critical)
+};
+
 struct KRITAUI_EXPORT KisAiStrokeProgram
 {
     int schemaVersion {2};
@@ -125,6 +133,7 @@ struct KRITAUI_EXPORT KisAiStrokeProgram
     QString stepPhase {QStringLiteral("complete")}; // blocking, shading, lineart, finishing, complete
     QString visualCritique;
     QString agentCritique;                          // Autonomous illustration agent visual critique & assessment
+    QVector<KisAiCritiqueRegion> critiqueRegions;   // Machine-readable region-specific critique actions (Phase 3.2)
     QString targetFocusArea;                        // Current agent compositional focus area
     qreal readinessScore {1.0};                     // Agent self-scored visual completion readiness in [0.0, 1.0]
     QString recommendedAction;                      // Agent next proposed action or refinement
@@ -200,6 +209,11 @@ public:
      * JSON schema for OpenAI Structured Outputs (response_format: json_schema).
      */
     static QJsonObject strokeProgramJsonSchema();
+
+    /**
+     * V3 Phase 1: Structured Outputs JSON schema for meaning-only SceneSpec.
+     */
+    static QJsonObject sceneSpecJsonSchema();
 
     /**
      * Parse raw response body from Chat Completions API into a KisAiStrokeProgram.
@@ -440,11 +454,25 @@ public:
 
     /**
      * Merge operations from an extension program into a base program.
+     * When particle suppression is enabled (default), extension 'particles'
+     * operations are dropped if the base already contains particles, blocking
+     * Goal Mode blizzard-noise accumulation across steps.
      */
     static KisAiStrokeProgram mergePrograms(
         const KisAiStrokeProgram &base,
         const KisAiStrokeProgram &extension
     );
+
+    /**
+     * V3 Phase 0.1: Particle (dot/stipple) suppression policy.
+     * Enabled by default. When enabled, refineForRendering() caps the number
+     * of 'particles' operations per program and mergePrograms() blocks
+     * cross-step particle accumulation. The Docker exposes this as the
+     * "suppress FX particles" checkbox.
+     */
+    static void setParticleSuppressionEnabled(bool enabled);
+    static bool isParticleSuppressionEnabled();
+    static int maxParticlesOperations();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_H

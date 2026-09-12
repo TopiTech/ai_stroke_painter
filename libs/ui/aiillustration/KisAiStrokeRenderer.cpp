@@ -155,10 +155,15 @@ QVector<KisAiStrokeOperation> KisAiStrokeRenderer::expandProceduralOperations(
     const QVector<KisAiStrokeOperation> &operations,
     const QSize &canvasSize)
 {
-    QVector<KisAiStrokeOperation> expanded;
-    expanded.reserve(operations.size() * 2);
+    // V3 Phase 0.2: First fuse overlapping hair Flats patches ("bubble/afro"
+    // artifact) into continuous silhouettes before strand synthesis.
+    const QVector<KisAiStrokeOperation> unified =
+        KisAiStrokeQualityUtils::uniteOverlappingHairFlats(operations);
 
-    for (const KisAiStrokeOperation &op : operations) {
+    QVector<KisAiStrokeOperation> expanded;
+    expanded.reserve(unified.size() * 2);
+
+    for (const KisAiStrokeOperation &op : unified) {
         if (op.kind == KisAiStrokeOperation::Kind::Ribbon &&
             (op.brush.profile.compare(QLatin1String("hair"), Qt::CaseInsensitive) == 0 ||
              op.brush.profile.compare(QLatin1String("hair_strand"), Qt::CaseInsensitive) == 0 ||
@@ -492,12 +497,29 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
     // Group layer for clean encapsulation with pass-through mode enabled
     // so that child layers with non-normal composite modes (e.g. Shading with Multiply
     // and Highlights with Screen) blend directly through to layers beneath the group.
-    const QString groupTitle = (program.totalSteps > 1)
-        ? QStringLiteral("🎨 AI [Step %1/%2]: %3").arg(program.currentStep).arg(program.totalSteps).arg(program.prompt.left(20).trimmed())
-        : QStringLiteral("🎨 AI: %1").arg(program.prompt.left(24).trimmed());
-    KisGroupLayerSP group = new KisGroupLayer(image.data(), groupTitle, OPACITY_OPAQUE_U8);
-    group->setPassThroughMode(true);
-    adapter.addNode(group, root, aboveNode);
+    // V3 Phase 3.1: Single Artboard enforcement.
+    // When executing Goal Mode (totalSteps > 1) or iterative refinements, reuse existing
+    // "🎨 AI Illustration" group layer instead of proliferating groups per step.
+    KisGroupLayerSP group = nullptr;
+    if (program.totalSteps > 1) {
+        KisNodeSP candidate = root->firstChild();
+        while (candidate) {
+            if (candidate->inherits("KisGroupLayer") && candidate->name().startsWith(QStringLiteral("🎨 AI"))) {
+                group = dynamic_cast<KisGroupLayer*>(candidate.data());
+                break;
+            }
+            candidate = candidate->nextSibling();
+        }
+    }
+
+    if (!group) {
+        const QString groupTitle = (program.totalSteps > 1)
+            ? QStringLiteral("🎨 AI Illustration")
+            : QStringLiteral("🎨 AI: %1").arg(program.prompt.left(24).trimmed());
+        group = new KisGroupLayer(image.data(), groupTitle, OPACITY_OPAQUE_U8);
+        group->setPassThroughMode(true);
+        adapter.addNode(group, root, aboveNode);
+    }
     KisNodeSP childAboveNode = nullptr;
 
     QImage flatsImage;
@@ -597,35 +619,51 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
         }
 
         const QString layerTitle = QStringLiteral("AI: %1").arg(layerKey);
-        KisPaintLayerSP layer = new KisPaintLayer(image, layerTitle, OPACITY_OPAQUE_U8);
-        layer->paintDevice()->convertFromQImage(layerImage, nullptr);
-
-        if (isShading) {
-            layer->setCompositeOpId(COMPOSITE_MULT);
-            layer->setColorLabelIndex(7); // Purple
-        } else if (isHighlights) {
-            // A2b: Screen blend mode matching preview and preventing harsh blowout/disappearance
-            layer->setCompositeOpId(COMPOSITE_SCREEN);
-            layer->setColorLabelIndex(3); // Yellow
-        } else if (isFlats) {
-            layer->setCompositeOpId(COMPOSITE_OVER);
-            layer->setColorLabelIndex(1); // Blue
-        } else if (isBackground) {
-            layer->setCompositeOpId(COMPOSITE_OVER);
-            layer->setColorLabelIndex(8); // Grey
-        } else if (layerKey.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) == 0) {
-            layer->setCompositeOpId(COMPOSITE_OVER);
-            layer->setColorLabelIndex(4); // Orange
-        } else if (isFx) {
-            layer->setCompositeOpId(COMPOSITE_ADD); // Additive blending for floating particles & sparkles
-            layer->setColorLabelIndex(2); // Green (FX)
-        } else {
-            layer->setCompositeOpId(COMPOSITE_OVER);
-            layer->setColorLabelIndex(2); // Green (FX)
+        KisPaintLayerSP layer = nullptr;
+        KisNodeSP existingChild = group->firstChild();
+        while (existingChild) {
+            if (existingChild->inherits("KisPaintLayer") && existingChild->name() == layerTitle) {
+                layer = dynamic_cast<KisPaintLayer*>(existingChild.data());
+                break;
+            }
+            existingChild = existingChild->nextSibling();
         }
 
-        layer->setDirty(bounds);
-        adapter.addNode(layer, group, childAboveNode);
+        if (layer) {
+            layer->paintDevice()->clear();
+            layer->paintDevice()->convertFromQImage(layerImage, nullptr);
+            layer->setDirty(bounds);
+        } else {
+            layer = new KisPaintLayer(image, layerTitle, OPACITY_OPAQUE_U8);
+            layer->paintDevice()->convertFromQImage(layerImage, nullptr);
+
+            if (isShading) {
+                layer->setCompositeOpId(COMPOSITE_MULT);
+                layer->setColorLabelIndex(7); // Purple
+            } else if (isHighlights) {
+                // A2b: Screen blend mode matching preview and preventing harsh blowout/disappearance
+                layer->setCompositeOpId(COMPOSITE_SCREEN);
+                layer->setColorLabelIndex(3); // Yellow
+            } else if (isFlats) {
+                layer->setCompositeOpId(COMPOSITE_OVER);
+                layer->setColorLabelIndex(1); // Blue
+            } else if (isBackground) {
+                layer->setCompositeOpId(COMPOSITE_OVER);
+                layer->setColorLabelIndex(8); // Grey
+            } else if (layerKey.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) == 0) {
+                layer->setCompositeOpId(COMPOSITE_OVER);
+                layer->setColorLabelIndex(4); // Orange
+            } else if (isFx) {
+                layer->setCompositeOpId(COMPOSITE_ADD); // Additive blending for floating particles & sparkles
+                layer->setColorLabelIndex(2); // Green (FX)
+            } else {
+                layer->setCompositeOpId(COMPOSITE_OVER);
+                layer->setColorLabelIndex(2); // Green (FX)
+            }
+
+            layer->setDirty(bounds);
+            adapter.addNode(layer, group, childAboveNode);
+        }
         childAboveNode = layer;
         ++layersAdded;
     }
@@ -637,17 +675,66 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
         if (!compPreview.isNull()) {
             QImage bloomGlow = generateBloomMap(compPreview, 0.40, 8);
             if (!bloomGlow.isNull()) {
-                // 40% opacity Screen blending for soft atmospheric glow
-                KisPaintLayerSP bloomLayer = new KisPaintLayer(image, QStringLiteral("🎨 AI: Bloom FX"), qRound(0.40 * 255));
-                bloomLayer->paintDevice()->convertFromQImage(bloomGlow, nullptr);
-                bloomLayer->setCompositeOpId(COMPOSITE_SCREEN);
-                bloomLayer->setColorLabelIndex(3); // Yellow
-                bloomLayer->setDirty(bounds);
-                adapter.addNode(bloomLayer, group, childAboveNode);
+                KisPaintLayerSP bloomLayer = nullptr;
+                KisNodeSP exBloom = group->firstChild();
+                while (exBloom) {
+                    if (exBloom->name() == QStringLiteral("🎨 AI: Bloom FX")) {
+                        bloomLayer = dynamic_cast<KisPaintLayer*>(exBloom.data());
+                        break;
+                    }
+                    exBloom = exBloom->nextSibling();
+                }
+                if (bloomLayer) {
+                    bloomLayer->paintDevice()->clear();
+                    bloomLayer->paintDevice()->convertFromQImage(bloomGlow, nullptr);
+                    bloomLayer->setDirty(bounds);
+                } else {
+                    // 40% opacity Screen blending for soft atmospheric glow
+                    bloomLayer = new KisPaintLayer(image, QStringLiteral("🎨 AI: Bloom FX"), qRound(0.40 * 255));
+                    bloomLayer->paintDevice()->convertFromQImage(bloomGlow, nullptr);
+                    bloomLayer->setCompositeOpId(COMPOSITE_SCREEN);
+                    bloomLayer->setColorLabelIndex(3); // Yellow
+                    bloomLayer->setDirty(bounds);
+                    adapter.addNode(bloomLayer, group, childAboveNode);
+                }
                 childAboveNode = bloomLayer;
                 ++layersAdded;
             }
         }
+
+        // V3 Phase 2.5: Color Grading Real-canvas Layer
+        QImage gradeImg(canvasSize, QImage::Format_ARGB32_Premultiplied);
+        gradeImg.fill(Qt::transparent);
+        {
+            QPainter pGrade(&gradeImg);
+            QLinearGradient grad(0, 0, 0, canvasSize.height());
+            grad.setColorAt(0.0, QColor(30, 45, 80, 28));   // cool ambient overhead
+            grad.setColorAt(1.0, QColor(255, 210, 160, 22)); // warm bounce light
+            pGrade.fillRect(QRect(QPoint(0, 0), canvasSize), grad);
+        }
+        KisPaintLayerSP gradeLayer = nullptr;
+        KisNodeSP exGrade = group->firstChild();
+        while (exGrade) {
+            if (exGrade->name() == QStringLiteral("🎨 AI: Grade")) {
+                gradeLayer = dynamic_cast<KisPaintLayer*>(exGrade.data());
+                break;
+            }
+            exGrade = exGrade->nextSibling();
+        }
+        if (gradeLayer) {
+            gradeLayer->paintDevice()->clear();
+            gradeLayer->paintDevice()->convertFromQImage(gradeImg, nullptr);
+            gradeLayer->setDirty(bounds);
+        } else {
+            gradeLayer = new KisPaintLayer(image, QStringLiteral("🎨 AI: Grade"), qRound(0.50 * 255));
+            gradeLayer->paintDevice()->convertFromQImage(gradeImg, nullptr);
+            gradeLayer->setCompositeOpId(COMPOSITE_OVER);
+            gradeLayer->setColorLabelIndex(6); // Violet
+            gradeLayer->setDirty(bounds);
+            adapter.addNode(gradeLayer, group, childAboveNode);
+        }
+        childAboveNode = gradeLayer;
+        ++layersAdded;
     }
 
     adapter.endMacro();

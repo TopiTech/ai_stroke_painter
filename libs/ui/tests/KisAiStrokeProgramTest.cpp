@@ -20,6 +20,10 @@
 #include "aiillustration/KisAiStrokeProgram.h"
 #include "aiillustration/KisAiPromptAnalyzer.h"
 #include "aiillustration/KisAiStrokeTypeChecker.h"
+#include "aiillustration/KisAiSceneSpec.h"
+#include "aiillustration/KisAiLayoutEngine.h"
+#include "aiillustration/KisAiLightRig.h"
+#include "aiillustration/KisAiStrokeQualityUtils.h"
 #include "KisAiTestUtils.h"
 
 #include <algorithm>
@@ -742,7 +746,9 @@ void KisAiStrokeProgramTest::testParticleCountClamping()
 
     program = KisAiStrokeProgram();
     QVERIFY2(KisAiStrokeProgramCodec::parseResponse(QJsonDocument(budgetRoot).toJson(QJsonDocument::Compact), &program, &error), qPrintable(error));
-    QCOMPARE(program.operations.size(), 30);
+    // V3 Phase 0.1: per-program particle operation cap applies on top of the
+    // total particle budget; excess operations are dropped at refine time.
+    QCOMPARE(program.operations.size(), KisAiStrokeProgramCodec::maxParticlesOperations());
 
     int totalParticles = 0;
     for (const KisAiStrokeOperation &op : program.operations) {
@@ -3018,6 +3024,387 @@ void KisAiStrokeProgramTest::testDotNoiseSuppression()
     // Only the intentional catchlight survives; the random noise dot is dropped.
     QCOMPARE(refined.operations.size(), 1);
     QCOMPARE(refined.operations.at(0).id, QStringLiteral("eye_catchlight"));
+}
+
+void KisAiStrokeProgramTest::testParticleAccumulationBlockedInMerge()
+{
+    // V3 Phase 0.1: Goal Mode must not accumulate particle layers step after step.
+    const bool wasEnabled = KisAiStrokeProgramCodec::isParticleSuppressionEnabled();
+    KisAiStrokeProgramCodec::setParticleSuppressionEnabled(true);
+
+    auto makeParticles = [](const QString &id) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Particles;
+        op.id = id;
+        op.layer = QStringLiteral("FX");
+        op.bounds = QRectF(0.1, 0.1, 0.8, 0.8);
+        op.particleCount = 12;
+        return op;
+    };
+    auto makePath = [](const QString &id) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Path;
+        op.id = id;
+        op.layer = QStringLiteral("Lineart");
+        op.points = {KisAiStrokePoint(0.2, 0.2, 0.8), KisAiStrokePoint(0.5, 0.5, 0.9),
+                     KisAiStrokePoint(0.8, 0.2, 0.8)};
+        return op;
+    };
+
+    KisAiStrokeProgram base;
+    base.schemaVersion = 2;
+    base.canvasSize = QSize(512, 512);
+    base.operations.append(makeParticles(QStringLiteral("step1_petals")));
+    base.operations.append(makePath(QStringLiteral("contour")));
+
+    KisAiStrokeProgram extension;
+    extension.schemaVersion = 2;
+    extension.canvasSize = QSize(512, 512);
+    extension.operations.append(makeParticles(QStringLiteral("step2_sparkles")));
+    extension.operations.append(makePath(QStringLiteral("detail")));
+
+    const KisAiStrokeProgram merged = KisAiStrokeProgramCodec::mergePrograms(base, extension);
+    int particleOps = 0;
+    for (const KisAiStrokeOperation &op : merged.operations) {
+        if (op.kind == KisAiStrokeOperation::Kind::Particles)
+            ++particleOps;
+    }
+    // Only the base step's particles survive; the extension's are dropped.
+    QCOMPARE(particleOps, 1);
+    QCOMPARE(merged.operations.size(), 3);
+
+    // Suppression OFF restores legacy additive behavior.
+    KisAiStrokeProgramCodec::setParticleSuppressionEnabled(false);
+    const KisAiStrokeProgram legacy = KisAiStrokeProgramCodec::mergePrograms(base, extension);
+    int legacyParticles = 0;
+    for (const KisAiStrokeOperation &op : legacy.operations) {
+        if (op.kind == KisAiStrokeOperation::Kind::Particles)
+            ++legacyParticles;
+    }
+    QCOMPARE(legacyParticles, 2);
+    KisAiStrokeProgramCodec::setParticleSuppressionEnabled(wasEnabled);
+}
+
+void KisAiStrokeProgramTest::testParticlesOperationCapInRefine()
+{
+    // V3 Phase 0.1: A single response can carry at most maxParticlesOperations().
+    const bool wasEnabled = KisAiStrokeProgramCodec::isParticleSuppressionEnabled();
+    KisAiStrokeProgramCodec::setParticleSuppressionEnabled(true);
+
+    KisAiStrokeProgram prog;
+    prog.schemaVersion = 2;
+    prog.canvasSize = QSize(512, 512);
+    for (int i = 0; i < KisAiStrokeProgramCodec::maxParticlesOperations() + 3; ++i) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Particles;
+        op.id = QStringLiteral("noise_%1").arg(i);
+        op.layer = QStringLiteral("FX");
+        op.bounds = QRectF(0.05, 0.05, 0.9, 0.9);
+        op.particleCount = 10;
+        prog.operations.append(op);
+    }
+    KisAiStrokeQualityReport report;
+    const KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(prog, &report);
+    int particleOps = 0;
+    for (const KisAiStrokeOperation &op : refined.operations) {
+        if (op.kind == KisAiStrokeOperation::Kind::Particles)
+            ++particleOps;
+    }
+    QCOMPARE(particleOps, KisAiStrokeProgramCodec::maxParticlesOperations());
+    QVERIFY(report.droppedOperations >= 3);
+    QVERIFY(!report.warnings.isEmpty());
+    KisAiStrokeProgramCodec::setParticleSuppressionEnabled(wasEnabled);
+}
+
+void KisAiStrokeProgramTest::testEyePairSymmetryLint()
+{
+    // V3 Phase 0.3: A skewed eye pair must raise a symmetry warning for the
+    // quality self-correction loop, while a symmetric pair stays silent.
+    auto makeEye = [](const QString &id, qreal cx, qreal cy) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::AnimeEye;
+        op.id = id;
+        op.layer = QStringLiteral("Lineart");
+        op.eyeCenter = QPointF(cx, cy);
+        op.eyeSize = QSizeF(0.10, 0.12);
+        return op;
+    };
+
+    KisAiStrokeProgram symmetric;
+    symmetric.schemaVersion = 2;
+    symmetric.canvasSize = QSize(512, 512);
+    symmetric.operations.append(makeEye(QStringLiteral("eye_l"), 0.38, 0.42));
+    symmetric.operations.append(makeEye(QStringLiteral("eye_r"), 0.62, 0.42));
+    KisAiStrokeQualityReport symReport;
+    KisAiStrokeProgramCodec::refineForRendering(symmetric, &symReport);
+    QVERIFY(!symReport.warnings.join(QStringLiteral("\n")).contains(QStringLiteral("asymmetric")));
+
+    KisAiStrokeProgram skewed;
+    skewed.schemaVersion = 2;
+    skewed.canvasSize = QSize(512, 512);
+    skewed.operations.append(makeEye(QStringLiteral("eye_l"), 0.30, 0.40));
+    skewed.operations.append(makeEye(QStringLiteral("eye_r"), 0.75, 0.55));
+    KisAiStrokeQualityReport skewReport;
+    KisAiStrokeProgramCodec::refineForRendering(skewed, &skewReport);
+    QVERIFY(skewReport.warnings.join(QStringLiteral("\n")).contains(QStringLiteral("asymmetric")));
+}
+
+void KisAiStrokeProgramTest::testSceneSpecSchemaStrict()
+{
+    // V3 Phase 1.1: sceneSpecJsonSchema must enforce meaning only, no raw coordinates
+    const QJsonObject schema = KisAiSceneSpecCodec::sceneSpecJsonSchema();
+    QCOMPARE(schema.value(QStringLiteral("type")).toString(), QStringLiteral("object"));
+    const QJsonArray req = schema.value(QStringLiteral("required")).toArray();
+    QVERIFY(req.contains(QJsonValue(QStringLiteral("subject"))));
+    QVERIFY(req.contains(QJsonValue(QStringLiteral("head"))));
+
+    const QJsonObject props = schema.value(QStringLiteral("properties")).toObject();
+    QVERIFY(props.contains(QStringLiteral("subject")));
+    QVERIFY(props.contains(QStringLiteral("head")));
+    QVERIFY(props.contains(QStringLiteral("composition")));
+    QVERIFY(props.contains(QStringLiteral("light")));
+    QVERIFY(props.contains(QStringLiteral("negative")));
+    // No coordinate fields (operations/strokes/points)
+    QVERIFY(!props.contains(QStringLiteral("operations")));
+    QVERIFY(!props.contains(QStringLiteral("strokes")));
+    QVERIFY(!props.contains(QStringLiteral("points")));
+}
+
+void KisAiStrokeProgramTest::testSceneSpecParsingAndDefault()
+{
+    // V3 Phase 1.1: Spec parsing and keyword-derived defaults
+    const QByteArray json = QByteArrayLiteral(
+        "{\n"
+        "  \"subject\": {\"type\": \"character\", \"pose_id\": \"three_quarter_bust\", \"facing\": \"front-right\"},\n"
+        "  \"head\": {\"expression\": \"smile_open\", \"gaze\": \"front\", \"hair_style\": \"twin_tails\", \"hair_color\": \"#fa0055\", \"eye_color\": \"#00ccff\"},\n"
+        "  \"composition\": {\"framing\": \"bust_up\", \"head_center\": [0.5, 0.40], \"head_height\": 0.45},\n"
+        "  \"light\": {\"warmth\": \"warm_key_cool_fill\", \"time\": \"night\"}\n"
+        "}"
+    );
+
+    KisAiSceneSpec spec;
+    QString err;
+    QStringList warnings;
+    QVERIFY(KisAiSceneSpecCodec::parseSceneSpec(json, &spec, &err, &warnings));
+    QCOMPARE(spec.head.hairStyle, QStringLiteral("twin_tails"));
+    QCOMPARE(spec.light.timeOfDay, QStringLiteral("night"));
+    QCOMPARE(spec.composition.headHeight, 0.45);
+    QCOMPARE(spec.subject.facing, QStringLiteral("front-right"));
+
+    // Fallback keyword derivation
+    const KisAiSceneSpec defSpec = KisAiSceneSpecCodec::defaultSpecForPrompt(
+        QStringLiteral("silver hair girl with green eyes in starry night sky"), QSize(1024, 1024));
+    QCOMPARE(defSpec.light.timeOfDay, QStringLiteral("night"));
+    QCOMPARE(defSpec.head.eyeColor, QColor(34, 197, 94));
+    QCOMPARE(defSpec.head.hairColor, QColor(226, 232, 240));
+}
+
+void KisAiStrokeProgramTest::testHeadRigSymmetryAndHairMass()
+{
+    // V3 Phase 1.2: HeadRig must be symmetric around center.x()
+    const QPointF center(0.5, 0.4);
+    const qreal width = 0.30;
+    const qreal height = 0.40;
+    const QPolygonF outline = KisAiLayoutEngine::headOutlinePolygon(center, width, height);
+    QVERIFY(outline.size() >= 20);
+
+    // Verify left-right symmetry
+    for (int i = 0; i < outline.size(); ++i) {
+        const QPointF &pt = outline.at(i);
+        const qreal dx = pt.x() - center.x();
+        // For every point with dx, there must be a point with -dx at approximately same y
+        bool foundMirror = false;
+        for (int j = 0; j < outline.size(); ++j) {
+            const QPointF &mirror = outline.at(j);
+            if (qAbs((mirror.x() - center.x()) + dx) < 0.015 && qAbs(mirror.y() - pt.y()) < 0.015) {
+                foundMirror = true;
+                break;
+            }
+        }
+        QVERIFY2(foundMirror, "Head outline must be symmetric around center.x()");
+    }
+
+    // Eye pair centers must be symmetric for front-facing
+    const auto eyes = KisAiLayoutEngine::eyePairCenters(center, width, height, QStringLiteral("front"));
+    QVERIFY(qAbs((eyes.first.x() + eyes.second.x()) * 0.5 - center.x()) < 1.0e-5);
+    QCOMPARE(eyes.first.y(), eyes.second.y());
+
+    // HairMass generation produces ribbon side locks
+    KisAiSceneSpec spec;
+    spec.head.hairStyle = QStringLiteral("twin_tails");
+    spec.head.hairColor = QColor(40, 60, 120);
+    const auto hairOps = KisAiLayoutEngine::hairMassForStyle(spec, center, width, height);
+    QVERIFY(!hairOps.isEmpty());
+    bool hasRibbon = false;
+    for (const auto &op : hairOps) {
+        if (op.kind == KisAiStrokeOperation::Kind::Ribbon) {
+            hasRibbon = true;
+            break;
+        }
+    }
+    QVERIFY(hasRibbon);
+}
+
+void KisAiStrokeProgramTest::testLayoutEngineGeneratesProgram()
+{
+    // V3 Phase 1.2: LayoutEngine generates a complete, valid KisAiStrokeProgram
+    KisAiSceneSpec spec;
+    spec.prompt = QStringLiteral("Anime girl with twintails");
+    spec.subject.type = QStringLiteral("character");
+    spec.head.expression = QStringLiteral("smile_open");
+    spec.head.hairStyle = QStringLiteral("twin_tails");
+
+    const KisAiStrokeProgram prog = KisAiLayoutEngine::generateProgram(spec, QSize(1024, 1024));
+    QVERIFY(prog.isValid());
+    QVERIFY(!prog.operations.isEmpty());
+
+    int animeEyeCount = 0;
+    bool hasFaceSkin = false;
+    bool hasHair = false;
+    for (const auto &op : prog.operations) {
+        if (op.kind == KisAiStrokeOperation::Kind::AnimeEye)
+            ++animeEyeCount;
+        if (op.id.contains(QStringLiteral("face_skin")))
+            hasFaceSkin = true;
+        if (op.id.contains(QStringLiteral("hair")))
+            hasHair = true;
+    }
+    QCOMPARE(animeEyeCount, 2);
+    QVERIFY(hasFaceSkin);
+    QVERIFY(hasHair);
+}
+
+void KisAiStrokeProgramTest::testLightRigConsistency()
+{
+    // V3 Phase 2.1: LightRig shadow & highlight coherence
+    KisAiSceneSpec nightSpec;
+    nightSpec.light.timeOfDay = QStringLiteral("night");
+    nightSpec.light.warmth = QStringLiteral("warm_key_cool_fill");
+    const KisAiLightSettings nightRig = KisAiLightRig::fromSpec(nightSpec);
+
+    const QColor skin(255, 224, 192);
+    const QColor nightShadow = KisAiLightRig::shadowColor(skin, nightRig);
+    // Never pure black
+    QVERIFY(nightShadow != QColor(0, 0, 0));
+    QVERIFY(nightShadow.value() >= 30);
+    // Night fill tint is bluish/cool (hue between 180 and 300)
+    QVERIFY(nightRig.fillTint.hue() >= 180 && nightRig.fillTint.hue() <= 300);
+
+    const QColor midTone(100, 120, 160);
+    const QColor nightHighlight = KisAiLightRig::highlightColor(midTone, nightRig);
+    QVERIFY(nightHighlight.value() > midTone.value());
+}
+
+void KisAiStrokeProgramTest::testFourLayerShadingPresent()
+{
+    // V3 Phase 2.2: 4-layer shading synthesized by LightRig (core shadow, rim, chin AO, hair cast)
+    KisAiSceneSpec spec;
+    spec.subject.type = QStringLiteral("character");
+    const KisAiStrokeProgram prog = KisAiLayoutEngine::generateProgram(spec, QSize(1024, 1024));
+
+    bool hasCoreShadow = false;
+    bool hasRim = false;
+    bool hasChinAo = false;
+    bool hasHairCast = false;
+    for (const auto &op : prog.operations) {
+        if (op.id.contains(QStringLiteral("core_shadow")))
+            hasCoreShadow = true;
+        if (op.id.contains(QStringLiteral("rim_light")))
+            hasRim = true;
+        if (op.id == QStringLiteral("chin_ao"))
+            hasChinAo = true;
+        if (op.id == QStringLiteral("hair_cast_shadow"))
+            hasHairCast = true;
+    }
+    QVERIFY(hasCoreShadow);
+    QVERIFY(hasRim);
+    QVERIFY(hasChinAo);
+    QVERIFY(hasHairCast);
+}
+
+void KisAiStrokeProgramTest::testLineartHierarchy()
+{
+    // V3 Phase 2.3: Lineart stroke weights into 3-tier hierarchy
+    QVector<KisAiStrokeOperation> ops;
+
+    KisAiStrokeOperation heavy;
+    heavy.kind = KisAiStrokeOperation::Kind::Path;
+    heavy.layer = QStringLiteral("Lineart");
+    heavy.points = {KisAiStrokePoint(0.1, 0.1), KisAiStrokePoint(0.9, 0.9)}; // length ~ 1.13 >= 1.0
+    heavy.brush.size = 0.02; // non-canonical size
+    ops.append(heavy);
+
+    KisAiStrokeOperation light;
+    light.kind = KisAiStrokeOperation::Kind::Path;
+    light.layer = QStringLiteral("Lineart");
+    light.points = {KisAiStrokePoint(0.5, 0.5), KisAiStrokePoint(0.55, 0.55)}; // length ~ 0.07 < 0.35
+    light.brush.size = 0.02;
+    ops.append(light);
+
+    const int adjusted = KisAiStrokeQualityUtils::applyLineartHierarchy(ops);
+    QCOMPARE(adjusted, 2);
+    QCOMPARE(ops[0].brush.size, 0.008); // Tier 1: outer contours
+    QCOMPARE(ops[1].brush.size, 0.003); // Tier 3: details
+}
+
+void KisAiStrokeProgramTest::testBrushPresetMapping()
+{
+    // V3 Phase 2.4: Profile to Krita preset mapping
+    QCOMPARE(KisAiStrokeQualityUtils::brushPresetName(QStringLiteral("gpen")), QStringLiteral("Pencil-2"));
+    QCOMPARE(KisAiStrokeQualityUtils::brushPresetName(QStringLiteral("watercolor")), QStringLiteral("Watercolor Soft"));
+    QCOMPARE(KisAiStrokeQualityUtils::brushPresetName(QStringLiteral("airbrush")), QStringLiteral("Airbrush Soft"));
+    QCOMPARE(KisAiStrokeQualityUtils::brushPresetName(QStringLiteral("crayon")), QStringLiteral("Chalk Soft"));
+
+    KisAiStrokeProgram prog;
+    prog.schemaVersion = 2;
+    KisAiStrokeOperation op;
+    op.kind = KisAiStrokeOperation::Kind::Path;
+    op.brush.profile = QStringLiteral("gpen");
+    prog.operations.append(op);
+
+    const int assigned = KisAiStrokeQualityUtils::assignBrushPresetHints(prog);
+    QCOMPARE(assigned, 1);
+    QCOMPARE(prog.operations[0].brush.presetHint, QStringLiteral("Pencil-2"));
+}
+
+void KisAiStrokeProgramTest::testStructuredCritiqueParsing()
+{
+    // V3 Phase 3.2: Machine-readable critique regions parsing
+    const QByteArray json = QByteArrayLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"prompt\": \"Anime portrait\",\n"
+        "  \"agent_critique\": \"Right eye is slightly drifted and chin shading lacks soft diffusion.\",\n"
+        "  \"regions\": [\n"
+        "    {\"area\": \"right_eye\", \"issue\": \"offset from eye center line\", \"action\": \"repaint\", \"priority\": 4},\n"
+        "    {\"area\": \"chin_ao\", \"issue\": \"harsh edge on contact shadow\", \"action\": \"soften\", \"priority\": 2}\n"
+        "  ],\n"
+        "  \"operations\": [\n"
+        "    {\"kind\": \"fill\", \"id\": \"face_skin\", \"layer\": \"Flats\", \"polygon\": [[0.3,0.3],[0.7,0.3],[0.5,0.7]], \"brush\": {\"color\": \"#ffe0c0\"}}\n"
+        "  ]\n"
+        "}"
+    );
+
+    KisAiStrokeProgram prog;
+    QString err;
+    QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(QJsonDocument::fromJson(json).object(), &prog, &err));
+    QCOMPARE(prog.critiqueRegions.size(), 2);
+    QCOMPARE(prog.critiqueRegions[0].area, QStringLiteral("right_eye"));
+    QCOMPARE(prog.critiqueRegions[0].action, QStringLiteral("repaint"));
+    QCOMPARE(prog.critiqueRegions[0].priority, 4);
+    QCOMPARE(prog.critiqueRegions[1].area, QStringLiteral("chin_ao"));
+    QCOMPARE(prog.critiqueRegions[1].action, QStringLiteral("soften"));
+    QCOMPARE(prog.critiqueRegions[1].priority, 2);
+
+    // Verify feedback loop propagation into next step payload
+    const QJsonObject nextPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"), QStringLiteral("Anime portrait"), QSize(1024, 1024),
+        2, 3, QString(), QString(), 500, QString(), false, false, true, 0.7, 1.0, 0, 0, &prog);
+
+    const QJsonArray messages = nextPayload.value(QStringLiteral("messages")).toArray();
+    const QString userText = messages.at(1).toObject().value(QStringLiteral("content")).toString();
+    QVERIFY(userText.contains(QStringLiteral("previous_step_critique_regions")));
+    QVERIFY(userText.contains(QStringLiteral("right_eye")));
 }
 
 KISTEST_MAIN(KisAiStrokeProgramTest)
