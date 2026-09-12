@@ -315,23 +315,26 @@ QString KisAiPromptAnalyzer::generateArtDirection(
             "[DOMAIN ART DIRECTION: Character / Figure Portrait]\n"
             "GUIDELINES & PRIORITIES:\n"
             "- Strictly derive character gender, age, skin tone, hairstyle, attire, and emotional expression from the USER REQUEST.\n"
+            "- STRICT NO RANDOM PARTICLES: Do NOT emit 'particles' or scattered dots across faces or bodies. Keep skin, eyes, and hair clean.\n"
             "- Avoid mechanical 'hatch' across smooth skin surfaces; use soft 'fill' (brush: watercolor/brush, style: wash) for natural shading.\n"
-            "- Render organic forms using 'fill', 'path', and 'ribbon'.\n"
+            "- Render organic forms using 'fill', 'path', and 'ribbon'. Avoid dozens of tiny circular patches for hair; use cohesive ribbons and silhouettes.\n"
             "1. Layer 'Flats' (Base Volumes & Silhouettes):\n"
             "   - Skin / Body Base: Solid, continuous coverage for head, neck, and exposed anatomy with fill (color derived from subject prompt).\n"
-            "   - Hair Silhouette: Primary hair volume masses framing the head using ribbon/fill (color: '%1' or prompt-specified hue).\n"
-            "   - Eye Sockets & Irises: Almond sclera discs and circular iris color blocks with fill (color: '%2' or prompt-specified hue).\n"
+            "   - Hair Silhouette: Primary cohesive hair volume masses framing the head using ribbon/fill (color: '%1' or prompt-specified hue).\n"
+            "   - Eye Sockets & Irises: Almond sclera discs and circular iris color blocks with fill, or preferably use 'anime_eye' operations.\n"
             "   - Clothing & Adornments: Distinct opaque color masses defining garments and silhouette.\n"
             "2. Layer 'Shading' (3D Depth & Ambient Occlusion - MULTIPLY BLEND):\n"
             "   - Cast Shadows: Soft shadows under hair clumps, chin/jawline, and fabric drapery with opacity 0.3-0.5.\n"
             "   - Form Shadows: Curvature transitions across facial planes, nose bridge, and anatomical landmarks.\n"
             "   - Contact AO: Deep crevice shadows between overlapping locks and garment folds.\n"
             "3. Layer 'Lineart' (Anatomical & Clothing Contours - 1.5 to 3.5 px):\n"
-            "   - Expressive Contours: Elegant curved paths using Catmull-Rom splines for jawline, eye contours, and mouth.\n"
+            "   - Eyes: Use 'anime_eye' (e.g. center: [0.38, 0.44], size: [0.10, 0.12], iris_color: '%2') for flawless anime eyes with iris gradient, lashes, pupil, and catchlights.\n"
+            "   - Expressive Contours: Elegant curved paths using Catmull-Rom splines for jawline and mouth.\n"
             "   - Hair & Fabric Strands: Flowing tapered paths and ribbons indicating movement and volume.\n"
             "4. Layer 'Highlights' & 'FX' (Specular Polish):\n"
             "   - Catchlights: Crisp glints inside eye pupils to convey vitality.\n"
-            "   - Surface Luster: Restrained specular points on focal highlights, jewelry, or metallic surfaces.\n"
+            "   - Surface Luster: Restrained specular points on focal highlights, lip gloss, jewelry, or hair angel halo.\n"
+            "   - STRICT: Zero random particles or stippling on face/body.\n"
         ).arg(spec.hairColor, spec.eyeColor);
         break;
     }
@@ -561,12 +564,12 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
     case 4: // Phase 4: Highlights, FX & Polish
     default:
         out += QStringLiteral(
-            "PHASE 4 MISSION: [SPECULAR HIGHLIGHTS & ATMOSPHERIC FX POLISH]\n"
-            "- Target Layers: 'Highlights' (Screen blend) and 'FX' (Particles, Highlights).\n"
+            "PHASE 4 MISSION: [SPECULAR HIGHLIGHTS & POLISH]\n"
+            "- Target Layers: 'Highlights' (Screen blend) and 'FX'.\n"
             "- Specular Glints: Eye catchlights (#ffffff, 2-5px glints on irises), lip glints, nose tip point, hair angel halo rim lighting.\n"
-            "- Dynamic FX: Floating petals, embers, stars, or light sparkles (shape: petal/sparkle/bokeh/star).\n"
+            "- STRICT NO RANDOM PARTICLES / NO STIPPLING: DO NOT emit 'particles' (stars/snow/dots) unless explicitly requested in the prompt! Never spray noise over faces.\n"
             "- STRICT: DO NOT use 'manga_lines' (radial speed lines) unless explicitly requested as an action/battle scene!\n"
-            "- Final Goal Check: Bring the illustration to 100% presentation readiness.\n"
+            "- Final Goal Check: Bring the illustration to 100% presentation readiness with pristine, clean render quality.\n"
         );
         break;
     }

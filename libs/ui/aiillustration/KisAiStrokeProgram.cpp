@@ -292,7 +292,8 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
                                                               QStringLiteral("ribbon"),
                                                               QStringLiteral("particles"),
                                                               QStringLiteral("hatch"),
-                                                              QStringLiteral("manga_lines")}}};
+                                                              QStringLiteral("manga_lines"),
+                                                              QStringLiteral("anime_eye")}}};
     opProps[QStringLiteral("id")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("layer")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("brush")] = brushSchema;
@@ -446,9 +447,11 @@ QString KisAiStrokeProgramCodec::buildOperationKindsSection()
         "- 'path': Expressive linework, contours, facial features. Points [ [x, y, pressure], ... ] where pressure "
         "is 0.1-1.0. brush { 'profile': 'gpen'/'pencil'/'airbrush'/'watercolor'/'marker'/'crayon'/'neon'/'splatter', 'color': '#hex', 'size': "
         "0.002-0.01, opacity: 0.0-1.0 }.\n"
-        "- 'particles': Atmospheric particles. Bounds [x1, y1, x2, y2], count (10-50), shape "
+        "- 'anime_eye': Procedural high-fidelity anime eye assembly (sclera, iris gradient, pupil, eyelash curves, double eyelid, catchlights). "
+        "center [cx, cy], size [w, h], iris_color '#hex', secondary_color '#hex', style ('sparkle'/'dual_dot'/'gradient'), expression ('open'/'smile'/'half'), is_right (true/false).\n"
+        "- 'particles': Atmospheric particles (STRICT: ONLY use when explicitly requested like starry sky, blizzard, petals). NEVER spray over faces. Bounds [x1, y1, x2, y2], count (8-24), shape "
         "('petal'/'sparkle'/'star'/'dot'), brush { 'color': '#hex' }.\n"
-         "- 'manga_lines': Radial speed/focus lines toward a center. center [cx, cy], inner_radius (0.05-0.3), outer_radius (0.5-1.0), density (16-80), brush { 'profile': 'gpen', 'color': '#hex', 'size': 0.002-0.01, opacity: 0.0-1.0 }."
+        "- 'manga_lines': Radial speed/focus lines toward a center. center [cx, cy], inner_radius (0.05-0.3), outer_radius (0.5-1.0), density (16-80), brush { 'profile': 'gpen', 'color': '#hex', 'size': 0.002-0.01, opacity: 0.0-1.0 }."
     );
 }
 
@@ -2306,6 +2309,9 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
             || k.contains(QLatin1String("contour"))) {
             return KisAiStrokeOperation::Kind::Path;
         }
+        if (k.contains(QLatin1String("anime_eye")) || k.contains(QLatin1String("eye"))) {
+            return KisAiStrokeOperation::Kind::AnimeEye;
+        }
         return KisAiStrokeOperation::Kind::Unknown;
     };
 
@@ -2653,6 +2659,34 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 }
                 op.density = qBound(4, toIntField(findField(o, {QStringLiteral("density")}), 48), 120);
                 op.lineLengthJitter = toDoubleField(findField(o, {QStringLiteral("line_length_jitter"), QStringLiteral("jitter")}), 0.20);
+            } else if (op.kind == KisAiStrokeOperation::Kind::AnimeEye) {
+                const QJsonValue centerVal = findField(o, {QStringLiteral("center"), QStringLiteral("eye_center")});
+                if (!centerVal.isUndefined() && !centerVal.isNull()) {
+                    const auto cp = parsePoint(centerVal);
+                    if (cp.second >= 0.0) {
+                        op.eyeCenter = cp.first;
+                        if (qMax(op.eyeCenter.x(), op.eyeCenter.y()) > kPixelCoordinateThreshold) {
+                            op.eyeCenter = QPointF(op.eyeCenter.x() / canvasW, op.eyeCenter.y() / canvasH);
+                        }
+                    }
+                }
+                const QJsonArray szArr = findField(o, {QStringLiteral("size"), QStringLiteral("eye_size")}).toArray();
+                if (szArr.size() >= 2) {
+                    qreal ew = toDoubleField(szArr.at(0), 0.10);
+                    qreal eh = toDoubleField(szArr.at(1), 0.12);
+                    if (qMax(ew, eh) > kPixelCoordinateThreshold) {
+                        ew /= canvasW;
+                        eh /= canvasH;
+                    }
+                    op.eyeSize = QSizeF(qBound(0.01, ew, 0.50), qBound(0.01, eh, 0.50));
+                } else {
+                    op.eyeSize = QSizeF(0.10, 0.12);
+                }
+                op.eyeIrisColor = parseColor(findField(o, {QStringLiteral("iris_color"), QStringLiteral("color")}).toString(), QColor(60, 120, 240));
+                op.eyeSecondaryColor = parseColor(findField(o, {QStringLiteral("secondary_color"), QStringLiteral("secondary")}).toString(), QColor(160, 210, 255));
+                op.eyeStyle = findField(o, {QStringLiteral("style"), QStringLiteral("eye_style")}, QStringLiteral("sparkle")).toString(QStringLiteral("sparkle"));
+                op.eyeExpression = findField(o, {QStringLiteral("expression"), QStringLiteral("eye_expression")}, QStringLiteral("open")).toString(QStringLiteral("open"));
+                op.eyeIsRight = findField(o, {QStringLiteral("is_right"), QStringLiteral("right")}, false).toBool(false);
             }
 
             if (op.kind != KisAiStrokeOperation::Kind::Unknown) {
@@ -2914,6 +2948,25 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             }
             op.points = points;
             renderable = !op.points.isEmpty();
+            // Phase 1: Suppress isolated stippling / tiny dot noise
+            if (op.points.size() == 1) {
+                const QString lowerId = op.id.toLower();
+                const bool isIntentionalCatchlight = lowerId.contains(QLatin1String("glint")) ||
+                                                     lowerId.contains(QLatin1String("catchlight")) ||
+                                                     lowerId.contains(QLatin1String("highlight")) ||
+                                                     lowerId.contains(QLatin1String("pupil")) ||
+                                                     lowerId.contains(QLatin1String("eye")) ||
+                                                     lowerId.contains(QLatin1String("star")) ||
+                                                     op.layer == QLatin1String("Highlights");
+                if (!isIntentionalCatchlight) {
+                    renderable = false;
+                }
+            } else if (op.points.size() == 2) {
+                const qreal dist = std::hypot(op.points[0].pos.x() - op.points[1].pos.x(), op.points[0].pos.y() - op.points[1].pos.y());
+                if (dist < 0.005) {
+                    renderable = false;
+                }
+            }
             break;
         }
         case KisAiStrokeOperation::Kind::Fill:
@@ -3001,11 +3054,22 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             const QPointF topLeft = clampedPoint(bounds.topLeft(), &localReport.repairedValues);
             const QPointF bottomRight = clampedPoint(bounds.bottomRight(), &localReport.repairedValues);
             op.bounds = QRectF(topLeft, bottomRight).normalized();
-            // 0 is allowed: parse-time budgeting zeroes operations that exceeded
-            // MAX_TOTAL_PARTICLES, and re-inflating them to 1 would break that
-            // total-work bound. A zero-count op simply draws nothing.
-            op.particleCount = qBound(0, op.particleCount, 300);
+
+            // Clamp particle count to prevent dense blizzard overcrowding, while preserving 0 for parse-time budgeting
+            if (op.particleCount > 0) {
+                op.particleCount = qBound(1, op.particleCount, 64);
+            } else {
+                op.particleCount = 0;
+            }
             renderable = op.bounds.width() > 1.0e-4 && op.bounds.height() > 1.0e-4;
+            break;
+        }
+        case KisAiStrokeOperation::Kind::AnimeEye: {
+            op.eyeCenter = clampedPoint(op.eyeCenter, &localReport.repairedValues);
+            const qreal w = qBound<qreal>(0.02, op.eyeSize.width(), 0.40);
+            const qreal h = qBound<qreal>(0.02, op.eyeSize.height(), 0.40);
+            op.eyeSize = QSizeF(w, h);
+            renderable = true;
             break;
         }
         case KisAiStrokeOperation::Kind::MangaLines: {
@@ -3150,6 +3214,10 @@ qreal KisAiStrokeProgramCodec::qualityScore(const KisAiStrokeProgram &program)
             }
         } else if (op.kind == KisAiStrokeOperation::Kind::MangaLines) {
             geometryPoints += op.density * 2;
+        } else if (op.kind == KisAiStrokeOperation::Kind::AnimeEye) {
+            geometryPoints += 16;
+            ++continuousStrokes;
+            totalPolygonArea += 0.05;
         }
     }
 

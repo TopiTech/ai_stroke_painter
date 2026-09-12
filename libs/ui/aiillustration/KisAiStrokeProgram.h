@@ -56,6 +56,7 @@ struct KRITAUI_EXPORT KisAiStrokeOperation
         Particles,
         Hatch,
         MangaLines,
+        AnimeEye,
         Unknown
     };
 
@@ -101,6 +102,15 @@ struct KRITAUI_EXPORT KisAiStrokeOperation
     qreal outerRadius {0.70};
     int density {48};
     qreal lineLengthJitter {0.20};
+
+    // AnimeEye (Procedural high-fidelity anime eye assembly)
+    QPointF eyeCenter {0.5, 0.5};
+    QSizeF eyeSize {0.10, 0.12};
+    QColor eyeIrisColor {QColor(60, 120, 240)};
+    QColor eyeSecondaryColor {QColor(160, 210, 255)};
+    QString eyeStyle {QStringLiteral("sparkle")}; // sparkle, dual_dot, gradient
+    QString eyeExpression {QStringLiteral("open")}; // open, smile, half, closed
+    bool eyeIsRight {false};
 };
 
 struct KRITAUI_EXPORT KisAiStrokeProgram

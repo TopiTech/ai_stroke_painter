@@ -436,6 +436,10 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
         kindStr = QStringLiteral("fill");
         (*opObj)[QStringLiteral("kind")] = kindStr;
         if (report) ++report->coercedValues;
+    } else if (kindStr == QLatin1String("anime_eye") || kindStr == QLatin1String("anime_eyes") || kindStr == QLatin1String("eye") || kindStr == QLatin1String("eye_feature") || kindStr == QLatin1String("eyes")) {
+        kindStr = QStringLiteral("anime_eye");
+        (*opObj)[QStringLiteral("kind")] = kindStr;
+        if (report) ++report->coercedValues;
     }
 
     // If kind still empty, infer from geometry
@@ -450,6 +454,8 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
             kindStr = QStringLiteral("particles");
         } else if (opObj->contains(QStringLiteral("inner_radius")) || opObj->contains(QStringLiteral("outer_radius")) || opObj->contains(QStringLiteral("density"))) {
             kindStr = QStringLiteral("manga_lines");
+        } else if (opObj->contains(QStringLiteral("iris_color")) || opObj->contains(QStringLiteral("eye_center")) || opObj->contains(QStringLiteral("eye_style"))) {
+            kindStr = QStringLiteral("anime_eye");
         } else {
             kindStr = QStringLiteral("path");
         }
@@ -704,6 +710,60 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
             if (coerceToNumber(opObj->value(QStringLiteral("density")), &dens)) {
                 (*opObj)[QStringLiteral("density")] = qBound(4, qRound(dens), 120);
             }
+        }
+    } else if (kindStr == QLatin1String("anime_eye")) {
+        // Validate center [cx, cy]
+        if (!opObj->contains(QStringLiteral("center")) && opObj->contains(QStringLiteral("eye_center"))) {
+            (*opObj)[QStringLiteral("center")] = opObj->value(QStringLiteral("eye_center"));
+            if (report) ++report->coercedValues;
+        }
+        if (opObj->contains(QStringLiteral("center"))) {
+            const QJsonValue cVal = opObj->value(QStringLiteral("center"));
+            if (cVal.isArray() && cVal.toArray().size() >= 2) {
+                QJsonArray cArr = cVal.toArray();
+                qreal cx = 0.5, cy = 0.5;
+                coerceToNumber(cArr.at(0), &cx);
+                coerceToNumber(cArr.at(1), &cy);
+                (*opObj)[QStringLiteral("center")] = QJsonArray({qBound(0.0, cx, 1.0), qBound(0.0, cy, 1.0)});
+            } else {
+                (*opObj)[QStringLiteral("center")] = QJsonArray({0.5, 0.5});
+                if (report) ++report->coercedValues;
+            }
+        } else {
+            (*opObj)[QStringLiteral("center")] = QJsonArray({0.5, 0.5});
+            if (report) ++report->coercedValues;
+        }
+
+        // Validate size [w, h]
+        if (!opObj->contains(QStringLiteral("size")) && opObj->contains(QStringLiteral("eye_size"))) {
+            (*opObj)[QStringLiteral("size")] = opObj->value(QStringLiteral("eye_size"));
+            if (report) ++report->coercedValues;
+        }
+        if (opObj->contains(QStringLiteral("size"))) {
+            const QJsonValue sVal = opObj->value(QStringLiteral("size"));
+            if (sVal.isArray() && sVal.toArray().size() >= 2) {
+                QJsonArray sArr = sVal.toArray();
+                qreal ew = 0.10, eh = 0.12;
+                coerceToNumber(sArr.at(0), &ew);
+                coerceToNumber(sArr.at(1), &eh);
+                (*opObj)[QStringLiteral("size")] = QJsonArray({qBound(0.01, ew, 0.50), qBound(0.01, eh, 0.50)});
+            } else if (sVal.isDouble() || sVal.isString()) {
+                qreal esz = 0.10;
+                coerceToNumber(sVal, &esz);
+                (*opObj)[QStringLiteral("size")] = QJsonArray({qBound(0.01, esz, 0.50), qBound(0.01, esz * 1.2, 0.50)});
+            } else {
+                (*opObj)[QStringLiteral("size")] = QJsonArray({0.10, 0.12});
+                if (report) ++report->coercedValues;
+            }
+        } else {
+            (*opObj)[QStringLiteral("size")] = QJsonArray({0.10, 0.12});
+            if (report) ++report->coercedValues;
+        }
+
+        // Validate iris_color & secondary_color
+        if (!opObj->contains(QStringLiteral("iris_color")) && opObj->contains(QStringLiteral("color"))) {
+            (*opObj)[QStringLiteral("iris_color")] = opObj->value(QStringLiteral("color"));
+            if (report) ++report->coercedValues;
         }
     } else {
         if (report) {

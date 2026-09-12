@@ -7,6 +7,7 @@
 #define KIS_AI_STROKE_RENDERER_H
 
 #include <QImage>
+#include <QPainterPath>
 #include <QPointF>
 #include <QSize>
 #include <QString>
@@ -171,14 +172,16 @@ public:
 private:
     static QImage renderOperationsToImage(
         const QVector<KisAiStrokeOperation> &operations,
-        const QSize &canvasSize
+        const QSize &canvasSize,
+        const QPainterPath &faceExclusionPath = QPainterPath()
     );
 
     static void rasterizeOperation(
         QPainter &painter,
         const KisAiStrokeOperation &op,
         const QSize &canvasSize,
-        int supersampleScale = 1
+        int supersampleScale = 1,
+        const QPainterPath &faceExclusionPath = QPainterPath()
     );
 
     static void drawPathOperation(
@@ -207,6 +210,14 @@ private:
     );
 
     static void drawParticlesOperation(
+        QPainter &painter,
+        const KisAiStrokeOperation &op,
+        const QSize &canvasSize,
+        int supersampleScale = 1,
+        const QPainterPath &faceExclusionPath = QPainterPath()
+    );
+
+    static void drawAnimeEyeOperation(
         QPainter &painter,
         const KisAiStrokeOperation &op,
         const QSize &canvasSize,

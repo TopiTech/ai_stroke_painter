@@ -2931,6 +2931,95 @@ void KisAiStrokeProgramTest::testTypeCheckerParticleAndMangaLinesAliases()
     QCOMPARE(coercedManga.value(QStringLiteral("density")).toInt(), 60);
 }
 
+void KisAiStrokeProgramTest::testAnimeEyeParsingAndRefinement()
+{
+    const QString json = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"anime_eye\",\n"
+        "      \"id\": \"left_eye\",\n"
+        "      \"layer\": \"Flats\",\n"
+        "      \"center\": [0.38, 0.42],\n"
+        "      \"size\": [0.08, 0.10],\n"
+        "      \"iris_color\": \"#3a7bd5\",\n"
+        "      \"secondary_color\": \"#00d2ff\",\n"
+        "      \"style\": \"sparkle\",\n"
+        "      \"expression\": \"open\",\n"
+        "      \"is_right\": false\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+
+    KisAiStrokeProgram prog;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(json.toUtf8(), &prog, &error), qPrintable(error));
+    QCOMPARE(prog.operations.size(), 1);
+
+    const KisAiStrokeOperation &op = prog.operations.at(0);
+    QCOMPARE(op.kind, KisAiStrokeOperation::Kind::AnimeEye);
+    QCOMPARE(op.id, QStringLiteral("left_eye"));
+    QCOMPARE(op.eyeCenter, QPointF(0.38, 0.42));
+    QCOMPARE(op.eyeSize, QSizeF(0.08, 0.10));
+    QCOMPARE(op.eyeIrisColor, QColor(QStringLiteral("#3a7bd5")));
+    QCOMPARE(op.eyeSecondaryColor, QColor(QStringLiteral("#00d2ff")));
+    QCOMPARE(op.eyeStyle, QStringLiteral("sparkle"));
+    QCOMPARE(op.eyeExpression, QStringLiteral("open"));
+    QCOMPARE(op.eyeIsRight, false);
+
+    // Verify type checker handles eye alias
+    QJsonObject aliasEye;
+    aliasEye[QStringLiteral("kind")] = QStringLiteral("eye");
+    aliasEye[QStringLiteral("layer")] = QStringLiteral("Flats");
+    aliasEye[QStringLiteral("eye_center")] = QJsonArray({0.62, 0.42});
+    aliasEye[QStringLiteral("eye_size")] = QJsonArray({0.08, 0.10});
+    aliasEye[QStringLiteral("color")] = QStringLiteral("#e040fb");
+    aliasEye[QStringLiteral("right")] = true;
+
+    QJsonObject root;
+    root[QStringLiteral("schema_version")] = 2;
+    root[QStringLiteral("operations")] = QJsonArray({aliasEye});
+
+    KisAiStrokeTypeCheckReport report;
+    KisAiStrokeTypeChecker::checkAndCoerceProgram(&root, &report);
+
+    const QJsonObject coercedEye = root[QStringLiteral("operations")].toArray().at(0).toObject();
+    QCOMPARE(coercedEye.value(QStringLiteral("kind")).toString(), QStringLiteral("anime_eye"));
+    QVERIFY(coercedEye.contains(QStringLiteral("center")));
+    QVERIFY(coercedEye.contains(QStringLiteral("size")));
+    QVERIFY(coercedEye.contains(QStringLiteral("iris_color")));
+}
+
+void KisAiStrokeProgramTest::testDotNoiseSuppression()
+{
+    // A single isolated point in Lineart/Shading (stippling / dot noise) should be dropped
+    // unless it is an intentional catchlight/glint.
+    KisAiStrokeProgram prog;
+    prog.schemaVersion = 2;
+    prog.canvasSize = QSize(512, 512);
+
+    KisAiStrokeOperation noiseDot;
+    noiseDot.kind = KisAiStrokeOperation::Kind::Path;
+    noiseDot.id = QStringLiteral("noise_speck_1");
+    noiseDot.layer = QStringLiteral("Lineart");
+    noiseDot.points = {KisAiStrokePoint(0.5, 0.5, 1.0)};
+    prog.operations.append(noiseDot);
+
+    KisAiStrokeOperation catchlight;
+    catchlight.kind = KisAiStrokeOperation::Kind::Path;
+    catchlight.id = QStringLiteral("eye_catchlight");
+    catchlight.layer = QStringLiteral("Highlights");
+    catchlight.points = {KisAiStrokePoint(0.38, 0.40, 1.0)};
+    prog.operations.append(catchlight);
+
+    KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(prog);
+    // Only the intentional catchlight survives; the random noise dot is dropped.
+    QCOMPARE(refined.operations.size(), 1);
+    QCOMPARE(refined.operations.at(0).id, QStringLiteral("eye_catchlight"));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

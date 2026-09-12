@@ -84,6 +84,8 @@ private Q_SLOTS:
     void testTrimOperationsPreservesOriginalOrderWithinLayers();
     void testExtractOperationsQualityReportPassthrough();
     void testTypeCheckerParticleAndMangaLinesAliases();
+    void testAnimeEyeParsingAndRefinement();
+    void testDotNoiseSuppression();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

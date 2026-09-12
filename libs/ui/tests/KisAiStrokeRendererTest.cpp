@@ -1385,4 +1385,78 @@ void KisAiStrokeRendererTest::testSoftEdgeDiffusionRadiusBounded()
     QVERIFY(normImg.pixelColor(13, 13).alpha() > 0);
 }
 
+void KisAiStrokeRendererTest::testRenderAnimeEye()
+{
+    KisAiStrokeProgram prog;
+    prog.schemaVersion = 2;
+    prog.canvasSize = QSize(256, 256);
+
+    KisAiStrokeOperation eyeOp;
+    eyeOp.kind = KisAiStrokeOperation::Kind::AnimeEye;
+    eyeOp.id = QStringLiteral("test_eye");
+    eyeOp.layer = QStringLiteral("Flats");
+    eyeOp.eyeCenter = QPointF(0.5, 0.5);
+    eyeOp.eyeSize = QSizeF(0.25, 0.30);
+    eyeOp.eyeIrisColor = QColor(QStringLiteral("#2060e0"));
+    eyeOp.eyeSecondaryColor = QColor(QStringLiteral("#70b0ff"));
+    eyeOp.eyeStyle = QStringLiteral("sparkle");
+    eyeOp.eyeExpression = QStringLiteral("open");
+    eyeOp.eyeIsRight = false;
+    prog.operations.append(eyeOp);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, QSize(256, 256));
+    QCOMPARE(img.size(), QSize(256, 256));
+
+    // The eye center (128, 128) must have non-zero alpha and painted iris color
+    const QColor centerPixel = img.pixelColor(128, 128);
+    QVERIFY(centerPixel.alpha() > 100);
+
+    // Corner (10, 10) outside the eye should be transparent
+    QCOMPARE(img.pixelColor(10, 10).alpha(), 0);
+}
+
+void KisAiStrokeRendererTest::testFaceExclusionMaskSuppressesParticles()
+{
+    // Program with a face/skin fill in Flats, and particles covering the canvas in FX
+    KisAiStrokeProgram prog;
+    prog.schemaVersion = 2;
+    prog.canvasSize = QSize(200, 200);
+
+    KisAiStrokeOperation faceOp;
+    faceOp.kind = KisAiStrokeOperation::Kind::Fill;
+    faceOp.id = QStringLiteral("face_skin");
+    faceOp.layer = QStringLiteral("Flats");
+    faceOp.brush.color = QColor(255, 224, 200);
+    faceOp.brush.opacity = 1.0;
+    faceOp.polygon = {
+        QPointF(0.3, 0.3),
+        QPointF(0.7, 0.3),
+        QPointF(0.7, 0.7),
+        QPointF(0.3, 0.7)
+    };
+    prog.operations.append(faceOp);
+
+    KisAiStrokeOperation particlesOp;
+    particlesOp.kind = KisAiStrokeOperation::Kind::Particles;
+    particlesOp.id = QStringLiteral("fx_particles");
+    particlesOp.layer = QStringLiteral("FX");
+    particlesOp.brush.color = QColor(255, 0, 0); // bright red particles
+    particlesOp.brush.profile = QStringLiteral("airbrush");
+    particlesOp.brush.size = 0.02;
+    particlesOp.bounds = QRectF(0.0, 0.0, 1.0, 1.0);
+    particlesOp.particleCount = 50;
+    particlesOp.particleShape = QStringLiteral("circle");
+    prog.operations.append(particlesOp);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, QSize(200, 200), false);
+    QCOMPARE(img.size(), QSize(200, 200));
+
+    // The center of the face (100, 100) should be skin tone, NOT overlaid with red particle dots
+    const QColor faceCenter = img.pixelColor(100, 100);
+    QVERIFY(faceCenter.alpha() > 200);
+    // Face center should be close to skin color (R high, G ~224, B ~200), not pure red (R 255, G 0, B 0)
+    QVERIFY(faceCenter.green() > 150);
+    QVERIFY(faceCenter.blue() > 150);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)
