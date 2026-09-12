@@ -218,11 +218,11 @@ bool KisAiStrokeTypeChecker::checkBrushObject(QJsonObject *brushObj, QString *ou
         (*brushObj)[QStringLiteral("color")] = QStringLiteral("#232323");
     }
 
-    // size: positive number
+    // size: positive number in (0.0, 1.0]
     if (brushObj->contains(QStringLiteral("size"))) {
         const QJsonValue sVal = brushObj->value(QStringLiteral("size"));
         qreal sz = 0.008;
-        if (!sVal.isDouble() || sVal.toDouble() <= 0.0) {
+        if (!sVal.isDouble() || sVal.toDouble() <= 0.0 || sVal.toDouble() > 1.0) {
             if (coerceToNumber(sVal, &sz) && sz > 0.0) {
                 (*brushObj)[QStringLiteral("size")] = sz;
                 if (coercedCount) ++(*coercedCount);

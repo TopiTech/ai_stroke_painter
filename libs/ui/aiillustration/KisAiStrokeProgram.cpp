@@ -372,7 +372,8 @@ QString KisAiStrokeProgramCodec::buildJsonContractSection()
         "4. No Python literals: use true, false, and null (all lowercase) instead of True, False, None.\n"
         "5. No ellipses or placeholders: never write '...' or placeholder entries; emit complete geometry only.\n"
         "6. Valid numbers only: coordinates must be standard decimal numbers (e.g. 0.5, -0.1). Never output NaN, Infinity, or unit suffixes (no 'px', 'deg', '%').\n"
-        "7. Complete JSON: budget your points and operations so your output completes fully before reaching token limits."
+        "7. Complete JSON: budget your points and operations so your output completes fully before reaching token limits.\n"
+        "8. Brush size is in (0.0, 1.0]: values outside this range are invalid and will cause type-check failures."
     );
 }
 
@@ -444,10 +445,10 @@ QString KisAiStrokeProgramCodec::buildOperationKindsSection()
         "width_start, width_mid, width_end (0.005-0.05).\n"
         "- 'path': Expressive linework, contours, facial features. Points [ [x, y, pressure], ... ] where pressure "
         "is 0.1-1.0. brush { 'profile': 'gpen'/'pencil'/'airbrush'/'watercolor'/'marker'/'crayon'/'neon'/'splatter', 'color': '#hex', 'size': "
-        "0.002-0.01 }.\n"
+        "0.002-0.01, opacity: 0.0-1.0 }.\n"
         "- 'particles': Atmospheric particles. Bounds [x1, y1, x2, y2], count (10-50), shape "
         "('petal'/'sparkle'/'star'/'dot'), brush { 'color': '#hex' }.\n"
-        "- 'manga_lines': Radial speed/focus lines toward a center. center [cx, cy], inner_radius (0.05-0.3), outer_radius (0.5-1.0), density (16-80), brush { 'profile': 'gpen', 'color': '#hex', 'size': 0.002 }."
+         "- 'manga_lines': Radial speed/focus lines toward a center. center [cx, cy], inner_radius (0.05-0.3), outer_radius (0.5-1.0), density (16-80), brush { 'profile': 'gpen', 'color': '#hex', 'size': 0.002-0.01, opacity: 0.0-1.0 }."
     );
 }
 
