@@ -1,43 +1,48 @@
 {
   "version": 1,
-  "id": "goal-20260911-code-review",
+  "id": "goal-20260913-full-code-review",
   "status": "completed",
-  "objective": "プロジェクト全体をコードレビューし、重要度・影響範囲・修正リスクを判断した上で必要な修正とテストを実施する",
+  "objective": "プロジェクト全体をコードレビューし、既存仕様・テスト・設定・主要処理経路を把握した上で、重要度・影響範囲・修正リスクを判断し、必要な修正と再発防止テストを実施する",
   "completion_criteria": [
-    "aiillustration モジュールの主要処理経路をレビュー済み",
-    "発見した問題に優先度を付け、重大なものを修正済み",
-    "修正に対応する回帰テストを追加済み",
-    "既定のテストスイートがすべて成功"
+    "aiillustration モジュールの主要処理経路 (Docker/StrokeProgram/StrokeRenderer/QualityUtils/PromptAnalyzer/TypeChecker/LayoutEngine/LightRig/DeliberateStroke/IllustrationRenderer) をレビュー済み",
+    "発見した問題を重要度 (P0-P3) と影響範囲付きで記録",
+    "重大な問題 (P0/P1) を修正し、可能な限り回帰テストを追加",
+    "AI_STROKE_STANDALONE_TESTS のctest 3/3 スイートがすべて成功",
+    "変更TUが build-ai でコンパイル成功"
   ],
   "constraints": [
-    "既存動作・公開APIの互換性を維持",
-    "無関係な変更をしない"
+    "公開API・既存動作の互換性を維持 (やむを得ない変更は影響検証と移行措置)",
+    "無関係なリファクタリング・変更をしない",
+    "テスト削除・検証スキップで成功扱いにしない"
+  ],
+  "non_goals": [
+    "Krita 上流コード全体の書き直し",
+    "本番デプロイ・配布作業"
   ],
   "verification": [
-    "build-test: ctest 3/3 passed (KisAiStrokeProgramTest, KisAiStrokeRendererTest, KisAiIllustrationRendererTest)",
-    "build-ai: 変更TU単体コンパイル成功 (Docker/StrokeRenderer/StrokeProgram)"
+    "cmake --build build-test && ctest --test-dir build-test --output-on-failure",
+    "build-ai での変更TUオブジェクトコンパイル"
   ],
+  "budget": {
+    "max_iterations": 20,
+    "max_elapsed_minutes": null
+  },
   "progress": {
-    "iteration": 9,
+    "iteration": 3,
     "completed": [
-      "core review (Program/Renderer/QualityUtils/Docker/Analyzer/TypeChecker)",
-      "P1: px brush width halved under 2x supersampling",
-      "P1: reserveParticles hard-fail on count>200",
-      "P2: corrupt QSettings ints widen spinbox range",
-      "P2: refine re-inflated budget-zeroed particle ops (found by new test)",
-      "renderer zero-count particles must draw nothing",
-      "regression tests added (parser + renderer x2)"
+      "baseline survey (3/3 ctest suites green)",
+      "module review (all 11 TUs + KisMainWindow wiring)",
+      "triage (3 findings fixed, others verified-OK)",
+      "fixes: hueColor wrap / expandPrompt hardening / history snapshot downscale",
+      "regression test testCreateConceptImageDeterministicWithLowHuePrompts added",
+      "verification: build-ai kritaui OK, build-test OK, ctest 3/3"
     ],
     "remaining": [],
-    "last_action": "final verification: all standalone tests pass, Krita TUs compile",
-    "last_result": "100% tests passed out of 3"
+    "last_action": "final verification and report",
+    "last_result": "all tests pass"
   },
-  "evidence": [
-    "ctest build-test: 3/3 suites pass",
-    "build-ai obj compile: KisAiIllustrationDocker.cpp.obj, KisAiStrokeRenderer.cpp.obj, KisAiStrokeProgram.cpp.obj OK",
-    "new tests: testPxBrushSizeSurvivesSupersampling, testHatchErasersAreShapeBounded, testParticleCountClamping"
-  ],
+  "evidence": [],
   "blockers": [],
-  "created_at": "2026-09-11T00:00:00Z",
-  "updated_at": "2026-09-11T00:00:00Z"
+  "created_at": "2026-09-13T00:00:00Z",
+  "updated_at": "2026-09-13T00:00:00Z"
 }

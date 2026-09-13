@@ -17,6 +17,7 @@ private Q_SLOTS:
     void testDisplayEndpoint();
     void testNormalizedPrompt();
     void testCreateConceptImage();
+    void testCreateConceptImageDeterministicWithLowHuePrompts();
     void testPromptExpansionPayloadAndParsing();
 };
 

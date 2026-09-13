@@ -4062,8 +4062,18 @@ void KisAiIllustrationDocker::expandPromptWithAi()
         unprotectApiKeyForCurrentUser(s.value(QStringLiteral("AIIllustration/apiKey")).toString(), &apiKey);
     }
 
-    if (endpoint.isEmpty()) {
-        setStatus(i18n("エンドポイントが指定されていません。詳細設定で指定してください。"), true);
+    // The prompt expander POSTs the user's API key to the endpoint, so it must
+    // pass the same validation (HTTPS outside loopback, no secrets in URL) as
+    // every other request path in this docker.
+    QString endpointError;
+    if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &endpointError)) {
+        if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
+            m_detailsToggleBtn->setChecked(true);
+        }
+        if (m_endpointEditor) {
+            m_endpointEditor->setFocus();
+        }
+        setStatus(endpointError, true);
         return;
     }
 
@@ -4078,16 +4088,22 @@ void KisAiIllustrationDocker::expandPromptWithAi()
     QNetworkRequest request(endpointUrl);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     if (!apiKey.isEmpty()) {
-        request.setRawHeader("Authorization", "Bearer " + apiKey.toUtf8());
+        request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
     }
+    // Never follow redirects silently: an HTTPS endpoint could bounce the
+    // Authorization header to an attacker-controlled host (same policy as the
+    // stroke/image request paths).
+    request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
     m_expandPromptResponseBuffer.clear();
+    m_expandPromptResponseTooLarge = false;
     if (m_expandPromptReply) {
         m_expandPromptReply->abort();
         m_expandPromptReply->deleteLater();
     }
 
     m_expandPromptReply = m_networkManager->post(request, payload);
+    m_expandPromptReply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
     if (m_expandPromptButton) {
         m_expandPromptButton->setEnabled(false);
         m_expandPromptButton->setText(i18n("推敲中…"));
@@ -4095,11 +4111,30 @@ void KisAiIllustrationDocker::expandPromptWithAi()
     setStatus(i18n("AIがプロンプトを推敲・詳細化しています…"));
 
     connect(m_expandPromptReply.data(), &QNetworkReply::readyRead, this, [this] {
-        if (m_expandPromptReply) {
-            m_expandPromptResponseBuffer.append(m_expandPromptReply->readAll());
+        if (!m_expandPromptReply || m_expandPromptResponseTooLarge) {
+            return;
+        }
+        m_expandPromptResponseBuffer.append(m_expandPromptReply->readAll());
+        // The expansion response is plain JSON, not an image; a 32 MB ceiling
+        // is already generous. Stop reading past it instead of buffering a
+        // hostile peer's unbounded stream.
+        if (m_expandPromptResponseBuffer.size() > MAX_REMOTE_RESPONSE_BYTES) {
+            m_expandPromptResponseBuffer.clear();
+            m_expandPromptResponseTooLarge = true;
+            m_expandPromptReply->abort();
         }
     });
     connect(m_expandPromptReply.data(), &QNetworkReply::finished, this, &KisAiIllustrationDocker::finishExpandPromptRequest);
+    // Stalled-server guard: the finished handler below re-enables the button,
+    // and this timeout guarantees it also happens when no finished signal ever
+    // arrives. finishExpandPromptRequest() is a no-op on a null reply.
+    QTimer::singleShot(REMOTE_IMAGE_TIMEOUT_MS, this, [this] {
+        if (m_expandPromptReply) {
+            logDebug(QStringLiteral("PROMPT_EXPAND_TIMEOUT"),
+                     QStringLiteral("プロンプト推敲リクエストがタイムアウトしたため中止します。"));
+            m_expandPromptReply->abort();
+        }
+    });
 }
 
 void KisAiIllustrationDocker::finishExpandPromptRequest()
@@ -4116,9 +4151,15 @@ void KisAiIllustrationDocker::finishExpandPromptRequest()
     const auto networkError = m_expandPromptReply->error();
     const int httpStatus = m_expandPromptReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const QByteArray data = m_expandPromptResponseBuffer.isEmpty() ? m_expandPromptReply->readAll() : m_expandPromptResponseBuffer;
+    m_expandPromptResponseBuffer.clear();
     m_expandPromptReply->deleteLater();
     m_expandPromptReply = nullptr;
 
+    if (m_expandPromptResponseTooLarge) {
+        m_expandPromptResponseTooLarge = false;
+        setStatus(i18n("プロンプト推敲の応答が上限サイズを超えました。"), true);
+        return;
+    }
     if (networkError != QNetworkReply::NoError && httpStatus != 200) {
         setStatus(i18n("プロンプト推敲に失敗しました (HTTP %1)").arg(httpStatus), true);
         return;
@@ -4162,7 +4203,17 @@ void KisAiIllustrationDocker::syncForegroundPalette()
 
 void KisAiIllustrationDocker::addHistorySnapshot(const KisAiGenerationSnapshot &snapshot)
 {
-    m_historySnapshots.prepend(snapshot);
+    // Snapshots live for the whole session (up to kMaxHistoryCount entries) and
+    // are only ever shown as ~54px thumbnails or restored at preview-label
+    // size. Storing the full-resolution render (up to 1536^2 ARGB each) wasted
+    // hundreds of MB, so cap the retained copy at 256px.
+    KisAiGenerationSnapshot retained = snapshot;
+    if (!retained.previewImage.isNull() &&
+        (retained.previewImage.width() > 256 || retained.previewImage.height() > 256)) {
+        retained.previewImage = retained.previewImage.scaled(
+            256, 256, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    m_historySnapshots.prepend(retained);
     while (m_historySnapshots.size() > kMaxHistoryCount) {
         m_historySnapshots.removeLast();
     }

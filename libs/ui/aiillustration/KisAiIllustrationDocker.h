@@ -267,6 +267,7 @@ private:
     QPushButton *m_syncColorButton {nullptr};
     QPointer<QNetworkReply> m_expandPromptReply;
     QByteArray m_expandPromptResponseBuffer;
+    bool m_expandPromptResponseTooLarge {false};
 
     // Visual Cards
     QFrame *m_visualCardsCard {nullptr};

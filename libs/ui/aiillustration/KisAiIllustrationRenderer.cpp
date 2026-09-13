@@ -89,8 +89,13 @@ bool hasSensitiveUrlComponent(const QUrl &url)
 
 QColor hueColor(int hue, int saturation, int lightness, int alpha = 255)
 {
+    // QColor::setHsl() is only specified for hue in [0, 359]. Callers pass
+    // offsets like (hue - 48) that can go negative, and C++ % keeps the sign
+    // of the dividend, so wrap explicitly (same convention as
+    // KisAiStrokeProgramCodec::calculateHueShiftedShadow()).
+    const int wrappedHue = ((hue % 360) + 360) % 360;
     QColor color;
-    color.setHsl(hue % 360, saturation, lightness, alpha);
+    color.setHsl(wrappedHue, saturation, lightness, alpha);
     return color;
 }
 

@@ -118,6 +118,41 @@ void KisAiIllustrationRendererTest::testCreateConceptImage()
     QVERIFY(img1 != img3);
 }
 
+void KisAiIllustrationRendererTest::testCreateConceptImageDeterministicWithLowHuePrompts()
+{
+    // Regression: hueColor() used `hue % 360`, which stays negative in C++ for
+    // negative dividends (e.g. hue - 48 with a low seed hue). QColor::setHsl()
+    // is only specified for hue in [0, 359], so such prompts produced
+    // unspecified colors and non-deterministic rendering across platforms.
+    // Prompts hashing to low seed hues must still render deterministically.
+    const QSize targetSize(256, 256);
+    QImage first;
+
+    // Sweep many prompts so the sweep is guaranteed to cover seed hues below
+    // 48, where (hue - 28) / (hue - 48) previously went negative.
+    for (int i = 0; i < 200; ++i) {
+        const QString prompt = QStringLiteral("gradient study #%1").arg(i);
+        const QImage a = KisAiIllustrationRenderer::createConceptImage(prompt, targetSize);
+        QVERIFY(!a.isNull());
+
+        const QImage b = KisAiIllustrationRenderer::createConceptImage(prompt, targetSize);
+        QCOMPARE(a, b); // deterministic
+
+        if (i == 0) {
+            first = a;
+        }
+        // Every rendered pixel must be fully opaque; an out-of-range hue
+        // produces unspecified color garbage that can fail this check.
+        for (int y = 0; y < a.height(); y += 8) {
+            for (int x = 0; x < a.width(); x += 8) {
+                const QRgb px = a.pixel(x, y);
+                QVERIFY(qAlpha(px) == 255);
+            }
+        }
+    }
+    QCOMPARE(first.size(), targetSize);
+}
+
 void KisAiIllustrationRendererTest::testPromptExpansionPayloadAndParsing()
 {
     // Test payload generation
