@@ -170,6 +170,16 @@ bool KisAiSceneSpecCodec::parseSceneSpec(
             *errorMessage = QStringLiteral("Null output spec.");
         return false;
     }
+    // Mirror the MAX_RESPONSE_BYTES guard used by parseResponse and the
+    // MAX_COMPOSITION_PLAN_BYTES guard used by parseCompositionPlan: this entry
+    // point also sanitizes attacker-controlled model output, and the sanitizer's
+    // regex work grows with the input.
+    constexpr int MAX_SCENE_SPEC_BYTES = 32 * 1024 * 1024;
+    if (responseBytes.size() > MAX_SCENE_SPEC_BYTES) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("SceneSpec response exceeded the size limit.");
+        return false;
+    }
     // Reuse the hardened envelope extractor (markdown fences, <think> tokens).
     const QString jsonText = KisAiStrokeProgramCodec::sanitizeAndExtractJson(
         QString::fromUtf8(responseBytes));

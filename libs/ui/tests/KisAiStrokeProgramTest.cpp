@@ -3989,6 +3989,36 @@ void KisAiStrokeProgramTest::testExtractOperationsSchemaVersionGate()
     QCOMPARE(program.schemaVersion, 2);
 }
 
+void KisAiStrokeProgramTest::testSceneSpecRejectsOversizedBody()
+{
+    // Regression: parseSceneSpec had no size guard while parseResponse and
+    // parseCompositionPlan did, allowing the same oversized hostile input through
+    // a third entry point instead of rejecting it up front.
+    QByteArray oversized;
+    oversized.reserve(33 * 1024 * 1024);
+    oversized.append("{\"subject\": {\"type\": \"");
+    oversized.append(QByteArray(33 * 1024 * 1024, 'x'));
+    oversized.append("\"}}");
+
+    QString error;
+    KisAiSceneSpec spec;
+    QVERIFY2(!KisAiSceneSpecCodec::parseSceneSpec(oversized, &spec, &error),
+             "an oversized SceneSpec response must be rejected");
+    QVERIFY(!error.isEmpty());
+
+    // Sanity: a normal-sized payload still parses after the guard.
+    QString okError;
+    QStringList okWarnings;
+    KisAiSceneSpec okSpec;
+    const QByteArray normal = QByteArrayLiteral(
+        "{\"subject\": {\"type\": \"character\"}, "
+        "\"head\": {\"hair_color\": \"#2b3a67\"}}");
+    QVERIFY2(KisAiSceneSpecCodec::parseSceneSpec(normal, &okSpec, &okError, &okWarnings),
+             qPrintable(okError));
+    QCOMPARE(okSpec.subject.type, QStringLiteral("character"));
+    QCOMPARE(okSpec.head.hairColor, QColor(0x2b, 0x3a, 0x67));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

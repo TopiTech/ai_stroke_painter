@@ -115,6 +115,7 @@ private Q_SLOTS:
     void testHatchSpacingClampedBeforeRescue();
     void testCompositionPlanRejectsOversizedBody();
     void testExtractOperationsSchemaVersionGate();
+    void testSceneSpecRejectsOversizedBody();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

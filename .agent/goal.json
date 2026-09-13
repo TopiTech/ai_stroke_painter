@@ -1,48 +1,61 @@
 {
   "version": 1,
-  "id": "goal-20260913-full-code-review",
+  "id": "goal-20260913-HEAD-review",
   "status": "completed",
-  "objective": "プロジェクト全体をコードレビューし、既存仕様・テスト・設定・主要処理経路を把握した上で、重要度・影響範囲・修正リスクを判断し、必要な修正と再発防止テストを実施する",
+  "objective": "Whole-project review: verify HEAD (3338a240) plus all project-specific modules (Program, Renderer, QualityUtils, TypeChecker, SceneSpec, LayoutEngine, DeliberateStroke, PromptAnalyzer, LightRig, Docker network paths), fix confirmed root-cause defects with regression tests, and run the full verification suite.",
   "completion_criteria": [
-    "aiillustration モジュールの主要処理経路 (Docker/StrokeProgram/StrokeRenderer/QualityUtils/PromptAnalyzer/TypeChecker/LayoutEngine/LightRig/DeliberateStroke/IllustrationRenderer) をレビュー済み",
-    "発見した問題を重要度 (P0-P3) と影響範囲付きで記録",
-    "重大な問題 (P0/P1) を修正し、可能な限り回帰テストを追加",
-    "AI_STROKE_STANDALONE_TESTS のctest 3/3 スイートがすべて成功",
-    "変更TUが build-ai でコンパイル成功"
+    "HEAD diff (46 hunks, 7 files) fully reviewed and verified",
+    "All project-specific modules under libs/ui/aiillustration reviewed against correctness/security/performance/maintainability checklists",
+    "Confirmed findings fixed at root cause with regression tests",
+    "Regression test proven to fail without the fix",
+    "ctest 3/3 suites green with the fix applied",
+    "git diff --check / git status final audit clean"
   ],
   "constraints": [
-    "公開API・既存動作の互換性を維持 (やむを得ない変更は影響検証と移行措置)",
-    "無関係なリファクタリング・変更をしない",
-    "テスト削除・検証スキップで成功扱いにしない"
+    "Do not discard, overwrite, or revert pre-existing uncommitted changes (only .agent/goal.json was modified at start)",
+    "No destructive git operations, no commit/push/deploy",
+    "No refactoring or dependency updates unrelated to confirmed findings",
+    "No speculative changes without established root cause"
   ],
   "non_goals": [
-    "Krita 上流コード全体の書き直し",
-    "本番デプロイ・配布作業"
+    "Review of upstream Krita code outside libs/ui/aiillustration",
+    "New feature work"
   ],
   "verification": [
-    "cmake --build build-test && ctest --test-dir build-test --output-on-failure",
-    "build-ai での変更TUオブジェクトコンパイル"
+    "ctest --test-dir build-test --output-on-failure",
+    "cmake --build build-test --parallel 4",
+    "git diff --check"
   ],
   "budget": {
     "max_iterations": 20,
     "max_elapsed_minutes": null
   },
   "progress": {
-    "iteration": 3,
+    "iteration": 6,
     "completed": [
-      "baseline survey (3/3 ctest suites green)",
-      "module review (all 11 TUs + KisMainWindow wiring)",
-      "triage (3 findings fixed, others verified-OK)",
-      "fixes: hueColor wrap / expandPrompt hardening / history snapshot downscale",
-      "regression test testCreateConceptImageDeterministicWithLowHuePrompts added",
-      "verification: build-ai kritaui OK, build-test OK, ctest 3/3"
+      "invariants captured: status clean except .agent/goal.json, branch main",
+      "baseline: ctest 3/3 passed",
+      "HEAD diff full review re-verified: all 46 hunks across 7 files (Program 17, Docker 7, Renderer 10, QualityUtils 4, TypeChecker 2, tests 6)",
+      "whole-project pass: SceneSpec, LayoutEngine, DeliberateStroke, PromptAnalyzer, LightRig, Docker network/security paths reviewed",
+      "confirmed gap: parseSceneSpec lacked the 32MB byte guard enforced by parseResponse and parseCompositionPlan (defense-in-depth parity)",
+      "theoretical-only observations ruled unreachable: resampleEquidistant INT_MAX ceiling (min step 1.8e-4 from stabilizeStroke bounds output), SSE line loop terminates (bounded input), qualityScore QSet order only feeds order-insensitive aggregation",
+      "fix applied: MAX_SCENE_SPEC_BYTES guard in KisAiSceneSpecCodec::parseSceneSpec",
+      "regression test added: testSceneSpecRejectsOversizedBody (oversized body rejected, normal payload still parses)",
+      "test proven: without fix it FAILS with 'an oversized SceneSpec response must be rejected'; with fix it passes",
+      "final: ctest 3/3 green, 105 assertions passed in KisAiStrokeProgramTest, git diff --check clean"
     ],
     "remaining": [],
-    "last_action": "final verification and report",
-    "last_result": "all tests pass"
+    "last_action": "final audit and report",
+    "last_result": "1 confirmed finding fixed with proven regression test; all 3 ctest suites green"
   },
-  "evidence": [],
+  "evidence": [
+    "baseline: ctest 3/3 passed (KisAiStrokeProgramTest, KisAiStrokeRendererTest, KisAiStrokeIllustrationRendererTest)",
+    "without fix: ctest KisAiStrokeProgramTest FAIL, 'FAIL!: testSceneSpecRejectsOversizedBody ... an oversized SceneSpec response must be rejected', Totals 104 passed 1 failed",
+    "with fix: ctest 3/3 passed, Totals: 105 passed, 0 failed",
+    "git diff --check exit 0; working tree contains only the fix, its test, and goal tracking",
+    "git stash round-trip used for negative verification; fix restored via git stash pop and rebuilt"
+  ],
   "blockers": [],
   "created_at": "2026-09-13T00:00:00Z",
-  "updated_at": "2026-09-13T00:00:00Z"
+  "updated_at": "2026-09-13T09:40:00Z"
 }
