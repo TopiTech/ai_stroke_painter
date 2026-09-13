@@ -9,6 +9,7 @@
 #include "KisAiStrokeProgram.h"
 #include <QByteArray>
 #include <QDockWidget>
+#include <QDateTime>
 #include <QElapsedTimer>
 #include <QPointer>
 
@@ -16,6 +17,7 @@ class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QFrame;
+class QHBoxLayout;
 class QLabel;
 class QLineEdit;
 class QNetworkAccessManager;
@@ -23,7 +25,9 @@ class QNetworkReply;
 class QPlainTextEdit;
 class QProgressBar;
 class QPushButton;
+class QScrollArea;
 class QSpinBox;
+class QTabBar;
 class QTimer;
 class QToolButton;
 class QWidget;
@@ -31,6 +35,20 @@ class QImage;
 class QString;
 
 class KisMainWindow;
+
+/**
+ * Snapshot of a generation result for the history gallery.
+ */
+struct KisAiGenerationSnapshot {
+    QDateTime timestamp;
+    QString prompt;
+    QSize canvasSize;
+    QImage previewImage;
+    int artStyleIndex {0};
+    QString styleName;
+    int modeIndex {0};
+    int strokeBudget {500};
+};
 
 /**
  * The compiled-in AI illustration workspace. It owns the prompt-to-canvas
@@ -224,6 +242,52 @@ private:
     QPlainTextEdit *m_debugLogText {nullptr};
     QPushButton *m_copyLogButton {nullptr};
     QPushButton *m_clearLogButton {nullptr};
+
+    // UI Modernization (Phase 1)
+    enum class UiMode {
+        Simple,
+        Pro
+    };
+    void setUiMode(UiMode mode);
+    void addHistorySnapshot(const KisAiGenerationSnapshot &snapshot);
+    void restoreHistorySnapshot(int index);
+    void updateHistoryUi();
+    void expandPromptWithAi();
+    void finishExpandPromptRequest();
+    void syncForegroundPalette();
+    void onStyleCardClicked(QPushButton *btn, int styleIndex);
+    void onCompositionCardClicked(QPushButton *btn, const QString &framing);
+    void onLightingCardClicked(QPushButton *btn, const QString &lighting);
+
+    UiMode m_uiMode {UiMode::Simple};
+    QTabBar *m_uiModeTabs {nullptr};
+
+    // Prompt Expander & Color Sync
+    QPushButton *m_expandPromptButton {nullptr};
+    QPushButton *m_syncColorButton {nullptr};
+    QPointer<QNetworkReply> m_expandPromptReply;
+    QByteArray m_expandPromptResponseBuffer;
+
+    // Visual Cards
+    QFrame *m_visualCardsCard {nullptr};
+    QVector<QPushButton*> m_styleCardButtons;
+    QVector<QPushButton*> m_compositionCardButtons;
+    QVector<QPushButton*> m_lightingCardButtons;
+    QPushButton *m_activeStyleCard {nullptr};
+    QPushButton *m_activeCompositionCard {nullptr};
+    QPushButton *m_activeLightingCard {nullptr};
+    QString m_selectedFraming;
+    QString m_selectedLighting;
+
+    // History Gallery
+    QFrame *m_historyCard {nullptr};
+    QHBoxLayout *m_historyThumbsLayout {nullptr};
+    QVector<KisAiGenerationSnapshot> m_historySnapshots;
+    static constexpr int kMaxHistoryCount = 15;
+
+    // Mode-switchable cards
+    QFrame *m_engineCard {nullptr};
+    QFrame *m_goalCard {nullptr};
 
     QLabel *m_statusLabel {nullptr};
     QLabel *m_previewLabel {nullptr};

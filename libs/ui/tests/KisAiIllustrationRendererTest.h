@@ -17,6 +17,7 @@ private Q_SLOTS:
     void testDisplayEndpoint();
     void testNormalizedPrompt();
     void testCreateConceptImage();
+    void testPromptExpansionPayloadAndParsing();
 };
 
 #endif // KIS_AI_ILLUSTRATION_RENDERER_TEST_H

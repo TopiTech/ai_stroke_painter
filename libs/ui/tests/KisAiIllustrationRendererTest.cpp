@@ -6,6 +6,9 @@
 #include "KisAiIllustrationRendererTest.h"
 
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #ifndef AI_STROKE_STANDALONE
 #include <testui.h>
 #else
@@ -16,6 +19,7 @@
 #endif
 
 #include "aiillustration/KisAiIllustrationRenderer.h"
+#include "aiillustration/KisAiPromptAnalyzer.h"
 
 void KisAiIllustrationRendererTest::testValidateImageEndpoint()
 {
@@ -112,6 +116,44 @@ void KisAiIllustrationRendererTest::testCreateConceptImage()
     // Different prompts produce different concept art
     const QImage img3 = KisAiIllustrationRenderer::createConceptImage(QStringLiteral("Green forest with river"), targetSize);
     QVERIFY(img1 != img3);
+}
+
+void KisAiIllustrationRendererTest::testPromptExpansionPayloadAndParsing()
+{
+    // Test payload generation
+    const QString shortPrompt = QStringLiteral("黒髪ツインテールの少女");
+    const QByteArray payload = KisAiPromptAnalyzer::buildPromptExpansionPayload(
+        shortPrompt, QStringLiteral("gpt-4o"), KisAiPromptAnalyzer::ArtStyle::AnimeCel);
+
+    QVERIFY(!payload.isEmpty());
+    QJsonDocument doc = QJsonDocument::fromJson(payload);
+    QVERIFY(!doc.isNull() && doc.isObject());
+    const QJsonObject obj = doc.object();
+    QCOMPARE(obj.value(QStringLiteral("model")).toString(), QStringLiteral("gpt-4o"));
+    const QJsonArray messages = obj.value(QStringLiteral("messages")).toArray();
+    QCOMPARE(messages.size(), 2);
+    QVERIFY(messages[0].toObject().value(QStringLiteral("content")).toString().contains(QStringLiteral("Anime Cel")));
+    QCOMPARE(messages[1].toObject().value(QStringLiteral("content")).toString(), shortPrompt);
+
+    // Test parse response with JSON
+    const QByteArray mockResponse = R"({
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "\"黒髪ツインテールの美少女、大きな紫の瞳、爽やかな笑顔、学校の制服、夕暮れの柔らかい光、桜の花びらが舞う背景\""
+                }
+            }
+        ]
+    })";
+
+    QString errorMsg;
+    const QString parsed = KisAiPromptAnalyzer::parseExpandedPrompt(mockResponse, &errorMsg);
+    QVERIFY(errorMsg.isEmpty());
+    QVERIFY(!parsed.startsWith(QLatin1Char('"')));
+    QVERIFY(!parsed.endsWith(QLatin1Char('"')));
+    QVERIFY(parsed.contains(QStringLiteral("ツインテール")));
+    QVERIFY(parsed.contains(QStringLiteral("紫の瞳")));
 }
 
 KISTEST_MAIN(KisAiIllustrationRendererTest)

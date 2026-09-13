@@ -59,6 +59,7 @@
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QStyle>
+#include <QTabBar>
 #include <QTextBlock>
 #include <QTextCursor>
 #include <QToolButton>
@@ -66,6 +67,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+#include <kis_canvas_resource_provider.h>
 #include <klocalizedstring.h>
 
 #include <algorithm>
@@ -302,7 +304,20 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         "QProgressBar { background: #0d1117; border: 1px solid #273142; border-radius: 3px; max-height: 6px; }"
         "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #06b6d4); border-radius: 2px; }"
         "QPlainTextEdit#aiDebugLog { background: #080b10; border: 1px solid #1e293b; border-radius: 4px; font-family: Consolas, 'Courier New', monospace; font-size: 11px; color: #94a3b8; }"
-        "QLabel#aiTestStatus { font-size: 11px; padding: 2px 0px; }"));
+        "QLabel#aiTestStatus { font-size: 11px; padding: 2px 0px; }"
+        "QTabBar::tab { background: #171d29; color: #94a3b8; padding: 5px 12px; border-top-left-radius: 6px; border-top-right-radius: 6px; font-weight: 600; font-size: 11px; margin-right: 2px; }"
+        "QTabBar::tab:selected { background: #2563eb; color: #ffffff; }"
+        "QTabBar::tab:hover:!selected { background: #1e2736; color: #cbd5e1; }"
+        "QPushButton[class=\"aiVisualCard\"] { background: #131924; color: #cbd5e1; border: 1px solid #253144; border-radius: 6px; padding: 4px 6px; font-size: 11px; text-align: center; min-height: 24px; }"
+        "QPushButton[class=\"aiVisualCard\"]:hover { background: #1c2637; border-color: #3b82f6; color: #ffffff; }"
+        "QPushButton[class=\"aiVisualCard\"][active=\"true\"] { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1e3a8a, stop:1 #1d4ed8); border: 1px solid #60a5fa; color: #ffffff; font-weight: 700; }"
+        "QPushButton[class=\"aiHistoryThumb\"] { background: #0d1117; border: 1px solid #273142; border-radius: 6px; padding: 2px; }"
+        "QPushButton[class=\"aiHistoryThumb\"]:hover { border-color: #38bdf8; }"
+        "QPushButton#aiExpandPromptBtn { background: #1e1b4b; color: #c084fc; border: 1px solid #4338ca; border-radius: 5px; font-size: 11px; font-weight: 600; padding: 3px 8px; }"
+        "QPushButton#aiExpandPromptBtn:hover { background: #312e81; color: #e9d5ff; border-color: #6366f1; }"
+        "QPushButton#aiExpandPromptBtn:pressed { background: #1e1b4b; }"
+        "QPushButton#aiSyncColorBtn { background: #142e2b; color: #34d399; border: 1px solid #065f46; border-radius: 5px; font-size: 11px; font-weight: 600; padding: 3px 8px; }"
+        "QPushButton#aiSyncColorBtn:hover { background: #064e3b; color: #a7f3d0; border-color: #10b981; }"));
 
     auto *layout = new QVBoxLayout(panel);
     layout->setContentsMargins(12, 12, 12, 12);
@@ -312,6 +327,15 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     title->setObjectName(QStringLiteral("aiTitle"));
     title->setAccessibleName(i18n("AI Stroke Painter workspace"));
     layout->addWidget(title);
+
+    m_uiModeTabs = new QTabBar(panel);
+    m_uiModeTabs->setObjectName(QStringLiteral("aiUiModeTabs"));
+    m_uiModeTabs->addTab(i18n("⚡ かんたん (Simple)"));
+    m_uiModeTabs->addTab(i18n("🛠️ 詳細 (Pro)"));
+    m_uiModeTabs->setShape(QTabBar::RoundedNorth);
+    m_uiModeTabs->setFocusPolicy(Qt::StrongFocus);
+    m_uiModeTabs->setCursor(Qt::PointingHandCursor);
+    layout->addWidget(m_uiModeTabs);
 
     auto *subtitle = new QLabel(i18n("描きたい情景を言葉で指定すると、AIが絵筆のストロークを生成してキャンバスを描画します。"), panel);
     subtitle->setObjectName(QStringLiteral("aiSubtitle"));
@@ -339,9 +363,28 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     // Card 1: Illustration Prompt
     CardWidget promptCard = createCard();
+    auto *promptHeaderRow = new QHBoxLayout();
+    promptHeaderRow->setContentsMargins(0, 0, 0, 0);
     auto *promptHeader = new QLabel(i18n("イラストの指示"), promptCard.frame);
     promptHeader->setProperty("class", "aiCardTitle");
-    promptCard.layout->addWidget(promptHeader);
+    promptHeaderRow->addWidget(promptHeader);
+    promptHeaderRow->addStretch(1);
+
+    m_expandPromptButton = new QPushButton(i18n("✨ AI推敲"), promptCard.frame);
+    m_expandPromptButton->setObjectName(QStringLiteral("aiExpandPromptBtn"));
+    m_expandPromptButton->setToolTip(i18n("短い指示から、高品質なアニメイラスト用の豊かな情景描写へAIが自動展開します。"));
+    m_expandPromptButton->setCursor(Qt::PointingHandCursor);
+    connect(m_expandPromptButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::expandPromptWithAi);
+    promptHeaderRow->addWidget(m_expandPromptButton);
+
+    m_syncColorButton = new QPushButton(i18n("🎨 前景色"), promptCard.frame);
+    m_syncColorButton->setObjectName(QStringLiteral("aiSyncColorBtn"));
+    m_syncColorButton->setToolTip(i18n("現在Kritaで選んでいる前景色（描画色）をプロンプトへ配色指示として取り込みます。"));
+    m_syncColorButton->setCursor(Qt::PointingHandCursor);
+    connect(m_syncColorButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::syncForegroundPalette);
+    promptHeaderRow->addWidget(m_syncColorButton);
+
+    promptCard.layout->addLayout(promptHeaderRow);
 
     // Quick chip buttons (grid layout prevents clipping when dock is narrow)
     auto *chipGrid = new QGridLayout();
@@ -412,6 +455,82 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     layout->addWidget(promptCard.frame);
 
+    // Card 1.5: Visual Style & Composition Cards
+    CardWidget visualCardWidget = createCard();
+    m_visualCardsCard = visualCardWidget.frame;
+    auto *visualHeader = new QLabel(i18n("🎨 ビジュアルスタイル ＆ 構図"), m_visualCardsCard);
+    visualHeader->setProperty("class", "aiCardTitle");
+    visualCardWidget.layout->addWidget(visualHeader);
+
+    // 1. Art Styles Row
+    auto *styleRow = new QHBoxLayout();
+    styleRow->setSpacing(4);
+    const QList<QPair<QString, int>> stylePresets = {
+        {i18n("🌸 アニメ"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel)},
+        {i18n("💧 水彩"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor)},
+        {i18n("🖌️ 厚塗り"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Impasto)},
+        {i18n("⚡ サイバー"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::CyberNeon)},
+        {i18n("✒️ インク"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::InkSketch)},
+    };
+    for (const auto &sp : stylePresets) {
+        auto *btn = new QPushButton(sp.first, m_visualCardsCard);
+        btn->setProperty("class", "aiVisualCard");
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setFocusPolicy(Qt::StrongFocus);
+        connect(btn, &QPushButton::clicked, this, [this, btn, styleIdx = sp.second] {
+            onStyleCardClicked(btn, styleIdx);
+        });
+        m_styleCardButtons.append(btn);
+        styleRow->addWidget(btn);
+    }
+    visualCardWidget.layout->addLayout(styleRow);
+
+    // 2. Composition & Angle Row
+    auto *compRow = new QHBoxLayout();
+    compRow->setSpacing(4);
+    const QList<QPair<QString, QString>> compPresets = {
+        {i18n("👤 顔アップ"), QStringLiteral("face_closeup")},
+        {i18n("👚 バスト"), QStringLiteral("bust_up")},
+        {i18n("👗 全身"), QStringLiteral("full_body")},
+        {i18n("📐 煽り/俯瞰"), QStringLiteral("dynamic_angle")},
+    };
+    for (const auto &cp : compPresets) {
+        auto *btn = new QPushButton(cp.first, m_visualCardsCard);
+        btn->setProperty("class", "aiVisualCard");
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setFocusPolicy(Qt::StrongFocus);
+        connect(btn, &QPushButton::clicked, this, [this, btn, framing = cp.second] {
+            onCompositionCardClicked(btn, framing);
+        });
+        m_compositionCardButtons.append(btn);
+        compRow->addWidget(btn);
+    }
+    visualCardWidget.layout->addLayout(compRow);
+
+    // 3. Lighting & Mood Row
+    auto *lightRow = new QHBoxLayout();
+    lightRow->setSpacing(4);
+    const QList<QPair<QString, QString>> lightPresets = {
+        {i18n("☀️ 昼光"), QStringLiteral("soft_daylight")},
+        {i18n("🌇 夕暮れ"), QStringLiteral("sunset_glow")},
+        {i18n("🌙 月夜"), QStringLiteral("night_moon")},
+        {i18n("⚡ 逆光"), QStringLiteral("dramatic_backlight")},
+    };
+    for (const auto &lp : lightPresets) {
+        auto *btn = new QPushButton(lp.first, m_visualCardsCard);
+        btn->setProperty("class", "aiVisualCard");
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setFocusPolicy(Qt::StrongFocus);
+        connect(btn, &QPushButton::clicked, this, [this, btn, light = lp.second] {
+            onLightingCardClicked(btn, light);
+        });
+        m_lightingCardButtons.append(btn);
+        lightRow->addWidget(btn);
+    }
+    visualCardWidget.layout->addLayout(lightRow);
+
+    layout->addWidget(m_visualCardsCard);
+
     // Card 2: Canvas Settings
     CardWidget canvasCard = createCard();
     auto *canvasHeaderRow = new QHBoxLayout();
@@ -475,6 +594,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     // Card 3: Generation Engine
     CardWidget engineCard = createCard();
+    m_engineCard = engineCard.frame;
     auto *engineHeader = new QLabel(i18n("生成エンジン"), engineCard.frame);
     engineHeader->setProperty("class", "aiCardTitle");
     engineCard.layout->addWidget(engineHeader);
@@ -715,6 +835,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     // Card 3.5: Goal Mode Settings
     CardWidget goalCard = createCard();
+    m_goalCard = goalCard.frame;
     auto *goalHeader = new QLabel(i18n("🎯 自律多段階作画 (Goal Mode)"), goalCard.frame);
     goalHeader->setProperty("class", "aiCardTitle");
     goalCard.layout->addWidget(goalHeader);
@@ -880,6 +1001,32 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     layout->addWidget(actionCard.frame);
 
+    // Card 4.5: History Gallery
+    CardWidget historyCardWidget = createCard();
+    m_historyCard = historyCardWidget.frame;
+    auto *historyHeader = new QLabel(i18n("🖼️ 最近の生成履歴"), m_historyCard);
+    historyHeader->setProperty("class", "aiCardTitle");
+    historyCardWidget.layout->addWidget(historyHeader);
+
+    auto *historyScroll = new QScrollArea(m_historyCard);
+    historyScroll->setWidgetResizable(true);
+    historyScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    historyScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    historyScroll->setFixedHeight(72);
+    historyScroll->setStyleSheet(QStringLiteral("QScrollArea { background: transparent; border: none; }"));
+
+    auto *historyContainer = new QWidget(historyScroll);
+    historyContainer->setStyleSheet(QStringLiteral("background: transparent;"));
+    m_historyThumbsLayout = new QHBoxLayout(historyContainer);
+    m_historyThumbsLayout->setContentsMargins(0, 0, 0, 0);
+    m_historyThumbsLayout->setSpacing(6);
+    m_historyThumbsLayout->addStretch(1);
+
+    historyScroll->setWidget(historyContainer);
+    historyCardWidget.layout->addWidget(historyScroll);
+
+    layout->addWidget(m_historyCard);
+
     // Card 5: Debug Log Card
     CardWidget debugCardWidget = createCard();
     m_debugCard = debugCardWidget.frame;
@@ -992,8 +1139,13 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     connect(m_customInstructionsEdit, &QPlainTextEdit::textChanged, this, [this] {
         m_settingsSaveDebounceTimer->start();
     });
+    connect(m_uiModeTabs, &QTabBar::currentChanged, this, [this](int idx) {
+        setUiMode(idx == 0 ? UiMode::Simple : UiMode::Pro);
+    });
 
     updateModeUi();
+    setUiMode(m_uiMode);
+    updateHistoryUi();
 }
 
 KisAiIllustrationDocker::~KisAiIllustrationDocker()
@@ -1164,6 +1316,14 @@ void KisAiIllustrationDocker::generateLocalStrokes(const QString &prompt)
     const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize);
     if (!preview.isNull()) {
         m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        KisAiGenerationSnapshot snapshot;
+        snapshot.timestamp = QDateTime::currentDateTime();
+        snapshot.prompt = prompt;
+        snapshot.canvasSize = canvasSize;
+        snapshot.previewImage = preview;
+        snapshot.modeIndex = static_cast<int>(GenerationMode::LocalStrokes);
+        snapshot.strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
+        addHistorySnapshot(snapshot);
     }
 
     KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
@@ -1291,6 +1451,14 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     }
     const int artStyle = m_artStyleCombo ? m_artStyleCombo->currentData().toInt() : 0;
 
+    QString effectivePrompt = prompt;
+    if (!m_selectedFraming.isEmpty()) {
+        effectivePrompt += QStringLiteral("、構図: ") + m_selectedFraming;
+    }
+    if (!m_selectedLighting.isEmpty()) {
+        effectivePrompt += QStringLiteral("、照明: ") + m_selectedLighting;
+    }
+
     const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
     const QSize canvasSize = effectiveCanvasSize();
 
@@ -1301,13 +1469,13 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
 
     if (useCompositionPlan) {
         m_waitingForCompositionPlan = true;
-        m_lastFailedPrompt = prompt;
+        m_lastFailedPrompt = effectivePrompt;
         const QJsonObject planPayload = KisAiStrokeProgramCodec::buildCompositionPlanPayload(
-            model, prompt, canvasSize, artStyle);
+            model, effectivePrompt, canvasSize, artStyle);
 
         logDebug(QStringLiteral("COMP_PLAN_REQ"),
                  QStringLiteral("POST Composition Plan (model=%1, prompt=\"%2\")")
-                     .arg(model, prompt.left(60)));
+                     .arg(model, effectivePrompt.left(60)));
 
         m_activeRequestEndpoint = endpoint;
         m_isStreamingRequest = false;
@@ -1354,7 +1522,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     const QJsonObject payload = useSceneSpec
         ? KisAiSceneSpecCodec::buildSceneSpecPayload(
             model,
-            prompt,
+            effectivePrompt,
             canvasSize,
             artStyle,
             reasoningEffort,
@@ -1368,7 +1536,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         )
         : KisAiStrokeProgramCodec::buildChatCompletionsPayload(
             model,
-            prompt,
+            effectivePrompt,
             canvasSize,
             strokeBudget,
             reasoningEffort,
@@ -1668,6 +1836,16 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize, true, nullptr, trappingPx);
     if (!preview.isNull()) {
         m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        KisAiGenerationSnapshot snapshot;
+        snapshot.timestamp = QDateTime::currentDateTime();
+        snapshot.prompt = m_promptEditor ? m_promptEditor->toPlainText() : QString();
+        snapshot.canvasSize = effectiveCanvasSize();
+        snapshot.previewImage = preview;
+        snapshot.artStyleIndex = m_artStyleCombo ? m_artStyleCombo->currentData().toInt() : 0;
+        snapshot.styleName = m_artStyleCombo ? m_artStyleCombo->currentText() : QString();
+        snapshot.modeIndex = static_cast<int>(GenerationMode::LlmStrokes);
+        snapshot.strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
+        addHistorySnapshot(snapshot);
     }
 
     KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
@@ -1698,6 +1876,13 @@ void KisAiIllustrationDocker::generateLocalConcept(const QString &prompt)
 
     if (addImageAsLayer(result, promptForLayerName(prompt))) {
         setStatus(i18n("コンセプトスケッチを新しいレイヤーに追加しました。"));
+        KisAiGenerationSnapshot snapshot;
+        snapshot.timestamp = QDateTime::currentDateTime();
+        snapshot.prompt = prompt;
+        snapshot.canvasSize = canvasSize;
+        snapshot.previewImage = result;
+        snapshot.modeIndex = static_cast<int>(GenerationMode::LocalConcept);
+        addHistorySnapshot(snapshot);
     }
     setBusy(false);
 }
@@ -1903,6 +2088,13 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
     m_previewLabel->setPixmap(QPixmap::fromImage(image).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
     if (addImageAsLayer(image, promptForLayerName(m_promptEditor->toPlainText()))) {
         setStatus(i18n("画像モデルの結果を新しいレイヤーに追加しました。"));
+        KisAiGenerationSnapshot snapshot;
+        snapshot.timestamp = QDateTime::currentDateTime();
+        snapshot.prompt = m_promptEditor ? m_promptEditor->toPlainText() : QString();
+        snapshot.canvasSize = effectiveCanvasSize();
+        snapshot.previewImage = image;
+        snapshot.modeIndex = static_cast<int>(GenerationMode::RemoteImage);
+        addHistorySnapshot(snapshot);
     }
 }
 
@@ -2998,6 +3190,19 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
     }
     if (success) {
         setStatus(i18n("🎯 Goal作画が完了しました。Kritaのレイヤードックで各層を確認・調整できます。"));
+        const QPixmap pm = m_previewLabel ? m_previewLabel->pixmap() : QPixmap();
+        if (!pm.isNull()) {
+            KisAiGenerationSnapshot snapshot;
+            snapshot.timestamp = QDateTime::currentDateTime();
+            snapshot.prompt = m_goalPrompt;
+            snapshot.canvasSize = effectiveCanvasSize();
+            snapshot.previewImage = pm.toImage();
+            snapshot.artStyleIndex = m_artStyleCombo ? m_artStyleCombo->currentData().toInt() : 0;
+            snapshot.styleName = m_artStyleCombo ? m_artStyleCombo->currentText() : QString();
+            snapshot.modeIndex = static_cast<int>(GenerationMode::LlmStrokes);
+            snapshot.strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
+            addHistorySnapshot(snapshot);
+        }
     }
     setBusy(false);
 }
@@ -3408,6 +3613,13 @@ void KisAiIllustrationDocker::loadSettings()
     if (m_customInstructionsEdit) {
         m_customInstructionsEdit->setPlainText(settings.value(QStringLiteral("AIIllustration/customInstructions"), QString()).toString());
     }
+
+    const int savedUiMode = settings.value(QStringLiteral("AIIllustration/uiMode"), 0).toInt();
+    m_uiMode = (savedUiMode == 1) ? UiMode::Pro : UiMode::Simple;
+    if (m_uiModeTabs) {
+        m_uiModeTabs->setCurrentIndex(savedUiMode);
+    }
+    setUiMode(m_uiMode);
 }
 
 void KisAiIllustrationDocker::saveSettingsForMode(GenerationMode mode)
@@ -3496,6 +3708,7 @@ void KisAiIllustrationDocker::saveSettings()
     if (m_strokeProtocolCombo) settings.setValue(QStringLiteral("AIIllustration/strokeProtocol"), m_strokeProtocolCombo->currentData().toInt());
     if (m_reasoningEffortCombo) settings.setValue(QStringLiteral("AIIllustration/reasoningEffort"), m_reasoningEffortCombo->currentData().toString());
     if (m_customInstructionsEdit) settings.setValue(QStringLiteral("AIIllustration/customInstructions"), m_customInstructionsEdit->toPlainText());
+    settings.setValue(QStringLiteral("AIIllustration/uiMode"), (m_uiMode == UiMode::Pro) ? 1 : 0);
 }
 
 void KisAiIllustrationDocker::testLlmConnection()
@@ -3726,3 +3939,311 @@ void KisAiIllustrationDocker::copyDebugLog()
         }
     }
 }
+
+void KisAiIllustrationDocker::setUiMode(UiMode mode)
+{
+    m_uiMode = mode;
+    if (m_uiModeTabs && m_uiModeTabs->currentIndex() != (mode == UiMode::Simple ? 0 : 1)) {
+        const QSignalBlocker blocker(m_uiModeTabs);
+        m_uiModeTabs->setCurrentIndex(mode == UiMode::Simple ? 0 : 1);
+    }
+
+    const bool isPro = (mode == UiMode::Pro);
+    if (m_engineCard) {
+        m_engineCard->setVisible(isPro);
+    }
+    if (m_goalCard) {
+        m_goalCard->setVisible(isPro);
+    }
+    if (m_debugCard) {
+        m_debugCard->setVisible(isPro && m_debugModeCheck && m_debugModeCheck->isChecked());
+    }
+}
+
+void KisAiIllustrationDocker::onStyleCardClicked(QPushButton *btn, int styleIndex)
+{
+    if (!btn) return;
+    for (auto *b : m_styleCardButtons) {
+        if (b != btn) {
+            b->setProperty("active", "false");
+            b->style()->unpolish(b);
+            b->style()->polish(b);
+        }
+    }
+
+    const bool wasActive = (m_activeStyleCard == btn);
+    if (wasActive) {
+        m_activeStyleCard = nullptr;
+        btn->setProperty("active", "false");
+        if (m_artStyleCombo) {
+            m_artStyleCombo->setCurrentIndex(0); // Auto
+        }
+    } else {
+        m_activeStyleCard = btn;
+        btn->setProperty("active", "true");
+        if (m_artStyleCombo) {
+            const int idx = m_artStyleCombo->findData(styleIndex);
+            if (idx >= 0) {
+                m_artStyleCombo->setCurrentIndex(idx);
+            }
+        }
+    }
+    btn->style()->unpolish(btn);
+    btn->style()->polish(btn);
+}
+
+void KisAiIllustrationDocker::onCompositionCardClicked(QPushButton *btn, const QString &framing)
+{
+    if (!btn) return;
+    for (auto *b : m_compositionCardButtons) {
+        if (b != btn) {
+            b->setProperty("active", "false");
+            b->style()->unpolish(b);
+            b->style()->polish(b);
+        }
+    }
+
+    const bool wasActive = (m_activeCompositionCard == btn);
+    if (wasActive) {
+        m_activeCompositionCard = nullptr;
+        m_selectedFraming.clear();
+        btn->setProperty("active", "false");
+    } else {
+        m_activeCompositionCard = btn;
+        m_selectedFraming = framing;
+        btn->setProperty("active", "true");
+    }
+    btn->style()->unpolish(btn);
+    btn->style()->polish(btn);
+}
+
+void KisAiIllustrationDocker::onLightingCardClicked(QPushButton *btn, const QString &lighting)
+{
+    if (!btn) return;
+    for (auto *b : m_lightingCardButtons) {
+        if (b != btn) {
+            b->setProperty("active", "false");
+            b->style()->unpolish(b);
+            b->style()->polish(b);
+        }
+    }
+
+    const bool wasActive = (m_activeLightingCard == btn);
+    if (wasActive) {
+        m_activeLightingCard = nullptr;
+        m_selectedLighting.clear();
+        btn->setProperty("active", "false");
+    } else {
+        m_activeLightingCard = btn;
+        m_selectedLighting = lighting;
+        btn->setProperty("active", "true");
+    }
+    btn->style()->unpolish(btn);
+    btn->style()->polish(btn);
+}
+
+void KisAiIllustrationDocker::expandPromptWithAi()
+{
+    if (!m_promptEditor) return;
+    const QString currentPrompt = m_promptEditor->toPlainText().trimmed();
+    if (currentPrompt.isEmpty()) {
+        setStatus(i18n("推敲するプロンプトを入力してください。"), true);
+        return;
+    }
+
+    const QString endpoint = m_endpointEditor ? m_endpointEditor->text().trimmed() : QString();
+    const QString model = m_modelEditor ? m_modelEditor->text().trimmed() : QStringLiteral("gpt-4o");
+    QString apiKey = m_apiKeyEditor ? m_apiKeyEditor->text().trimmed() : QString();
+    if (apiKey.isEmpty()) {
+        apiKey = m_inFlightApiKey;
+    }
+    if (apiKey.isEmpty() && m_saveApiKeyCheck && m_saveApiKeyCheck->isChecked()) {
+        QSettings s;
+        unprotectApiKeyForCurrentUser(s.value(QStringLiteral("AIIllustration/apiKey")).toString(), &apiKey);
+    }
+
+    if (endpoint.isEmpty()) {
+        setStatus(i18n("エンドポイントが指定されていません。詳細設定で指定してください。"), true);
+        return;
+    }
+
+    auto style = KisAiPromptAnalyzer::ArtStyle::General;
+    if (m_artStyleCombo) {
+        style = static_cast<KisAiPromptAnalyzer::ArtStyle>(m_artStyleCombo->currentData().toInt());
+    }
+
+    const QByteArray payload = KisAiPromptAnalyzer::buildPromptExpansionPayload(currentPrompt, model, style);
+
+    const QUrl endpointUrl(endpoint);
+    QNetworkRequest request(endpointUrl);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
+    if (!apiKey.isEmpty()) {
+        request.setRawHeader("Authorization", "Bearer " + apiKey.toUtf8());
+    }
+
+    m_expandPromptResponseBuffer.clear();
+    if (m_expandPromptReply) {
+        m_expandPromptReply->abort();
+        m_expandPromptReply->deleteLater();
+    }
+
+    m_expandPromptReply = m_networkManager->post(request, payload);
+    if (m_expandPromptButton) {
+        m_expandPromptButton->setEnabled(false);
+        m_expandPromptButton->setText(i18n("推敲中…"));
+    }
+    setStatus(i18n("AIがプロンプトを推敲・詳細化しています…"));
+
+    connect(m_expandPromptReply.data(), &QNetworkReply::readyRead, this, [this] {
+        if (m_expandPromptReply) {
+            m_expandPromptResponseBuffer.append(m_expandPromptReply->readAll());
+        }
+    });
+    connect(m_expandPromptReply.data(), &QNetworkReply::finished, this, &KisAiIllustrationDocker::finishExpandPromptRequest);
+}
+
+void KisAiIllustrationDocker::finishExpandPromptRequest()
+{
+    if (m_expandPromptButton) {
+        m_expandPromptButton->setEnabled(true);
+        m_expandPromptButton->setText(i18n("✨ AI推敲"));
+    }
+
+    if (!m_expandPromptReply) {
+        return;
+    }
+
+    const auto networkError = m_expandPromptReply->error();
+    const int httpStatus = m_expandPromptReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray data = m_expandPromptResponseBuffer.isEmpty() ? m_expandPromptReply->readAll() : m_expandPromptResponseBuffer;
+    m_expandPromptReply->deleteLater();
+    m_expandPromptReply = nullptr;
+
+    if (networkError != QNetworkReply::NoError && httpStatus != 200) {
+        setStatus(i18n("プロンプト推敲に失敗しました (HTTP %1)").arg(httpStatus), true);
+        return;
+    }
+
+    QString parseError;
+    const QString expanded = KisAiPromptAnalyzer::parseExpandedPrompt(data, &parseError);
+    if (expanded.isEmpty()) {
+        setStatus(i18n("推敲結果の解析に失敗しました: %1").arg(parseError), true);
+        return;
+    }
+
+    if (m_promptEditor) {
+        m_promptEditor->setPlainText(expanded);
+        focusPrompt();
+    }
+    setStatus(i18n("✨ プロンプトを推敲・拡張しました！"));
+}
+
+void KisAiIllustrationDocker::syncForegroundPalette()
+{
+    QColor fgColor(43, 58, 103); // fallback
+    if (m_mainWindow && m_mainWindow->viewManager() && m_mainWindow->viewManager()->canvasResourceProvider()) {
+        fgColor = m_mainWindow->viewManager()->canvasResourceProvider()->fgColor().toQColor();
+    }
+
+    const QString hex = fgColor.name();
+    if (m_promptEditor) {
+        QString text = m_promptEditor->toPlainText().trimmed();
+        const QString colorClause = i18n("メイン配色: %1").arg(hex);
+        if (!text.isEmpty()) {
+            text += QStringLiteral("、") + colorClause;
+        } else {
+            text = colorClause;
+        }
+        m_promptEditor->setPlainText(text);
+        focusPrompt();
+    }
+    setStatus(i18n("Kritaの前景色 (%1) をプロンプトに取り込みました。").arg(hex));
+}
+
+void KisAiIllustrationDocker::addHistorySnapshot(const KisAiGenerationSnapshot &snapshot)
+{
+    m_historySnapshots.prepend(snapshot);
+    while (m_historySnapshots.size() > kMaxHistoryCount) {
+        m_historySnapshots.removeLast();
+    }
+    updateHistoryUi();
+}
+
+void KisAiIllustrationDocker::updateHistoryUi()
+{
+    if (!m_historyThumbsLayout) return;
+
+    QLayoutItem *item;
+    while ((item = m_historyThumbsLayout->takeAt(0)) != nullptr) {
+        if (item->widget()) {
+            delete item->widget();
+        }
+        delete item;
+    }
+
+    if (m_historySnapshots.isEmpty()) {
+        auto *placeholder = new QLabel(i18n("生成されたイラストの履歴がここに並びます"), m_historyCard);
+        placeholder->setStyleSheet(QStringLiteral("color: #64748b; font-size: 11px; padding: 12px;"));
+        m_historyThumbsLayout->addWidget(placeholder);
+        m_historyThumbsLayout->addStretch(1);
+        return;
+    }
+
+    for (int i = 0; i < m_historySnapshots.size(); ++i) {
+        const auto &snap = m_historySnapshots.at(i);
+        auto *thumbBtn = new QPushButton(m_historyCard);
+        thumbBtn->setProperty("class", "aiHistoryThumb");
+        thumbBtn->setFixedSize(60, 60);
+        thumbBtn->setCursor(Qt::PointingHandCursor);
+        thumbBtn->setFocusPolicy(Qt::StrongFocus);
+        if (!snap.previewImage.isNull()) {
+            thumbBtn->setIcon(QIcon(QPixmap::fromImage(snap.previewImage)));
+            thumbBtn->setIconSize(QSize(54, 54));
+        }
+        thumbBtn->setToolTip(i18n("#%1 (%2)\n%3\nクリックでプロンプト・設定を復元")
+            .arg(i + 1)
+            .arg(snap.timestamp.toString(QStringLiteral("hh:mm:ss")))
+            .arg(snap.prompt));
+        connect(thumbBtn, &QPushButton::clicked, this, [this, i] {
+            restoreHistorySnapshot(i);
+        });
+        m_historyThumbsLayout->addWidget(thumbBtn);
+    }
+    m_historyThumbsLayout->addStretch(1);
+}
+
+void KisAiIllustrationDocker::restoreHistorySnapshot(int index)
+{
+    if (index < 0 || index >= m_historySnapshots.size()) return;
+    const auto &snap = m_historySnapshots.at(index);
+
+    if (m_promptEditor) {
+        m_promptEditor->setPlainText(snap.prompt);
+    }
+    if (m_widthSpin && snap.canvasSize.width() > 0) {
+        m_widthSpin->setValue(snap.canvasSize.width());
+    }
+    if (m_heightSpin && snap.canvasSize.height() > 0) {
+        m_heightSpin->setValue(snap.canvasSize.height());
+    }
+    if (m_strokeBudgetSpin && snap.strokeBudget > 0) {
+        m_strokeBudgetSpin->setValue(snap.strokeBudget);
+    }
+    if (m_artStyleCombo && snap.artStyleIndex >= 0) {
+        const int idx = m_artStyleCombo->findData(snap.artStyleIndex);
+        if (idx >= 0) {
+            m_artStyleCombo->setCurrentIndex(idx);
+        }
+    }
+    if (m_modeCombo && snap.modeIndex >= 0) {
+        m_modeCombo->setCurrentIndex(snap.modeIndex);
+    }
+    if (m_previewLabel && !snap.previewImage.isNull()) {
+        const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
+        m_previewLabel->setPixmap(QPixmap::fromImage(snap.previewImage).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    }
+
+    focusPrompt();
+    setStatus(i18n("履歴 #%1 のプロンプトと設定を復元しました。").arg(index + 1));
+}
+

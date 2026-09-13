@@ -5,6 +5,9 @@
 
 #include "KisAiPromptAnalyzer.h"
 
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QRegularExpression>
 #include <cmath>
 
@@ -575,4 +578,80 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
     }
 
     return out;
+}
+
+QByteArray KisAiPromptAnalyzer::buildPromptExpansionPayload(const QString &shortPrompt, const QString &model, ArtStyle style)
+{
+    const QString styleInstruction = (style != ArtStyle::General)
+        ? QStringLiteral(" Art style emphasis: %1.").arg(styleName(style))
+        : QString();
+
+    const QString systemPrompt = QStringLiteral(
+        "You are an expert art director and anime illustrator prompt engineer. "
+        "Given a concise user prompt, elaborate it into a vivid, descriptive, high-quality prompt in the same language "
+        "(use Japanese if input is in Japanese, English if input is in English). "
+        "Elaborate on subject features (expression, gaze, hair details, eyes), costume styling, lighting mood (key/fill/rim light), "
+        "atmosphere, and color palette.%1 "
+        "Output ONLY the elaborated prompt string. Do not include conversational filler, preamble, markdown formatting, or quotes."
+    ).arg(styleInstruction);
+
+    QJsonObject systemMessage;
+    systemMessage[QStringLiteral("role")] = QStringLiteral("system");
+    systemMessage[QStringLiteral("content")] = systemPrompt;
+
+    QJsonObject userMessage;
+    userMessage[QStringLiteral("role")] = QStringLiteral("user");
+    userMessage[QStringLiteral("content")] = shortPrompt.trimmed();
+
+    QJsonArray messages;
+    messages.append(systemMessage);
+    messages.append(userMessage);
+
+    QJsonObject payload;
+    payload[QStringLiteral("model")] = model.isEmpty() ? QStringLiteral("gpt-4o") : model;
+    payload[QStringLiteral("messages")] = messages;
+    payload[QStringLiteral("temperature")] = 0.7;
+    payload[QStringLiteral("max_tokens")] = 300;
+
+    return QJsonDocument(payload).toJson(QJsonDocument::Compact);
+}
+
+QString KisAiPromptAnalyzer::parseExpandedPrompt(const QByteArray &responseBytes, QString *errorMessage)
+{
+    QJsonParseError parseError;
+    const QJsonDocument doc = QJsonDocument::fromJson(responseBytes, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("JSONパースエラー: %1").arg(parseError.errorString());
+        }
+        return QString();
+    }
+
+    const QJsonObject root = doc.object();
+    if (root.contains(QStringLiteral("error"))) {
+        const QJsonObject errorObj = root.value(QStringLiteral("error")).toObject();
+        const QString msg = errorObj.value(QStringLiteral("message")).toString();
+        if (errorMessage) {
+            *errorMessage = msg.isEmpty() ? QStringLiteral("APIエラーが発生しました") : msg;
+        }
+        return QString();
+    }
+
+    const QJsonArray choices = root.value(QStringLiteral("choices")).toArray();
+    if (choices.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("応答にchoicesが含まれていません");
+        }
+        return QString();
+    }
+
+    const QJsonObject firstChoice = choices.first().toObject();
+    const QJsonObject message = firstChoice.value(QStringLiteral("message")).toObject();
+    QString content = message.value(QStringLiteral("content")).toString().trimmed();
+
+    if (content.startsWith(QLatin1Char('"')) && content.endsWith(QLatin1Char('"')) && content.size() >= 2) {
+        content = content.mid(1, content.size() - 2).trimmed();
+    }
+
+    return content;
 }

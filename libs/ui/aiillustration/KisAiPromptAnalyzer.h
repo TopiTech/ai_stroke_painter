@@ -98,6 +98,17 @@ public:
      * Human-readable label for an ArtStyle.
      */
     static QString styleName(ArtStyle style);
+
+    /**
+     * Build an OpenAI chat completion JSON payload to expand a concise prompt into a rich,
+     * detailed anime/illustration prompt covering subject, costume, lighting, and palette.
+     */
+    static QByteArray buildPromptExpansionPayload(const QString &shortPrompt, const QString &model, ArtStyle style = ArtStyle::General);
+
+    /**
+     * Parse the expanded prompt from a chat completion response JSON.
+     */
+    static QString parseExpandedPrompt(const QByteArray &responseBytes, QString *errorMessage = nullptr);
 };
 
 #endif // KIS_AI_PROMPT_ANALYZER_H
