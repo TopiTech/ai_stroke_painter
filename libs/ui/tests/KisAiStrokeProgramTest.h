@@ -104,6 +104,9 @@ private Q_SLOTS:
     void testCanvasSizeClampedAtParseTime();
     void testReasoningModelFamilyPrefixMatching();
     void testExtractOperationsDiagnosticNotFabricated();
+    void testSceneSpecPayloadReasoningModelOmitsTemperature();
+    void testSceneSpecPayloadStreamingAndJsonSchema();
+    void testJsonModeForcedJsonObjectHandling();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

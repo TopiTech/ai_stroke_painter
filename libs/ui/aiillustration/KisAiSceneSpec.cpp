@@ -319,10 +319,20 @@ QJsonObject KisAiSceneSpecCodec::buildSceneSpecPayload(
     const QString &model,
     const QString &prompt,
     const QSize &canvasSize,
-    int artStyle)
+    int artStyle,
+    const QString &reasoningEffort,
+    const QString &customInstructions,
+    bool enableStreaming,
+    bool enforceJsonFormat,
+    qreal temperature,
+    qreal topP,
+    int maxTokensOverride,
+    bool forceJsonObjectOnly)
 {
     Q_UNUSED(artStyle);
-    const QString systemText = QStringLiteral(
+    const bool reasoning = KisAiStrokeProgramCodec::isReasoningModel(model);
+
+    QString systemText = QStringLiteral(
         "You are an Art Director for a deterministic painting engine. "
         "Output a SceneSpec JSON object describing WHAT to paint (subject, expression, hairstyle, colors, light, framing). "
         "CRITICAL: Output MEANING ONLY. There are no coordinate fields; the engine owns all geometry and guarantees symmetry. "
@@ -330,6 +340,10 @@ QJsonObject KisAiSceneSpecCodec::buildSceneSpecPayload(
         "=== USER REQUEST (ABSOLUTE HIGHEST PRIORITY) ===\n\"%1\"\n"
         "If any example below conflicts with the USER REQUEST, follow the USER REQUEST.\n\n%2")
         .arg(prompt.trimmed(), canonicalSpecExample(prompt));
+
+    if (!customInstructions.trimmed().isEmpty()) {
+        systemText += QStringLiteral("\n\n[USER ADDITIONAL FEEDBACK]\n") + customInstructions.trimmed();
+    }
 
     const QJsonObject userObj{
         {QStringLiteral("directive"), QStringLiteral("Return the SceneSpec JSON object for this request.")},
@@ -340,15 +354,53 @@ QJsonObject KisAiSceneSpecCodec::buildSceneSpecPayload(
     };
 
     QJsonObject payload;
-    payload.insert(QStringLiteral("model"), model);
-    payload.insert(QStringLiteral("temperature"), 0.5);
+    payload.insert(QStringLiteral("model"), model.trimmed());
+    payload.insert(QStringLiteral("seed"), static_cast<int>(KisAiStrokeProgramCodec::stableSeed(prompt.simplified())));
+
     QJsonArray messages;
     messages.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("system")}, {QStringLiteral("content"), systemText}});
     messages.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("user")}, {QStringLiteral("content"), QString::fromUtf8(QJsonDocument(userObj).toJson(QJsonDocument::Compact))}});
     payload.insert(QStringLiteral("messages"), messages);
-    QJsonObject format;
-    format.insert(QStringLiteral("type"), QStringLiteral("json_object"));
-    payload.insert(QStringLiteral("response_format"), format);
+
+    if (enableStreaming) {
+        payload.insert(QStringLiteral("stream"), true);
+    }
+
+    if (enforceJsonFormat) {
+        if (!forceJsonObjectOnly && KisAiStrokeProgramCodec::supportsJsonSchema(model)) {
+            QJsonObject schemaObj;
+            schemaObj.insert(QStringLiteral("name"), QStringLiteral("scene_spec"));
+            schemaObj.insert(QStringLiteral("strict"), true);
+            schemaObj.insert(QStringLiteral("schema"), sceneSpecJsonSchema());
+
+            QJsonObject responseFormat;
+            responseFormat.insert(QStringLiteral("type"), QStringLiteral("json_schema"));
+            responseFormat.insert(QStringLiteral("json_schema"), schemaObj);
+            payload.insert(QStringLiteral("response_format"), responseFormat);
+        } else {
+            QJsonObject responseFormat;
+            responseFormat.insert(QStringLiteral("type"), QStringLiteral("json_object"));
+            payload.insert(QStringLiteral("response_format"), responseFormat);
+        }
+    }
+
+    const int calculatedTokens = maxTokensOverride > 0
+        ? maxTokensOverride
+        : (reasoning ? 8192 : 2048);
+
+    if (reasoning) {
+        payload.insert(QStringLiteral("max_completion_tokens"), calculatedTokens);
+        if (!reasoningEffort.isEmpty() && reasoningEffort.toLower() != QLatin1String("none")) {
+            payload.insert(QStringLiteral("reasoning_effort"), reasoningEffort.toLower());
+        }
+    } else {
+        payload.insert(QStringLiteral("max_tokens"), calculatedTokens);
+        payload.insert(QStringLiteral("temperature"), qBound<qreal>(0.0, temperature, 2.0));
+        if (topP > 0.0 && topP < 1.0) {
+            payload.insert(QStringLiteral("top_p"), qBound<qreal>(0.01, topP, 1.0));
+        }
+    }
+
     return payload;
 }
 

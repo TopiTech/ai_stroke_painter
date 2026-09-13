@@ -117,7 +117,15 @@ public:
         const QString &model,
         const QString &prompt,
         const QSize &canvasSize,
-        int artStyle = 0
+        int artStyle = 0,
+        const QString &reasoningEffort = QString(),
+        const QString &customInstructions = QString(),
+        bool enableStreaming = true,
+        bool enforceJsonFormat = true,
+        qreal temperature = 0.5,
+        qreal topP = 1.0,
+        int maxTokensOverride = 0,
+        bool forceJsonObjectOnly = false
     );
 
     /**

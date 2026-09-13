@@ -378,6 +378,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     promptCard.layout->addLayout(chipGrid);
 
     m_presetCombo = new QComboBox(promptCard.frame);
+    m_presetCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_presetCombo->setMinimumContentsLength(10);
     m_presetCombo->addItem(i18n("プリセット一覧から選択…"), QString());
     m_presetCombo->addItem(i18n("👤 美少女アニメ顔 (Anime Girl)"), QStringLiteral("アニメ美少女のクローズアップポートレート、大きな輝く青い瞳、二重まぶた、繊細なまつ毛、さらさらの銀髪、柔らかい頬の赤み、天使の輪"));
     m_presetCombo->addItem(i18n("🌸 山と桜の風景 (Mountain & Sakura)"), QStringLiteral("壮大な富士山と満開の桜の木、夕暮れのグラデーション空、舞い散る花びら、伝統的な日本風景"));
@@ -478,6 +480,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     engineCard.layout->addWidget(engineHeader);
 
     m_modeCombo = new QComboBox(engineCard.frame);
+    m_modeCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_modeCombo->setMinimumContentsLength(10);
     m_modeCombo->addItem(i18n("LLM 座標ストローク描画 (Chat Completions)"), static_cast<int>(GenerationMode::LlmStrokes));
     m_modeCombo->addItem(i18n("ローカル座標ストローク描画"), static_cast<int>(GenerationMode::LocalStrokes));
     m_modeCombo->addItem(i18n("画像モデル API (DALL-E)"), static_cast<int>(GenerationMode::RemoteImage));
@@ -591,6 +595,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_maxRetriesSpin->setToolTip(i18n("通信一時エラー時や品質自己修復時の自動リトライ最大回数"));
 
     m_jsonModeCombo = new QComboBox(m_detailsContainer);
+    m_jsonModeCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_jsonModeCombo->setMinimumContentsLength(10);
     m_jsonModeCombo->addItem(i18n("自動判定 (エンドポイント依存)"), 0);
     m_jsonModeCombo->addItem(i18n("構造化出力 (json_schema)"), 1);
     m_jsonModeCombo->addItem(i18n("強制 (json_object)"), 2);
@@ -599,6 +605,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_jsonModeCombo->setToolTip(i18n("APIの response_format (json_schema / json_object) を利用するかどうか"));
 
     m_visionQualityCombo = new QComboBox(m_detailsContainer);
+    m_visionQualityCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_visionQualityCombo->setMinimumContentsLength(10);
     m_visionQualityCombo->addItem(i18n("自動 (Auto)"), QStringLiteral("auto"));
     m_visionQualityCombo->addItem(i18n("高画質 (High)"), QStringLiteral("high"));
     m_visionQualityCombo->addItem(i18n("低解像度 (Low)"), QStringLiteral("low"));
@@ -607,6 +615,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     // V3 Phase 1: Generation Mode (v3 SceneSpec / v2 StrokeProgram)
     m_strokeProtocolCombo = new QComboBox(m_detailsContainer);
+    m_strokeProtocolCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_strokeProtocolCombo->setMinimumContentsLength(10);
+    m_strokeProtocolCombo->setAccessibleName(i18n("Stroke protocol"));
     m_strokeProtocolCombo->addItem(i18n("v3 SceneSpec 意味生成 (推奨・黄金比保証)"), 0);
     m_strokeProtocolCombo->addItem(i18n("v2 StrokeProgram 座標生成 (互換)"), 1);
     m_strokeProtocolCombo->setToolTip(i18n("LLMに意味・光・表情のみを出力させ決定論的幾何エンジンで描画するか(v3)、従来通り座標を出力させるか(v2)を指定します。"));
@@ -621,6 +632,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_suppressParticlesCheck->setToolTip(i18n("顔や画面全体を覆う点描ノイズ・吹雪状パーティクルの生成と多重蓄積を抑止します。星空・雪・花びら等が必要な場合のみOFFにしてください。"));
 
     m_reasoningEffortCombo = new QComboBox(m_detailsContainer);
+    m_reasoningEffortCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_reasoningEffortCombo->setMinimumContentsLength(10);
     m_reasoningEffortCombo->addItem(i18n("指定なし (デフォルト)"), QStringLiteral(""));
     m_reasoningEffortCombo->addItem(i18n("Low (高速・低思考)"), QStringLiteral("low"));
     m_reasoningEffortCombo->addItem(i18n("Medium (標準思考)"), QStringLiteral("medium"));
@@ -726,6 +739,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     goalOptionsLayout->addRow(i18n("作画ステップ数"), m_goalStepsSpin);
 
     m_artStyleCombo = new QComboBox(goalOptionsWidget);
+    m_artStyleCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_artStyleCombo->setMinimumContentsLength(10);
     m_artStyleCombo->addItem(i18n("🎨 おまかせ (Auto)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::General));
     m_artStyleCombo->addItem(i18n("✨ アニメセル画 (Anime Cel)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel));
     m_artStyleCombo->addItem(i18n("💧 透明水彩 (Watercolor)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor));
@@ -1245,11 +1260,15 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     }
 
     bool enforceJson = false;
+    bool forceJsonObjectOnly = false;
     const int jsonModeIdx = m_jsonModeCombo ? m_jsonModeCombo->currentIndex() : 0;
     if (jsonModeIdx == 0) {
         enforceJson = KisAiStrokeProgramCodec::supportsJsonFormat(endpoint);
     } else if (jsonModeIdx == 1) {
         enforceJson = true;
+    } else if (jsonModeIdx == 2) {
+        enforceJson = true;
+        forceJsonObjectOnly = true;
     } else {
         enforceJson = false;
     }
@@ -1333,7 +1352,20 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     const bool useSceneSpec = (strokeProtocol == 0) && !useCompositionPlan && !m_isSelfCorrectionRetry;
 
     const QJsonObject payload = useSceneSpec
-        ? KisAiSceneSpecCodec::buildSceneSpecPayload(model, prompt, canvasSize, artStyle)
+        ? KisAiSceneSpecCodec::buildSceneSpecPayload(
+            model,
+            prompt,
+            canvasSize,
+            artStyle,
+            reasoningEffort,
+            customInstructions,
+            true, // enableStreaming
+            enforceJson,
+            temperature,
+            topP,
+            maxTokens,
+            forceJsonObjectOnly
+        )
         : KisAiStrokeProgramCodec::buildChatCompletionsPayload(
             model,
             prompt,
@@ -1346,7 +1378,8 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
             temperature,
             topP,
             maxTokens,
-            artStyle
+            artStyle,
+            forceJsonObjectOnly
         );
 
     logDebug(QStringLiteral("LLM_REQ"),
@@ -1714,6 +1747,11 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
     request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
+    if (endpoint.contains(QLatin1String("openrouter.ai"), Qt::CaseInsensitive)) {
+        request.setRawHeader("HTTP-Referer", "https://github.com/TopiTech/ai_stroke_painter");
+        request.setRawHeader("X-Title", "AI Stroke Painter");
+    }
+
     const QString sizeStr = imageSizeText(m_widthSpin, m_heightSpin);
     const QJsonObject payload {
         {QStringLiteral("model"), model},
@@ -1738,6 +1776,7 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
     m_reply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
     m_reply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
 
+    m_inFlightApiKey = apiKey;
     if (m_saveApiKeyCheck && !m_saveApiKeyCheck->isChecked()) {
         m_apiKeyEditor->clear();
     }
@@ -1770,6 +1809,7 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
 void KisAiIllustrationDocker::finishRemoteImageRequest()
 {
     stopAllRequestTimers();
+    clearInFlightApiKey();
 
     QPointer<QNetworkReply> reply = m_reply;
     m_reply = nullptr;
@@ -2519,11 +2559,15 @@ void KisAiIllustrationDocker::executeGoalStep()
         m_lastGoalRequestHadImage = (!imageBase64.isEmpty() && !m_goalVisionFallbackActive);
 
         bool enforceJson = false;
+        bool forceJsonObjectOnly = false;
         const int jsonModeIdx = m_jsonModeCombo ? m_jsonModeCombo->currentIndex() : 0;
         if (jsonModeIdx == 0) {
             enforceJson = KisAiStrokeProgramCodec::supportsJsonFormat(endpoint);
         } else if (jsonModeIdx == 1) {
             enforceJson = true;
+        } else if (jsonModeIdx == 2) {
+            enforceJson = true;
+            forceJsonObjectOnly = true;
         } else {
             enforceJson = false;
         }
@@ -2561,7 +2605,8 @@ void KisAiIllustrationDocker::executeGoalStep()
             static_cast<int>(artStyle),
             accumProg,
             m_lastGoalCritique,
-            m_visionQualityCombo ? m_visionQualityCombo->currentData().toString() : QStringLiteral("auto")
+            m_visionQualityCombo ? m_visionQualityCombo->currentData().toString() : QStringLiteral("auto"),
+            forceJsonObjectOnly
         );
 
         logDebug(QStringLiteral("GOAL_REQ"), QStringLiteral(
@@ -3509,6 +3554,11 @@ void KisAiIllustrationDocker::testLlmConnection()
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
+
+    if (endpoint.contains(QLatin1String("openrouter.ai"), Qt::CaseInsensitive)) {
+        request.setRawHeader("HTTP-Referer", "https://github.com/TopiTech/ai_stroke_painter");
+        request.setRawHeader("X-Title", "AI Stroke Painter");
+    }
 
     const auto mode = static_cast<GenerationMode>(m_modeCombo ? m_modeCombo->currentData().toInt() : 0);
     QJsonObject payload;

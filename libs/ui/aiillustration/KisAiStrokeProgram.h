@@ -191,7 +191,8 @@ public:
         qreal temperature = 0.7,
         qreal topP = 1.0,
         int maxTokensOverride = 0,
-        int artStyle = 0
+        int artStyle = 0,
+        bool forceJsonObjectOnly = false
     );
 
     /**
@@ -407,7 +408,8 @@ public:
         int artStyle = 0,
         const KisAiStrokeProgram *accumulatedProgram = nullptr,
         const QString &previousCritique = QString(),
-        const QString &visionDetail = QStringLiteral("auto")
+        const QString &visionDetail = QStringLiteral("auto"),
+        bool forceJsonObjectOnly = false
     );
 
     /**

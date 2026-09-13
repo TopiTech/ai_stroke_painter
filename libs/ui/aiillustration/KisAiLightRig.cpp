@@ -204,10 +204,10 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         ao.brush.size = 0.02;
         ao.fillStyle = QStringLiteral("wash");
         const qreal aoW = hw * 0.30, aoH = hh * 0.06;
-        const QPointF aoC(hc.x(), hc.y() + hh * 0.44);
+        const QPointF aoC(hc.x(), hc.y() + (hh * 0.44));
         for (int i = 0; i <= 12; ++i) {
             const qreal t = 2.0 * M_PI * i / 12.0;
-            ao.polygon.append(QPointF(aoC.x() + aoW * std::cos(t), aoC.y() + aoH * std::sin(t)));
+            ao.polygon.append(QPointF(aoC.x() + (aoW * std::cos(t)), aoC.y() + (aoH * std::sin(t))));
         }
         shading.append(ao);
 
@@ -220,10 +220,10 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         hairCast.brush.opacity = 0.30;
         hairCast.brush.size = 0.02;
         hairCast.fillStyle = QStringLiteral("wash");
-        const qreal bandW = hw * 0.46, bandTop = hc.y() - hh * 0.34, bandBottom = hc.y() - hh * 0.20;
+        const qreal bandW = hw * 0.46, bandTop = hc.y() - (hh * 0.34), bandBottom = hc.y() - (hh * 0.20);
         hairCast.polygon = QPolygonF{
             QPointF(hc.x() - bandW, bandTop), QPointF(hc.x() + bandW, bandTop),
-            QPointF(hc.x() + bandW * 0.92, bandBottom), QPointF(hc.x() - bandW * 0.92, bandBottom)};
+            QPointF(hc.x() + (bandW * 0.92), bandBottom), QPointF(hc.x() - (bandW * 0.92), bandBottom)};
         shading.append(hairCast);
     }
 

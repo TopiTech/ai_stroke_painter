@@ -175,9 +175,9 @@ void drawPromptMotif(QPainter &painter, const QRectF &bounds, const QString &pro
     }
 
     QPainterPath figure;
-    figure.addEllipse(QPointF(center.x(), center.y() - radius * 0.50), radius * 0.44, radius * 0.44);
-    figure.moveTo(center.x() - radius * 0.86, center.y() + radius * 1.25);
-    figure.quadTo(center.x(), center.y() - radius * 0.05, center.x() + radius * 0.86, center.y() + radius * 1.25);
+    figure.addEllipse(QPointF(center.x(), center.y() - (radius * 0.50)), radius * 0.44, radius * 0.44);
+    figure.moveTo(center.x() - (radius * 0.86), center.y() + (radius * 1.25));
+    figure.quadTo(center.x(), center.y() - (radius * 0.05), center.x() + (radius * 0.86), center.y() + (radius * 1.25));
     figure.closeSubpath();
     painter.drawPath(figure);
 }

@@ -3543,6 +3543,170 @@ void KisAiStrokeProgramTest::testExtractOperationsDiagnosticNotFabricated()
     QVERIFY(diagnostic.errorLine <= 0);
 }
 
+void KisAiStrokeProgramTest::testSceneSpecPayloadReasoningModelOmitsTemperature()
+{
+    const QSize canvasSize(1024, 1024);
+    const QString prompt = QStringLiteral("A magical girl with glowing twin braids");
+
+    // Reasoning model: must omit temperature & top_p, and set max_completion_tokens
+    const QJsonObject reasoningPayload = KisAiSceneSpecCodec::buildSceneSpecPayload(
+        QStringLiteral("o3-mini"),
+        prompt,
+        canvasSize,
+        0, // artStyle
+        QStringLiteral("high"), // reasoningEffort
+        QStringLiteral("Do not draw background particles") // customInstructions
+    );
+
+    QVERIFY(!reasoningPayload.contains(QStringLiteral("temperature")));
+    QVERIFY(!reasoningPayload.contains(QStringLiteral("top_p")));
+    QVERIFY(reasoningPayload.contains(QStringLiteral("max_completion_tokens")));
+    QCOMPARE(reasoningPayload.value(QStringLiteral("reasoning_effort")).toString(), QStringLiteral("high"));
+    QVERIFY(reasoningPayload.contains(QStringLiteral("stream")));
+    QVERIFY(reasoningPayload.value(QStringLiteral("stream")).toBool());
+
+    // Messages must contain custom instructions
+    const QJsonArray messages = reasoningPayload.value(QStringLiteral("messages")).toArray();
+    QVERIFY(messages.size() >= 2);
+    const QString systemText = messages.at(0).toObject().value(QStringLiteral("content")).toString();
+    QVERIFY(systemText.contains(QStringLiteral("Do not draw background particles")));
+
+    // Standard model: must contain temperature & max_tokens
+    const QJsonObject standardPayload = KisAiSceneSpecCodec::buildSceneSpecPayload(
+        QStringLiteral("gpt-4o"),
+        prompt,
+        canvasSize,
+        0,
+        QString(),
+        QString(),
+        false, // enableStreaming = false
+        true,  // enforceJsonFormat = true
+        0.7,   // temperature
+        0.95   // topP
+    );
+
+    QVERIFY(standardPayload.contains(QStringLiteral("temperature")));
+    QCOMPARE(standardPayload.value(QStringLiteral("temperature")).toDouble(), 0.7);
+    QVERIFY(standardPayload.contains(QStringLiteral("top_p")));
+    QCOMPARE(standardPayload.value(QStringLiteral("top_p")).toDouble(), 0.95);
+    QVERIFY(standardPayload.contains(QStringLiteral("max_tokens")));
+    QVERIFY(!standardPayload.contains(QStringLiteral("stream")));
+}
+
+void KisAiStrokeProgramTest::testSceneSpecPayloadStreamingAndJsonSchema()
+{
+    const QSize canvasSize(1024, 1024);
+    const QString prompt = QStringLiteral("Sunset meadow landscape");
+
+    // Model supporting json_schema
+    const QJsonObject schemaPayload = KisAiSceneSpecCodec::buildSceneSpecPayload(
+        QStringLiteral("gpt-4o"),
+        prompt,
+        canvasSize,
+        0,
+        QString(),
+        QString(),
+        true, // enableStreaming
+        true, // enforceJsonFormat
+        0.5,
+        1.0,
+        0,
+        false // forceJsonObjectOnly
+    );
+
+    QVERIFY(schemaPayload.value(QStringLiteral("stream")).toBool());
+    const QJsonObject respFormat = schemaPayload.value(QStringLiteral("response_format")).toObject();
+    QCOMPARE(respFormat.value(QStringLiteral("type")).toString(), QStringLiteral("json_schema"));
+    const QJsonObject jsonSchema = respFormat.value(QStringLiteral("json_schema")).toObject();
+    QCOMPARE(jsonSchema.value(QStringLiteral("name")).toString(), QStringLiteral("scene_spec"));
+    QVERIFY(jsonSchema.value(QStringLiteral("strict")).toBool());
+
+    // forceJsonObjectOnly = true
+    const QJsonObject forcedObjectPayload = KisAiSceneSpecCodec::buildSceneSpecPayload(
+        QStringLiteral("gpt-4o"),
+        prompt,
+        canvasSize,
+        0,
+        QString(),
+        QString(),
+        true,
+        true,
+        0.5,
+        1.0,
+        0,
+        true // forceJsonObjectOnly
+    );
+    const QJsonObject forcedFormat = forcedObjectPayload.value(QStringLiteral("response_format")).toObject();
+    QCOMPARE(forcedFormat.value(QStringLiteral("type")).toString(), QStringLiteral("json_object"));
+    QVERIFY(!forcedFormat.contains(QStringLiteral("json_schema")));
+
+    // enforceJsonFormat = false
+    const QJsonObject noJsonPayload = KisAiSceneSpecCodec::buildSceneSpecPayload(
+        QStringLiteral("gpt-4o"),
+        prompt,
+        canvasSize,
+        0,
+        QString(),
+        QString(),
+        true,
+        false // enforceJsonFormat = false
+    );
+    QVERIFY(!noJsonPayload.contains(QStringLiteral("response_format")));
+}
+
+void KisAiStrokeProgramTest::testJsonModeForcedJsonObjectHandling()
+{
+    const QSize canvasSize(1024, 1024);
+    const QString prompt = QStringLiteral("Cyberpunk city street");
+
+    // buildChatCompletionsPayload with forced json_object
+    const QJsonObject forcedChatPayload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
+        QStringLiteral("gpt-4o"),
+        prompt,
+        canvasSize,
+        400,
+        QString(),
+        QString(),
+        true,
+        true, // enforceJsonFormat
+        0.5,
+        1.0,
+        0,
+        0,
+        true // forceJsonObjectOnly
+    );
+    const QJsonObject chatFmt = forcedChatPayload.value(QStringLiteral("response_format")).toObject();
+    QCOMPARE(chatFmt.value(QStringLiteral("type")).toString(), QStringLiteral("json_object"));
+    QVERIFY(!chatFmt.contains(QStringLiteral("json_schema")));
+
+    // buildGoalStepPayload with forced json_object
+    const QJsonObject forcedGoalPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        prompt,
+        canvasSize,
+        1,
+        4,
+        QString(),
+        QString(),
+        400,
+        QString(),
+        true,
+        true,
+        true, // enforceJsonFormat
+        0.5,
+        1.0,
+        0,
+        0,
+        nullptr,
+        QString(),
+        QStringLiteral("auto"),
+        true // forceJsonObjectOnly
+    );
+    const QJsonObject goalFmt = forcedGoalPayload.value(QStringLiteral("response_format")).toObject();
+    QCOMPARE(goalFmt.value(QStringLiteral("type")).toString(), QStringLiteral("json_object"));
+    QVERIFY(!goalFmt.contains(QStringLiteral("json_schema")));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

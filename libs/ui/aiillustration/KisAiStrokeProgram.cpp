@@ -593,7 +593,8 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
                                                                  qreal temperature,
                                                                  qreal topP,
                                                                  int maxTokensOverride,
-                                                                 int artStyle)
+                                                                 int artStyle,
+                                                                 bool forceJsonObjectOnly)
 {
     const bool reasoning = isReasoningModel(model);
     const QString systemText = buildSystemPrompt(canvasSize, prompt, customInstructions, artStyle);
@@ -635,7 +636,7 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
 
     // Structured output via json_object or json_schema (optional, only when explicitly enforced or native OpenAI)
     if (enforceJsonFormat) {
-        if (supportsJsonSchema(model)) {
+        if (!forceJsonObjectOnly && supportsJsonSchema(model)) {
             QJsonObject schemaObj;
             schemaObj[QStringLiteral("name")] = QStringLiteral("stroke_program");
             schemaObj[QStringLiteral("strict")] = true;
@@ -4419,7 +4420,8 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     int artStyle,
     const KisAiStrokeProgram *accumulatedProgram,
     const QString &previousCritique,
-    const QString &visionDetail)
+    const QString &visionDetail,
+    bool forceJsonObjectOnly)
 {
     const bool reasoning = isReasoningModel(model);
     const bool vision = includeVision && isVisionModel(model) && !imageBase64.trimmed().isEmpty();
@@ -4563,7 +4565,7 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     }
 
     if (enforceJsonFormat) {
-        if (supportsJsonSchema(model)) {
+        if (!forceJsonObjectOnly && supportsJsonSchema(model)) {
             QJsonObject schemaObj;
             schemaObj[QStringLiteral("name")] = QStringLiteral("stroke_program");
             schemaObj[QStringLiteral("strict")] = true;

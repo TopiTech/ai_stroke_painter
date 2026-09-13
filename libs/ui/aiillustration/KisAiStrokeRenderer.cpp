@@ -2197,16 +2197,16 @@ void KisAiStrokeRenderer::drawAnimeEyeOperation(QPainter &painter, const KisAiSt
 
     // 6. Double Eyelid crease (二重まぶた)
     QPainterPath creasePath;
-    creasePath.moveTo(centerPt.x() - w * 0.35 * sign, centerPt.y() - h * 0.62);
-    creasePath.quadTo(centerPt.x(), centerPt.y() - h * 0.72, centerPt.x() + w * 0.32 * sign, centerPt.y() - h * 0.58);
+    creasePath.moveTo(centerPt.x() - (w * 0.35 * sign), centerPt.y() - (h * 0.62));
+    creasePath.quadTo(centerPt.x(), centerPt.y() - (h * 0.72), centerPt.x() + (w * 0.32 * sign), centerPt.y() - (h * 0.58));
     QPen creasePen(lashColor, qMax<qreal>(1.0, lashThickness * 0.35), Qt::SolidLine, Qt::RoundCap);
     painter.setPen(creasePen);
     painter.drawPath(creasePath);
 
     // 7. Lower Eyelash (下まつ毛)
     QPainterPath lowerLash;
-    lowerLash.moveTo(centerPt.x() - w * 0.20 * sign, centerPt.y() + h * 0.48);
-    lowerLash.quadTo(centerPt.x() + w * 0.15 * sign, centerPt.y() + h * 0.50, centerPt.x() + w * 0.38 * sign, centerPt.y() + h * 0.35);
+    lowerLash.moveTo(centerPt.x() - (w * 0.20 * sign), centerPt.y() + (h * 0.48));
+    lowerLash.quadTo(centerPt.x() + (w * 0.15 * sign), centerPt.y() + (h * 0.50), centerPt.x() + (w * 0.38 * sign), centerPt.y() + (h * 0.35));
     QPen lowerPen(lashColor, qMax<qreal>(1.0, lashThickness * 0.40), Qt::SolidLine, Qt::RoundCap);
     painter.setPen(lowerPen);
     painter.drawPath(lowerLash);
