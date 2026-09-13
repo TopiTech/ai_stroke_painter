@@ -446,7 +446,16 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::backgroundForSpec(
     wash.id = QStringLiteral("bg_wash");
     wash.layer = QStringLiteral("Background");
     wash.polygon = QPolygonF{}; // empty = full canvas
-    wash.gradientColors = QVector<QColor>{top, bottom};
+    // D4-3: 3-stop sky — zenith / horizon glow / ground haze for air depth.
+    QColor mid = top;
+    if (tod == QLatin1String("night")) {
+        mid = QColor(20, 30, 70);
+    } else if (tod == QLatin1String("sunset")) {
+        mid = QColor(200, 100, 140);
+    } else {
+        mid = QColor(180, 210, 235);
+    }
+    wash.gradientColors = QVector<QColor>{top, mid, bottom};
     wash.angleDeg = 90.0;
     wash.brush.profile = QStringLiteral("watercolor");
     wash.brush.color = top;
@@ -479,6 +488,18 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::backgroundForSpec(
         const QColor ridgeColor = tod == QLatin1String("night") ? QColor(20, 30, 60) : QColor(90, 110, 130);
         ops.append(makeFill(QStringLiteral("bg_ridge"), QStringLiteral("Background"),
                             ridge, ridgeColor, QStringLiteral("brush"), 1.0, QStringLiteral("contour")));
+        // D4-3: distant haze band — aerial perspective between sky and ridge.
+        QPolygonF haze;
+        haze.append(QPointF(0.0, 0.62));
+        haze.append(QPointF(0.30, 0.55));
+        haze.append(QPointF(0.62, 0.60));
+        haze.append(QPointF(1.0, 0.52));
+        haze.append(QPointF(1.0, 0.66));
+        haze.append(QPointF(0.0, 0.70));
+        const QColor hazeColor = tod == QLatin1String("night") ? QColor(50, 65, 120, 110)
+            : tod == QLatin1String("sunset") ? QColor(240, 170, 150, 110) : QColor(210, 225, 240, 110);
+        ops.append(makeFill(QStringLiteral("bg_haze"), QStringLiteral("Background"),
+                            haze, hazeColor, QStringLiteral("watercolor"), 0.45, QStringLiteral("wash")));
     } else {
         // Character backdrop: soft floor shadow ellipse grounds the bust.
         ops.append(makeFill(QStringLiteral("bg_floor_shadow"), QStringLiteral("Background"),
@@ -826,6 +847,29 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(
                             QStringLiteral("Shading"),
                             ellipsePolygon(QPointF(hc.x() + side * hw * 0.30, hc.y() + hh * 0.26), hw * 0.09, hh * 0.05),
                             QColor(255, 159, 178), QStringLiteral("watercolor"), 0.35, QStringLiteral("wash")));
+    }
+
+    // D3-5: skin subsurface scattering — faint warm red where light passes
+    // through thin skin (nose tip, cheek peaks, ears). Suppressed at night,
+    // amplified at sunset via the LightRig time-of-day.
+    {
+        const QString tod = spec.light.timeOfDay;
+        const qreal sssGain = tod == QLatin1String("night") ? 0.55
+            : tod == QLatin1String("sunset") ? 1.35 : 1.0;
+        const qreal sssAlpha = qBound<qreal>(0.06, 0.16 * sssGain, 0.24);
+        ops.append(makeFill(QStringLiteral("sss_nose_tip"), QStringLiteral("Shading"),
+                            ellipsePolygon(QPointF(hc.x(), hc.y() + hh * 0.235), hw * 0.022, hh * 0.016),
+                            QColor(255, 122, 120), QStringLiteral("watercolor"), sssAlpha, QStringLiteral("wash")));
+        for (int side = -1; side <= 1; side += 2) {
+            ops.append(makeFill(side < 0 ? QStringLiteral("sss_cheek_l") : QStringLiteral("sss_cheek_r"),
+                                QStringLiteral("Shading"),
+                                ellipsePolygon(QPointF(hc.x() + side * hw * 0.30, hc.y() + hh * 0.26), hw * 0.055, hh * 0.030),
+                                QColor(255, 138, 130), QStringLiteral("watercolor"), sssAlpha * 0.8, QStringLiteral("wash")));
+            ops.append(makeFill(side < 0 ? QStringLiteral("sss_ear_l") : QStringLiteral("sss_ear_r"),
+                                QStringLiteral("Shading"),
+                                ellipsePolygon(QPointF(hc.x() + side * hw * 0.50, hc.y() + hh * 0.10), hw * 0.030, hh * 0.045),
+                                QColor(255, 120, 115), QStringLiteral("watercolor"), sssAlpha, QStringLiteral("wash")));
+        }
     }
 
     // Face contour lineart: crisp jaw arc reusing the rig outline.

@@ -447,6 +447,7 @@ set(kritaui_LIB_SRCS
     aiillustration/KisAiSceneSpec.cpp
     aiillustration/KisAiLayoutEngine.cpp
     aiillustration/KisAiLightRig.cpp
+    aiillustration/KisAiDeliberateStroke.cpp
     KisMainWindow.cpp
     KisOpenPane.cpp
     KisPart.cpp

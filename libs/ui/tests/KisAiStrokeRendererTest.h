@@ -65,6 +65,11 @@ private Q_SLOTS:
     void testLineScreenRowBudgetMatchesDotBudget();
     void testTypeCheckerClampsHostileParticleBounds();
     void testSceneSpecHyperQualityRendering();
+    void testDeliberateStabilizeRemovesJitter();
+    void testDeliberateLintDropsMicroAndOffCanvas();
+    void testDeliberateStrokeOrderBigToSmallFaceLast();
+    void testDeliberateAdaptiveSupersampleFaceOnly();
+    void testDeliberateEyePairSymmetryWarnings();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

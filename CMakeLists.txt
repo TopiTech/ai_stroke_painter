@@ -20,6 +20,7 @@ if (AI_STROKE_STANDALONE_TESTS)
         libs/ui/aiillustration/KisAiSceneSpec.cpp
         libs/ui/aiillustration/KisAiLayoutEngine.cpp
         libs/ui/aiillustration/KisAiLightRig.cpp
+        libs/ui/aiillustration/KisAiDeliberateStroke.cpp
     )
     target_include_directories(ai_stroke_core PUBLIC
         libs/ui

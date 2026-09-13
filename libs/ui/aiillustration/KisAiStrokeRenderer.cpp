@@ -4,6 +4,7 @@
  */
 
 #include "KisAiStrokeRenderer.h"
+#include "KisAiDeliberateStroke.h"
 #include "KisAiStrokeQualityUtils.h"
 
 #ifndef AI_STROKE_STANDALONE
@@ -809,10 +810,9 @@ QImage KisAiStrokeRenderer::renderOperationsToImage(const QVector<KisAiStrokeOpe
                                                     const QSize &canvasSize,
                                                     const QPainterPath &faceExclusionPath)
 {
-    // Supersample ordinary illustration canvases.  It materially improves
-    // narrow tapers and diagonal silhouettes while keeping large-document
-    // memory bounded.
-    const int scale = qMax(canvasSize.width(), canvasSize.height()) <= 1536 ? 2 : 1;
+    // D0: meaning-aware supersampling — faces/eyes deserve 3x on modest
+    // canvases while plain backgrounds stay cheap. Memory-bounded.
+    const int scale = KisAiDeliberateStroke::adaptiveSupersampleScale(operations, canvasSize);
     const QSize workingSize(canvasSize.width() * scale, canvasSize.height() * scale);
     QImage working(workingSize, QImage::Format_ARGB32_Premultiplied);
     working.fill(Qt::transparent);
@@ -824,11 +824,19 @@ QImage KisAiStrokeRenderer::renderOperationsToImage(const QVector<KisAiStrokeOpe
         scaledFacePath = tr.map(scaledFacePath);
     }
 
+    // D1: deliberate paint order — large masses first, facial details last.
+    const QVector<KisAiStrokeOperation> orderedOps =
+        KisAiDeliberateStroke::orderOperationsForRendering(operations, canvasSize);
+
     {
         QPainter painter(&working);
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        for (const KisAiStrokeOperation &op : operations) {
+        for (const KisAiStrokeOperation &op : orderedOps) {
+            // D1: per-stroke gate — degenerate/off-canvas strokes never reach ink.
+            const KisAiStrokeLintReport lint = KisAiDeliberateStroke::lintStroke(op, canvasSize);
+            if (lint.drop)
+                continue;
             rasterizeOperation(painter, op, workingSize, scale, scaledFacePath);
         }
     }
@@ -898,14 +906,24 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
         return;
     }
 
-    const int n = op.points.size();
+    // D0: deliberate pre-pass — jitter removal + uniform resampling so long
+    // LLM spans and dense facial clusters share one clean representation.
+    const QVector<KisAiStrokePoint> stablePoints =
+        KisAiDeliberateStroke::stabilizeStroke(op.points, canvasSize, op.closed,
+                                               KisAiStrokeProgramCodec::stableSeed(op.id));
+    const KisAiStrokeLintReport lint = KisAiDeliberateStroke::lintStroke(op, canvasSize);
+    if (lint.drop) {
+        return; // micro/off-canvas/degenerate strokes never reach ink
+    }
+
+    const int n = stablePoints.size();
 
     // Scale input points and extract pressures
     QVector<QPointF> scaledPts;
     QVector<qreal> pressures;
     scaledPts.reserve(n);
     pressures.reserve(n);
-    for (const KisAiStrokePoint &pt : op.points) {
+    for (const KisAiStrokePoint &pt : stablePoints) {
         scaledPts.append(scalePoint(pt.pos, canvasSize));
         pressures.append(qBound<qreal>(0.05, pt.pressure, 1.0));
     }
@@ -917,6 +935,18 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
     // subdivisions peaks at 24 for smooth paths; 12 under-reserved and forced
     // mid-loop reallocation on every long stroke.
     curveSamples.reserve(segments * 24 + 1);
+    // D2-1: speed-coupled ink — slow passages pool darker/wider, fast
+    // passages skip thinner (deterministic, from segment length).
+    qreal segLenAvg = 0.0;
+    {
+        qreal total = 0.0;
+        for (int i = 0; i < segments; ++i) {
+            const QPointF a = (i < scaledPts.size()) ? scaledPts.at(i % scaledPts.size()) : QPointF();
+            const QPointF b = scaledPts.at((i + 1) % scaledPts.size());
+            total += std::hypot(b.x() - a.x(), b.y() - a.y());
+        }
+        segLenAvg = segments > 0 ? total / segments : 1.0;
+    }
 
     for (int i = 0; i < segments; ++i) {
         QPointF p0, p1, p2, p3;
@@ -960,7 +990,11 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
             // Natural stroke taper according to brush profile
             const qreal taper = KisAiStrokeQualityUtils::calculateTaper(globalT, op.brush.profile, op.closed);
 
-            qreal strokeW = effectiveBrushWidth(op.brush, p * taper, canvasSize, supersampleScale);
+            // D2-1 speed coupling: +8% width pooled when slow, −12% skipped when fast.
+            const qreal speedRatio = segLenAvg > 1.0e-6 ? segmentLength / segLenAvg : 1.0;
+            const qreal speedGain = qBound<qreal>(0.88, 1.0 + (1.0 - qMin<qreal>(speedRatio, 2.0)) * 0.10, 1.08);
+
+            qreal strokeW = effectiveBrushWidth(op.brush, p * taper, canvasSize, supersampleScale) * speedGain;
 
             // If calligraphy profile, modulate width based on tangent vector
             if (op.brush.profile.compare(QLatin1String("calligraphy"), Qt::CaseInsensitive) == 0) {
@@ -1114,6 +1148,25 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
         painter.drawPolyline(leftEdge);
         painter.drawPolyline(rightEdge);
         drawRoundJoins(fringe, 0.4);
+
+        // D2-2: paper grain — sparse deterministic tooth inside the wash.
+        {
+            QRandomGenerator grain(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/paper")));
+            painter.setPen(Qt::NoPen);
+            QColor grainDot = color;
+            grainDot.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.10, 1.0));
+            painter.setBrush(grainDot);
+            const QRectF washBounds = ribbonPoly.boundingRect();
+            const int grainCount = qBound(8, sampleCount * 2, 120);
+            for (int g = 0; g < grainCount; ++g) {
+                const qreal gx = washBounds.left() + grain.generateDouble() * washBounds.width();
+                const qreal gy = washBounds.top() + grain.generateDouble() * washBounds.height();
+                if (!ribbonPoly.containsPoint(QPointF(gx, gy), Qt::OddEvenFill))
+                    continue;
+                const qreal gr = qMax<qreal>(0.4, effectiveBrushWidth(op.brush, 0.3, canvasSize, supersampleScale) * 0.08);
+                painter.drawEllipse(QPointF(gx, gy), gr, gr);
+            }
+        }
 
     } else if (profile == QLatin1String("brush")) {
         // Rich artistic hair/oil brush mark with bristle strands and stroke direction
@@ -1502,6 +1555,32 @@ void KisAiStrokeRenderer::drawGradientFillOperation(QPainter &painter,
     painter.setPen(Qt::NoPen);
     painter.setBrush(grad);
     painter.drawPolygon(poly);
+
+    // D2-5: 1.5% deterministic dither kills 8-bit Mach banding on smooth skies.
+    {
+        const QRect bounds = poly.boundingRect().toAlignedRect().intersected(
+            QRect(QPoint(0, 0), canvasSize));
+        if (!bounds.isEmpty() && bounds.width() * bounds.height() < 4096 * 4096) {
+            QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(
+                op.id + QStringLiteral("/dither")));
+            painter.setPen(Qt::NoPen);
+            const int dabStep = 3;
+            for (int y = bounds.top(); y <= bounds.bottom(); y += dabStep) {
+                for (int x = bounds.left(); x <= bounds.right(); x += dabStep) {
+                    if (!poly.containsPoint(QPointF(x + 0.5, y + 0.5), Qt::OddEvenFill))
+                        continue;
+                    const int n = int(rng.generateDouble() * 255.0);
+                    if (n < 4) { // ~1.5%: sparse light lift
+                        painter.setBrush(QColor(255, 255, 255, 10));
+                        painter.drawPoint(x, y);
+                    } else if (n > 251) { // ~1.5%: sparse dark dip
+                        painter.setBrush(QColor(0, 0, 0, 10));
+                        painter.drawPoint(x, y);
+                    }
+                }
+            }
+        }
+    }
 }
 
 void KisAiStrokeRenderer::drawRibbonOperation(QPainter &painter,
@@ -1520,10 +1599,23 @@ void KisAiStrokeRenderer::drawRibbonOperation(QPainter &painter,
 
     const qreal baseDim = qMin(canvasSize.width(), canvasSize.height());
 
+    // D0: stabilize the spine (jitter removal) before any envelope math.
+    QVector<KisAiStrokePoint> spinePts;
+    spinePts.reserve(rawSpine.size());
+    for (const QPointF &pt : rawSpine)
+        spinePts.append(KisAiStrokePoint(pt.x(), pt.y(), 0.8));
+    const QVector<KisAiStrokePoint> stableSpine =
+        KisAiDeliberateStroke::stabilizeStroke(spinePts, canvasSize, false,
+                                               KisAiStrokeProgramCodec::stableSeed(op.id));
+    QVector<QPointF> stableRaw;
+    stableRaw.reserve(stableSpine.size());
+    for (const KisAiStrokePoint &pt : stableSpine)
+        stableRaw.append(pt.pos);
+
     // Scale spine and smooth
     QVector<QPointF> scaledSpine;
-    scaledSpine.reserve(rawSpine.size());
-    for (const QPointF &pt : rawSpine) {
+    scaledSpine.reserve(stableRaw.size());
+    for (const QPointF &pt : stableRaw) {
         scaledSpine.append(scalePoint(pt, canvasSize));
     }
 
@@ -1534,6 +1626,18 @@ void KisAiStrokeRenderer::drawRibbonOperation(QPainter &painter,
     const int n = scaledSpine.size();
     if (n < 2)
         return;
+
+    // D2-4: curvature-coupled width — tighten on sharp bends, widen on runs.
+    QVector<qreal> spineCurves;
+    if (n >= 3) {
+        spineCurves = KisAiStrokeQualityUtils::computeCurvatures(scaledSpine);
+    } else {
+        spineCurves = QVector<qreal>(n, 0.0);
+    }
+    qreal curveMax = 0.0;
+    for (qreal c : spineCurves)
+        curveMax = qMax(curveMax, qAbs(c));
+    const qreal curveScale = curveMax > 1.0e-9 ? curveMax : 1.0;
 
     QVector<QPointF> leftEdge;
     QVector<QPointF> rightEdge;
@@ -1564,6 +1668,10 @@ void KisAiStrokeRenderer::drawRibbonOperation(QPainter &painter,
         } else {
             widthNorm = op.widthMid + (op.widthEnd - op.widthMid) * ((t - 0.5) * 2.0);
         }
+        const qreal curveT = spineCurves.isEmpty()
+            ? 0.0
+            : qAbs(spineCurves.at(qMin(i, spineCurves.size() - 1))) / curveScale;
+        widthNorm *= (1.0 - 0.20 * qBound<qreal>(0.0, curveT, 1.0));
         const qreal halfW = qMax<qreal>(0.5, widthNorm * baseDim * 0.5);
 
         leftEdge.append(curr + normal * halfW);

@@ -27,6 +27,7 @@
 
 #include "aiillustration/KisAiStrokeProgram.h"
 #include "aiillustration/KisAiStrokeRenderer.h"
+#include "aiillustration/KisAiDeliberateStroke.h"
 #include "aiillustration/KisAiStrokeQualityUtils.h"
 #include "aiillustration/KisAiStrokeTypeChecker.h"
 #include "aiillustration/KisAiLayoutEngine.h"
@@ -1713,6 +1714,128 @@ void KisAiStrokeRendererTest::testSceneSpecHyperQualityRendering()
 
     img1.save(QDir(artifactDir).filePath(QStringLiteral("hyper-quality-anime-sailor.png")));
     img2.save(QDir(artifactDir).filePath(QStringLiteral("hyper-quality-anime-hoodie.png")));
+}
+
+void KisAiStrokeRendererTest::testDeliberateStabilizeRemovesJitter()
+{
+    // D0: RDP(1.2px) + equidistant(3px) collapses micro-jitter, keeps endpoints.
+    QVector<KisAiStrokePoint> noisy;
+    for (int i = 0; i <= 40; ++i) {
+        const qreal x = qreal(i) / 40.0;
+        const qreal jitter = (i > 0 && i < 40 && i % 2 == 0) ? 0.0004 : 0.0; // ~0.4px at 1024
+        noisy.append(KisAiStrokePoint(x, 0.5 + jitter, 0.8));
+    }
+    const auto stable = KisAiDeliberateStroke::stabilizeStroke(noisy, QSize(1024, 1024), false, 42);
+    QVERIFY(stable.size() >= 2);
+    QVERIFY(stable.size() < noisy.size());
+    QVERIFY(qAbs(stable.first().pos.x() - 0.0) < 1e-6);
+    QVERIFY(qAbs(stable.last().pos.x() - 1.0) < 1e-6);
+}
+
+void KisAiStrokeRendererTest::testDeliberateLintDropsMicroAndOffCanvas()
+{
+    const QSize canvas(1024, 1024);
+    KisAiStrokeOperation micro;
+    micro.kind = KisAiStrokeOperation::Kind::Path;
+    micro.id = QStringLiteral("micro");
+    micro.layer = QStringLiteral("Lineart");
+    micro.points = QVector<KisAiStrokePoint>{
+        KisAiStrokePoint(0.5, 0.5, 0.8), KisAiStrokePoint(0.5005, 0.5, 0.8)};
+    micro.brush.color = QColor(20, 20, 20);
+    micro.brush.size = 0.004;
+    QVERIFY(KisAiDeliberateStroke::lintStroke(micro, canvas).drop);
+
+    KisAiStrokeOperation off;
+    off.kind = KisAiStrokeOperation::Kind::Path;
+    off.id = QStringLiteral("off");
+    off.layer = QStringLiteral("Lineart");
+    off.points = QVector<KisAiStrokePoint>{
+        KisAiStrokePoint(2.0, 2.0, 0.8), KisAiStrokePoint(2.5, 2.5, 0.8)};
+    off.brush.color = QColor(20, 20, 20);
+    off.brush.size = 0.004;
+    QVERIFY(KisAiDeliberateStroke::lintStroke(off, canvas).drop);
+
+    KisAiStrokeOperation good;
+    good.kind = KisAiStrokeOperation::Kind::Path;
+    good.id = QStringLiteral("good");
+    good.layer = QStringLiteral("Lineart");
+    good.points = QVector<KisAiStrokePoint>{
+        KisAiStrokePoint(0.2, 0.5, 0.8), KisAiStrokePoint(0.8, 0.5, 0.8)};
+    good.brush.color = QColor(20, 20, 20);
+    good.brush.size = 0.004;
+    QVERIFY(!KisAiDeliberateStroke::lintStroke(good, canvas).drop);
+}
+
+void KisAiStrokeRendererTest::testDeliberateStrokeOrderBigToSmallFaceLast()
+{
+    const QSize canvas(1024, 1024);
+    auto path = [](const QString &id, const QString &layer, qreal x0, qreal x1) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Path;
+        op.id = id;
+        op.layer = layer;
+        op.points = QVector<KisAiStrokePoint>{
+            KisAiStrokePoint(x0, 0.5, 0.8), KisAiStrokePoint(x1, 0.5, 0.8)};
+        op.brush.color = QColor(20, 20, 20);
+        op.brush.size = 0.004;
+        return op;
+    };
+    QVector<KisAiStrokeOperation> ops;
+    ops.append(path(QStringLiteral("left_eye"), QStringLiteral("Lineart"), 0.3, 0.4));
+    ops.append(path(QStringLiteral("bg_line"), QStringLiteral("Background"), 0.0, 1.0));
+    ops.append(path(QStringLiteral("hair_long"), QStringLiteral("Flats"), 0.1, 0.9));
+    const QVector<KisAiStrokeOperation> ordered =
+        KisAiDeliberateStroke::orderOperationsForRendering(ops, canvas);
+    QCOMPARE(ordered.size(), 3);
+    QCOMPARE(ordered.at(0).id, QStringLiteral("bg_line"));
+    QCOMPARE(ordered.at(1).id, QStringLiteral("hair_long"));
+    QCOMPARE(ordered.at(2).id, QStringLiteral("left_eye"));
+}
+
+void KisAiStrokeRendererTest::testDeliberateAdaptiveSupersampleFaceOnly()
+{
+    auto faceOp = []() {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::AnimeEye;
+        op.id = QStringLiteral("left_eye");
+        op.layer = QStringLiteral("Lineart");
+        op.eyeCenter = QPointF(0.4, 0.4);
+        op.eyeSize = QSizeF(0.1, 0.12);
+        return op;
+    };
+    auto bgOp = []() {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Fill;
+        op.id = QStringLiteral("bg");
+        op.layer = QStringLiteral("Background");
+        op.polygon = QPolygonF{QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)};
+        op.brush.color = QColor(100, 120, 160);
+        return op;
+    };
+    QCOMPARE(KisAiDeliberateStroke::adaptiveSupersampleScale({faceOp()}, QSize(1024, 1024)), 3);
+    QCOMPARE(KisAiDeliberateStroke::adaptiveSupersampleScale({bgOp()}, QSize(1024, 1024)), 2);
+    QCOMPARE(KisAiDeliberateStroke::adaptiveSupersampleScale({faceOp()}, QSize(2048, 2048)), 1);
+}
+
+void KisAiStrokeRendererTest::testDeliberateEyePairSymmetryWarnings()
+{
+    auto eye = [](const QString &id, qreal x, qreal y) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::AnimeEye;
+        op.id = id;
+        op.layer = QStringLiteral("Lineart");
+        op.eyeCenter = QPointF(x, y);
+        op.eyeSize = QSizeF(0.1, 0.12);
+        return op;
+    };
+    QVERIFY(KisAiDeliberateStroke::eyePairSymmetryWarnings(
+                {eye(QStringLiteral("l"), 0.4, 0.4), eye(QStringLiteral("r"), 0.6, 0.4)})
+                .isEmpty());
+    QVERIFY(!KisAiDeliberateStroke::eyePairSymmetryWarnings(
+                 {eye(QStringLiteral("l"), 0.4, 0.4), eye(QStringLiteral("r"), 0.6, 0.5)})
+                 .isEmpty());
+    QVERIFY(KisAiDeliberateStroke::eyePairSymmetryWarnings({eye(QStringLiteral("l"), 0.4, 0.4)})
+                .contains(QStringLiteral("single-eye-only")));
 }
 
 KISTEST_MAIN(KisAiStrokeRendererTest)
