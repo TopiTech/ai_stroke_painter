@@ -216,9 +216,15 @@ KisAiPromptAnalyzer::SemanticSpec KisAiPromptAnalyzer::analyze(
                text.contains(QStringLiteral("painterly")) || text.contains(QStringLiteral("厚塗り")) ||
                text.contains(QStringLiteral("油絵")) || text.contains(QStringLiteral("油彩"))) {
         spec.style = ArtStyle::Impasto;
+    } else if (text.contains(QStringLiteral("fine lineart")) || text.contains(QStringLiteral("fine line")) ||
+               text.contains(QStringLiteral("細密画")) || text.contains(QStringLiteral("細密")) ||
+               text.contains(QStringLiteral("細かい線画")) || text.contains(QStringLiteral("繊細な線")) ||
+               text.contains(QStringLiteral("delicate line")) || text.contains(QStringLiteral("intricate line")) ||
+               text.contains(QStringLiteral("極細")) || text.contains(QStringLiteral("ペン画"))) {
+        spec.style = ArtStyle::FineLineart;
     } else if (text.contains(QStringLiteral("sketch")) || text.contains(QStringLiteral("ink")) ||
                text.contains(QStringLiteral("hatching")) || text.contains(QStringLiteral("スケッチ")) ||
-               text.contains(QStringLiteral("ペン画")) || text.contains(QStringLiteral("線画"))) {
+               text.contains(QStringLiteral("線画"))) {
         spec.style = ArtStyle::InkSketch;
     } else if (text.contains(QStringLiteral("cyber")) || text.contains(QStringLiteral("neon")) ||
                text.contains(QStringLiteral("glowing")) || text.contains(QStringLiteral("ネオン")) ||
@@ -438,6 +444,8 @@ QString KisAiPromptAnalyzer::styleName(ArtStyle style)
         return QStringLiteral("Textured Impasto");
     case ArtStyle::InkSketch:
         return QStringLiteral("Manga Ink Sketch");
+    case ArtStyle::FineLineart:
+        return QStringLiteral("Fine Lineart & Delicate Pen");
     case ArtStyle::CyberNeon:
         return QStringLiteral("Cyberpunk Neon");
     case ArtStyle::General:

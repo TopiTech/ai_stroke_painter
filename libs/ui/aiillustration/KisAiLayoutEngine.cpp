@@ -342,6 +342,32 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::hairFrontMassForStyle(
             ops.append(makePath(QStringLiteral("hair_fringe_line"), QStringLiteral("Lineart"),
                                 fringeLine, darkerWarm(hair, 0.65), QStringLiteral("gpen"), 0.0035, 0.95));
         }
+
+        // D3-3: Internal Hair Flow Strands (細密毛流れ線) - flowing from crown towards clump tips
+        const qreal strandOffsets[] = {-0.34, -0.15, 0.0, 0.15, 0.34};
+        for (int s = 0; s < 5; ++s) {
+            const qreal offX = strandOffsets[s] * headWidth;
+            QVector<KisAiStrokePoint> strand;
+            strand.append(KisAiStrokePoint(headCenter.x() + offX * 0.40, topY + headHeight * 0.08, 0.30));
+            strand.append(KisAiStrokePoint(headCenter.x() + offX * 0.75, topY + headHeight * 0.28, 0.70));
+            strand.append(KisAiStrokePoint(headCenter.x() + offX * 1.05, topY + headHeight * 0.48, 0.25));
+            ops.append(makePath(QStringLiteral("hair_strand_%1").arg(s), QStringLiteral("Lineart"),
+                                strand, darkerWarm(hair, 0.72), QStringLiteral("fineliner"), 0.0016, 0.85));
+        }
+
+        // D3-3: Bangs Skin Bleed (前髪の肌透け) - gentle soft wash at clump tips so eyebrows/eyes peek through
+        QPolygonF bleedPoly;
+        bleedPoly.reserve(fringeLine.size() * 2);
+        for (const KisAiStrokePoint &pt : fringeLine) {
+            bleedPoly.append(pt.pos);
+        }
+        for (int i = fringeLine.size() - 1; i >= 0; --i) {
+            bleedPoly.append(QPointF(fringeLine[i].pos.x(), fringeLine[i].pos.y() - headHeight * 0.055));
+        }
+        if (bleedPoly.size() >= 3) {
+            ops.append(makeFill(QStringLiteral("hair_bangs_bleed"), QStringLiteral("Shading"),
+                                bleedPoly, spec.head.skinTone, QStringLiteral("watercolor"), 0.18, QStringLiteral("wash")));
+        }
     }
 
     // 2. Side locks (顔周りの毛束): primary lock + delicate sub-lock
@@ -365,6 +391,15 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::hairFrontMassForStyle(
         lock.widthMid = 0.028;
         lock.widthEnd = 0.005;
         ops.append(lock);
+
+        // Side lock contour lineart
+        QVector<KisAiStrokePoint> lockLine;
+        for (int i = 0; i < lock.spine.size(); ++i) {
+            const qreal p = (i == 0 || i == lock.spine.size() - 1) ? 0.35 : 0.85;
+            lockLine.append(KisAiStrokePoint(lock.spine[i].x(), lock.spine[i].y(), p));
+        }
+        ops.append(makePath(side < 0 ? QStringLiteral("hair_side_line_l") : QStringLiteral("hair_side_line_r"),
+                            QStringLiteral("Lineart"), lockLine, darkerWarm(hair, 0.65), QStringLiteral("gpen"), 0.0028, 0.90));
 
         // Sub-strand (delicate secondary lock for fullness)
         KisAiStrokeOperation subLock;
@@ -396,16 +431,28 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::hairFrontMassForStyle(
                             darkerWarm(hair, 0.85), QStringLiteral("gpen"), 0.0035, 0.95));
     }
 
-    // 5. Angel halo: specular arc above the crown (Highlights)
-    QVector<KisAiStrokePoint> halo;
+    // 5. Angel halo: multi-layer specular arc above the crown (Highlights)
+    // 5a. Soft broad aura glow
+    QVector<KisAiStrokePoint> haloAura;
     for (int i = 0; i <= 12; ++i) {
         const qreal t = M_PI * (0.12 + 0.76 * i / 12.0);
-        halo.append(KisAiStrokePoint(headCenter.x() + std::cos(t) * headWidth * 0.36,
-                                     topY - headHeight * 0.05 - std::sin(t) * headHeight * 0.10,
-                                     0.30 + 0.65 * std::sin(M_PI * i / 12.0)));
+        haloAura.append(KisAiStrokePoint(headCenter.x() + std::cos(t) * headWidth * 0.36,
+                                         topY - headHeight * 0.05 - std::sin(t) * headHeight * 0.10,
+                                         0.30 + 0.65 * std::sin(M_PI * i / 12.0)));
     }
-    ops.append(makePath(QStringLiteral("hair_angel_halo"), QStringLiteral("Highlights"), halo,
-                        QColor(255, 255, 255), QStringLiteral("airbrush"), 0.006, 0.80));
+    ops.append(makePath(QStringLiteral("hair_angel_halo_aura"), QStringLiteral("Highlights"), haloAura,
+                        QColor(255, 255, 255), QStringLiteral("airbrush"), 0.008, 0.45));
+
+    // 5b. Crisp specular core ribbon
+    QVector<KisAiStrokePoint> haloCore;
+    for (int i = 2; i <= 10; ++i) {
+        const qreal t = M_PI * (0.12 + 0.76 * i / 12.0);
+        haloCore.append(KisAiStrokePoint(headCenter.x() + std::cos(t) * headWidth * 0.36,
+                                         topY - headHeight * 0.05 - std::sin(t) * headHeight * 0.10,
+                                         0.20 + 0.80 * std::sin(M_PI * (i - 2) / 8.0)));
+    }
+    ops.append(makePath(QStringLiteral("hair_angel_halo_core"), QStringLiteral("Highlights"), haloCore,
+                        QColor(255, 255, 255), QStringLiteral("fineliner"), 0.0024, 0.85));
 
     return ops;
 }
@@ -693,6 +740,17 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::clothingForSpec(
                             mainCloth.darker(140), QStringLiteral("gpen"), 0.0028, 0.75));
     }
 
+    // Anatomic clavicle (鎖骨) lineart - delicate natural lines across upper chest
+    for (int side = -1; side <= 1; side += 2) {
+        QVector<KisAiStrokePoint> clavicle;
+        clavicle.append(KisAiStrokePoint(hc.x() + side * neckW * 0.18, shoulderY + hh * 0.08, 0.20));
+        clavicle.append(KisAiStrokePoint(hc.x() + side * shoulderW * 0.22, shoulderY + hh * 0.07, 0.65));
+        clavicle.append(KisAiStrokePoint(hc.x() + side * shoulderW * 0.42, shoulderY + hh * 0.09, 0.25));
+        ops.append(makePath(side < 0 ? QStringLiteral("clavicle_l") : QStringLiteral("clavicle_r"),
+                            QStringLiteral("Lineart"), clavicle,
+                            darkerWarm(skin, 0.70), QStringLiteral("fineliner"), 0.0018, 0.65));
+    }
+
     return ops;
 }
 
@@ -800,7 +858,13 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(
                             darkerWarm(hair, 0.72), QStringLiteral("gpen"), 0.0030, 0.85));
     }
 
-    // Nose: shadow dot + specular highlight point (delicate anime nose)
+    // Nose: bridge highlight line + shadow dot + specular highlight point (delicate anime nose)
+    QVector<KisAiStrokePoint> noseBridge;
+    noseBridge.append(KisAiStrokePoint(hc.x(), hc.y() + hh * 0.14, 0.20));
+    noseBridge.append(KisAiStrokePoint(hc.x(), hc.y() + hh * 0.19, 0.70));
+    ops.append(makePath(QStringLiteral("nose_bridge_hl"), QStringLiteral("Highlights"), noseBridge,
+                        QColor(255, 255, 255), QStringLiteral("airbrush"), 0.0020, 0.65));
+
     ops.append(makeFill(QStringLiteral("nose_shadow"), QStringLiteral("Shading"),
                         ellipsePolygon(QPointF(hc.x(), hc.y() + hh * 0.22), hw * 0.016, hh * 0.012),
                         darkerWarm(skin, 0.88), QStringLiteral("watercolor"), 0.45, QStringLiteral("wash")));
@@ -839,6 +903,11 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(
         ops.append(makeFill(QStringLiteral("lip_gloss"), QStringLiteral("Highlights"),
                             ellipsePolygon(QPointF(hc.x(), hc.y() + hh * 0.355), hw * 0.015, hh * 0.007),
                             QColor(255, 255, 255), QStringLiteral("airbrush"), 0.65, QStringLiteral("wash")));
+
+        // Lower lip volume shadow (下唇の落ち影)
+        ops.append(makeFill(QStringLiteral("lower_lip_shadow"), QStringLiteral("Shading"),
+                            ellipsePolygon(QPointF(hc.x(), hc.y() + hh * 0.368), hw * 0.035, hh * 0.008),
+                            darkerWarm(skin, 0.82), QStringLiteral("watercolor"), 0.35, QStringLiteral("wash")));
     }
 
     // Cheek blush (soft natural bloom)

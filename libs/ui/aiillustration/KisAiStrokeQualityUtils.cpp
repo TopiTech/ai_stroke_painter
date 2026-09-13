@@ -96,7 +96,7 @@ QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::resampleEquidistant(
         return points;
     }
 
-    const qreal step = qMax<qreal>(0.5, stepPx);
+    const qreal step = qMax<qreal>(1.0e-5, stepPx);
     const int n = points.size();
 
     QVector<qreal> segmentLengths;
@@ -1005,16 +1005,41 @@ int KisAiStrokeQualityUtils::applyLineartHierarchy(
             continue; // absolute sizes are authorial intent
         if (op.points.size() < 2)
             continue;
+
+        const QString prof = op.brush.profile.toLower();
+        const bool isDelicate = prof == QLatin1String("fineliner") || prof == QLatin1String("maru_pen")
+            || prof == QLatin1String("feathering") || prof == QLatin1String("stipple")
+            || op.id.contains(QLatin1String("strand")) || op.id.contains(QLatin1String("hatch"))
+            || op.id.contains(QLatin1String("eyelash")) || op.id.contains(QLatin1String("double_eyelid"))
+            || op.id.contains(QLatin1String("wrinkle")) || op.id.contains(QLatin1String("trim"))
+            || op.id.contains(QLatin1String("iris"));
+
+        // If authorial / rig intent explicitly specified a delicate line <= 0.0025, do not inflate it
+        if (op.brush.size > 0.0 && op.brush.size <= 0.0025 && isDelicate) {
+            continue;
+        }
+
         qreal length = 0.0;
         for (int i = 1; i < op.points.size(); ++i) {
             const QPointF d = op.points.at(i).pos - op.points.at(i - 1).pos;
             length += std::hypot(d.x(), d.y());
         }
+
         qreal tier = 0.003;
-        if (length >= 1.0)
+        if (isDelicate || length < 0.12) {
+            // Tier 0: Micro details, hair strands, delicate hatches, eyelashes
+            tier = 0.0015;
+        } else if (length >= 1.0) {
+            // Tier 3: Major outer silhouette contours
             tier = 0.008;
-        else if (length >= 0.35)
+        } else if (length >= 0.35) {
+            // Tier 2: Structural outlines
             tier = 0.005;
+        } else {
+            // Tier 1: Intermediate contours
+            tier = 0.003;
+        }
+
         if (op.closed)
             tier = qMin<qreal>(0.009, tier + 0.001);
         if (qAbs(op.brush.size - tier) > 1.0e-6) {
@@ -1028,11 +1053,13 @@ int KisAiStrokeQualityUtils::applyLineartHierarchy(
 QString KisAiStrokeQualityUtils::brushPresetName(const QString &profile)
 {
     const QString p = profile.trimmed().toLower();
-    if (p == QLatin1String("gpen") || p == QLatin1String("pencil"))
+    if (p == QLatin1String("fineliner") || p == QLatin1String("maru_pen"))
+        return QStringLiteral("Ink_Fineliner");
+    if (p == QLatin1String("gpen") || p == QLatin1String("pencil") || p == QLatin1String("feathering"))
         return QStringLiteral("Pencil-2");
     if (p == QLatin1String("airbrush"))
         return QStringLiteral("Airbrush Soft");
-    if (p == QLatin1String("crayon") || p == QLatin1String("charcoal") || p == QLatin1String("splatter"))
+    if (p == QLatin1String("crayon") || p == QLatin1String("charcoal") || p == QLatin1String("splatter") || p == QLatin1String("stipple"))
         return QStringLiteral("Chalk Soft");
     if (p == QLatin1String("watercolor"))
         return QStringLiteral("Watercolor Soft");

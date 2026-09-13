@@ -162,12 +162,26 @@ QVector<KisAiStrokePoint> KisAiDeliberateStroke::stabilizeStroke(
         return points;
     const qreal minDim = qMax<qreal>(64.0, qMin(canvasSize.width(), canvasSize.height()));
 
-    // 1. RDP jitter removal in normalized units (1.2px epsilon).
+    const qreal rawLenPx = pathLengthPx(points, canvasSize, closed);
+
+    // Adaptive step & RDP: short strokes (< 45px, such as eyelashes, hair tips, micro hatches)
+    // must not be decimated to 2-3 straight segments by a coarse 3px step.
+    qreal stepPx = 3.0;
+    qreal epsPx = 1.2;
+    if (rawLenPx < 15.0) {
+        stepPx = qBound<qreal>(0.75, rawLenPx / 8.0, 1.2);
+        epsPx = 0.4;
+    } else if (rawLenPx < 45.0) {
+        stepPx = 1.8;
+        epsPx = 0.8;
+    }
+
+    // 1. RDP jitter removal in normalized units.
     QVector<QPointF> positions;
     positions.reserve(points.size());
     for (const KisAiStrokePoint &p : points)
         positions.append(p.pos);
-    const qreal epsNorm = 1.2 / minDim;
+    const qreal epsNorm = epsPx / minDim;
     QVector<QPointF> simplified = KisAiStrokeQualityUtils::simplifyRDP(positions, epsNorm);
     if (simplified.size() < 2)
         return points;
@@ -192,8 +206,8 @@ QVector<KisAiStrokePoint> KisAiDeliberateStroke::stabilizeStroke(
     if (kept.size() < 2)
         return kept;
 
-    // 2. Equidistant resampling (3px step) for uniform ink density.
-    const qreal stepNorm = 3.0 / minDim;
+    // 2. Equidistant resampling (adaptive step) for uniform ink density without erasing details.
+    const qreal stepNorm = stepPx / minDim;
     QVector<KisAiStrokePoint> resampled =
         KisAiStrokeQualityUtils::resampleEquidistant(kept, stepNorm, closed);
     if (resampled.size() < 2)
@@ -240,7 +254,17 @@ KisAiStrokeLintReport KisAiDeliberateStroke::lintStroke(
             }
             return rep;
         }
-        if (rep.lengthPx < 2.0) {
+        // Adaptive micro-path threshold: fine linework, stippling, facial details,
+        // and short hair strands tolerate shorter lengths down to 0.45px.
+        const QString prof = op.brush.profile.toLower();
+        const bool isFine = prof == QLatin1String("fineliner") || prof == QLatin1String("maru_pen")
+            || prof == QLatin1String("feathering") || prof == QLatin1String("stipple")
+            || prof == QLatin1String("pencil")
+            || isFaceDetail(op.id) || op.id.contains(QLatin1String("strand"))
+            || op.id.contains(QLatin1String("hatch")) || op.id.contains(QLatin1String("wrinkle"))
+            || op.id.contains(QLatin1String("trim")) || op.id.contains(QLatin1String("eyelash"));
+        const qreal minLen = isFine ? 0.45 : 1.2;
+        if (rep.lengthPx < minLen) {
             rep.drop = true;
             rep.reasons << QStringLiteral("micro-path");
             return rep;

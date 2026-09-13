@@ -259,6 +259,24 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         }
         shading.append(ao);
 
+        // Contact AO: Neck base / collar junction (接触影)
+        KisAiStrokeOperation neckAo;
+        neckAo.kind = KisAiStrokeOperation::Kind::Fill;
+        neckAo.id = QStringLiteral("neck_collar_ao");
+        neckAo.layer = QStringLiteral("Shading");
+        neckAo.brush.profile = QStringLiteral("watercolor");
+        neckAo.brush.color = shadowColor(QColor(255, 224, 192), rig);
+        neckAo.brush.opacity = 0.24;
+        neckAo.brush.size = 0.02;
+        neckAo.fillStyle = QStringLiteral("wash");
+        const qreal nAoW = hw * 0.32, nAoH = hh * 0.04;
+        const QPointF nAoC(hc.x(), hc.y() + (hh * 0.72));
+        for (int i = 0; i <= 12; ++i) {
+            const qreal t = 2.0 * M_PI * i / 12.0;
+            neckAo.polygon.append(QPointF(nAoC.x() + (nAoW * std::cos(t)), nAoC.y() + (nAoH * std::sin(t))));
+        }
+        shading.append(neckAo);
+
         KisAiStrokeOperation hairCast;
         hairCast.kind = KisAiStrokeOperation::Kind::Fill;
         hairCast.id = QStringLiteral("hair_cast_shadow");

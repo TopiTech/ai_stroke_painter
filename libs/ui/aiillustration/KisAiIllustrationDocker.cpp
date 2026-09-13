@@ -471,6 +471,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         {i18n("🖌️ 厚塗り"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Impasto)},
         {i18n("⚡ サイバー"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::CyberNeon)},
         {i18n("✒️ インク"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::InkSketch)},
+        {i18n("🖋️ 細密画"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::FineLineart)},
     };
     for (const auto &sp : stylePresets) {
         auto *btn = new QPushButton(sp.first, m_visualCardsCard);
@@ -867,6 +868,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_artStyleCombo->addItem(i18n("💧 透明水彩 (Watercolor)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor));
     m_artStyleCombo->addItem(i18n("🖌️ 厚塗り・油彩 (Impasto)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Impasto));
     m_artStyleCombo->addItem(i18n("✒️ マンガ・インク (Ink Sketch)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::InkSketch));
+    m_artStyleCombo->addItem(i18n("🖋️ 細密ペン画 (Fine Lineart)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::FineLineart));
     m_artStyleCombo->addItem(i18n("⚡ サイバーネオン (Cyber Neon)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::CyberNeon));
     m_artStyleCombo->setAccessibleName(i18n("Art style"));
     goalOptionsLayout->addRow(i18n("画風スタイル"), m_artStyleCombo);

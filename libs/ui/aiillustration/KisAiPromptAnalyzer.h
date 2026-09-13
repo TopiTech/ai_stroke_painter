@@ -54,7 +54,8 @@ public:
         Watercolor,  // Soft washes, wet fringes, bleeding edges
         Impasto,     // Rich textured paint, heavy shading, dramatic contrast
         InkSketch,   // Hatching lines, manga ink, monochrome or subtle tint
-        CyberNeon    // High-contrast neon glows, dark backdrop, electric accents
+        CyberNeon,   // High-contrast neon glows, dark backdrop, electric accents
+        FineLineart  // Delicate pen linework, cross-hatching, intricate hair & contours
     };
 
     struct ColorHarmony {

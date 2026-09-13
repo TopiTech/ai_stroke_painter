@@ -1727,7 +1727,10 @@ void KisAiStrokeRendererTest::testDeliberateStabilizeRemovesJitter()
     }
     const auto stable = KisAiDeliberateStroke::stabilizeStroke(noisy, QSize(1024, 1024), false, 42);
     QVERIFY(stable.size() >= 2);
-    QVERIFY(stable.size() < noisy.size());
+    // Micro-jitter is collapsed by RDP: all points should lie on the baseline y = 0.5
+    for (const auto &pt : stable) {
+        QVERIFY(qAbs(pt.pos.y() - 0.5) < 1e-5);
+    }
     QVERIFY(qAbs(stable.first().pos.x() - 0.0) < 1e-6);
     QVERIFY(qAbs(stable.last().pos.x() - 1.0) < 1e-6);
 }
@@ -1836,6 +1839,128 @@ void KisAiStrokeRendererTest::testDeliberateEyePairSymmetryWarnings()
                  .isEmpty());
     QVERIFY(KisAiDeliberateStroke::eyePairSymmetryWarnings({eye(QStringLiteral("l"), 0.4, 0.4)})
                 .contains(QStringLiteral("single-eye-only")));
+}
+
+void KisAiStrokeRendererTest::testFineLineRenderingSubpixel()
+{
+    // Test that delicate fineliner, maru_pen, feathering, and stipple profiles
+    // render correctly with subpixel paths without crashing or degenerating.
+    const QStringList profiles = {
+        QStringLiteral("fineliner"),
+        QStringLiteral("maru_pen"),
+        QStringLiteral("feathering"),
+        QStringLiteral("stipple")
+    };
+
+    const QSize canvasSize(512, 512);
+    for (const QString &prof : profiles) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Path;
+        op.id = QStringLiteral("test_fine_") + prof;
+        op.layer = QStringLiteral("Lineart");
+        op.brush.profile = prof;
+        op.brush.color = QColor(20, 20, 30);
+        op.brush.size = 0.002;
+        op.brush.opacity = 1.0;
+        op.smooth = true;
+        op.points = {
+            KisAiStrokePoint(0.2, 0.3, 0.8),
+            KisAiStrokePoint(0.4, 0.32, 0.9),
+            KisAiStrokePoint(0.6, 0.28, 0.7),
+            KisAiStrokePoint(0.8, 0.35, 0.4)
+        };
+
+        KisAiStrokeProgram prog;
+        prog.operations = {op};
+        QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvasSize);
+        QVERIFY(!img.isNull());
+
+        // Count drawn pixels
+        int drawn = 0;
+        for (int y = 0; y < canvasSize.height(); ++y) {
+            for (int x = 0; x < canvasSize.width(); ++x) {
+                if (img.pixelColor(x, y).alpha() > 15)
+                    ++drawn;
+            }
+        }
+        QVERIFY2(drawn > 10, qPrintable(QStringLiteral("Profile %1 produced too few pixels (%2)").arg(prof).arg(drawn)));
+    }
+}
+
+void KisAiStrokeRendererTest::testAdaptiveResamplingPreservesNuance()
+{
+    // A short curved detail stroke (e.g. 10px long eyelash or hair strand)
+    // should not be decimated into a 2-point straight segment by a 3px step.
+    const QSize canvasSize(1000, 1000);
+    QVector<KisAiStrokePoint> shortCurve = {
+        KisAiStrokePoint(0.500, 0.500, 0.5),
+        KisAiStrokePoint(0.503, 0.502, 0.8),
+        KisAiStrokePoint(0.506, 0.506, 0.9),
+        KisAiStrokePoint(0.508, 0.511, 0.4),
+    };
+
+    QVector<KisAiStrokePoint> resampled =
+        KisAiDeliberateStroke::stabilizeStroke(shortCurve, canvasSize, false, 42);
+
+    // Adaptive step should maintain at least 4 points to keep curvature
+    QVERIFY2(resampled.size() >= 4,
+             qPrintable(QStringLiteral("Adaptive resampling decimated short stroke to %1 points").arg(resampled.size())));
+}
+
+void KisAiStrokeRendererTest::testLineartHierarchyDynamicTiers()
+{
+    // Test that authorial / fine lineart intent (e.g. size <= 0.0025 for fineliner)
+    // is not inflated to 0.003 or 0.008.
+    KisAiStrokeOperation fineOp;
+    fineOp.kind = KisAiStrokeOperation::Kind::Path;
+    fineOp.id = QStringLiteral("hair_strand_0");
+    fineOp.layer = QStringLiteral("Lineart");
+    fineOp.brush.profile = QStringLiteral("fineliner");
+    fineOp.brush.size = 0.0016;
+    fineOp.points = {
+        KisAiStrokePoint(0.1, 0.1, 0.8),
+        KisAiStrokePoint(0.2, 0.3, 0.8),
+        KisAiStrokePoint(0.3, 0.5, 0.8)
+    };
+
+    QVector<KisAiStrokeOperation> ops = {fineOp};
+    KisAiStrokeQualityUtils::applyLineartHierarchy(ops);
+
+    QCOMPARE(ops.size(), 1);
+    QVERIFY2(ops.first().brush.size <= 0.0020,
+             qPrintable(QStringLiteral("Fine line size was inflated to %1").arg(ops.first().brush.size)));
+}
+
+void KisAiStrokeRendererTest::testHairStrandsAndBangsBleedGeneration()
+{
+    // Verify that KisAiLayoutEngine generates hair strand lineart and bangs bleed
+    KisAiSceneSpec spec;
+    spec.prompt = QStringLiteral("Anime girl portrait with fine hair");
+    spec.subject.type = QStringLiteral("character");
+    spec.composition.headCenter = QPointF(0.5, 0.4);
+    spec.composition.headHeight = 0.40;
+    spec.head.skinTone = QColor(255, 230, 215);
+    spec.head.hairColor = QColor(45, 30, 60);
+
+    const KisAiStrokeProgram prog = KisAiLayoutEngine::generateProgram(spec, QSize(1024, 1024));
+    QVERIFY(!prog.operations.isEmpty());
+
+    bool hasHairStrand = false;
+    bool hasBangsBleed = false;
+    bool hasClavicle = false;
+    bool hasNoseBridge = false;
+
+    for (const KisAiStrokeOperation &op : prog.operations) {
+        if (op.id.contains(QLatin1String("hair_strand"))) hasHairStrand = true;
+        if (op.id.contains(QLatin1String("hair_bangs_bleed"))) hasBangsBleed = true;
+        if (op.id.contains(QLatin1String("clavicle"))) hasClavicle = true;
+        if (op.id.contains(QLatin1String("nose_bridge"))) hasNoseBridge = true;
+    }
+
+    QVERIFY(hasHairStrand);
+    QVERIFY(hasBangsBleed);
+    QVERIFY(hasClavicle);
+    QVERIFY(hasNoseBridge);
 }
 
 KISTEST_MAIN(KisAiStrokeRendererTest)

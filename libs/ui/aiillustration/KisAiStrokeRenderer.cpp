@@ -888,6 +888,114 @@ void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter, const KisAiStrok
     painter.restore();
 }
 
+static bool renderFineLineStroke(
+    QPainter &painter,
+    const QVector<SampledStrokePoint> &curveSamples,
+    const KisAiStrokeOperation &op,
+    const QColor &color,
+    const QSize &canvasSize,
+    int supersampleScale)
+{
+    Q_UNUSED(canvasSize);
+    const int sampleCount = curveSamples.size();
+    if (sampleCount < 2)
+        return false;
+
+    const QString profile = op.brush.profile.toLower();
+    const bool isExplicitFine = (profile == QLatin1String("fineliner") || profile == QLatin1String("maru_pen")
+        || profile == QLatin1String("feathering") || profile == QLatin1String("stipple"));
+
+    // Check maximum and average stroke width
+    qreal maxW = 0.0;
+    qreal avgW = 0.0;
+    for (const SampledStrokePoint &s : curveSamples) {
+        maxW = qMax(maxW, s.width);
+        avgW += s.width;
+    }
+    avgW /= qMax(1, sampleCount);
+
+    const bool isSpecialEffect = (profile == QLatin1String("airbrush") || profile == QLatin1String("neon")
+        || profile == QLatin1String("splatter") || profile == QLatin1String("watercolor")
+        || profile == QLatin1String("charcoal") || profile == QLatin1String("crayon")
+        || profile == QLatin1String("marker"));
+
+    const bool isThinStroke = (maxW <= 2.6 * supersampleScale && !isSpecialEffect);
+
+    if (!isExplicitFine && !isThinStroke) {
+        return false; // Let ribbonPoly handle wider painterly strokes
+    }
+
+    // --- High-fidelity Subpixel Vector Path Rendering ---
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    if (profile == QLatin1String("stipple")) {
+        // Delicate ink stipples along curve
+        QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/stipple")));
+        painter.setPen(Qt::NoPen);
+        QColor dotCol = color;
+        const int dotCount = qBound(sampleCount * 2, sampleCount * 4, 300);
+        for (int i = 0; i < dotCount; ++i) {
+            const int idx = rng.bounded(sampleCount);
+            const QPointF &pt = curveSamples.at(idx).pos;
+            const qreal w = qMax<qreal>(0.8, curveSamples.at(idx).width);
+            const qreal spread = (rng.generateDouble() - 0.5) * w * 1.6;
+            const qreal r = qMax<qreal>(0.4, w * 0.22 * (0.6 + rng.generateDouble() * 0.6));
+            dotCol.setAlphaF(qBound<qreal>(0.1, color.alphaF() * (0.4 + rng.generateDouble() * 0.6), 1.0));
+            painter.setBrush(dotCol);
+            painter.drawEllipse(pt + QPointF(spread, spread * 0.8), r, r);
+        }
+        return true;
+    }
+
+    if (profile == QLatin1String("feathering")) {
+        // Multi-strand layered sketch touch with organic filament tremor
+        QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/feather")));
+        const int strands = 3;
+        for (int s = 0; s < strands; ++s) {
+            QPolygonF strandPath;
+            strandPath.reserve(sampleCount);
+            const qreal lateral = (rng.generateDouble() - 0.5) * avgW * 0.7;
+            for (int i = 0; i < sampleCount; ++i) {
+                const qreal jitter = (rng.generateDouble() - 0.5) * 0.35;
+                strandPath.append(curveSamples.at(i).pos + QPointF(lateral + jitter, jitter));
+            }
+            QColor featherCol = color;
+            featherCol.setAlphaF(qBound<qreal>(0.05, color.alphaF() * 0.42, 1.0));
+            QPen pen(featherCol, qMax<qreal>(0.5, avgW * 0.45), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+            painter.setPen(pen);
+            painter.setBrush(Qt::NoBrush);
+            painter.drawPolyline(strandPath);
+        }
+        return true;
+    }
+
+    // For fineliner, maru_pen, or thin strokes:
+    // Render with varying width segment-by-segment for natural pressure taper,
+    // avoiding polygon bowtie spikes entirely.
+    for (int i = 0; i < sampleCount - 1; ++i) {
+        const QPointF &p1 = curveSamples.at(i).pos;
+        const QPointF &p2 = curveSamples.at(i + 1).pos;
+        const qreal w = qMax<qreal>(0.5, (curveSamples.at(i).width + curveSamples.at(i + 1).width) * 0.5);
+
+        // Sharp tapering for fineliner/maru_pen at endpoints (natural flick / 抜き)
+        qreal tipFactor = 1.0;
+        if ((profile == QLatin1String("fineliner") || profile == QLatin1String("maru_pen")) && !op.closed) {
+            if (i < 3) {
+                tipFactor = qBound<qreal>(0.35, (i + 1) / 3.0, 1.0);
+            } else if (i > sampleCount - 4) {
+                tipFactor = qBound<qreal>(0.30, (sampleCount - 1 - i) / 3.0, 1.0);
+            }
+        }
+
+        QPen pen(color, w * tipFactor, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        painter.setPen(pen);
+        painter.setBrush(Qt::NoBrush);
+        painter.drawLine(p1, p2);
+    }
+
+    return true;
+}
+
 void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStrokeOperation &op, const QSize &canvasSize, int supersampleScale)
 {
     if (op.points.isEmpty())
@@ -1014,6 +1122,11 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
     const int sampleCount = curveSamples.size();
     if (sampleCount < 2)
         return;
+
+    // High-precision subpixel fine line rendering for delicate ink strokes and thin contours
+    if (renderFineLineStroke(painter, curveSamples, op, color, canvasSize, supersampleScale)) {
+        return;
+    }
 
     // Generate polygonal envelope for smooth varied thickness without stepped overlaps
     QVector<QPointF> leftEdge;

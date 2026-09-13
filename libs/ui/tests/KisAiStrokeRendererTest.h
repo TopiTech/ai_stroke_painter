@@ -70,6 +70,10 @@ private Q_SLOTS:
     void testDeliberateStrokeOrderBigToSmallFaceLast();
     void testDeliberateAdaptiveSupersampleFaceOnly();
     void testDeliberateEyePairSymmetryWarnings();
+    void testFineLineRenderingSubpixel();
+    void testAdaptiveResamplingPreservesNuance();
+    void testLineartHierarchyDynamicTiers();
+    void testHairStrandsAndBangsBleedGeneration();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H
