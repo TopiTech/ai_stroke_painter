@@ -93,12 +93,24 @@ QJsonObject KisAiSceneSpecCodec::sceneSpecJsonSchema()
     headProps.insert(QStringLiteral("expression"), strEnum({QStringLiteral("smile_open"), QStringLiteral("smile_closed"), QStringLiteral("neutral"), QStringLiteral("half"), QStringLiteral("closed")}));
     headProps.insert(QStringLiteral("gaze"), strEnum({QStringLiteral("front"), QStringLiteral("left"), QStringLiteral("right"), QStringLiteral("up")}));
     headProps.insert(QStringLiteral("hair_style"), strEnum({QStringLiteral("long_hime"), QStringLiteral("long_wavy"), QStringLiteral("bob"), QStringLiteral("twin_tails"), QStringLiteral("short_messy"), QStringLiteral("short_straight")}));
+    headProps.insert(QStringLiteral("hair_bangs"), strEnum({QStringLiteral("m_fringe"), QStringLiteral("straight_cut"), QStringLiteral("swept_left"), QStringLiteral("swept_right")}));
     headProps.insert(QStringLiteral("hair_color"), color());
     headProps.insert(QStringLiteral("eye_color"), color());
     headProps.insert(QStringLiteral("skin_tone"), color());
     head.insert(QStringLiteral("properties"), headProps);
     head.insert(QStringLiteral("additionalProperties"), false);
     props.insert(QStringLiteral("head"), head);
+
+    QJsonObject clothing;
+    clothing.insert(QStringLiteral("type"), QStringLiteral("object"));
+    QJsonObject clothProps;
+    clothProps.insert(QStringLiteral("style"), strEnum({QStringLiteral("school_uniform"), QStringLiteral("sailor"), QStringLiteral("hoodie"), QStringLiteral("casual"), QStringLiteral("dress"), QStringLiteral("kimono")}));
+    clothProps.insert(QStringLiteral("color"), color());
+    clothProps.insert(QStringLiteral("secondary_color"), color());
+    clothProps.insert(QStringLiteral("accent_color"), color());
+    clothing.insert(QStringLiteral("properties"), clothProps);
+    clothing.insert(QStringLiteral("additionalProperties"), false);
+    props.insert(QStringLiteral("clothing"), clothing);
 
     QJsonObject composition;
     composition.insert(QStringLiteral("type"), QStringLiteral("object"));
@@ -205,11 +217,24 @@ bool KisAiSceneSpecCodec::parseSceneSpecObject(
         spec.head.hairStyle = normalizeEnum(head.value(QStringLiteral("hair_style")).toString(spec.head.hairStyle),
                                             {QStringLiteral("long_hime"), QStringLiteral("long_wavy"), QStringLiteral("bob"), QStringLiteral("twin_tails"), QStringLiteral("short_messy"), QStringLiteral("short_straight")},
                                             QStringLiteral("long_hime"));
+        spec.head.hairBangs = normalizeEnum(head.value(QStringLiteral("hair_bangs")).toString(spec.head.hairBangs),
+                                            {QStringLiteral("m_fringe"), QStringLiteral("straight_cut"), QStringLiteral("swept_left"), QStringLiteral("swept_right")},
+                                            QStringLiteral("m_fringe"));
         spec.head.hairColor = parseColorField(head, QStringLiteral("hair_color"), spec.head.hairColor);
         spec.head.eyeColor = parseColorField(head, QStringLiteral("eye_color"), spec.head.eyeColor);
         spec.head.skinTone = parseColorField(head, QStringLiteral("skin_tone"), spec.head.skinTone);
     } else if (spec.isCharacter()) {
         localWarnings.append(QStringLiteral("head block missing; canonical anime head defaults applied."));
+    }
+
+    const QJsonObject cloth = rootObj.value(QStringLiteral("clothing")).toObject();
+    if (!cloth.isEmpty()) {
+        spec.clothing.style = normalizeEnum(cloth.value(QStringLiteral("style")).toString(spec.clothing.style),
+                                            {QStringLiteral("school_uniform"), QStringLiteral("sailor"), QStringLiteral("hoodie"), QStringLiteral("casual"), QStringLiteral("dress"), QStringLiteral("kimono")},
+                                            QStringLiteral("school_uniform"));
+        spec.clothing.color = parseColorField(cloth, QStringLiteral("color"), spec.clothing.color);
+        spec.clothing.secondaryColor = parseColorField(cloth, QStringLiteral("secondary_color"), spec.clothing.secondaryColor);
+        spec.clothing.accentColor = parseColorField(cloth, QStringLiteral("accent_color"), spec.clothing.accentColor);
     }
 
     const QJsonObject comp = rootObj.value(QStringLiteral("composition")).toObject();
@@ -430,12 +455,14 @@ KisAiSceneSpec KisAiSceneSpecCodec::defaultSpecForPrompt(
         spec.background.type = spec.light.timeOfDay == QLatin1String("night")
             ? QStringLiteral("night_sky_town") : QStringLiteral("sky_meadow");
     }
-    if ((lower.contains(QStringLiteral("silver")) || lower.contains(QStringLiteral("white"))) && lower.contains(QStringLiteral("hair"))) {
+    if (lower.contains(QStringLiteral("silver")) || lower.contains(QStringLiteral("white hair"))) {
         spec.head.hairColor = QColor(226, 232, 240);
-    } else if ((lower.contains(QStringLiteral("blonde")) || lower.contains(QStringLiteral("gold"))) && lower.contains(QStringLiteral("hair"))) {
-        spec.head.hairColor = QColor(250, 204, 21);
+    } else if (lower.contains(QStringLiteral("blonde")) || lower.contains(QStringLiteral("blond")) || lower.contains(QStringLiteral("gold"))) {
+        spec.head.hairColor = QColor(250, 214, 90);
+    } else if (lower.contains(QStringLiteral("pink")) && (lower.contains(QStringLiteral("hair")) || lower.contains(QStringLiteral("twin")))) {
+        spec.head.hairColor = QColor(255, 160, 185);
     } else if (lower.contains(QStringLiteral("red")) && lower.contains(QStringLiteral("hair"))) {
-        spec.head.hairColor = QColor(185, 60, 50);
+        spec.head.hairColor = QColor(195, 55, 60);
     } else if (lower.contains(QStringLiteral("black")) && lower.contains(QStringLiteral("hair"))) {
         spec.head.hairColor = QColor(24, 24, 32);
     }
@@ -458,6 +485,19 @@ KisAiSceneSpec KisAiSceneSpecCodec::defaultSpecForPrompt(
         spec.composition.framing = QStringLiteral("full_body");
         spec.composition.headHeight = 0.22;
         spec.composition.headCenter = QPointF(0.5, 0.24);
+    }
+    if (lower.contains(QStringLiteral("hoodie")) || lower.contains(QStringLiteral("parka"))) {
+        spec.clothing.style = QStringLiteral("hoodie");
+        spec.clothing.color = QColor(64, 72, 90);
+    } else if (lower.contains(QStringLiteral("sailor")) || lower.contains(QStringLiteral("school")) || lower.contains(QStringLiteral("uniform"))) {
+        spec.clothing.style = QStringLiteral("school_uniform");
+        spec.clothing.color = QColor(36, 44, 70);
+    } else if (lower.contains(QStringLiteral("dress")) || lower.contains(QStringLiteral("goth"))) {
+        spec.clothing.style = QStringLiteral("dress");
+        spec.clothing.color = QColor(48, 32, 54);
+    } else if (lower.contains(QStringLiteral("kimono")) || lower.contains(QStringLiteral("yukata"))) {
+        spec.clothing.style = QStringLiteral("kimono");
+        spec.clothing.color = QColor(160, 48, 64);
     }
     return spec;
 }

@@ -44,8 +44,27 @@ public:
         qreal headWidth,
         qreal headHeight
     );
+    static QVector<KisAiStrokeOperation> hairBackMassForStyle(
+        const KisAiSceneSpec &spec,
+        const QPointF &headCenter,
+        qreal headWidth,
+        qreal headHeight
+    );
+    static QVector<KisAiStrokeOperation> hairFrontMassForStyle(
+        const KisAiSceneSpec &spec,
+        const QPointF &headCenter,
+        qreal headWidth,
+        qreal headHeight
+    );
     static QVector<KisAiStrokeOperation> backgroundForSpec(
         const KisAiSceneSpec &spec,
+        const QSize &canvasSize
+    );
+    static QVector<KisAiStrokeOperation> clothingForSpec(
+        const KisAiSceneSpec &spec,
+        const QPointF &headCenter,
+        qreal headWidth,
+        qreal headHeight,
         const QSize &canvasSize
     );
 

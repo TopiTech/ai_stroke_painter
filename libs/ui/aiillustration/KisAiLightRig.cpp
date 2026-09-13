@@ -4,6 +4,7 @@
  */
 
 #include "KisAiLightRig.h"
+#include "KisAiLayoutEngine.h"
 #include "KisAiStrokeQualityUtils.h"
 
 #include <QPainterPath>
@@ -114,6 +115,15 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         }
     }
 
+    const KisAiStrokeOperation *fringeOp = nullptr;
+    for (const KisAiStrokeOperation &op : flatsOps) {
+        const QString lowerId = op.id.toLower();
+        if (lowerId.contains(QLatin1String("fringe")) || lowerId.contains(QLatin1String("bangs"))) {
+            fringeOp = &op;
+            break;
+        }
+    }
+
     int shadowIndex = 0;
     for (const KisAiStrokeOperation &op : flatsOps) {
         if (op.kind != KisAiStrokeOperation::Kind::Fill && op.kind != KisAiStrokeOperation::Kind::GradientFill)
@@ -122,6 +132,16 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
             continue;
         if (polygonAreaLocal(op.polygon) < 2.0e-4)
             continue; // micro patches earn no shadow; keeps noise down
+
+        // Exclude facial skin, neck, and front hair fringe from coarse shifted core shadows.
+        // Facial and fringe shadows are handled anatomically by neck_shadow, eyelid_shade, hair_cast_shadow, etc.
+        const QString lowerId = op.id.toLower();
+        if (lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face")) ||
+            lowerId.contains(QLatin1String("ear")) || lowerId.contains(QLatin1String("neck")) ||
+            lowerId.contains(QLatin1String("fringe")) || lowerId.contains(QLatin1String("bangs"))) {
+            continue;
+        }
+
         QPainterPath original;
         original.addPolygon(op.polygon);
         QPainterPath shifted;
@@ -130,7 +150,16 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         for (const QPointF &pt : op.polygon)
             shiftedPoly.append(QPointF(clamp01Local(pt.x() + shadowOffset.x()), clamp01Local(pt.y() + shadowOffset.y())));
         shifted.addPolygon(shiftedPoly);
-        const QPolygonF coreShadow = original.intersected(shifted).toFillPolygon();
+        QPainterPath shadowPath = original.intersected(shifted);
+
+        // Subtract head/face anchor so back hair shadows never cast over the front of the face!
+        if (headAnchor && (lowerId.contains(QLatin1String("hair")) || lowerId.contains(QLatin1String("back")))) {
+            QPainterPath facePath;
+            facePath.addPolygon(KisAiLayoutEngine::headOutlinePolygon(headAnchor->headCenter, headAnchor->headWidth, headAnchor->headHeight));
+            shadowPath = shadowPath.subtracted(facePath);
+        }
+
+        const QPolygonF coreShadow = shadowPath.toFillPolygon();
         if (coreShadow.size() < 3 || polygonAreaLocal(coreShadow) < 1.0e-4)
             continue;
 
@@ -140,7 +169,7 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         shadow.layer = QStringLiteral("Shading");
         shadow.brush.profile = QStringLiteral("watercolor");
         shadow.brush.color = shadowColor(op.brush.color, rig);
-        shadow.brush.opacity = 0.55;
+        shadow.brush.opacity = 0.35;
         shadow.brush.size = 0.03;
         shadow.polygon = coreShadow;
         shadow.fillStyle = QStringLiteral("wash");
@@ -152,36 +181,55 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
 
     // Rim light along the light-facing edge of the largest mass.
     if (largestMass && largestMass->polygon.size() >= 4) {
-        struct ScoredPoint { int index; QPointF pt; qreal score; };
-        QVector<ScoredPoint> scored;
-        scored.reserve(largestMass->polygon.size());
-        for (int pi = 0; pi < largestMass->polygon.size(); ++pi) {
-            const QPointF &pt = largestMass->polygon.at(pi);
-            scored.append({pi, pt, pt.x() * lightDir.x() + pt.y() * lightDir.y()});
+        const QPolygonF &poly = largestMass->polygon;
+        const int n = poly.size();
+
+        // Find the best contiguous edge run facing the light direction.
+        QVector<qreal> scores(n);
+        for (int i = 0; i < n; ++i) {
+            scores[i] = poly[i].x() * lightDir.x() + poly[i].y() * lightDir.y();
         }
-        std::sort(scored.begin(), scored.end(),
-                  [](const ScoredPoint &a, const ScoredPoint &b) { return a.score > b.score; });
-        const int rimCount = qMin(6, scored.size());
-        if (rimCount >= 2) {
+
+        int bestEdge = 0;
+        qreal bestEdgeScore = -1e9;
+        for (int i = 0; i < n; ++i) {
+            const int next = (i + 1) % n;
+            const qreal dist = QLineF(poly[i], poly[next]).length();
+            if (dist > 0.35) continue;
+            const qreal edgeScore = (scores[i] + scores[next]) * 0.5;
+            if (edgeScore > bestEdgeScore) {
+                bestEdgeScore = edgeScore;
+                bestEdge = i;
+            }
+        }
+
+        QVector<int> runIndices;
+        runIndices.append(bestEdge);
+        runIndices.append((bestEdge + 1) % n);
+
+        const int prev = (bestEdge - 1 + n) % n;
+        if (QLineF(poly[prev], poly[bestEdge]).length() < 0.25 && scores[prev] > bestEdgeScore * 0.6) {
+            runIndices.prepend(prev);
+        }
+        const int next2 = (bestEdge + 2) % n;
+        const int currEnd = runIndices.last();
+        if (QLineF(poly[currEnd], poly[next2]).length() < 0.25 && scores[next2] > bestEdgeScore * 0.6) {
+            runIndices.append(next2);
+        }
+
+        if (runIndices.size() >= 2) {
             KisAiStrokeOperation rim;
             rim.kind = KisAiStrokeOperation::Kind::Path;
             rim.id = QStringLiteral("%1_rim_light").arg(largestMass->id);
             rim.layer = QStringLiteral("Highlights");
-            rim.brush.profile = QStringLiteral("gpen");
+            rim.brush.profile = QStringLiteral("airbrush");
             rim.brush.color = highlightColor(largestMass->brush.color, rig);
-            rim.brush.size = 0.0035;
-            rim.brush.opacity = 0.85;
-            // Order rim points along the polygon so the path stays coherent.
-            // Carry the original index instead of re-looking points up by
-            // value: duplicate coordinates would otherwise all resolve to the
-            // first index and zig-zag the rim path.
-            QVector<ScoredPoint> top;
-            for (int i = 0; i < rimCount; ++i)
-                top.append(scored.at(i));
-            std::sort(top.begin(), top.end(),
-                      [](const ScoredPoint &a, const ScoredPoint &b) { return a.index < b.index; });
-            for (const ScoredPoint &sp : top)
-                rim.points.append(KisAiStrokePoint(sp.pt.x(), sp.pt.y(), 0.7));
+            rim.brush.size = 0.0055;
+            rim.brush.opacity = 0.70;
+
+            for (int idx : runIndices) {
+                rim.points.append(KisAiStrokePoint(poly[idx].x(), poly[idx].y(), 0.7));
+            }
             rim.closed = false;
             rim.smooth = true;
             shading.append(rim);
@@ -200,10 +248,10 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         ao.layer = QStringLiteral("Shading");
         ao.brush.profile = QStringLiteral("watercolor");
         ao.brush.color = shadowColor(QColor(255, 224, 192), rig);
-        ao.brush.opacity = 0.35;
+        ao.brush.opacity = 0.20;
         ao.brush.size = 0.02;
         ao.fillStyle = QStringLiteral("wash");
-        const qreal aoW = hw * 0.30, aoH = hh * 0.06;
+        const qreal aoW = hw * 0.25, aoH = hh * 0.05;
         const QPointF aoC(hc.x(), hc.y() + (hh * 0.44));
         for (int i = 0; i <= 12; ++i) {
             const qreal t = 2.0 * M_PI * i / 12.0;
@@ -217,13 +265,48 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         hairCast.layer = QStringLiteral("Shading");
         hairCast.brush.profile = QStringLiteral("watercolor");
         hairCast.brush.color = shadowColor(QColor(255, 224, 192), rig);
-        hairCast.brush.opacity = 0.30;
+        hairCast.brush.opacity = 0.18;
         hairCast.brush.size = 0.02;
         hairCast.fillStyle = QStringLiteral("wash");
-        const qreal bandW = hw * 0.46, bandTop = hc.y() - (hh * 0.34), bandBottom = hc.y() - (hh * 0.20);
-        hairCast.polygon = QPolygonF{
-            QPointF(hc.x() - bandW, bandTop), QPointF(hc.x() + bandW, bandTop),
-            QPointF(hc.x() + (bandW * 0.92), bandBottom), QPointF(hc.x() - (bandW * 0.92), bandBottom)};
+
+        if (fringeOp && fringeOp->polygon.size() >= 3) {
+            // Project shadow downward from fringe clump tips onto forehead skin
+            const QPointF castOffset(-lightDir.x() * 0.015, std::abs(lightDir.y()) * 0.025 + 0.012);
+            QPolygonF shiftedFringe;
+            shiftedFringe.reserve(fringeOp->polygon.size());
+            for (const QPointF &pt : fringeOp->polygon) {
+                shiftedFringe.append(pt + castOffset);
+            }
+            QPainterPath fringePath;
+            fringePath.addPolygon(fringeOp->polygon);
+            QPainterPath castPath;
+            castPath.addPolygon(shiftedFringe);
+            // Crucial: Subtract the front hair fringe itself so the cast shadow is
+            // ONLY rendered onto the exposed forehead skin and NEVER covers the bangs!
+            castPath = castPath.subtracted(fringePath);
+
+            // Also clip to face skin contour so it stays strictly on the forehead
+            QPainterPath facePath;
+            facePath.addPolygon(KisAiLayoutEngine::headOutlinePolygon(hc, hw, hh));
+            castPath = castPath.intersected(facePath);
+
+            hairCast.polygon = castPath.toFillPolygon();
+            if (hairCast.polygon.size() < 3) {
+                const qreal bandW = hw * 0.38;
+                const qreal bandTop = hc.y() + (hh * 0.02);
+                const qreal bandBottom = hc.y() + (hh * 0.05);
+                hairCast.polygon = QPolygonF{
+                    QPointF(hc.x() - bandW, bandTop), QPointF(hc.x() + bandW, bandTop),
+                    QPointF(hc.x() + (bandW * 0.90), bandBottom), QPointF(hc.x() - (bandW * 0.90), bandBottom)};
+            }
+        } else {
+            const qreal bandW = hw * 0.38;
+            const qreal bandTop = hc.y() + (hh * 0.02);
+            const qreal bandBottom = hc.y() + (hh * 0.05);
+            hairCast.polygon = QPolygonF{
+                QPointF(hc.x() - bandW, bandTop), QPointF(hc.x() + bandW, bandTop),
+                QPointF(hc.x() + (bandW * 0.90), bandBottom), QPointF(hc.x() - (bandW * 0.90), bandBottom)};
+        }
         shading.append(hairCast);
     }
 

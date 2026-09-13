@@ -64,6 +64,7 @@ private Q_SLOTS:
     void testHatchLineCountIsBounded();
     void testLineScreenRowBudgetMatchesDotBudget();
     void testTypeCheckerClampsHostileParticleBounds();
+    void testSceneSpecHyperQualityRendering();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

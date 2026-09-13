@@ -32,9 +32,18 @@ struct KRITAUI_EXPORT KisAiSceneHead
     QString expression {QStringLiteral("smile_open")}; // smile_open, smile_closed, neutral, half, closed
     QString gaze {QStringLiteral("front")}; // front, left, right, up
     QString hairStyle {QStringLiteral("long_hime")}; // long_hime, long_wavy, bob, twin_tails, short_messy, short_straight
+    QString hairBangs {QStringLiteral("m_fringe")}; // m_fringe, straight_cut, swept_left, swept_right
     QColor hairColor {QColor(43, 58, 103)};
     QColor eyeColor {QColor(59, 130, 246)};
     QColor skinTone {QColor(255, 224, 192)};
+};
+
+struct KRITAUI_EXPORT KisAiSceneClothing
+{
+    QString style {QStringLiteral("school_uniform")}; // school_uniform, sailor, hoodie, casual, dress, kimono
+    QColor color {QColor(40, 48, 72)}; // primary clothing color
+    QColor secondaryColor {QColor(245, 245, 250)}; // collar, trim, inner
+    QColor accentColor {QColor(220, 50, 70)}; // ribbon, tie, accents
 };
 
 struct KRITAUI_EXPORT KisAiSceneComposition
@@ -74,7 +83,7 @@ struct KRITAUI_EXPORT KisAiSceneNegative
 };
 
 /**
- * V3 Phase 1: Meaning-only art direction (no coordinates).
+ * V3 Phase 1 / V4: Meaning-only art direction (no coordinates).
  * The LLM decides WHAT/WHERE IN WORDS; the LayoutEngine owns geometry.
  */
 struct KRITAUI_EXPORT KisAiSceneSpec
@@ -83,6 +92,7 @@ struct KRITAUI_EXPORT KisAiSceneSpec
     QSize canvasSize {1024, 1024};
     KisAiSceneSubject subject;
     KisAiSceneHead head;
+    KisAiSceneClothing clothing;
     KisAiSceneComposition composition;
     KisAiScenePalette palette;
     KisAiSceneLight light;

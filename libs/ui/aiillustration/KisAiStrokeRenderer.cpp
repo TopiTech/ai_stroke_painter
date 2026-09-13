@@ -188,14 +188,22 @@ QVector<KisAiStrokeOperation> KisAiStrokeRenderer::expandProceduralOperations(
                 expanded.append(syn.highlightHalo);
             }
         } else if (op.kind == KisAiStrokeOperation::Kind::Fill &&
-                   (op.brush.profile.compare(QLatin1String("watercolor"), Qt::CaseInsensitive) == 0 ||
-                    op.brush.profile.compare(QLatin1String("foliage"), Qt::CaseInsensitive) == 0 ||
+                   !op.id.contains(QLatin1String("shadow"), Qt::CaseInsensitive) &&
+                   !op.id.contains(QLatin1String("shade"), Qt::CaseInsensitive) &&
+                   !op.id.contains(QLatin1String("skin"), Qt::CaseInsensitive) &&
+                   !op.id.contains(QLatin1String("neck"), Qt::CaseInsensitive) &&
+                   !op.id.contains(QLatin1String("blush"), Qt::CaseInsensitive) &&
+                   !op.id.contains(QLatin1String("chin"), Qt::CaseInsensitive) &&
+                   !op.id.contains(QLatin1String("face"), Qt::CaseInsensitive) &&
+                   !op.id.contains(QLatin1String("clothing"), Qt::CaseInsensitive) &&
+                   !op.id.contains(QLatin1String("hair"), Qt::CaseInsensitive) &&
+                   (op.brush.profile.compare(QLatin1String("foliage"), Qt::CaseInsensitive) == 0 ||
                     op.brush.profile.compare(QLatin1String("leaves"), Qt::CaseInsensitive) == 0 ||
                     op.brush.profile.compare(QLatin1String("petals"), Qt::CaseInsensitive) == 0 ||
                     op.id.contains(QLatin1String("sakura"), Qt::CaseInsensitive) ||
-                    op.id.contains(QLatin1String("tree"), Qt::CaseInsensitive) ||
+                    op.id.contains(QLatin1String("tree_canopy"), Qt::CaseInsensitive) ||
                     op.id.contains(QLatin1String("foliage"), Qt::CaseInsensitive) ||
-                    op.id.contains(QLatin1String("flower"), Qt::CaseInsensitive))) {
+                    op.id.contains(QLatin1String("petal"), Qt::CaseInsensitive))) {
             const QVector<KisAiStrokeOperation> foliage =
                 KisAiStrokeQualityUtils::synthesizeFoliageClusters(op, canvasSize);
             expanded.append(foliage);
@@ -1080,7 +1088,14 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
         }
         painter.setBrush(color);
         painter.drawPolygon(innerPoly);
-        drawRoundJoins(color, 0.9);
+        if (!curveSamples.isEmpty()) {
+            painter.setPen(Qt::NoPen);
+            painter.setBrush(color);
+            const qreal rStart = qMax<qreal>(0.25, curveSamples.first().width * 0.45 * 0.9);
+            painter.drawEllipse(curveSamples.first().pos, rStart, rStart);
+            const qreal rEnd = qMax<qreal>(0.25, curveSamples.last().width * 0.45 * 0.9);
+            painter.drawEllipse(curveSamples.last().pos, rEnd, rEnd);
+        }
 
     } else if (profile == QLatin1String("watercolor")) {
         // Transparent wash with subtle water-fringe contour (wet edge effect)
@@ -2092,7 +2107,8 @@ void KisAiStrokeRenderer::drawAnimeEyeOperation(QPainter &painter, const KisAiSt
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
 
-    const qreal sign = op.eyeIsRight ? -1.0 : 1.0;
+    const qreal outerSign = op.eyeIsRight ? 1.0 : -1.0;
+    const qreal innerSign = -outerSign;
     const QRectF eyeRect(centerPt.x() - w * 0.5, centerPt.y() - h * 0.5, w, h);
 
     // 1. Sclera (白目)
@@ -2183,31 +2199,50 @@ void KisAiStrokeRenderer::drawAnimeEyeOperation(QPainter &painter, const KisAiSt
     // 5. Upper Eyelash & Eyeline (上まつ毛・アイライン)
     QColor lashColor = darkTop.darker(130);
     lashColor.setAlpha(255);
-    const qreal lashThickness = qMax<qreal>(2.0, h * 0.08);
+    const qreal lashThickness = qMax<qreal>(2.2, h * 0.09);
 
+    // Main sweeping upper lash line: from inner corner (目頭) over pupil to outer corner (目尻)
     QPainterPath lashPath;
-    lashPath.moveTo(centerPt.x() - w * 0.50 * sign, centerPt.y() - h * 0.02);
-    lashPath.quadTo(centerPt.x(), centerPt.y() - h * 0.58, centerPt.x() + w * 0.48 * sign, centerPt.y() - h * 0.15);
-    lashPath.quadTo(centerPt.x() + w * 0.56 * sign, centerPt.y() - h * 0.28, centerPt.x() + w * 0.58 * sign, centerPt.y() - h * 0.35);
+    lashPath.moveTo(centerPt.x() + innerSign * w * 0.44, centerPt.y() + h * 0.02);
+    lashPath.quadTo(centerPt.x() + outerSign * w * 0.05, centerPt.y() - h * 0.56,
+                    centerPt.x() + outerSign * w * 0.46, centerPt.y() - h * 0.12);
+    // Outer wing flick (目尻の跳ね上げ・キャットアイ)
+    lashPath.quadTo(centerPt.x() + outerSign * w * 0.54, centerPt.y() - h * 0.22,
+                    centerPt.x() + outerSign * w * 0.58, centerPt.y() - h * 0.30);
 
     QPen lashPen(lashColor, lashThickness, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     painter.setPen(lashPen);
     painter.setBrush(Qt::NoBrush);
     painter.drawPath(lashPath);
 
-    // 6. Double Eyelid crease (二重まぶた)
+    // Accent upper lash tip (繊細なまつ毛のアクセント)
+    QPainterPath accentLash;
+    accentLash.moveTo(centerPt.x() + outerSign * w * 0.38, centerPt.y() - h * 0.35);
+    accentLash.quadTo(centerPt.x() + outerSign * w * 0.46, centerPt.y() - h * 0.44,
+                      centerPt.x() + outerSign * w * 0.50, centerPt.y() - h * 0.48);
+    QPen accentPen(lashColor, qMax<qreal>(1.2, lashThickness * 0.45), Qt::SolidLine, Qt::RoundCap);
+    painter.setPen(accentPen);
+    painter.drawPath(accentLash);
+
+    // 6. Double Eyelid crease (二重まぶた: 自然な平行二重ライン)
     QPainterPath creasePath;
-    creasePath.moveTo(centerPt.x() - (w * 0.35 * sign), centerPt.y() - (h * 0.62));
-    creasePath.quadTo(centerPt.x(), centerPt.y() - (h * 0.72), centerPt.x() + (w * 0.32 * sign), centerPt.y() - (h * 0.58));
-    QPen creasePen(lashColor, qMax<qreal>(1.0, lashThickness * 0.35), Qt::SolidLine, Qt::RoundCap);
+    creasePath.moveTo(centerPt.x() + innerSign * (w * 0.26), centerPt.y() - (h * 0.60));
+    creasePath.quadTo(centerPt.x() + outerSign * (w * 0.05), centerPt.y() - (h * 0.68),
+                      centerPt.x() + outerSign * (w * 0.35), centerPt.y() - (h * 0.54));
+    QColor creaseColor = lashColor;
+    creaseColor.setAlpha(185);
+    QPen creasePen(creaseColor, qMax<qreal>(1.0, lashThickness * 0.32), Qt::SolidLine, Qt::RoundCap);
     painter.setPen(creasePen);
     painter.drawPath(creasePath);
 
-    // 7. Lower Eyelash (下まつ毛)
+    // 7. Lower Eyelash (下まつ毛: 目尻側のソフトで繊細なアクセント)
     QPainterPath lowerLash;
-    lowerLash.moveTo(centerPt.x() - (w * 0.20 * sign), centerPt.y() + (h * 0.48));
-    lowerLash.quadTo(centerPt.x() + (w * 0.15 * sign), centerPt.y() + (h * 0.50), centerPt.x() + (w * 0.38 * sign), centerPt.y() + (h * 0.35));
-    QPen lowerPen(lashColor, qMax<qreal>(1.0, lashThickness * 0.40), Qt::SolidLine, Qt::RoundCap);
+    lowerLash.moveTo(centerPt.x() + outerSign * (w * 0.12), centerPt.y() + (h * 0.46));
+    lowerLash.quadTo(centerPt.x() + outerSign * (w * 0.28), centerPt.y() + (h * 0.48),
+                     centerPt.x() + outerSign * (w * 0.40), centerPt.y() + (h * 0.36));
+    QColor lowerLashColor = lashColor;
+    lowerLashColor.setAlpha(175);
+    QPen lowerPen(lowerLashColor, qMax<qreal>(1.0, lashThickness * 0.35), Qt::SolidLine, Qt::RoundCap);
     painter.setPen(lowerPen);
     painter.drawPath(lowerLash);
 

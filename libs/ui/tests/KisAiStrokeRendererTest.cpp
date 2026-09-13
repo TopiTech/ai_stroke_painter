@@ -29,6 +29,8 @@
 #include "aiillustration/KisAiStrokeRenderer.h"
 #include "aiillustration/KisAiStrokeQualityUtils.h"
 #include "aiillustration/KisAiStrokeTypeChecker.h"
+#include "aiillustration/KisAiLayoutEngine.h"
+#include "aiillustration/KisAiSceneSpec.h"
 
 void KisAiStrokeRendererTest::testCatmullRomSpline()
 {
@@ -1664,6 +1666,53 @@ void KisAiStrokeRendererTest::testTypeCheckerClampsHostileParticleBounds()
     }
     const int count = opObj.value(QStringLiteral("count")).toInt();
     QVERIFY(count >= 1 && count <= 256);
+}
+
+void KisAiStrokeRendererTest::testSceneSpecHyperQualityRendering()
+{
+    // Test 1: Sailor school uniform, silver hair, blue eyes, M-fringe
+    KisAiSceneSpec spec1 = KisAiSceneSpecCodec::defaultSpecForPrompt(
+        QStringLiteral("anime girl portrait with silver hair and blue eyes, sailor uniform"),
+        QSize(1024, 1024)
+    );
+    const KisAiStrokeProgram prog1 = KisAiLayoutEngine::generateProgram(spec1, QSize(1024, 1024));
+    QVERIFY(prog1.isValid());
+    QVERIFY(prog1.operations.size() >= 20);
+
+    const QString artifactDir = qEnvironmentVariable("AI_STROKE_TEST_ARTIFACT_DIR", QStringLiteral("build-test/artifacts"));
+    QDir().mkpath(artifactDir);
+    {
+        QFile dumpFile(QDir(artifactDir).filePath(QStringLiteral("ops_dump.txt")));
+        if (dumpFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            QTextStream ts(&dumpFile);
+            for (const auto &op : prog1.operations) {
+                ts << "OP: " << op.id << " | Layer: " << op.layer << " | Kind: " << (int)op.kind 
+                   << " | Color: " << op.brush.color.name(QColor::HexArgb) 
+                   << " | Opacity: " << op.brush.opacity 
+                   << " | Profile: " << op.brush.profile 
+                   << " | PolyPts: " << op.polygon.size()
+                   << " | BBox: " << op.polygon.boundingRect().x() << "," << op.polygon.boundingRect().y() << " " << op.polygon.boundingRect().width() << "x" << op.polygon.boundingRect().height()
+                   << "\n";
+            }
+        }
+    }
+    const QImage img1 = KisAiStrokeRenderer::renderProgramToImage(prog1, QSize(1024, 1024));
+    QVERIFY(!img1.isNull());
+
+    // Test 2: Hoodie, twin tails, blonde hair, green eyes
+    KisAiSceneSpec spec2 = KisAiSceneSpecCodec::defaultSpecForPrompt(
+        QStringLiteral("anime girl with blonde twin tails and green eyes, oversized hoodie"),
+        QSize(1024, 1024)
+    );
+    const KisAiStrokeProgram prog2 = KisAiLayoutEngine::generateProgram(spec2, QSize(1024, 1024));
+    QVERIFY(prog2.isValid());
+    QVERIFY(prog2.operations.size() >= 20);
+
+    const QImage img2 = KisAiStrokeRenderer::renderProgramToImage(prog2, QSize(1024, 1024));
+    QVERIFY(!img2.isNull());
+
+    img1.save(QDir(artifactDir).filePath(QStringLiteral("hyper-quality-anime-sailor.png")));
+    img2.save(QDir(artifactDir).filePath(QStringLiteral("hyper-quality-anime-hoodie.png")));
 }
 
 KISTEST_MAIN(KisAiStrokeRendererTest)

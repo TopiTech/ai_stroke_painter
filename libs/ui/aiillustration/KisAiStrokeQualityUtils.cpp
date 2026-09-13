@@ -895,6 +895,17 @@ KisAiStrokeProgram KisAiStrokeQualityUtils::applyTrapping(
     return trapped;
 }
 
+namespace {
+bool isFrontHairOp(const KisAiStrokeOperation &op)
+{
+    const QString id = op.id.toLower();
+    return id.contains(QLatin1String("fringe")) ||
+           id.contains(QLatin1String("bangs")) ||
+           id.contains(QLatin1String("front")) ||
+           id.contains(QLatin1String("side_lock"));
+}
+} // namespace
+
 QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::uniteOverlappingHairFlats(
     const QVector<KisAiStrokeOperation> &operations)
 {
@@ -914,17 +925,24 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::uniteOverlappingHairFlats
     if (hairCandidates.size() < 2)
         return operations;
 
-    // Greedy boolean union: repeatedly merge the first path intersecting any
-    // other candidate. Non-intersecting silhouettes (e.g. twin-tails) survive
-    // as independent masses with their own colors.
+    // Greedy boolean union: merge intersecting silhouettes, but NEVER merge
+    // Front Hair (fringe/bangs) with Back Hair (behind face skin) across Z-depth!
     QVector<QPainterPath> masses;
     QVector<KisAiStrokeOperation> massOwners;
+    QVector<int> candidateMassIndex(hairCandidates.size(), -1);
     masses.reserve(hairCandidates.size());
-    for (const KisAiStrokeOperation &op : hairCandidates) {
+
+    for (int ci = 0; ci < hairCandidates.size(); ++ci) {
+        const KisAiStrokeOperation &op = hairCandidates.at(ci);
+        const bool opIsFront = isFrontHairOp(op);
         QPainterPath path;
         path.addPolygon(op.polygon);
         bool absorbed = false;
         for (int i = 0; i < masses.size(); ++i) {
+            // Front hair only merges with front hair; back hair only with back hair
+            if (opIsFront != isFrontHairOp(massOwners.at(i)))
+                continue;
+
             if (masses.at(i).intersects(path)) {
                 masses[i] = masses.at(i).united(path);
                 // Keep the visual identity of the larger contributor.
@@ -937,11 +955,13 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::uniteOverlappingHairFlats
                 } else {
                     massOwners[i].polygon = masses.at(i).toFillPolygon();
                 }
+                candidateMassIndex[ci] = i;
                 absorbed = true;
                 break;
             }
         }
         if (!absorbed) {
+            candidateMassIndex[ci] = masses.size();
             masses.append(path);
             massOwners.append(op);
         }
@@ -949,20 +969,21 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::uniteOverlappingHairFlats
 
     QVector<KisAiStrokeOperation> result;
     result.reserve(others.size() + massOwners.size());
-    // Preserve original relative order: hair masses rejoin at the position of
-    // their first contributing candidate.
-    int massCursor = 0;
-    bool massesEmitted = false;
+    // Preserve exact Z-order: each hair mass is emitted when its FIRST contributing
+    // candidate is encountered, keeping front hair strictly over face skin!
+    QSet<int> emittedMasses;
+    int hairCandidateCursor = 0;
+
     for (const KisAiStrokeOperation &op : operations) {
         const bool isHairFill = op.kind == KisAiStrokeOperation::Kind::Fill
             && KisAiStrokeProgramCodec::normalizeLayerName(op.layer) == QLatin1String("Flats")
             && op.id.contains(QLatin1String("hair"), Qt::CaseInsensitive)
             && op.polygon.size() >= 3;
         if (isHairFill) {
-            if (!massesEmitted) {
-                for (; massCursor < massOwners.size(); ++massCursor)
-                    result.append(massOwners.at(massCursor));
-                massesEmitted = true;
+            const int massIdx = candidateMassIndex.value(hairCandidateCursor++, -1);
+            if (massIdx >= 0 && !emittedMasses.contains(massIdx)) {
+                emittedMasses.insert(massIdx);
+                result.append(massOwners.at(massIdx));
             }
             continue;
         }
@@ -1140,8 +1161,8 @@ KisAiStrokeQualityUtils::HairClumpSynthesis KisAiStrokeQualityUtils::synthesizeH
         out.highlightHalo.layer = QStringLiteral("Highlights");
         out.highlightHalo.brush.profile = QStringLiteral("airbrush");
         out.highlightHalo.brush.color = calculateHueShiftedHighlight(ribbonOp.brush.color, QColor(255, 252, 240), 0.70);
-        out.highlightHalo.brush.size = qMax<qreal>(0.004, (avgWidth * 0.35) / baseDim);
-        out.highlightHalo.brush.opacity = 0.55;
+        out.highlightHalo.brush.size = qMax<qreal>(0.003, (avgWidth * 0.20) / baseDim);
+        out.highlightHalo.brush.opacity = 0.22;
 
         int hStart = qMax(0, qRound(spine.size() * 0.25));
         int hEnd = qMin(spine.size() - 1, qRound(spine.size() * 0.55));
