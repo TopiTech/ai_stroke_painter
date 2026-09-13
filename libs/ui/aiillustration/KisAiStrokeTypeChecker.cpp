@@ -626,7 +626,10 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
                         validBounds = false;
                         break;
                     }
-                    bArr[i] = n;
+                    // Checker output feeds the renderer directly on the
+                    // checker-only path, so clamp here to the normalized [0,1]
+                    // domain instead of letting 1e300-scale values through.
+                    bArr[i] = qBound(0.0, n, 1.0);
                 }
                 if (validBounds) {
                     (*opObj)[QStringLiteral("bounds")] = bArr;
@@ -642,7 +645,10 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
         if (opObj->contains(QStringLiteral("count"))) {
             qreal cnt = 16;
             if (coerceToNumber(opObj->value(QStringLiteral("count")), &cnt)) {
-                (*opObj)[QStringLiteral("count")] = qBound(1, qRound(cnt), 256);
+                // qRound on a value beyond int range is UB (typically saturates
+                // to INT_MIN, which qBound would then mis-clamp); clamp the
+                // double first.
+                (*opObj)[QStringLiteral("count")] = qBound(1, qRound(qBound(0.0, cnt, 1.0e9)), 256);
             } else {
                 (*opObj)[QStringLiteral("count")] = 16;
                 if (report) ++report->coercedValues;
@@ -662,7 +668,8 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
                     qreal centerY = 0.5;
                     coerceToNumber(cArr.at(0), &centerX);
                     coerceToNumber(cArr.at(1), &centerY);
-                    (*opObj)[QStringLiteral("center")] = QJsonArray({centerX, centerY});
+                    // Same normalized-domain clamp as the anime-eye center.
+                    (*opObj)[QStringLiteral("center")] = QJsonArray({qBound(0.0, centerX, 1.0), qBound(0.0, centerY, 1.0)});
                 }
             }
         }
@@ -708,7 +715,8 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
         if (opObj->contains(QStringLiteral("density"))) {
             qreal dens = 48;
             if (coerceToNumber(opObj->value(QStringLiteral("density")), &dens)) {
-                (*opObj)[QStringLiteral("density")] = qBound(4, qRound(dens), 120);
+                // Clamp the double before qRound to avoid the INT_MIN saturation.
+                (*opObj)[QStringLiteral("density")] = qBound(4, qRound(qBound(0.0, dens, 1.0e9)), 120);
             }
         }
     } else if (kindStr == QLatin1String("anime_eye")) {

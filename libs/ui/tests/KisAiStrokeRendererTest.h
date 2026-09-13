@@ -61,6 +61,9 @@ private Q_SLOTS:
     void testFaceExclusionMaskSuppressesParticles();
     void testUniteOverlappingHairFlats();
     void testGoalModeSingleArtboard();
+    void testHatchLineCountIsBounded();
+    void testLineScreenRowBudgetMatchesDotBudget();
+    void testTypeCheckerClampsHostileParticleBounds();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

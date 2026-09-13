@@ -121,7 +121,26 @@ void removeAdjacentDuplicates(int count, PointAccessor pointAt, QVector<int> *ke
 bool KisAiStrokeProgramCodec::isReasoningModel(const QString &model)
 {
     const QString lower = model.toLower().trimmed();
-    return lower.contains(QLatin1String("o1")) || lower.contains(QLatin1String("o3"))
+    // "o1"/"o3" must match as a family prefix (o1, o1-mini, o3-mini, ...) but
+    // not as an arbitrary substring (proto1, radio3). "note"/"dots" are
+    // intentionally broad: some providers encode reasoning capability in those
+    // fragments (e.g. dots-3-note-preview).
+    const auto matchesFamily = [&lower](const char *family) {
+        const QString f = QLatin1String(family);
+        if (lower == f || lower.startsWith(f + QLatin1Char('-')) || lower.startsWith(f + QLatin1Char('/'))) {
+            return true;
+        }
+        int idx = lower.indexOf(f + QLatin1Char('-'));
+        while (idx > 0) {
+            const QChar prev = lower.at(idx - 1);
+            if (prev == QLatin1Char('/') || prev == QLatin1Char('-') || prev == QLatin1Char(':') || prev == QLatin1Char('_')) {
+                return true;
+            }
+            idx = lower.indexOf(f + QLatin1Char('-'), idx + 1);
+        }
+        return false;
+    };
+    return matchesFamily("o1") || matchesFamily("o3")
         || lower.contains(QLatin1String("deepseek-r1")) || lower.contains(QLatin1String("deepseek-reasoner"))
         || lower.contains(QLatin1String("thinking")) || lower.contains(QLatin1String("reasoner"))
         || lower.contains(QLatin1String("qwq")) || lower.contains(QLatin1String("dots"))
@@ -943,10 +962,20 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
         QStringLiteral(R"((?<=[,\:\[\s])null[a-zA-Z]+(?=[,\:\]\}\s]))"));
     text.replace(valNull, QStringLiteral("null"));
 
-    // 12. Fix missing commas between object properties
-    static const QRegularExpression missingCommaProp(
-        QStringLiteral(R"re((?<="|\d|true|false|null|\}|\])\s+(?="(?:[a-zA-Z_][a-zA-Z0-9_\-]*|__AI_STR_MASK_\d+__)"\s*:))re"));
-    text.replace(missingCommaProp, QStringLiteral(", "));
+    // 12. Fix missing commas between object properties. The lookbehind is
+    // split into fixed-length alternatives because PCRE2 (< 10.43) rejects
+    // variable-length lookbehinds; Qt would silently disable the whole repair.
+    {
+        static const QRegularExpression missingCommaPropChar(
+            QStringLiteral(R"re((?<=["\}\]])\s+(?="(?:[a-zA-Z_][a-zA-Z0-9_\-]*|__AI_STR_MASK_\d+__)"\s*:))re"));
+        static const QRegularExpression missingCommaPropDigit(
+            QStringLiteral(R"re((?<=\d)\s+(?="(?:[a-zA-Z_][a-zA-Z0-9_\-]*|__AI_STR_MASK_\d+__)"\s*:))re"));
+        static const QRegularExpression missingCommaPropWord(
+            QStringLiteral(R"re((?<=(?:true|false|null))\s+(?="(?:[a-zA-Z_][a-zA-Z0-9_\-]*|__AI_STR_MASK_\d+__)"\s*:))re"));
+        text.replace(missingCommaPropChar, QStringLiteral(", "));
+        text.replace(missingCommaPropDigit, QStringLiteral(", "));
+        text.replace(missingCommaPropWord, QStringLiteral(", "));
+    }
 
     // 13. Fix missing commas between numbers in coordinate arrays (e.g. [0.1 0.2 0.8] -> [0.1, 0.2, 0.8])
     static const QRegularExpression missingCommaNum(
@@ -1282,17 +1311,30 @@ bool KisAiStrokeProgramCodec::parseSseStreamChunk(
         return false;
     }
 
+    // The accumulated content is the decoded stream body; it must obey the same
+    // overall budget as a buffered response so a hostile/buggy peer streaming
+    // endless deltas cannot exhaust memory.
+    constexpr int MAX_SSE_CONTENT_BYTES = 32 * 1024 * 1024;
+    if (accumulatedContent->size() > MAX_SSE_CONTENT_BYTES) {
+        unprocessedBuffer->clear();
+        return false;
+    }
+
     unprocessedBuffer->append(chunk);
     bool anyDeltaExtracted = false;
 
+    // Consume complete lines in a single forward scan and rewrite the carry-over
+    // buffer once per chunk. Calling remove(0, n) per line makes a large chunk
+    // with many lines quadratic (each remove memmoves the whole remainder).
+    int scanPos = 0;
     while (true) {
-        const int newlineIdx = unprocessedBuffer->indexOf('\n');
+        const int newlineIdx = unprocessedBuffer->indexOf('\n', scanPos);
         if (newlineIdx < 0) {
             break;
         }
 
-        QByteArray line = unprocessedBuffer->left(newlineIdx).trimmed();
-        unprocessedBuffer->remove(0, newlineIdx + 1);
+        QByteArray line = unprocessedBuffer->mid(scanPos, newlineIdx - scanPos).trimmed();
+        scanPos = newlineIdx + 1;
 
         if (line.isEmpty() || line.startsWith(':')) {
             // SSE keep-alive or comment
@@ -1342,6 +1384,11 @@ bool KisAiStrokeProgramCodec::parseSseStreamChunk(
                 }
             }
         }
+    }
+
+    // Drop the consumed prefix in one move, keeping any partial trailing line.
+    if (scanPos > 0) {
+        unprocessedBuffer->remove(0, scanPos);
     }
 
     return anyDeltaExtracted;
@@ -1409,7 +1456,11 @@ bool KisAiStrokeProgramCodec::extractOperationsFromRawText(const QString &rawTex
         if (ch == QLatin1Char('"')) {
             inString = true;
         } else if (ch == QLatin1Char('{')) {
-            openBraces.append(i);
+            // A hostile response of pure '{' would otherwise push one entry per
+            // byte; stop tracking once no further range can be recorded.
+            if (openBraces.size() < MAX_OBJECT_RANGES) {
+                openBraces.append(i);
+            }
         } else if (ch == QLatin1Char('}') && !openBraces.isEmpty()) {
             const int openBrace = openBraces.takeLast();
             if (objectRanges.size() < MAX_OBJECT_RANGES) {
@@ -2064,7 +2115,10 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
         return true;
     }
 
-    if (diagnostic) {
+    if (diagnostic && extDocErr.error != QJsonParseError::NoError) {
+        // Only report a JSON syntax error when the extracted JSON actually
+        // failed to parse; a clean-but-empty document must not fabricate an
+        // "error at line 1, column 1" diagnostic.
         diagnostic->hasError = true;
         diagnostic->errorOffset = extDocErr.offset;
         diagnostic->errorMessage = extDocErr.errorString();
@@ -2192,11 +2246,20 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 return o.value(name);
             }
         }
+        // Tolerant fallback for near-miss keys ("layer_name" for "layer"). The
+        // old n.contains(k) direction let a stray 1-char key such as "s" match
+        // "size"/"points", and k.contains(n) let "kind" match "id"; both hijack
+        // unrelated fields, so only containment of the longer key inside the
+        // candidate is allowed and only when the candidate is at least 4
+        // characters long.
         for (auto it = o.constBegin(); it != o.constEnd(); ++it) {
             const QString k = it.key().trimmed().toLower();
             for (const auto &name : names) {
                 const QString n = name.toLower();
-                if (k == n || k.contains(n) || n.contains(k)) {
+                if (k == n) {
+                    return it.value();
+                }
+                if (n.size() >= 4 && k.size() > n.size() && k.contains(n)) {
                     return it.value();
                 }
             }
@@ -2318,7 +2381,11 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
             }
         }
         if (cw > 0 && ch > 0) {
-            outProgram->canvasSize = QSize(cw, ch);
+            // Clamp at parse time: the pixel-vs-normalized auto-scaling below
+            // divides by these values, so a hostile 2e9 canvas would shrink
+            // every pixel coordinate to ~0 before refineForRendering clamps.
+            constexpr int PARSE_CANVAS_EDGE_MAX = 4096;
+            outProgram->canvasSize = QSize(qBound(1, cw, PARSE_CANVAS_EDGE_MAX), qBound(1, ch, PARSE_CANVAS_EDGE_MAX));
         }
     }
 
@@ -4524,8 +4591,10 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
     } else {
         payload[QStringLiteral("max_tokens")] = calculatedTokens;
         payload[QStringLiteral("temperature")] = qBound<qreal>(0.0, temperature, 2.0);
-        if (topP < 1.0) {
-            payload[QStringLiteral("top_p")] = qBound<qreal>(0.05, topP, 1.0);
+        // Mirror buildChatCompletionsPayload(): omit top_p for the default 1.0
+        // and for non-positive values instead of sending a fabricated 0.05.
+        if (topP > 0.0 && topP < 1.0) {
+            payload[QStringLiteral("top_p")] = qBound<qreal>(0.01, topP, 1.0);
         }
     }
 

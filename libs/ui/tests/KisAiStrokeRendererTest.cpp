@@ -28,6 +28,7 @@
 #include "aiillustration/KisAiStrokeProgram.h"
 #include "aiillustration/KisAiStrokeRenderer.h"
 #include "aiillustration/KisAiStrokeQualityUtils.h"
+#include "aiillustration/KisAiStrokeTypeChecker.h"
 
 void KisAiStrokeRendererTest::testCatmullRomSpline()
 {
@@ -1575,6 +1576,94 @@ void KisAiStrokeRendererTest::testGoalModeSingleArtboard()
         const QString norm = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
         QVERIFY2(allowedLayers.contains(norm), qPrintable(QStringLiteral("Invalid layer: %1").arg(norm)));
     }
+}
+
+void KisAiStrokeRendererTest::testHatchLineCountIsBounded()
+{
+    // A tiny spacing over a huge polygon previously issued hundreds of
+    // thousands of clipped drawLine calls for a single hatch pass.
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(2048, 2048);
+
+    KisAiStrokeOperation hatch;
+    hatch.kind = KisAiStrokeOperation::Kind::Hatch;
+    hatch.id = QStringLiteral("hostile_hatch");
+    hatch.layer = QStringLiteral("Shading");
+    hatch.polygon << QPointF(0.0, 0.0) << QPointF(1.0, 0.0) << QPointF(1.0, 1.0) << QPointF(0.0, 1.0);
+    hatch.brush.color = QColor(60, 60, 60);
+    hatch.brush.opacity = 1.0;
+    hatch.angleDeg = 45.0;
+    hatch.spacing = 0.002; // parse-time floor -> ~4 px on a 2048 canvas
+    program.operations.append(hatch);
+
+    const KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(program);
+    QVERIFY(!refined.operations.isEmpty());
+
+    QImage canvas(512, 512, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+
+    QElapsedTimer timer;
+    timer.start();
+    {
+        QPainter painter(&canvas);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        KisAiStrokeRenderer::renderProgramToImage(refined, QSize(512, 512));
+    }
+    const qint64 elapsedMs = timer.elapsed();
+    QVERIFY2(elapsedMs < 10000, qPrintable(QStringLiteral("hostile hatch took %1 ms").arg(elapsedMs)));
+}
+
+void KisAiStrokeRendererTest::testLineScreenRowBudgetMatchesDotBudget()
+{
+    // The line screen shares the bounded-work policy with the dot screen: a
+    // degenerate spacing must not turn into an unbounded row loop.
+    QImage canvas(2048, 2048, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+
+    QPolygonF poly;
+    poly << QPointF(0, 0) << QPointF(2047, 0) << QPointF(2047, 2047) << QPointF(0, 2047);
+
+    QElapsedTimer timer;
+    timer.start();
+    {
+        QPainter painter(&canvas);
+        KisAiStrokeQualityUtils::drawHalftonePattern(painter, poly, QColor(0, 0, 0, 255), 1.0, 0.5, 0.0, true);
+    }
+    const qint64 elapsedMs = timer.elapsed();
+    QVERIFY2(elapsedMs < 10000, qPrintable(QStringLiteral("line screen took %1 ms").arg(elapsedMs)));
+
+    bool hasDrawnPixel = false;
+    for (int y = 0; y < 2048 && !hasDrawnPixel; y += 97) {
+        for (int x = 0; x < 2048; x += 97) {
+            if (canvas.pixelColor(x, y).alpha() > 0) {
+                hasDrawnPixel = true;
+                break;
+            }
+        }
+    }
+    QVERIFY(hasDrawnPixel);
+}
+
+void KisAiStrokeRendererTest::testTypeCheckerClampsHostileParticleBounds()
+{
+    // The type checker rewrites bounds/count for the checker-only path, so it
+    // must not pass 1e300-scale or inverted values through to the renderer.
+    QJsonObject opObj;
+    opObj[QStringLiteral("kind")] = QStringLiteral("particles");
+    opObj[QStringLiteral("bounds")] = QJsonArray({1.0e300, -5.0, 1.0e300, 1.0e300});
+    opObj[QStringLiteral("count")] = 1.0e300;
+
+    KisAiStrokeTypeCheckReport report;
+    QVERIFY(KisAiStrokeTypeChecker::checkAndCoerceOperation(&opObj, 0, &report));
+
+    const QJsonArray bounds = opObj.value(QStringLiteral("bounds")).toArray();
+    QCOMPARE(bounds.size(), 4);
+    for (int i = 0; i < 4; ++i) {
+        const qreal v = bounds.at(i).toDouble();
+        QVERIFY2(v >= 0.0 && v <= 1.0, qPrintable(QString::number(v)));
+    }
+    const int count = opObj.value(QStringLiteral("count")).toInt();
+    QVERIFY(count >= 1 && count <= 256);
 }
 
 KISTEST_MAIN(KisAiStrokeRendererTest)

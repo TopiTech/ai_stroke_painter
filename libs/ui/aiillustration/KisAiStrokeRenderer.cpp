@@ -142,10 +142,17 @@ KisAiStrokeRenderer::generateCatmullRomSpline(const QVector<QPointF> &points, in
             const qreal t = qreal(step) / steps;
             result.append(centripetalPoint(p0, p1, p2, p3, t));
         }
+        // Include t = 1 (== p2, the next knot) so each span reaches its end;
+        // sampling only [0, 1) left every segment ~1/subdivisions short and
+        // produced visible polygonal faceting between spans.
+        result.append(p2);
     }
 
     if (!closed) {
-        result.append(points.last());
+        // The final segment already ended at points.last(); avoid a duplicate.
+        if (result.isEmpty() || result.last() != points.last()) {
+            result.append(points.last());
+        }
     }
 
     return result;
@@ -554,6 +561,18 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
 
     int layersAdded = 0;
 
+    // Accumulate the composite the same way renderProgramToImage() does, so the
+    // finishing-step bloom map can be derived from it instead of re-running the
+    // whole rasterization pipeline a second time.
+    QImage bloomSource;
+    const bool needsBloomSource =
+        program.stepPhase.compare(QLatin1String("finishing"), Qt::CaseInsensitive) == 0 ||
+        (program.goalReached && program.currentStep >= program.totalSteps);
+    if (needsBloomSource) {
+        bloomSource = QImage(canvasSize, QImage::Format_ARGB32_Premultiplied);
+        bloomSource.fill(Qt::transparent);
+    }
+
     for (const QString &layerKey : orderedLayers) {
         const QVector<KisAiStrokeOperation> &ops = layerBuckets[layerKey];
         if (ops.isEmpty())
@@ -618,6 +637,20 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
             clipPainter.drawImage(0, 0, flatsImage);
         }
 
+        if (needsBloomSource && !bloomSource.isNull()) {
+            QPainter bloomPainter(&bloomSource);
+            if (isShading) {
+                bloomPainter.setCompositionMode(QPainter::CompositionMode_Multiply);
+            } else if (isHighlights) {
+                bloomPainter.setCompositionMode(QPainter::CompositionMode_Screen);
+            } else if (isFx) {
+                bloomPainter.setCompositionMode(QPainter::CompositionMode_Plus);
+            } else {
+                bloomPainter.setCompositionMode(QPainter::CompositionMode_SourceOver);
+            }
+            bloomPainter.drawImage(0, 0, layerImage);
+        }
+
         const QString layerTitle = QStringLiteral("AI: %1").arg(layerKey);
         KisPaintLayerSP layer = nullptr;
         KisNodeSP existingChild = group->firstChild();
@@ -670,8 +703,13 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
 
     if (program.stepPhase.compare(QLatin1String("finishing"), Qt::CaseInsensitive) == 0 ||
         (program.goalReached && program.currentStep >= program.totalSteps)) {
-        // B4: Generate isolated, non-destructive Cinematic Bloom Layer on real canvas
-        QImage compPreview = renderProgramToImage(activeProgram, canvasSize, clipShadingToFlats, inheritedFlatsProgram, effectiveTrapping);
+        // B4: Generate isolated, non-destructive Cinematic Bloom Layer on real canvas.
+        // The composite was accumulated while rendering the layers above, so no
+        // second full rasterization pass is needed here.
+        QImage compPreview = bloomSource;
+        if (compPreview.isNull()) {
+            compPreview = renderProgramToImage(activeProgram, canvasSize, clipShadingToFlats, inheritedFlatsProgram, effectiveTrapping);
+        }
         if (!compPreview.isNull()) {
             QImage bloomGlow = generateBloomMap(compPreview, 0.40, 8);
             if (!bloomGlow.isNull()) {
@@ -868,7 +906,9 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
     const int segments = op.closed ? n : (n - 1);
 
     QVector<SampledStrokePoint> curveSamples;
-    curveSamples.reserve(segments * 12 + 1);
+    // subdivisions peaks at 24 for smooth paths; 12 under-reserved and forced
+    // mid-loop reallocation on every long stroke.
+    curveSamples.reserve(segments * 24 + 1);
 
     for (int i = 0; i < segments; ++i) {
         QPointF p0, p1, p2, p3;
@@ -1316,7 +1356,9 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
     }
 
     // Phase 1: Special treatment for Nose shading: prevent ugly black holes
-    if (isNose && op.layer == QLatin1String("Shading") && color.value() < 50) {
+    // (op.layer must be compared via the normalized name; every other branch in
+    // this pipeline operates on normalized layer names).
+    if (isNose && KisAiStrokeProgramCodec::normalizeLayerName(op.layer) == QLatin1String("Shading") && color.value() < 50) {
         color.setRgb(120, 75, 65, qBound(0, qRound(color.alphaF() * 255 * 0.4), 80));
     }
 
@@ -1633,11 +1675,22 @@ void KisAiStrokeRenderer::drawHatchOperation(QPainter &painter, const KisAiStrok
         const QPointF dir(std::cos(rad), std::sin(rad));
         const QPointF norm(-std::sin(rad), std::cos(rad));
 
-        const int numLines = qRound(radius * 2.0 / spacing);
+        // Bound the line count like drawHalftonePattern does: a tiny spacing
+        // over a huge bounding radius must not translate into hundreds of
+        // thousands of clipped drawLine calls per pass. Beyond the cap the
+        // hatch is already visually solid, so widening the spacing keeps the
+        // coverage without the runaway work.
+        constexpr int MAX_HATCH_LINES = 2000;
+        const qreal rawNumLines = radius * 2.0 / spacing;
+        int numLines = std::isfinite(rawNumLines) ? qRound(rawNumLines) : 0;
+        if (numLines > MAX_HATCH_LINES) {
+            numLines = MAX_HATCH_LINES;
+        }
+        const qreal effectiveSpacing = numLines > 0 ? qMax(spacing, radius * 2.0 / numLines) : spacing;
         for (int i = -numLines; i <= numLines; ++i) {
-            const QPointF lineMid = center + norm * (i * spacing);
+            const QPointF lineMid = center + norm * (i * effectiveSpacing);
             // Slight organic tremor/jitter to avoid sterile mechanical appearance
-            const qreal wobble = (rng.generateDouble() - 0.5) * spacing * 0.15;
+            const qreal wobble = (rng.generateDouble() - 0.5) * effectiveSpacing * 0.15;
             const QPointF p1 = lineMid - dir * radius + norm * wobble;
             const QPointF p2 = lineMid + dir * radius - norm * wobble;
             painter.drawLine(p1, p2);
@@ -1764,6 +1817,10 @@ void KisAiStrokeRenderer::applySoftEdgeDiffusion(QImage &image, int radius)
     }
 
     if (image.format() != QImage::Format_ARGB32_Premultiplied && image.format() != QImage::Format_ARGB32) {
+        image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    } else if (image.format() == QImage::Format_ARGB32) {
+        // Straight-alpha pixels bleed colour into a box filter that assumes
+        // premultiplied math, producing halos around transparent regions.
         image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     }
 
@@ -2129,8 +2186,8 @@ void KisAiStrokeRenderer::drawAnimeEyeOperation(QPainter &painter, const KisAiSt
     const qreal lashThickness = qMax<qreal>(2.0, h * 0.08);
 
     QPainterPath lashPath;
-    lashPath.moveTo(centerPt.x() - w * 0.50, centerPt.y() - h * 0.02);
-    lashPath.quadTo(centerPt.x(), centerPt.y() - h * 0.58, centerPt.x() + w * 0.48, centerPt.y() - h * 0.15);
+    lashPath.moveTo(centerPt.x() - w * 0.50 * sign, centerPt.y() - h * 0.02);
+    lashPath.quadTo(centerPt.x(), centerPt.y() - h * 0.58, centerPt.x() + w * 0.48 * sign, centerPt.y() - h * 0.15);
     lashPath.quadTo(centerPt.x() + w * 0.56 * sign, centerPt.y() - h * 0.28, centerPt.x() + w * 0.58 * sign, centerPt.y() - h * 0.35);
 
     QPen lashPen(lashColor, lashThickness, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
@@ -2140,16 +2197,16 @@ void KisAiStrokeRenderer::drawAnimeEyeOperation(QPainter &painter, const KisAiSt
 
     // 6. Double Eyelid crease (二重まぶた)
     QPainterPath creasePath;
-    creasePath.moveTo(centerPt.x() - w * 0.35, centerPt.y() - h * 0.62);
-    creasePath.quadTo(centerPt.x(), centerPt.y() - h * 0.72, centerPt.x() + w * 0.32, centerPt.y() - h * 0.58);
+    creasePath.moveTo(centerPt.x() - w * 0.35 * sign, centerPt.y() - h * 0.62);
+    creasePath.quadTo(centerPt.x(), centerPt.y() - h * 0.72, centerPt.x() + w * 0.32 * sign, centerPt.y() - h * 0.58);
     QPen creasePen(lashColor, qMax<qreal>(1.0, lashThickness * 0.35), Qt::SolidLine, Qt::RoundCap);
     painter.setPen(creasePen);
     painter.drawPath(creasePath);
 
     // 7. Lower Eyelash (下まつ毛)
     QPainterPath lowerLash;
-    lowerLash.moveTo(centerPt.x() - w * 0.20, centerPt.y() + h * 0.48);
-    lowerLash.quadTo(centerPt.x() + w * 0.15, centerPt.y() + h * 0.50, centerPt.x() + w * 0.38, centerPt.y() + h * 0.35);
+    lowerLash.moveTo(centerPt.x() - w * 0.20 * sign, centerPt.y() + h * 0.48);
+    lowerLash.quadTo(centerPt.x() + w * 0.15 * sign, centerPt.y() + h * 0.50, centerPt.x() + w * 0.38 * sign, centerPt.y() + h * 0.35);
     QPen lowerPen(lashColor, qMax<qreal>(1.0, lashThickness * 0.40), Qt::SolidLine, Qt::RoundCap);
     painter.setPen(lowerPen);
     painter.drawPath(lowerLash);

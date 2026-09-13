@@ -98,6 +98,12 @@ private Q_SLOTS:
     void testLineartHierarchy();
     void testBrushPresetMapping();
     void testStructuredCritiqueParsing();
+    void testFindFieldDoesNotHijackShortKeys();
+    void testSseAccumulatedContentIsBounded();
+    void testSseChunkWithManyLinesIsLinear();
+    void testCanvasSizeClampedAtParseTime();
+    void testReasoningModelFamilyPrefixMatching();
+    void testExtractOperationsDiagnosticNotFabricated();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

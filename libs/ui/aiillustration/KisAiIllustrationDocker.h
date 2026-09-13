@@ -143,6 +143,10 @@ private:
     int m_currentRetryCount {0};
     int m_maxRetryCount {2};
     bool m_isSelfCorrectionRetry {false};
+    // Debounces saveSettings() for free-typed text fields (custom
+    // instructions); without it every keystroke rewrites the whole QSettings
+    // tree and re-runs DPAPI encryption of the stored API key.
+    QTimer *m_settingsSaveDebounceTimer {nullptr};
     // True while generateLlmStrokes() is being re-entered from executeRetry().
     // A single-shot QTimer is already inactive by then, so the retry budget must
     // not be reset based on the timer state.

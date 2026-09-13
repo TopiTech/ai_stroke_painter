@@ -59,6 +59,8 @@
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QStyle>
+#include <QTextBlock>
+#include <QTextCursor>
 #include <QToolButton>
 #include <QTimer>
 #include <QUrl>
@@ -78,7 +80,6 @@ namespace
 constexpr qint64 MAX_REMOTE_RESPONSE_BYTES = 32LL * 1024 * 1024;
 constexpr qint64 MAX_REMOTE_IMAGE_BYTES = 24LL * 1024 * 1024;
 constexpr qint64 MAX_REMOTE_IMAGE_PIXELS = 24LL * 1024 * 1024;
-constexpr int INITIAL_REQUEST_TIMEOUT_MS = 120'000;
 constexpr int ACTIVITY_TIMEOUT_MS = 60'000;
 constexpr int MAX_REQUEST_TIMEOUT_MS = 600'000;
 constexpr int REMOTE_IMAGE_TIMEOUT_MS = 180'000;
@@ -535,6 +536,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_strokeBudgetSpin->setSingleStep(50);
     m_strokeBudgetSpin->setSuffix(i18n(" 本"));
     m_strokeBudgetSpin->setAccessibleName(i18n("Stroke budget"));
+    // addRow(QLabel*, field) does not auto-associate buddies (only the QString
+    // overload does), so the label would be invisible to screen readers.
+    m_strokeBudgetLabel->setBuddy(m_strokeBudgetSpin);
 
     m_temperatureSpin = new QDoubleSpinBox(m_detailsContainer);
     m_temperatureSpin->setRange(0.0, 2.0);
@@ -673,6 +677,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_testConnectionStatusLabel = new QLabel(m_detailsContainer);
     m_testConnectionStatusLabel->setObjectName(QStringLiteral("aiTestStatus"));
     m_testConnectionStatusLabel->setWordWrap(true);
+    // Error detail can echo server-supplied text; keep it plain text.
+    m_testConnectionStatusLabel->setTextFormat(Qt::PlainText);
     m_testConnectionStatusLabel->setVisible(false);
     detailsLayout->addWidget(m_testConnectionStatusLabel);
 
@@ -775,6 +781,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     m_critiqueLabel = new QLabel(i18n("AIの視覚批評・自己分析がここに表示されます。"), m_goalInspectorCard);
     m_critiqueLabel->setWordWrap(true);
+    // Critique text comes from the model; render it as plain text so HTML in
+    // an untrusted response is never interpreted.
+    m_critiqueLabel->setTextFormat(Qt::PlainText);
     m_critiqueLabel->setStyleSheet(QStringLiteral(
         "background: #0d1117; color: #94a3b8; border: 1px solid #273142; border-left: 3px solid #38bdf8; border-radius: 4px; padding: 6px 8px; font-size: 11px;"));
     inspectorLayout->addWidget(m_critiqueLabel);
@@ -840,6 +849,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_statusLabel = new QLabel(i18n("キャンバスがない場合は、生成時に新しい AI キャンバスを作成します。"), actionCard.frame);
     m_statusLabel->setObjectName(QStringLiteral("aiStatus"));
     m_statusLabel->setWordWrap(true);
+    // Status text can carry server/model-supplied error detail; render it as
+    // plain text so HTML from an untrusted response is never interpreted.
+    m_statusLabel->setTextFormat(Qt::PlainText);
     m_statusLabel->setAccessibleName(i18n("Generation status"));
     actionCard.layout->addWidget(m_statusLabel);
 
@@ -954,7 +966,17 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         saveSettings();
     });
     connect(m_reasoningEffortCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
-    connect(m_customInstructionsEdit, &QPlainTextEdit::textChanged, this, [this] { saveSettings(); });
+    // Free-typed text: debounce instead of rewriting the whole QSettings tree
+    // (including DPAPI re-encryption of the API key) on every keystroke.
+    if (!m_settingsSaveDebounceTimer) {
+        m_settingsSaveDebounceTimer = new QTimer(this);
+        m_settingsSaveDebounceTimer->setSingleShot(true);
+        m_settingsSaveDebounceTimer->setInterval(800);
+        connect(m_settingsSaveDebounceTimer, &QTimer::timeout, this, &KisAiIllustrationDocker::saveSettings);
+    }
+    connect(m_customInstructionsEdit, &QPlainTextEdit::textChanged, this, [this] {
+        m_settingsSaveDebounceTimer->start();
+    });
 
     updateModeUi();
 }
@@ -964,6 +986,10 @@ KisAiIllustrationDocker::~KisAiIllustrationDocker()
     cancelRetry();
     stopAllRequestTimers();
     clearInFlightApiKey();
+    if (m_settingsSaveDebounceTimer && m_settingsSaveDebounceTimer->isActive()) {
+        m_settingsSaveDebounceTimer->stop();
+        saveSettings(); // flush the debounced free-text edit
+    }
     saveSettings();
     if (!m_goalApiKey.isEmpty()) {
         m_goalApiKey.fill(QLatin1Char('\0'));
@@ -1042,6 +1068,10 @@ void KisAiIllustrationDocker::createCanvas()
     }
 
     KisDocument *document = KisPart::instance()->createDocument();
+    if (!document) {
+        setStatus(i18n("新しい AI キャンバスを作成できませんでした。"), true);
+        return;
+    }
     const KoColorSpace *colorSpace = KoColorSpaceRegistry::instance()->rgb8();
     const KoColor background(QColor(QStringLiteral("#f4f7ff")), colorSpace);
     const QString name = i18n("AI Illustration");
@@ -1140,12 +1170,24 @@ void KisAiIllustrationDocker::generateLocalStrokes(const QString &prompt)
 
 void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
 {
+    // Re-entrancy guard: a Ctrl+Enter during retry back-off or an in-flight
+    // request must never overwrite m_reply, otherwise the live reply's
+    // readyRead/finished lambdas end up bound to the replacement reply and the
+    // response buffers get cross-wired.
+    if (m_reply || (m_retryTimer && m_retryTimer->isActive())) {
+        return;
+    }
+
     QString errorMessage;
     const QString endpoint = m_endpointEditor->text().trimmed();
     const QString model = m_modelEditor->text().trimmed();
     const QString apiKey = !m_inFlightApiKey.isEmpty() ? m_inFlightApiKey : m_apiKeyEditor->text();
 
     if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
+        // A validation failure here means executeRetry()'s m_retryInFlight flag
+        // can never be consumed by the request path below; reset it so the next
+        // fresh request starts with a clean retry budget and prompt.
+        m_retryInFlight = false;
         if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
             m_detailsToggleBtn->setChecked(true);
         }
@@ -1156,6 +1198,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         return;
     }
     if (model.isEmpty()) {
+        m_retryInFlight = false;
         if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
             m_detailsToggleBtn->setChecked(true);
         }
@@ -1166,6 +1209,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         return;
     }
     if (apiKey.isEmpty()) {
+        m_retryInFlight = false;
         if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
             m_detailsToggleBtn->setChecked(true);
         }
@@ -1385,6 +1429,9 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     const QByteArray rawResponse = takeReplyData(reply.data());
     const bool responseTooLarge = m_responseTooLarge;
     m_responseTooLarge = false;
+    // Capture before deleteLater(): reading from the reply afterwards is only
+    // safe while it still lives on this stack frame.
+    const QString replyErrorString = reply->errorString();
     reply->deleteLater();
 
     if (requestWasCancelled) {
@@ -1480,7 +1527,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
             }
         }
         if (detail.isEmpty()) {
-            detail = reply->errorString();
+            detail = replyErrorString;
         }
         logDebug(QStringLiteral("LLM_ERROR"), QStringLiteral("HTTP %1: %2\nRaw: %3")
             .arg(httpStatus).arg(detail, QString::fromUtf8(rawResponse.left(500))));
@@ -1743,6 +1790,9 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
     const QByteArray response = takeReplyData(reply.data());
     const bool responseTooLarge = m_responseTooLarge;
     m_responseTooLarge = false;
+    // Capture before deleteLater(): reading from the reply afterwards is only
+    // safe while it still lives on this stack frame.
+    const QString replyErrorString = reply->errorString();
     reply->deleteLater();
 
     if (requestWasCancelled) {
@@ -1780,7 +1830,7 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
             }
         }
         if (detail.isEmpty()) {
-            detail = reply->errorString();
+            detail = replyErrorString;
         }
         logDebug(QStringLiteral("IMG_ERROR"), QStringLiteral("HTTP %1: %2\nRaw: %3")
             .arg(httpStatus).arg(detail, QString::fromUtf8(response.left(500))));
@@ -1855,7 +1905,13 @@ bool KisAiIllustrationDocker::appendReplyData(QNetworkReply *reply)
         return false;
     }
 
-    resetActivityTimeout();
+    // Only re-arm the idle timeout while the request is actually in flight;
+    // takeReplyData() drains the buffer after finish handlers already stopped
+    // the timers, and restarting the timer there would leave it running with
+    // no request to manage (harmless today, wrong tomorrow).
+    if (m_reply && m_reply.data() == reply) {
+        resetActivityTimeout();
+    }
 
     if (chunk.size() > MAX_REMOTE_RESPONSE_BYTES - m_responseBuffer.size()) {
         m_responseBuffer.clear();
@@ -2337,6 +2393,11 @@ void KisAiIllustrationDocker::executeGoalStep()
     if (!m_goalModeActive) {
         return;
     }
+    // Same re-entrancy guard as generateLlmStrokes(): an in-flight reply or a
+    // pending retry back-off must never be overwritten by a second POST.
+    if (m_reply || (m_retryTimer && m_retryTimer->isActive())) {
+        return;
+    }
 
     const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
     const QSize canvasSize = effectiveCanvasSize();
@@ -2597,6 +2658,9 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     const QByteArray rawResponse = takeReplyData(reply.data());
     const bool responseTooLarge = m_responseTooLarge;
     m_responseTooLarge = false;
+    // Capture before deleteLater(): reading from the reply afterwards is only
+    // safe while it still lives on this stack frame.
+    const QString replyErrorString = reply->errorString();
     reply->deleteLater();
 
     if (requestWasCancelled) {
@@ -2620,7 +2684,9 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         if (!m_streamedContent.isEmpty()) {
             setStatus(i18n("LLM からのデータ受信が %1 秒間途絶えたため中止しました。", ACTIVITY_TIMEOUT_MS / 1000), true);
         } else {
-            setStatus(i18n("LLM の初期応答が %1 秒以内に届かなかったため中止しました。", INITIAL_REQUEST_TIMEOUT_MS / 1000), true);
+            // Report the elapsed wall-clock time, not the legacy 120 s constant;
+            // the request actually used the user-configured timeout.
+            setStatus(i18n("LLM の初期応答が %1 秒以内に届かなかったため中止しました。", elapsedSec), true);
         }
         m_streamedContent.clear();
         m_sseBuffer.clear();
@@ -2660,7 +2726,7 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
             }
         }
         if (detail.isEmpty()) {
-            detail = reply->errorString();
+            detail = replyErrorString;
         }
 
         logDebug(QStringLiteral("GOAL_ERROR"), QStringLiteral("Step %1 HTTP %2: %3\nRaw: %4")
@@ -2881,6 +2947,9 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
                 m_goalPhaseLabel->setText(i18n("🎯 Goal作画 中断 (ステップ %1/%2)", m_goalCurrentStep, m_goalTotalSteps));
             }
         }
+        // The inspector's results are final once Goal mode ends; leaving the
+        // card visible kept stale controls on screen after completion.
+        m_goalInspectorCard->setVisible(false);
     }
     if (success) {
         setStatus(i18n("🎯 Goal作画が完了しました。Kritaのレイヤードックで各層を確認・調整できます。"));
@@ -3501,6 +3570,9 @@ void KisAiIllustrationDocker::finishTestConnectionRequest()
     const QByteArray response = takeTestReplyData(reply.data());
     const bool responseTooLarge = m_testResponseTooLarge;
     m_testResponseTooLarge = false;
+    // Capture before deleteLater(): reading from the reply afterwards is only
+    // safe while it still lives on this stack frame.
+    const QString replyErrorString = reply->errorString();
     reply->deleteLater();
 
     if (responseTooLarge) {
@@ -3547,7 +3619,7 @@ void KisAiIllustrationDocker::finishTestConnectionRequest()
             errorDetail = err.value(QStringLiteral("message")).toString().trimmed();
         }
         if (errorDetail.isEmpty()) {
-            errorDetail = reply->errorString();
+            errorDetail = replyErrorString;
         }
 
         const QString failMsg = i18n("❌ 接続失敗 (HTTP %1, %2ms): %3", httpStatus, elapsedMs, errorDetail);
@@ -3569,6 +3641,21 @@ void KisAiIllustrationDocker::logDebug(const QString &category, const QString &m
     const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));
     const QString formatted = QStringLiteral("[%1] [%2] %3").arg(timestamp, category, message);
     m_debugLogText->appendPlainText(formatted);
+    // Bound the log so a long debug session cannot grow the widget (and every
+    // clipboard copy of it) without limit.
+    {
+        QTextDocument *logDoc = m_debugLogText->document();
+        while (logDoc->blockCount() > 400) {
+            QTextCursor trimCursor(logDoc->firstBlock());
+            if (!trimCursor.movePosition(QTextCursor::NextBlock)) {
+                break;
+            }
+            trimCursor.movePosition(QTextCursor::StartOfBlock);
+            trimCursor.movePosition(QTextCursor::EndOfBlock, QTextCursor::KeepAnchor);
+            trimCursor.movePosition(QTextCursor::NextCharacter, QTextCursor::KeepAnchor); // include newline
+            trimCursor.removeSelectedText();
+        }
+    }
     m_debugLogText->ensureCursorVisible();
 }
 

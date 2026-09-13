@@ -152,11 +152,13 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
 
     // Rim light along the light-facing edge of the largest mass.
     if (largestMass && largestMass->polygon.size() >= 4) {
-        struct ScoredPoint { QPointF pt; qreal score; };
+        struct ScoredPoint { int index; QPointF pt; qreal score; };
         QVector<ScoredPoint> scored;
         scored.reserve(largestMass->polygon.size());
-        for (const QPointF &pt : largestMass->polygon)
-            scored.append({pt, pt.x() * lightDir.x() + pt.y() * lightDir.y()});
+        for (int pi = 0; pi < largestMass->polygon.size(); ++pi) {
+            const QPointF &pt = largestMass->polygon.at(pi);
+            scored.append({pi, pt, pt.x() * lightDir.x() + pt.y() * lightDir.y()});
+        }
         std::sort(scored.begin(), scored.end(),
                   [](const ScoredPoint &a, const ScoredPoint &b) { return a.score > b.score; });
         const int rimCount = qMin(6, scored.size());
@@ -170,17 +172,16 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
             rim.brush.size = 0.0035;
             rim.brush.opacity = 0.85;
             // Order rim points along the polygon so the path stays coherent.
-            QVector<QPointF> top;
+            // Carry the original index instead of re-looking points up by
+            // value: duplicate coordinates would otherwise all resolve to the
+            // first index and zig-zag the rim path.
+            QVector<ScoredPoint> top;
             for (int i = 0; i < rimCount; ++i)
-                top.append(scored.at(i).pt);
+                top.append(scored.at(i));
             std::sort(top.begin(), top.end(),
-                      [&](const QPointF &a, const QPointF &b) {
-                          const int ia = largestMass->polygon.indexOf(a);
-                          const int ib = largestMass->polygon.indexOf(b);
-                          return ia < ib;
-                      });
-            for (const QPointF &pt : top)
-                rim.points.append(KisAiStrokePoint(pt.x(), pt.y(), 0.7));
+                      [](const ScoredPoint &a, const ScoredPoint &b) { return a.index < b.index; });
+            for (const ScoredPoint &sp : top)
+                rim.points.append(KisAiStrokePoint(sp.pt.x(), sp.pt.y(), 0.7));
             rim.closed = false;
             rim.smooth = true;
             shading.append(rim);

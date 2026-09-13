@@ -280,6 +280,10 @@ QPolygonF KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(
             const qreal t = qreal(step) / steps;
             smoothed.append(catmullRomPoint(p0, p1, p2, p3, t));
         }
+        // Include t = 1 (== p2) so each span reaches its end knot; the next
+        // span starts at p1 == this p2, so the polygon stays connected without
+        // per-span gaps.
+        smoothed.append(p2);
     }
 
     return smoothed;
@@ -683,11 +687,20 @@ void KisAiStrokeQualityUtils::drawHalftonePattern(
     // widened, never narrowed, so the whole polygon stays covered rather than
     // rendering just a central patch.
     constexpr qreal MAX_HALFTONE_DOTS = 400000.0;
+    constexpr qreal MAX_HALFTONE_LINES = 40000.0;
     qreal effectiveSpacing = spacing;
     const qreal screenArea = qMax<qreal>(0.0, screenBounds.width()) * qMax<qreal>(0.0, screenBounds.height());
     const qreal estimatedDots = screenArea / (effectiveSpacing * effectiveSpacing);
     if (estimatedDots > MAX_HALFTONE_DOTS) {
         effectiveSpacing = std::sqrt(screenArea / MAX_HALFTONE_DOTS);
+    }
+    if (lineScreen) {
+        // Lines are one per row, so the row count — not the dot count — is the
+        // unbounded quantity; apply the same widening policy to it.
+        const qreal estimatedLines = qMax<qreal>(0.0, screenBounds.height()) / effectiveSpacing;
+        if (estimatedLines > MAX_HALFTONE_LINES) {
+            effectiveSpacing = qMax<qreal>(1.0, screenBounds.height() / MAX_HALFTONE_LINES);
+        }
     }
     if (!std::isfinite(effectiveSpacing) || effectiveSpacing <= 0.0) {
         painter.restore();

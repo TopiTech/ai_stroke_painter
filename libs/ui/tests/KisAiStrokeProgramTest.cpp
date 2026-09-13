@@ -8,6 +8,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QElapsedTimer>
 #ifndef AI_STROKE_STANDALONE
 #include <testui.h>
 #else
@@ -3405,6 +3406,141 @@ void KisAiStrokeProgramTest::testStructuredCritiqueParsing()
     const QString userText = messages.at(1).toObject().value(QStringLiteral("content")).toString();
     QVERIFY(userText.contains(QStringLiteral("previous_step_critique_regions")));
     QVERIFY(userText.contains(QStringLiteral("right_eye")));
+}
+
+void KisAiStrokeProgramTest::testFindFieldDoesNotHijackShortKeys()
+{
+    // The fuzzy fallback used to let "kind".contains("id") assign the kind
+    // string as the operation id when no explicit id existed, and let a stray
+    // 1-char key match "size"/"points".
+    const QJsonObject root {
+        {QStringLiteral("schema_version"), 2},
+        {QStringLiteral("operations"), QJsonArray {
+            QJsonObject {
+                {QStringLiteral("kind"), QStringLiteral("path")},
+                {QStringLiteral("layer"), QStringLiteral("Lineart")},
+                {QStringLiteral("points"), QJsonArray {QJsonArray {0.1, 0.1, 0.8}, QJsonArray {0.9, 0.9, 0.8}}},
+                {QStringLiteral("brush"), QJsonObject {
+                    {QStringLiteral("profile"), QStringLiteral("gpen")},
+                    {QStringLiteral("color"), QStringLiteral("#000000")},
+                    {QStringLiteral("size"), 0.01},
+                }},
+            },
+        }},
+    };
+
+    KisAiStrokeProgram program;
+    QString error;
+    QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error));
+    QCOMPARE(program.operations.size(), 1);
+    // No explicit id/name key: the id must stay empty at parse time (refine
+    // generates a synthetic one), never the kind string "path".
+    QVERIFY(!program.operations.first().id.contains(QStringLiteral("path")));
+}
+
+void KisAiStrokeProgramTest::testSseAccumulatedContentIsBounded()
+{
+    // A peer streaming endless deltas must not grow the accumulated content
+    // without limit; the stream parser gives up once the budget is exceeded.
+    QByteArray unprocessed;
+    QString content;
+    bool isDone = false;
+
+    const QByteArray chunk = QByteArrayLiteral("data: {\"choices\":[{\"delta\":{\"content\":\"AAAA\"}}]}\n\n");
+    for (int i = 0; i < 400000; ++i) {
+        if (!KisAiStrokeProgramCodec::parseSseStreamChunk(chunk, &unprocessed, &content, &isDone)) {
+            break;
+        }
+    }
+    QVERIFY2(content.size() <= 33 * 1024 * 1024,
+             qPrintable(QStringLiteral("content grew to %1").arg(content.size())));
+    QVERIFY(unprocessed.isEmpty());
+}
+
+void KisAiStrokeProgramTest::testSseChunkWithManyLinesIsLinear()
+{
+    // A coalesced chunk with many SSE lines used to be quadratic because every
+    // line removal memmoved the whole remainder of the buffer.
+    QByteArray unprocessed;
+    QString content;
+    bool isDone = false;
+
+    QByteArray bigChunk;
+    bigChunk.reserve(1024 * 1024);
+    for (int i = 0; i < 40000; ++i) {
+        bigChunk += QByteArrayLiteral(": keep-alive\n");
+    }
+    bigChunk += QByteArrayLiteral("data: {\"choices\":[{\"delta\":{\"content\":\"X\"}}]}\n\n");
+
+    QElapsedTimer timer;
+    timer.start();
+    QVERIFY(KisAiStrokeProgramCodec::parseSseStreamChunk(bigChunk, &unprocessed, &content, &isDone));
+    const qint64 elapsedMs = timer.elapsed();
+    QVERIFY2(elapsedMs < 5000, qPrintable(QStringLiteral("SSE parse took %1 ms").arg(elapsedMs)));
+    QCOMPARE(content, QStringLiteral("X"));
+    QVERIFY(unprocessed.isEmpty());
+}
+
+void KisAiStrokeProgramTest::testCanvasSizeClampedAtParseTime()
+{
+    // Pixel-vs-normalized auto-scaling divides by the parsed canvas size, so a
+    // hostile value must be clamped before any coordinate division happens.
+    const QJsonObject root {
+        {QStringLiteral("schema_version"), 2},
+        {QStringLiteral("canvas_size"), QJsonObject {
+            {QStringLiteral("width"), 2000000000},
+            {QStringLiteral("height"), 2000000000},
+        }},
+        {QStringLiteral("operations"), QJsonArray {
+            QJsonObject {
+                {QStringLiteral("kind"), QStringLiteral("ribbon")},
+                {QStringLiteral("layer"), QStringLiteral("Flats")},
+                {QStringLiteral("spine"), QJsonArray {QJsonArray {1000.0, 1000.0}, QJsonArray {2000.0, 2000.0}}},
+                {QStringLiteral("start_width"), 50.0},
+                {QStringLiteral("end_width"), 10.0},
+                {QStringLiteral("brush"), QJsonObject {
+                    {QStringLiteral("profile"), QStringLiteral("gpen")},
+                    {QStringLiteral("color"), QStringLiteral("#000000")},
+                }},
+            },
+        }},
+    };
+
+    KisAiStrokeProgram program;
+    QString error;
+    QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error));
+    QVERIFY(program.canvasSize.width() <= 4096);
+    QVERIFY(program.canvasSize.height() <= 4096);
+
+    const KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(program);
+    QVERIFY(!refined.operations.isEmpty());
+    // Ribbon spine points must not have been divided down to ~0.
+    QVERIFY(refined.operations.first().spine.first().x() > 0.0);
+}
+
+void KisAiStrokeProgramTest::testReasoningModelFamilyPrefixMatching()
+{
+    // "o1"/"o3" must match as a model-family prefix, not as an arbitrary
+    // substring (proto1, radio3 must stay non-reasoning).
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("o1")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("o3-mini")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("openai/o1-preview")));
+    QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("proto1")));
+    QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("radio3")));
+    QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("gpt-4o")));
+}
+
+void KisAiStrokeProgramTest::testExtractOperationsDiagnosticNotFabricated()
+{
+    // A clean JSON document that simply contains no program must not produce a
+    // fabricated "error at line 1, column 1" syntax diagnostic.
+    KisAiStrokeProgram program;
+    QString error;
+    KisAiJsonDiagnostic diagnostic;
+    const QByteArray noProgram = QByteArrayLiteral("{\"foo\": \"bar\", \"note\": \"no operations here\"}");
+    QVERIFY(!KisAiStrokeProgramCodec::parseResponse(noProgram, &program, &error, &diagnostic));
+    QVERIFY(!diagnostic.hasError);
+    QVERIFY(diagnostic.errorLine <= 0);
 }
 
 KISTEST_MAIN(KisAiStrokeProgramTest)
