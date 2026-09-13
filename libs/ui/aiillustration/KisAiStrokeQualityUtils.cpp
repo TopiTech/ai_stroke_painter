@@ -122,7 +122,12 @@ QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::resampleEquidistant(
     }
 
     QVector<KisAiStrokePoint> result;
-    result.reserve(qCeil(totalLength / step) + 2);
+    // The output count is totalLength/step, so a caller passing a very small
+    // normalised step could enqueue hundreds of thousands of points (and the
+    // reserve() below would commit that memory up front). Bound both.
+    constexpr int kMaxResampledPoints = 8192;
+    const int estimatedPoints = qBound(0, qCeil(totalLength / step) + 2, kMaxResampledPoints);
+    result.reserve(estimatedPoints);
     result.append(points.first());
 
     qreal currentTargetDist = step;
@@ -130,6 +135,9 @@ QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::resampleEquidistant(
     int segIdx = 0;
 
     while (currentTargetDist <= totalLength && segIdx < segmentCount) {
+        if (result.size() >= kMaxResampledPoints) {
+            break;
+        }
         const qreal segLen = segmentLengths.at(segIdx);
         if (accumulatedDist + segLen >= currentTargetDist && segLen > 1.0e-7) {
             const qreal localDist = currentTargetDist - accumulatedDist;
@@ -302,6 +310,12 @@ QPolygonF KisAiStrokeQualityUtils::offsetPolygon(const QPolygonF &polygon, qreal
         const QPointF &p1 = polygon.at(i);
         const QPointF &p2 = polygon.at((i + 1) % n);
         signedArea += p1.x() * p2.y() - p2.x() * p1.y();
+    }
+    // A zero-area (collinear or duplicated) polygon has no meaningful winding:
+    // signedArea > 0.0 would be false and every outward normal would be flipped,
+    // turning trapping dilation into a contraction. Leave it untouched instead.
+    if (qAbs(signedArea) < 1.0e-9) {
+        return polygon;
     }
     const bool isCCW = signedArea > 0.0;
     const qreal sign = isCCW ? 1.0 : -1.0;
@@ -937,11 +951,19 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::uniteOverlappingHairFlats
         const bool opIsFront = isFrontHairOp(op);
         QPainterPath path;
         path.addPolygon(op.polygon);
+        const QRectF opBounds = op.polygon.boundingRect();
         bool absorbed = false;
         for (int i = 0; i < masses.size(); ++i) {
             // Front hair only merges with front hair; back hair only with back hair
             if (opIsFront != isFrontHairOp(massOwners.at(i)))
                 continue;
+
+            // Reject disjoint candidates with a cheap bounds test: Qt's boolean
+            // path ops are far more expensive and this loop is quadratic in the
+            // number of hair silhouettes (routinely 20-40 from the model).
+            if (!opBounds.intersects(masses.at(i).boundingRect())) {
+                continue;
+            }
 
             if (masses.at(i).intersects(path)) {
                 masses[i] = masses.at(i).united(path);
@@ -1238,16 +1260,21 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::synthesizeFoliageClusters
 
     for (int c = 0; c < clusterCount; ++c) {
         QPointF centerPx;
+        // QPointF::isNull() is also true for a legitimate (0,0) hit, so an
+        // explicit flag is needed to distinguish "not found" from "found at the
+        // origin" (the renderer guards gradientCenter the same way).
+        bool centerFound = false;
         for (int attempt = 0; attempt < 15; ++attempt) {
             const qreal cx = b.left() + (0.15 + rng.generateDouble() * 0.70) * b.width();
             const qreal cy = b.top() + (0.15 + rng.generateDouble() * 0.70) * b.height();
             const QPointF cand(cx, cy);
             if (pixelPoly.containsPoint(cand, Qt::OddEvenFill)) {
                 centerPx = cand;
+                centerFound = true;
                 break;
             }
         }
-        if (centerPx.isNull()) {
+        if (!centerFound) {
             centerPx = b.center();
         }
 

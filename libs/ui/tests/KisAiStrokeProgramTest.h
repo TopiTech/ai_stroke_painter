@@ -108,6 +108,13 @@ private Q_SLOTS:
     void testSceneSpecPayloadStreamingAndJsonSchema();
     void testJsonModeForcedJsonObjectHandling();
     void testColorClauseDeduplication();
+    void testEyeKindWinsOverLineSubstring();
+    void testNumericStringExponentNotMangled();
+    void testLiteralsMaskingBudgetIsBounded();
+    void testCritiqueRegionsCountIsCapped();
+    void testHatchSpacingClampedBeforeRescue();
+    void testCompositionPlanRejectsOversizedBody();
+    void testExtractOperationsSchemaVersionGate();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

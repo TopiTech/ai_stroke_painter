@@ -3760,6 +3760,235 @@ void KisAiStrokeProgramTest::testColorClauseDeduplication()
     QCOMPARE(prompt.count(QStringLiteral("メイン配色:")), 1);
 }
 
+void KisAiStrokeProgramTest::testEyeKindWinsOverLineSubstring()
+{
+    // Regression: kind aliases such as "eye_outline" / "eyeliner" / "eye_lineart"
+    // contain "line", which used to be tested first and reclassified the eye as a
+    // plain Path, silently losing the AnimeEye renderer.
+    static const QStringList kinds {
+        QStringLiteral("anime_eye"),
+        QStringLiteral("eye"),
+        QStringLiteral("eye_outline"),
+        QStringLiteral("eyeliner"),
+        QStringLiteral("eye_lineart"),
+        QStringLiteral("eye_contour"),
+    };
+
+    for (const QString &kind : kinds) {
+        const QJsonObject root {
+            {QStringLiteral("schema_version"), 2},
+            {QStringLiteral("operations"), QJsonArray {
+                QJsonObject {
+                    {QStringLiteral("kind"), kind},
+                    {QStringLiteral("id"), QStringLiteral("left_eye")},
+                    {QStringLiteral("layer"), QStringLiteral("Lineart")},
+                    {QStringLiteral("eye_center"), QJsonArray {0.4, 0.4}},
+                    {QStringLiteral("eye_size"), QJsonArray {0.12, 0.08}},
+                },
+            }},
+        };
+
+        KisAiStrokeProgram program;
+        QString error;
+        QVERIFY2(KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error),
+                 qPrintable(QStringLiteral("kind=%1 error=%2").arg(kind, error)));
+        QCOMPARE(program.operations.size(), 1);
+        QVERIFY2(program.operations.first().kind == KisAiStrokeOperation::Kind::AnimeEye,
+                 qPrintable(QStringLiteral("kind '%1' must stay AnimeEye, not Path").arg(kind)));
+    }
+}
+
+void KisAiStrokeProgramTest::testNumericStringExponentNotMangled()
+{
+    // Regression: the numeric-string scrubber used to whitelist only [0-9.+-],
+    // so "1e3" became "13" and "-1.5e-3" became "-1.53" - a silently wrong value
+    // rather than a rejection. Exponent notation must survive.
+    const QJsonObject root {
+        {QStringLiteral("schema_version"), 2},
+        {QStringLiteral("seed"), QStringLiteral("1e3")},
+        {QStringLiteral("operations"), QJsonArray {
+            QJsonObject {
+                {QStringLiteral("kind"), QStringLiteral("fill")},
+                {QStringLiteral("id"), QStringLiteral("exponent_test")},
+                {QStringLiteral("layer"), QStringLiteral("Flats")},
+                {QStringLiteral("polygon"), QJsonArray {
+                    QJsonArray {QStringLiteral("0.2"), QStringLiteral("0.2")},
+                    QJsonArray {QStringLiteral("9e-1"), QStringLiteral("0.2")},
+                    QJsonArray {QStringLiteral("0.9"), QStringLiteral("0.8")},
+                }},
+                {QStringLiteral("brush"), QJsonObject {
+                    {QStringLiteral("color"), QStringLiteral("#223344")},
+                    {QStringLiteral("size"), QStringLiteral("1e-2")},
+                }},
+            },
+        }},
+    };
+
+    KisAiStrokeProgram program;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error), qPrintable(error));
+
+    // 1e3 == 1000, not 13.
+    QCOMPARE(program.seed, 1000);
+
+    QCOMPARE(program.operations.size(), 1);
+    const QPolygonF polygon = program.operations.first().polygon;
+    QCOMPARE(polygon.size(), 3);
+    // "9e-1" == 0.9. Under the old scrub it became "91", which the pixel
+    // auto-normalizer would then have scaled against the canvas.
+    QVERIFY2(qAbs(polygon.at(1).x() - 0.9) < 1e-6,
+             qPrintable(QStringLiteral("got x=%1, expected 0.9 (exponent was mangled)").arg(polygon.at(1).x())));
+}
+
+void KisAiStrokeProgramTest::testLiteralsMaskingBudgetIsBounded()
+{
+    // Regression: the token masker appended one entry per string literal with no
+    // cap, so a hostile body of `"a""a""a"...` amplified into millions of QStrings
+    // that were then copied by every repair pass. The masking budget must bail out
+    // instead of materializing them.
+    constexpr int literalCount = 9000; // above the 4096 budget
+    QString hostile = QStringLiteral("{\"operations\": [\"");
+    hostile.reserve(literalCount * 4 + 64);
+    for (int i = 0; i < literalCount; ++i) {
+        hostile += QStringLiteral("a\"\"");
+    }
+    hostile += QStringLiteral("]}");
+
+    KisAiJsonDiagnostic diagnostic;
+    const QString sanitized = KisAiStrokeProgramCodec::sanitizeAndExtractJson(hostile, &diagnostic);
+
+    QVERIFY(!sanitized.isEmpty());
+    const bool maskingApplied = std::any_of(
+        diagnostic.appliedRepairs.cbegin(), diagnostic.appliedRepairs.cend(),
+        [](const QString &entry) { return entry.startsWith(QStringLiteral("TokenMasking")); });
+    QVERIFY2(!maskingApplied, "masking budget was exceeded but TokenMasking still reported as applied");
+}
+
+void KisAiStrokeProgramTest::testCritiqueRegionsCountIsCapped()
+{
+    // Regression: critique regions were iterated without a size cap, so a hostile
+    // multi-megabyte array of {"area": "a"} inflated the program without bound.
+    QJsonArray regions;
+    for (int i = 0; i < 500; ++i) {
+        regions.append(QJsonObject {
+            {QStringLiteral("area"), QStringLiteral("face")},
+            {QStringLiteral("issue"), QStringLiteral("region %1").arg(i)},
+            {QStringLiteral("action"), QStringLiteral("refine")},
+        });
+    }
+
+    const QJsonObject root {
+        {QStringLiteral("schema_version"), 2},
+        {QStringLiteral("regions"), regions},
+        {QStringLiteral("operations"), QJsonArray {
+            QJsonObject {
+                {QStringLiteral("kind"), QStringLiteral("path")},
+                {QStringLiteral("id"), QStringLiteral("critique_carrier")},
+                {QStringLiteral("layer"), QStringLiteral("Lineart")},
+                {QStringLiteral("points"), QJsonArray {
+                    QJsonArray {0.1, 0.1, 1.0},
+                    QJsonArray {0.9, 0.9, 1.0},
+                }},
+                {QStringLiteral("brush"), QJsonObject {
+                    {QStringLiteral("color"), QStringLiteral("#000000")},
+                    {QStringLiteral("size"), 0.01},
+                }},
+            },
+        }},
+    };
+
+    KisAiStrokeProgram program;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error), qPrintable(error));
+    QCOMPARE(program.critiqueRegions.size(), 32);
+}
+
+void KisAiStrokeProgramTest::testHatchSpacingClampedBeforeRescue()
+{
+    // Regression: the "A5" hatch rescue compared op.spacing against thresholds
+    // before the switch clamped it, so a hostile 1e300 reached the comparison as
+    // an unbounded value. spacing must be bounded before any policy test reads it.
+    const QJsonObject root {
+        {QStringLiteral("schema_version"), 2},
+        {QStringLiteral("operations"), QJsonArray {
+            QJsonObject {
+                {QStringLiteral("kind"), QStringLiteral("hatch")},
+                {QStringLiteral("id"), QStringLiteral("hostile_hatch")},
+                {QStringLiteral("layer"), QStringLiteral("Shading")},
+                {QStringLiteral("spacing"), 1.0e300},
+                {QStringLiteral("polygon"), QJsonArray {
+                    QJsonArray {0.1, 0.1},
+                    QJsonArray {0.9, 0.1},
+                    QJsonArray {0.9, 0.9},
+                    QJsonArray {0.1, 0.9},
+                }},
+                {QStringLiteral("brush"), QJsonObject {
+                    {QStringLiteral("color"), QStringLiteral("#223344")},
+                    {QStringLiteral("size"), 0.02},
+                }},
+            },
+        }},
+    };
+
+    KisAiStrokeProgram program;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error), qPrintable(error));
+    QCOMPARE(program.operations.size(), 1);
+
+    KisAiStrokeQualityReport report;
+    const KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(program, &report);
+    QCOMPARE(refined.operations.size(), 1);
+
+    // The clamp ceiling is 0.2; a non-finite or >0.2 spacing must never survive.
+    QVERIFY2(std::isfinite(refined.operations.first().spacing), "spacing must be finite after refine");
+    QVERIFY2(refined.operations.first().spacing <= 0.2 + 1e-9,
+             qPrintable(QStringLiteral("spacing=%1 exceeded the clamp").arg(refined.operations.first().spacing)));
+}
+
+void KisAiStrokeProgramTest::testCompositionPlanRejectsOversizedBody()
+{
+    // Regression: parseCompositionPlan had no size guard while parseResponse did,
+    // allowing the same oversized hostile input through a different entry point.
+    QByteArray oversized;
+    oversized.reserve(33 * 1024 * 1024);
+    oversized.append("{\"directives\": \"");
+    oversized.append(QByteArray(33 * 1024 * 1024, 'x'));
+    oversized.append("\"}");
+
+    QString directives;
+    QString error;
+    QVERIFY2(!KisAiStrokeProgramCodec::parseCompositionPlan(oversized, &directives, &error),
+             "an oversized composition plan must be rejected");
+    QVERIFY(!error.isEmpty());
+
+    // Sanity: a normal-sized payload still parses. The parser reads the
+    // "artistic_directives" key and requires the result to be non-empty.
+    QString okDirectives;
+    QString okError;
+    const QByteArray normal = QByteArrayLiteral("{\"artistic_directives\": \"draw a calm portrait\"}");
+    QVERIFY2(KisAiStrokeProgramCodec::parseCompositionPlan(normal, &okDirectives, &okError), qPrintable(okError));
+    QCOMPARE(okDirectives, QStringLiteral("draw a calm portrait"));
+}
+
+void KisAiStrokeProgramTest::testExtractOperationsSchemaVersionGate()
+{
+    // Regression: the recovery path used captured(1).toInt() directly, so an
+    // overflowing digit run silently became 0 and bypassed the v1/v2 gate that
+    // parseProgramJson enforces.
+    const QString hostile = QStringLiteral(
+        "{\"schema_version\": 99999999999999999999, \"operations\": "
+        "[{\"kind\":\"path\",\"id\":\"p\",\"layer\":\"Lineart\",\"points\":[[0.1,0.1,1.0],[0.9,0.9,1.0]],"
+        "\"brush\":{\"color\":\"#000000\",\"size\":0.01}}]}");
+
+    KisAiStrokeProgram program;
+    QString error;
+    KisAiStrokeProgramCodec::extractOperationsFromRawText(hostile, &program, &error);
+
+    // An out-of-range/overflowing version must fall back to the current schema (2),
+    // never be recorded as a bogus version.
+    QCOMPARE(program.schemaVersion, 2);
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

@@ -36,7 +36,9 @@ QString KisAiJsonDiagnostic::formatForLog() const
 #include <QStringList>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
+#include <limits>
 
 namespace
 {
@@ -46,7 +48,9 @@ constexpr qreal kPixelCoordinateThreshold = 1.5;
 
 // V3 Phase 0.1: Particle suppression policy state. Enabled by default so
 // headless / test pipelines also benefit; the Docker checkbox toggles it.
-bool g_particleSuppressionEnabled = true;
+// Atomic because the Docker writes it from UI slots while refineForRendering()
+// and mergePrograms() read it from render/worker paths.
+std::atomic<bool> g_particleSuppressionEnabled {true};
 constexpr int kMaxParticlesOperations = 3;
 constexpr int kMaxMergedParticlesOperations = 2;
 
@@ -741,12 +745,21 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
     QVector<QString> maskedStrings;
     maskedStrings.reserve(128);
 
+    // A hostile/truncated body made of `"a""a""a"...` produces one masked entry
+    // per literal. Each entry is stored twice (the vector plus the ~30 replace()
+    // passes over the rewritten text), so the default QVector growth would
+    // amplify a 32 MB response into gigabytes. Past the budget we stop masking
+    // and let the sanitizer operate on the raw text instead; a valid program
+    // never carries more than a few hundred literals.
+    constexpr int kMaxMaskedStrings = 4096;
+
     {
         QString masked;
         masked.reserve(text.size());
         bool inStr = false;
         bool esc = false;
         QString currentStr;
+        bool maskingBudgetExhausted = false;
 
         for (int i = 0; i < text.size(); ++i) {
             const QChar ch = text.at(i);
@@ -764,6 +777,10 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
                 }
                 if (ch == QLatin1Char('"')) {
                     inStr = false;
+                    if (maskedStrings.size() >= kMaxMaskedStrings) {
+                        maskingBudgetExhausted = true;
+                        break;
+                    }
                     // Sanitize unescaped control characters inside the literal
                     QString cleanLiteral;
                     cleanLiteral.reserve(currentStr.size() + 16);
@@ -799,30 +816,34 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
             }
         }
 
-        // If a string was left open at EOF, close it safely
-        if (inStr) {
-            QString cleanLiteral;
-            cleanLiteral.reserve(currentStr.size() + 16);
-            for (int cIdx = 0; cIdx < currentStr.size(); ++cIdx) {
-                const QChar sc = currentStr.at(cIdx);
-                if (sc == QLatin1Char('\n')) {
-                    cleanLiteral.append(QStringLiteral("\\n"));
-                } else if (sc == QLatin1Char('\r')) {
-                    cleanLiteral.append(QStringLiteral("\\r"));
-                } else if (sc == QLatin1Char('\t')) {
-                    cleanLiteral.append(QStringLiteral("\\t"));
-                } else if (sc.unicode() < 0x20) {
-                    // Strip ASCII control bytes
-                } else {
-                    cleanLiteral.append(sc);
+        if (maskingBudgetExhausted) {
+            maskedStrings.clear();
+        } else {
+            // If a string was left open at EOF, close it safely
+            if (inStr) {
+                QString cleanLiteral;
+                cleanLiteral.reserve(currentStr.size() + 16);
+                for (int cIdx = 0; cIdx < currentStr.size(); ++cIdx) {
+                    const QChar sc = currentStr.at(cIdx);
+                    if (sc == QLatin1Char('\n')) {
+                        cleanLiteral.append(QStringLiteral("\\n"));
+                    } else if (sc == QLatin1Char('\r')) {
+                        cleanLiteral.append(QStringLiteral("\\r"));
+                    } else if (sc == QLatin1Char('\t')) {
+                        cleanLiteral.append(QStringLiteral("\\t"));
+                    } else if (sc.unicode() < 0x20) {
+                        // Strip ASCII control bytes
+                    } else {
+                        cleanLiteral.append(sc);
+                    }
                 }
+                const int maskIndex = maskedStrings.size();
+                maskedStrings.append(cleanLiteral);
+                masked.append(stringMaskPlaceholder(maskIndex));
             }
-            const int maskIndex = maskedStrings.size();
-            maskedStrings.append(cleanLiteral);
-            masked.append(stringMaskPlaceholder(maskIndex));
-        }
 
-        text = masked;
+            text = masked;
+        }
     }
 
     if (diagnostic && !maskedStrings.isEmpty()) {
@@ -1411,9 +1432,18 @@ bool KisAiStrokeProgramCodec::extractOperationsFromRawText(const QString &rawTex
     // Try to extract schema_version, title, prompt if present
     static const QRegularExpression schemaVerRe(QStringLiteral(R"("schema_version"\s*:\s*(\d+))"));
     const auto svMatch = schemaVerRe.match(rawText);
+    bool versionOk = false;
     if (svMatch.hasMatch()) {
-        outProgram->schemaVersion = svMatch.captured(1).toInt();
-    } else {
+        // Match the v1/v2 gate that parseProgramJson enforces: toInt() alone would
+        // accept an overflowing digit run (silently becoming 0) and bypass it.
+        const int parsed = svMatch.captured(1).toInt(&versionOk);
+        if (versionOk && parsed >= 1 && parsed <= 2) {
+            outProgram->schemaVersion = parsed;
+        } else {
+            versionOk = false;
+        }
+    }
+    if (!versionOk) {
         outProgram->schemaVersion = 2;
     }
 
@@ -1842,6 +1872,14 @@ bool KisAiStrokeProgramCodec::parseCompositionPlan(
     QString *errorMessage)
 {
     if (outDirectives) outDirectives->clear();
+    // Mirror the MAX_RESPONSE_BYTES guard used by parseResponse: this entry point
+    // also sanitizes attacker-controlled model output, and the sanitizer's work
+    // grows with the input.
+    constexpr int MAX_COMPOSITION_PLAN_BYTES = 32 * 1024 * 1024;
+    if (responseBytes.size() > MAX_COMPOSITION_PLAN_BYTES) {
+        if (errorMessage) *errorMessage = QStringLiteral("Composition plan response exceeded the size limit.");
+        return false;
+    }
     const QString raw = QString::fromUtf8(responseBytes).trimmed();
 
     QJsonParseError parseErr;
@@ -2274,14 +2312,25 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
             return std::isfinite(v) ? v : defaultVal;
         }
         if (val.isString()) {
-            bool ok = false;
+            // Parse the string as-is first: a whitelist scrub would silently turn
+            // exponent notation into a different number ("1e3" -> "13", "-1.5e-3"
+            // -> "-1.53"), which is a wrong value rather than a rejection.
             QString s = val.toString().trimmed();
+            {
+                bool ok = false;
+                const qreal v = s.toDouble(&ok);
+                if (ok && std::isfinite(v)) return v;
+            }
+            // Fall back to stripping incidental decoration (currency signs,
+            // percent, units) only when a direct parse is impossible.
             QString clean;
             for (const QChar &ch : s) {
-                if (ch.isDigit() || ch == QLatin1Char('.') || ch == QLatin1Char('-') || ch == QLatin1Char('+')) {
+                if (ch.isDigit() || ch == QLatin1Char('.') || ch == QLatin1Char('-') || ch == QLatin1Char('+')
+                    || ch == QLatin1Char('e') || ch == QLatin1Char('E')) {
                     clean.append(ch);
                 }
             }
+            bool ok = false;
             const qreal v = clean.toDouble(&ok);
             // A long digit run overflows to +/-inf with ok == true; such a value
             // must never reach the renderer as geometry.
@@ -2295,8 +2344,26 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
     const auto toIntField = [](const QJsonValue &val, int defaultVal) -> int {
         if (val.isDouble()) return val.toInt(defaultVal);
         if (val.isString()) {
+            // Direct parse first so exponent notation survives ("1e3" is 1000, not
+            // 13). Fall back to a bounded double parse before the digit scrub.
+            const QString s = val.toString().trimmed();
+            {
+                bool ok = false;
+                const int v = s.toInt(&ok);
+                if (ok) return v;
+            }
+            {
+                bool ok = false;
+                const qreal d = s.toDouble(&ok);
+                // Guard the range: casting an out-of-range or non-finite double to
+                // int is undefined behaviour, and a hostile "1e300" must not slip
+                // past the schema-version gate as a wrapped value.
+                if (ok && std::isfinite(d) && d >= qreal(std::numeric_limits<int>::min())
+                    && d <= qreal(std::numeric_limits<int>::max())) {
+                    return static_cast<int>(d);
+                }
+            }
             bool ok = false;
-            QString s = val.toString().trimmed();
             QString clean;
             for (const QChar &ch : s) {
                 if (ch.isDigit() || ch == QLatin1Char('-') || ch == QLatin1Char('+')) {
@@ -2344,7 +2411,14 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
     const QJsonValue regVal = findField(rootObj, {QStringLiteral("regions"), QStringLiteral("critique_regions"), QStringLiteral("region_actions")});
     if (regVal.isArray()) {
         const QJsonArray regArr = regVal.toArray();
+        // Critique regions are diagnostics shown to the user, not geometry, but
+        // they are still attacker-controlled. Every other collection in this
+        // parser is budgeted, so cap this one too.
+        constexpr int kMaxCritiqueRegions = 32;
         for (const QJsonValue &item : regArr) {
+            if (outProgram->critiqueRegions.size() >= kMaxCritiqueRegions) {
+                break;
+            }
             if (!item.isObject()) continue;
             const QJsonObject rObj = item.toObject();
             KisAiCritiqueRegion reg;
@@ -2430,12 +2504,15 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
             || k.contains(QLatin1String("solid_fill"))) {
             return KisAiStrokeOperation::Kind::Fill;
         }
+        // The eye check must precede the path check: ids like "eye_outline",
+        // "eyeliner" and "eye_lineart" contain "line", so a later eye test would
+        // never be reached and the eye would render as a plain path.
+        if (k.contains(QLatin1String("anime_eye")) || k.contains(QLatin1String("eye"))) {
+            return KisAiStrokeOperation::Kind::AnimeEye;
+        }
         if (k.contains(QLatin1String("path")) || k.contains(QLatin1String("stroke")) || k.contains(QLatin1String("line"))
             || k.contains(QLatin1String("contour"))) {
             return KisAiStrokeOperation::Kind::Path;
-        }
-        if (k.contains(QLatin1String("anime_eye")) || k.contains(QLatin1String("eye"))) {
-            return KisAiStrokeOperation::Kind::AnimeEye;
         }
         return KisAiStrokeOperation::Kind::Unknown;
     };
@@ -2447,10 +2524,21 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 return val.toDouble();
             }
             if (val.isString()) {
-                QString s = val.toString().trimmed();
+                // Direct parse first so exponent notation survives; the scrub below
+                // is only a fallback for decorated values like "0.5px".
+                const QString s = val.toString().trimmed();
+                {
+                    bool directOk = false;
+                    const qreal direct = s.toDouble(&directOk);
+                    if (directOk) {
+                        if (ok) *ok = true;
+                        return direct;
+                    }
+                }
                 QString clean;
                 for (const QChar &ch : s) {
-                    if (ch.isDigit() || ch == QLatin1Char('.') || ch == QLatin1Char('-') || ch == QLatin1Char('+')) {
+                    if (ch.isDigit() || ch == QLatin1Char('.') || ch == QLatin1Char('-') || ch == QLatin1Char('+')
+                        || ch == QLatin1Char('e') || ch == QLatin1Char('E')) {
                         clean.append(ch);
                     }
                 }
@@ -2958,6 +3046,13 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
         }
         op.brush.profile = profile;
 
+        // Bound spacing before any policy test below reads it. The A5 hatch
+        // rescue compares spacing against thresholds, so a hostile 1e300 (or NaN)
+        // must not reach that comparison as an unbounded value.
+        if (!std::isfinite(op.spacing))
+            op.spacing = 0.015;
+        op.spacing = qBound<qreal>(0.002, op.spacing, 0.2);
+
         // A5: Shading hatch rescue - convert coarse/mechanical hatch to smooth watercolor/brush fill
         if (op.layer == QLatin1String("Shading") && op.kind == KisAiStrokeOperation::Kind::Hatch) {
             if (!op.crossHatch && (op.spacing >= 0.02 || op.spacing <= 0.002)) {
@@ -3127,9 +3222,7 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
                     renderable = false;
                 }
             }
-            if (!std::isfinite(op.spacing))
-                op.spacing = 0.015;
-            op.spacing = qBound<qreal>(0.002, op.spacing, 0.2);
+            // spacing was already bounded at the top of the loop (see the A5 hatch rescue).
             op.gradientCenter = clampedPoint(op.gradientCenter, &localReport.repairedValues);
             op.gradientRadius = qBound<qreal>(0.01, std::isfinite(op.gradientRadius) ? op.gradientRadius : 0.5, 2.0);
             if (op.kind == KisAiStrokeOperation::Kind::GradientFill && !op.points.isEmpty()) {
@@ -3180,13 +3273,16 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             const QPointF bottomRight = clampedPoint(bounds.bottomRight(), &localReport.repairedValues);
             op.bounds = QRectF(topLeft, bottomRight).normalized();
 
-            // Clamp particle count to prevent dense blizzard overcrowding, while preserving 0 for parse-time budgeting
+            // Clamp particle count to prevent dense blizzard overcrowding, while
+            // preserving 0 for parse-time budgeting. A zero count renders nothing,
+            // so it must not be reported as renderable (the renderer returns
+            // immediately and the op would only inflate counts/summaries).
             if (op.particleCount > 0) {
                 op.particleCount = qBound(1, op.particleCount, 64);
             } else {
                 op.particleCount = 0;
             }
-            renderable = op.bounds.width() > 1.0e-4 && op.bounds.height() > 1.0e-4;
+            renderable = op.particleCount > 0 && op.bounds.width() > 1.0e-4 && op.bounds.height() > 1.0e-4;
             break;
         }
         case KisAiStrokeOperation::Kind::AnimeEye: {
@@ -4382,8 +4478,13 @@ QJsonObject KisAiStrokeProgramCodec::buildGeometryDigest(const KisAiStrokeProgra
     digest[QStringLiteral("flats_coverage_estimated")] = qBound<qreal>(0.0, flatsAreaEst, 1.0);
 
     QJsonArray palArr;
+    // QSet iteration order is unspecified, so the digest built from it (and any
+    // prompt derived from that digest) would vary between runs. Sort for a
+    // stable, reproducible palette.
+    QStringList paletteColors = colorSet.values();
+    paletteColors.sort();
     int count = 0;
-    for (const QString &c : colorSet) {
+    for (const QString &c : paletteColors) {
         palArr.append(c);
         if (++count >= 12) break;
     }
@@ -4760,12 +4861,12 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgramStep(
 
 void KisAiStrokeProgramCodec::setParticleSuppressionEnabled(bool enabled)
 {
-    g_particleSuppressionEnabled = enabled;
+    g_particleSuppressionEnabled.store(enabled, std::memory_order_relaxed);
 }
 
 bool KisAiStrokeProgramCodec::isParticleSuppressionEnabled()
 {
-    return g_particleSuppressionEnabled;
+    return g_particleSuppressionEnabled.load(std::memory_order_relaxed);
 }
 
 int KisAiStrokeProgramCodec::maxParticlesOperations()

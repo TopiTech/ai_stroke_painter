@@ -246,8 +246,12 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
     const qreal minDim = qMin(size.width(), size.height());
     const qreal effectiveTrapping = trappingPx < 0.0 ? qMax<qreal>(1.0, minDim / 1000.0 * 1.5) : trappingPx;
     KisAiStrokeProgram activeProgram = program;
+    // applyTrapping() normalizes the px distance using program.canvasSize, so the
+    // program must carry the size we are actually rasterizing into. Otherwise a
+    // 1024-sized program rendered into a 2048 target dilates the Flats mask by 2x.
+    activeProgram.canvasSize = size;
     if (effectiveTrapping > 0.0) {
-        activeProgram = KisAiStrokeQualityUtils::applyTrapping(program, effectiveTrapping);
+        activeProgram = KisAiStrokeQualityUtils::applyTrapping(activeProgram, effectiveTrapping);
     }
 
     QImage compositeImage(size, QImage::Format_ARGB32_Premultiplied);
@@ -717,7 +721,10 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
         // second full rasterization pass is needed here.
         QImage compPreview = bloomSource;
         if (compPreview.isNull()) {
-            compPreview = renderProgramToImage(activeProgram, canvasSize, clipShadingToFlats, inheritedFlatsProgram, effectiveTrapping);
+            // Defensive path only (bloomSource is allocated whenever this block
+            // runs). activeProgram already carries the trapping applied above, so
+            // pass 0.0 here or the dilation would be applied a second time.
+            compPreview = renderProgramToImage(activeProgram, canvasSize, clipShadingToFlats, inheritedFlatsProgram, 0.0);
         }
         if (!compPreview.isNull()) {
             QImage bloomGlow = generateBloomMap(compPreview, 0.40, 8);
@@ -933,7 +940,10 @@ static bool renderFineLineStroke(
         QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/stipple")));
         painter.setPen(Qt::NoPen);
         QColor dotCol = color;
-        const int dotCount = qBound(sampleCount * 2, sampleCount * 4, 300);
+        // qBound(min, val, max): the lower bound must be a constant so the 300
+        // cap actually holds. The previous qBound(sampleCount*2, sampleCount*4, 300)
+        // let the growing lower bound win past ~150 samples and unbounded the cost.
+        const int dotCount = qBound(8, sampleCount * 2, 300);
         for (int i = 0; i < dotCount; ++i) {
             const int idx = rng.bounded(sampleCount);
             const QPointF &pt = curveSamples.at(idx).pos;
@@ -2151,7 +2161,7 @@ QImage KisAiStrokeRenderer::generateBloomMap(const QImage &image, qreal intensit
     }
 
     QImage src = image;
-    if (src.format() != QImage::Format_ARGB32_Premultiplied && src.format() != QImage::Format_ARGB32) {
+    if (src.format() != QImage::Format_ARGB32_Premultiplied) {
         src = src.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     }
 
@@ -2169,13 +2179,19 @@ QImage KisAiStrokeRenderer::generateBloomMap(const QImage &image, qreal intensit
                 dstRow[x] = 0;
                 continue;
             }
-            const int r = qRed(c);
-            const int g = qGreen(c);
-            const int b = qBlue(c);
+            // Luminance must be measured on the straight (unpremultiplied) colour.
+            // Reading the premultiplied channels makes a translucent white glow
+            // score near its alpha, so the bloom would key on opacity rather than
+            // brightness and drop exactly the highlights it targets.
+            const QRgb straight = qUnpremultiply(c);
+            const int r = qRed(straight);
+            const int g = qGreen(straight);
+            const int b = qBlue(straight);
             const int lum = (299 * r + 587 * g + 114 * b) / 1000;
             if (lum > 170) {
                 const qreal factor = qreal(lum - 170) / (255.0 - 170.0);
-                dstRow[x] = qRgba(qRound(r * factor), qRound(g * factor), qRound(b * factor), qRound(a * factor));
+                const int outA = qRound(a * factor);
+                dstRow[x] = qPremultiply(qRgba(qRound(r * factor), qRound(g * factor), qRound(b * factor), outA));
             } else {
                 dstRow[x] = 0;
             }
@@ -2186,7 +2202,9 @@ QImage KisAiStrokeRenderer::generateBloomMap(const QImage &image, qreal intensit
     applySoftEdgeDiffusion(bright, radius);
     applySoftEdgeDiffusion(bright, qMax(2, radius / 2));
 
-    // Step 3: Modulate by intensity
+    // Step 3: Modulate by intensity. Scaling every premultiplied channel by the
+    // same factor preserves rgb <= a, but the 0..255 clamp must still be applied
+    // against the resulting alpha so the invariant survives rounding.
     const qreal boundedIntensity = qBound<qreal>(0.0, intensity, 2.0);
     if (boundedIntensity != 1.0) {
         for (int y = 0; y < h; ++y) {
@@ -2195,10 +2213,11 @@ QImage KisAiStrokeRenderer::generateBloomMap(const QImage &image, qreal intensit
                 const QRgb c = dstRow[x];
                 const int a = qAlpha(c);
                 if (a == 0) continue;
-                dstRow[x] = qRgba(qBound(0, qRound(qRed(c) * boundedIntensity), 255),
-                                  qBound(0, qRound(qGreen(c) * boundedIntensity), 255),
-                                  qBound(0, qRound(qBlue(c) * boundedIntensity), 255),
-                                  qBound(0, qRound(a * boundedIntensity), 255));
+                const int outA = qBound(0, qRound(a * boundedIntensity), 255);
+                dstRow[x] = qRgba(qMin(outA, qBound(0, qRound(qRed(c) * boundedIntensity), 255)),
+                                  qMin(outA, qBound(0, qRound(qGreen(c) * boundedIntensity), 255)),
+                                  qMin(outA, qBound(0, qRound(qBlue(c) * boundedIntensity), 255)),
+                                  outA);
             }
         }
     }
@@ -2213,7 +2232,7 @@ void KisAiStrokeRenderer::applyBloomEffect(QImage &image, qreal intensity, int r
         return;
     }
 
-    if (image.format() != QImage::Format_ARGB32_Premultiplied && image.format() != QImage::Format_ARGB32) {
+    if (image.format() != QImage::Format_ARGB32_Premultiplied) {
         image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     }
 
@@ -2228,10 +2247,13 @@ void KisAiStrokeRenderer::applyBloomEffect(QImage &image, qreal intensity, int r
             if (aBloom == 0) continue;
 
             const QRgb cSrc = dstRow[x];
-            const int r = qMin(255, qRed(cSrc) + qRed(cBloom));
-            const int g = qMin(255, qGreen(cSrc) + qGreen(cBloom));
-            const int b = qMin(255, qBlue(cSrc) + qBlue(cBloom));
             const int a = qMax(qAlpha(cSrc), aBloom);
+            // Additive compositing of premultiplied channels; clamping to the
+            // destination alpha keeps rgb <= a so the pixel stays a valid
+            // premultiplied value.
+            const int r = qMin(a, qRed(cSrc) + qRed(cBloom));
+            const int g = qMin(a, qGreen(cSrc) + qGreen(cBloom));
+            const int b = qMin(a, qBlue(cSrc) + qBlue(cBloom));
             dstRow[x] = qRgba(r, g, b, a);
         }
     }
@@ -2249,7 +2271,9 @@ void KisAiStrokeRenderer::applyChromaticAberration(QImage &image, int shiftPx)
         return;
     }
 
-    if (image.format() != QImage::Format_ARGB32_Premultiplied && image.format() != QImage::Format_ARGB32) {
+    // Operate on premultiplied data so the unpremultiply/premultiply round trip
+    // below is well defined regardless of the incoming layout.
+    if (image.format() != QImage::Format_ARGB32_Premultiplied) {
         image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     }
 
@@ -2262,10 +2286,16 @@ void KisAiStrokeRenderer::applyChromaticAberration(QImage &image, int shiftPx)
         for (int x = 0; x < w; ++x) {
             const int xR = qBound(0, x - boundedShift, w - 1);
             const int xB = qBound(0, x + boundedShift, w - 1);
-            const QRgb cR = srcRow[xR];
-            const QRgb cG = srcRow[x];
-            const QRgb cB = srcRow[xB];
-            dstRow[x] = qRgba(qRed(cR), qGreen(cG), qBlue(cB), qAlpha(cG));
+            // Each sample is premultiplied by its own alpha, so the channels must
+            // be unpremultiplied before they are recombined with the centre
+            // alpha. Storing raw premultiplied channels next to a different alpha
+            // yields rgb > a, i.e. an invalid pixel that paints as an additive
+            // fringe instead of a subtle lens shift.
+            const QRgb cR = qUnpremultiply(srcRow[xR]);
+            const QRgb cG = qUnpremultiply(srcRow[x]);
+            const QRgb cB = qUnpremultiply(srcRow[xB]);
+            const int a = qAlpha(cG);
+            dstRow[x] = qPremultiply(qRgba(qRed(cR), qGreen(cG), qBlue(cB), a));
         }
     }
 }

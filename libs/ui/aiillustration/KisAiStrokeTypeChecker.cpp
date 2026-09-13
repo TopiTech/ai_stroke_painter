@@ -149,7 +149,9 @@ bool KisAiStrokeTypeChecker::isValidColorString(const QString &str)
         }
     }
 
-    return QColor::isValidColorName(trimmed) || QColor::fromString(trimmed).isValid();
+    // QColor::fromString() is Qt 6.4+; the QColor(QString) constructor has the
+    // same semantics and exists on every supported Qt version.
+    return QColor::isValidColorName(trimmed) || QColor(trimmed).isValid();
 }
 
 bool KisAiStrokeTypeChecker::checkBrushObject(QJsonObject *brushObj, QString *outError, int *coercedCount)
@@ -320,9 +322,10 @@ bool KisAiStrokeTypeChecker::checkPointsArray(QJsonArray *pointsArray, QString *
 
             qreal x = 0.0, y = 0.0, p = 0.8;
             if (coerceToNumber(vx, &x) && coerceToNumber(vy, &y)) {
-                if (vp.isDouble() || coerceToNumber(vp, &p)) {
-                    // p is assigned
-                } else {
+                // Always route pressure through coerceToNumber: it is the only
+                // path that rejects NaN/Inf, and a raw vp.isDouble() check would
+                // let a non-finite JSON number through to the width math.
+                if (!coerceToNumber(vp, &p)) {
                     p = 0.8;
                 }
                 QJsonArray normPt;

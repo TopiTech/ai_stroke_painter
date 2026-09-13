@@ -88,6 +88,38 @@ constexpr int REMOTE_IMAGE_TIMEOUT_MS = 180'000;
 
 const QString kDpapiApiKeyPrefix = QStringLiteral("dpapi:");
 
+// QFormLayout::setRowVisible() only exists since Qt 6.4, while this project
+// still declares Qt 5.15 as its minimum. Hide the label/field widgets directly
+// on older Qt so the same rows collapse.
+void setFormRowVisible(QFormLayout *form, int row, bool visible)
+{
+    if (!form) {
+        return;
+    }
+#if QT_VERSION >= QT_VERSION_CHECK(6, 4, 0)
+    form->setRowVisible(row, visible);
+#else
+    const auto hideRole = [form, row, visible](QFormLayout::ItemRole role) {
+        QLayoutItem *item = form->itemAt(row, role);
+        if (!item) {
+            return;
+        }
+        if (QWidget *widget = item->widget()) {
+            widget->setVisible(visible);
+        } else if (QLayout *childLayout = item->layout()) {
+            // A nested layout has no visibility of its own; hide its widgets.
+            for (int i = 0; i < childLayout->count(); ++i) {
+                if (QWidget *widget = childLayout->itemAt(i)->widget()) {
+                    widget->setVisible(visible);
+                }
+            }
+        }
+    };
+    hideRole(QFormLayout::LabelRole);
+    hideRole(QFormLayout::FieldRole);
+#endif
+}
+
 bool protectApiKeyForCurrentUser(const QString &apiKey, QString *protectedValue)
 {
 #if defined(Q_OS_WIN)
@@ -467,8 +499,13 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     visualCardWidget.layout->addWidget(visualHeader);
 
     // 1. Art Styles Row
-    auto *styleRow = new QHBoxLayout();
-    styleRow->setSpacing(4);
+    // A single HBoxLayout cannot shrink below the sum of its minimum widths, and
+    // horizontal scrolling is disabled on the parent scroll area, so six buttons
+    // were clipped at the dock's own 360px minimum width. Use a grid, exactly as
+    // the prompt chips above do, so the row wraps instead of being cut off.
+    auto *styleGrid = new QGridLayout();
+    styleGrid->setSpacing(4);
+    styleGrid->setContentsMargins(0, 0, 0, 0);
     const QList<QPair<QString, int>> stylePresets = {
         {i18n("🌸 アニメ"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel)},
         {i18n("💧 水彩"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor)},
@@ -477,7 +514,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         {i18n("✒️ インク"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::InkSketch)},
         {i18n("🖋️ 細密画"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::FineLineart)},
     };
-    for (const auto &sp : stylePresets) {
+    for (int i = 0; i < stylePresets.size(); ++i) {
+        const auto &sp = stylePresets.at(i);
         auto *btn = new QPushButton(sp.first, m_visualCardsCard);
         btn->setProperty("class", "aiVisualCard");
         btn->setCursor(Qt::PointingHandCursor);
@@ -488,20 +526,22 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
             onStyleCardClicked(btn, styleIdx);
         });
         m_styleCardButtons.append(btn);
-        styleRow->addWidget(btn);
+        styleGrid->addWidget(btn, i / 3, i % 3);
     }
-    visualCardWidget.layout->addLayout(styleRow);
+    visualCardWidget.layout->addLayout(styleGrid);
 
-    // 2. Composition & Angle Row
-    auto *compRow = new QHBoxLayout();
-    compRow->setSpacing(4);
+    // 2. Composition & Angle Row (grid for the same clipping reason)
+    auto *compGrid = new QGridLayout();
+    compGrid->setSpacing(4);
+    compGrid->setContentsMargins(0, 0, 0, 0);
     const QList<QPair<QString, QString>> compPresets = {
         {i18n("👤 顔アップ"), QStringLiteral("face_closeup")},
         {i18n("👚 バスト"), QStringLiteral("bust_up")},
         {i18n("👗 全身"), QStringLiteral("full_body")},
         {i18n("📐 煽り/俯瞰"), QStringLiteral("dynamic_angle")},
     };
-    for (const auto &cp : compPresets) {
+    for (int i = 0; i < compPresets.size(); ++i) {
+        const auto &cp = compPresets.at(i);
         auto *btn = new QPushButton(cp.first, m_visualCardsCard);
         btn->setProperty("class", "aiVisualCard");
         btn->setCursor(Qt::PointingHandCursor);
@@ -512,20 +552,22 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
             onCompositionCardClicked(btn, framing);
         });
         m_compositionCardButtons.append(btn);
-        compRow->addWidget(btn);
+        compGrid->addWidget(btn, i / 2, i % 2);
     }
-    visualCardWidget.layout->addLayout(compRow);
+    visualCardWidget.layout->addLayout(compGrid);
 
     // 3. Lighting & Mood Row
-    auto *lightRow = new QHBoxLayout();
-    lightRow->setSpacing(4);
+    auto *lightGrid = new QGridLayout();
+    lightGrid->setSpacing(4);
+    lightGrid->setContentsMargins(0, 0, 0, 0);
     const QList<QPair<QString, QString>> lightPresets = {
         {i18n("☀️ 昼光"), QStringLiteral("soft_daylight")},
         {i18n("🌇 夕暮れ"), QStringLiteral("sunset_glow")},
         {i18n("🌙 月夜"), QStringLiteral("night_moon")},
         {i18n("⚡ 逆光"), QStringLiteral("dramatic_backlight")},
     };
-    for (const auto &lp : lightPresets) {
+    for (int i = 0; i < lightPresets.size(); ++i) {
+        const auto &lp = lightPresets.at(i);
         auto *btn = new QPushButton(lp.first, m_visualCardsCard);
         btn->setProperty("class", "aiVisualCard");
         btn->setCursor(Qt::PointingHandCursor);
@@ -536,9 +578,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
             onLightingCardClicked(btn, light);
         });
         m_lightingCardButtons.append(btn);
-        lightRow->addWidget(btn);
+        lightGrid->addWidget(btn, i / 2, i % 2);
     }
-    visualCardWidget.layout->addLayout(lightRow);
+    visualCardWidget.layout->addLayout(lightGrid);
 
     layout->addWidget(m_visualCardsCard);
 
@@ -908,11 +950,15 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     inspectorLayout->addWidget(inspectorTitle);
 
     m_goalPhaseLabel = new QLabel(i18n("待機中"), m_goalInspectorCard);
+    // stepPhase / targetFocusArea come straight from the model response, so they
+    // must never be parsed as rich text. Keep parity with the other labels here.
+    m_goalPhaseLabel->setTextFormat(Qt::PlainText);
     m_goalPhaseLabel->setStyleSheet(QStringLiteral("font-weight: 700; color: #38bdf8; font-size: 13px;"));
     m_goalPhaseLabel->setWordWrap(true);
     inspectorLayout->addWidget(m_goalPhaseLabel);
 
     m_agentFocusLabel = new QLabel(i18n("🎯 着目領域: 待機中"), m_goalInspectorCard);
+    m_agentFocusLabel->setTextFormat(Qt::PlainText);
     m_agentFocusLabel->setStyleSheet(QStringLiteral("font-weight: 600; color: #a5b4fc; font-size: 11px;"));
     m_agentFocusLabel->setWordWrap(true);
     inspectorLayout->addWidget(m_agentFocusLabel);
@@ -2267,22 +2313,25 @@ void KisAiIllustrationDocker::updateModeUi()
 
     const bool isStrokeMode = (isLlm || newMode == GenerationMode::LocalStrokes);
     if (m_remoteForm) {
-        m_remoteForm->setRowVisible(0, needsRemote);  // Endpoint
-        m_remoteForm->setRowVisible(1, needsRemote);  // Model
-        m_remoteForm->setRowVisible(2, needsRemote);  // API Key
-        m_remoteForm->setRowVisible(3, needsRemote);  // Save API Key checkbox
-        m_remoteForm->setRowVisible(4, isLlm);        // Stroke Budget
-        m_remoteForm->setRowVisible(5, isLlm);        // Temperature
-        m_remoteForm->setRowVisible(6, isLlm);        // Top-P
-        m_remoteForm->setRowVisible(7, isStrokeMode); // Trapping px
-        m_remoteForm->setRowVisible(8, isLlm);        // Max Tokens
-        m_remoteForm->setRowVisible(9, needsRemote);  // Timeout
-        m_remoteForm->setRowVisible(10, isLlm);       // Auto-retries
-        m_remoteForm->setRowVisible(11, isLlm);       // JSON Mode
-        m_remoteForm->setRowVisible(12, isLlm);       // Vision Quality
-        m_remoteForm->setRowVisible(13, isLlm);       // Composition Plan
-        m_remoteForm->setRowVisible(14, isLlm);       // Reasoning Effort
-        m_remoteForm->setRowVisible(15, isLlm);       // Custom Instructions
+        // Row indices must match the addRow() order in the constructor.
+        setFormRowVisible(m_remoteForm, 0, needsRemote);   // Endpoint
+        setFormRowVisible(m_remoteForm, 1, needsRemote);   // Model
+        setFormRowVisible(m_remoteForm, 2, needsRemote);   // API Key
+        setFormRowVisible(m_remoteForm, 3, needsRemote);   // Save API Key checkbox
+        setFormRowVisible(m_remoteForm, 4, isLlm);         // Stroke Budget
+        setFormRowVisible(m_remoteForm, 5, isLlm);         // Temperature
+        setFormRowVisible(m_remoteForm, 6, isLlm);         // Top-P
+        setFormRowVisible(m_remoteForm, 7, isStrokeMode);  // Trapping px
+        setFormRowVisible(m_remoteForm, 8, isLlm);         // Max Tokens
+        setFormRowVisible(m_remoteForm, 9, needsRemote);   // Timeout
+        setFormRowVisible(m_remoteForm, 10, isLlm);        // Auto-retries
+        setFormRowVisible(m_remoteForm, 11, isLlm);        // JSON Mode
+        setFormRowVisible(m_remoteForm, 12, isLlm);        // Vision Quality
+        setFormRowVisible(m_remoteForm, 13, isLlm);        // Stroke Protocol
+        setFormRowVisible(m_remoteForm, 14, isLlm);        // Composition Plan
+        setFormRowVisible(m_remoteForm, 15, isStrokeMode); // Suppress Particles
+        setFormRowVisible(m_remoteForm, 16, isLlm);        // Reasoning Effort
+        setFormRowVisible(m_remoteForm, 17, isLlm);        // Custom Instructions
     }
 
     if (m_testConnectionButton) {
@@ -4286,6 +4335,9 @@ void KisAiIllustrationDocker::updateHistoryUi()
             thumbBtn->setIcon(QIcon(QPixmap::fromImage(snap.previewImage)));
             thumbBtn->setIconSize(QSize(54, 54));
         }
+        // Icon-only button: without an accessible name a screen reader announces
+        // an unnamed button, unlike every other control in this docker.
+        thumbBtn->setAccessibleName(i18n("履歴 %1: %2", i + 1, snap.prompt));
         thumbBtn->setToolTip(i18n("#%1 (%2)\n%3\nクリックでプロンプト・設定を復元")
             .arg(i + 1)
             .arg(snap.timestamp.toString(QStringLiteral("hh:mm:ss")))
