@@ -374,6 +374,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_expandPromptButton->setObjectName(QStringLiteral("aiExpandPromptBtn"));
     m_expandPromptButton->setToolTip(i18n("短い指示から、高品質なアニメイラスト用の豊かな情景描写へAIが自動展開します。"));
     m_expandPromptButton->setCursor(Qt::PointingHandCursor);
+    m_expandPromptButton->setFocusPolicy(Qt::StrongFocus);
+    m_expandPromptButton->setAccessibleName(i18n("Expand prompt with AI"));
     connect(m_expandPromptButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::expandPromptWithAi);
     promptHeaderRow->addWidget(m_expandPromptButton);
 
@@ -381,6 +383,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_syncColorButton->setObjectName(QStringLiteral("aiSyncColorBtn"));
     m_syncColorButton->setToolTip(i18n("現在Kritaで選んでいる前景色（描画色）をプロンプトへ配色指示として取り込みます。"));
     m_syncColorButton->setCursor(Qt::PointingHandCursor);
+    m_syncColorButton->setFocusPolicy(Qt::StrongFocus);
+    m_syncColorButton->setAccessibleName(i18n("Sync foreground color to prompt"));
     connect(m_syncColorButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::syncForegroundPalette);
     promptHeaderRow->addWidget(m_syncColorButton);
 
@@ -478,6 +482,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         btn->setProperty("class", "aiVisualCard");
         btn->setCursor(Qt::PointingHandCursor);
         btn->setFocusPolicy(Qt::StrongFocus);
+        btn->setAccessibleName(i18n("画風: %1", sp.first));
+        btn->setToolTip(i18n("画風プリセット「%1」を適用").arg(sp.first));
         connect(btn, &QPushButton::clicked, this, [this, btn, styleIdx = sp.second] {
             onStyleCardClicked(btn, styleIdx);
         });
@@ -500,6 +506,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         btn->setProperty("class", "aiVisualCard");
         btn->setCursor(Qt::PointingHandCursor);
         btn->setFocusPolicy(Qt::StrongFocus);
+        btn->setAccessibleName(i18n("構図: %1", cp.first));
+        btn->setToolTip(i18n("構図プリセット「%1」を適用").arg(cp.first));
         connect(btn, &QPushButton::clicked, this, [this, btn, framing = cp.second] {
             onCompositionCardClicked(btn, framing);
         });
@@ -522,6 +530,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         btn->setProperty("class", "aiVisualCard");
         btn->setCursor(Qt::PointingHandCursor);
         btn->setFocusPolicy(Qt::StrongFocus);
+        btn->setAccessibleName(i18n("照明: %1", lp.first));
+        btn->setToolTip(i18n("照明プリセット「%1」を適用").arg(lp.first));
         connect(btn, &QPushButton::clicked, this, [this, btn, light = lp.second] {
             onLightingCardClicked(btn, light);
         });
@@ -1194,7 +1204,7 @@ bool KisAiIllustrationDocker::eventFilter(QObject *watched, QEvent *event)
             }
             return true;
         }
-        if (keyEvent->key() == Qt::Key_Escape && (m_reply || m_goalModeActive || m_testReply || (m_retryTimer && m_retryTimer->isActive()))) {
+        if (keyEvent->key() == Qt::Key_Escape && (m_reply || m_goalModeActive || m_testReply || m_expandPromptReply || (m_retryTimer && m_retryTimer->isActive()))) {
             cancelRemoteRequest();
             return true;
         }
@@ -1214,7 +1224,7 @@ void KisAiIllustrationDocker::keyPressEvent(QKeyEvent *event)
         event->accept();
         return;
     }
-    if (event->key() == Qt::Key_Escape && (m_reply || m_goalModeActive || m_testReply || (m_retryTimer && m_retryTimer->isActive()))) {
+    if (event->key() == Qt::Key_Escape && (m_reply || m_goalModeActive || m_testReply || m_expandPromptReply || (m_retryTimer && m_retryTimer->isActive()))) {
         cancelRemoteRequest();
         event->accept();
         return;
@@ -2111,6 +2121,9 @@ void KisAiIllustrationDocker::cancelRemoteRequest()
 
     if (m_testReply) {
         m_testReply->abort();
+    }
+    if (m_expandPromptReply) {
+        m_expandPromptReply->abort();
     }
     if (!m_reply) {
         if (m_goalModeActive) {
@@ -3721,7 +3734,17 @@ void KisAiIllustrationDocker::testLlmConnection()
 
     const QString endpoint = m_endpointEditor ? m_endpointEditor->text().trimmed() : QString();
     const QString model = m_modelEditor ? m_modelEditor->text().trimmed() : QString();
-    const QString apiKey = m_apiKeyEditor ? m_apiKeyEditor->text() : QString();
+    QString apiKey = m_apiKeyEditor ? m_apiKeyEditor->text().trimmed() : QString();
+    if (apiKey.isEmpty()) {
+        apiKey = m_inFlightApiKey;
+    }
+    if (apiKey.isEmpty() && m_saveApiKeyCheck && m_saveApiKeyCheck->isChecked()) {
+        QSettings s;
+        unprotectApiKeyForCurrentUser(s.value(QStringLiteral("AIIllustration/apiKey")).toString(), &apiKey);
+        if (!apiKey.isEmpty() && m_apiKeyEditor) {
+            m_apiKeyEditor->setText(apiKey);
+        }
+    }
 
     QString errorMessage;
     if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
@@ -4162,6 +4185,10 @@ void KisAiIllustrationDocker::finishExpandPromptRequest()
         setStatus(i18n("プロンプト推敲の応答が上限サイズを超えました。"), true);
         return;
     }
+    if (networkError == QNetworkReply::OperationCanceledError) {
+        setStatus(i18n("プロンプト推敲を中止しました。"));
+        return;
+    }
     if (networkError != QNetworkReply::NoError && httpStatus != 200) {
         setStatus(i18n("プロンプト推敲に失敗しました (HTTP %1)").arg(httpStatus), true);
         return;
@@ -4191,8 +4218,14 @@ void KisAiIllustrationDocker::syncForegroundPalette()
     const QString hex = fgColor.name();
     if (m_promptEditor) {
         QString text = m_promptEditor->toPlainText().trimmed();
+        static const QRegularExpression colorPattern(QStringLiteral("(?:、|\\s)*メイン配色:\\s*#[0-9a-fA-F]{6}"));
         const QString colorClause = i18n("メイン配色: %1").arg(hex);
-        if (!text.isEmpty()) {
+        if (text.contains(colorPattern)) {
+            text.replace(colorPattern, QStringLiteral("、") + colorClause);
+            if (text.startsWith(QStringLiteral("、"))) {
+                text = text.mid(1).trimmed();
+            }
+        } else if (!text.isEmpty()) {
             text += QStringLiteral("、") + colorClause;
         } else {
             text = colorClause;
@@ -4226,7 +4259,7 @@ void KisAiIllustrationDocker::updateHistoryUi()
 {
     if (!m_historyThumbsLayout) return;
 
-    QLayoutItem *item;
+    QLayoutItem *item = nullptr;
     while ((item = m_historyThumbsLayout->takeAt(0)) != nullptr) {
         if (item->widget()) {
             delete item->widget();

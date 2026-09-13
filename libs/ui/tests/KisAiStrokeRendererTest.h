@@ -74,6 +74,7 @@ private Q_SLOTS:
     void testAdaptiveResamplingPreservesNuance();
     void testLineartHierarchyDynamicTiers();
     void testHairStrandsAndBangsBleedGeneration();
+    void testShortStrokeTaperingEndpoints();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

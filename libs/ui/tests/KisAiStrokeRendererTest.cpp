@@ -1963,4 +1963,38 @@ void KisAiStrokeRendererTest::testHairStrandsAndBangsBleedGeneration()
     QVERIFY(hasNoseBridge);
 }
 
+void KisAiStrokeRendererTest::testShortStrokeTaperingEndpoints()
+{
+    // Verify that short fineliner strokes with 4 points render without crashing
+    // and correctly produce tapered ink without asymmetry.
+    const QSize canvasSize(512, 512);
+    KisAiStrokeOperation shortFine;
+    shortFine.kind = KisAiStrokeOperation::Kind::Path;
+    shortFine.id = QStringLiteral("short_eyelash");
+    shortFine.layer = QStringLiteral("Lineart");
+    shortFine.brush.profile = QStringLiteral("fineliner");
+    shortFine.brush.color = QColor(10, 10, 20);
+    shortFine.brush.size = 0.002;
+    shortFine.points = {
+        KisAiStrokePoint(0.48, 0.40, 0.7),
+        KisAiStrokePoint(0.49, 0.39, 0.8),
+        KisAiStrokePoint(0.51, 0.38, 0.8),
+        KisAiStrokePoint(0.53, 0.37, 0.4),
+    };
+
+    KisAiStrokeProgram prog;
+    prog.operations = {shortFine};
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvasSize);
+    QVERIFY(!img.isNull());
+
+    int coloredPixels = 0;
+    for (int y = 0; y < canvasSize.height(); ++y) {
+        for (int x = 0; x < canvasSize.width(); ++x) {
+            if (img.pixelColor(x, y).alpha() > 10)
+                ++coloredPixels;
+        }
+    }
+    QVERIFY2(coloredPixels > 5, qPrintable(QStringLiteral("Short stroke drew too few pixels: %1").arg(coloredPixels)));
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

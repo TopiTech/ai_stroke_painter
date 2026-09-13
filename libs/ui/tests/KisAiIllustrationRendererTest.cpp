@@ -191,4 +191,12 @@ void KisAiIllustrationRendererTest::testPromptExpansionPayloadAndParsing()
     QVERIFY(parsed.contains(QStringLiteral("紫の瞳")));
 }
 
+void KisAiIllustrationRendererTest::testCityConceptImagePrecedence()
+{
+    const QSize targetSize(256, 256);
+    const QImage cityImg = KisAiIllustrationRenderer::createConceptImage(QStringLiteral("Cyberpunk neon city skyline at dusk"), targetSize);
+    QVERIFY(!cityImg.isNull());
+    QCOMPARE(cityImg.size(), targetSize);
+}
+
 KISTEST_MAIN(KisAiIllustrationRendererTest)

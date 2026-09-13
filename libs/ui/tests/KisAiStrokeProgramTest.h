@@ -107,6 +107,7 @@ private Q_SLOTS:
     void testSceneSpecPayloadReasoningModelOmitsTemperature();
     void testSceneSpecPayloadStreamingAndJsonSchema();
     void testJsonModeForcedJsonObjectHandling();
+    void testColorClauseDeduplication();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

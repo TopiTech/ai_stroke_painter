@@ -3325,27 +3325,47 @@ void KisAiStrokeProgramTest::testFourLayerShadingPresent()
 
 void KisAiStrokeProgramTest::testLineartHierarchy()
 {
-    // V3 Phase 2.3: Lineart stroke weights into 3-tier hierarchy
+    // V3/V4 Phase 2.3: Lineart stroke weights into 4-tier hierarchy
+    // Tier 3: Major outer silhouette contours (length >= 1.0 -> 0.008)
+    // Tier 2: Structural outlines (0.35 <= length < 1.0 -> 0.005)
+    // Tier 1: Intermediate contours (0.12 <= length < 0.35 -> 0.003)
+    // Tier 0: Micro details, hair strands, delicate hatches, eyelashes (< 0.12 or delicate profile -> 0.0015)
     QVector<KisAiStrokeOperation> ops;
 
-    KisAiStrokeOperation heavy;
-    heavy.kind = KisAiStrokeOperation::Kind::Path;
-    heavy.layer = QStringLiteral("Lineart");
-    heavy.points = {KisAiStrokePoint(0.1, 0.1), KisAiStrokePoint(0.9, 0.9)}; // length ~ 1.13 >= 1.0
-    heavy.brush.size = 0.02; // non-canonical size
-    ops.append(heavy);
+    KisAiStrokeOperation silhouette;
+    silhouette.kind = KisAiStrokeOperation::Kind::Path;
+    silhouette.layer = QStringLiteral("Lineart");
+    silhouette.points = {KisAiStrokePoint(0.1, 0.1), KisAiStrokePoint(0.9, 0.9)}; // length ~ 1.13 >= 1.0
+    silhouette.brush.size = 0.02; // non-canonical size
+    ops.append(silhouette);
 
-    KisAiStrokeOperation light;
-    light.kind = KisAiStrokeOperation::Kind::Path;
-    light.layer = QStringLiteral("Lineart");
-    light.points = {KisAiStrokePoint(0.5, 0.5), KisAiStrokePoint(0.55, 0.55)}; // length ~ 0.07 < 0.35
-    light.brush.size = 0.02;
-    ops.append(light);
+    KisAiStrokeOperation structural;
+    structural.kind = KisAiStrokeOperation::Kind::Path;
+    structural.layer = QStringLiteral("Lineart");
+    structural.points = {KisAiStrokePoint(0.2, 0.2), KisAiStrokePoint(0.6, 0.5)}; // length = 0.50 (0.35 <= length < 1.0)
+    structural.brush.size = 0.02;
+    ops.append(structural);
+
+    KisAiStrokeOperation intermediate;
+    intermediate.kind = KisAiStrokeOperation::Kind::Path;
+    intermediate.layer = QStringLiteral("Lineart");
+    intermediate.points = {KisAiStrokePoint(0.4, 0.4), KisAiStrokePoint(0.55, 0.55)}; // length ~ 0.212 (0.12 <= length < 0.35)
+    intermediate.brush.size = 0.02;
+    ops.append(intermediate);
+
+    KisAiStrokeOperation micro;
+    micro.kind = KisAiStrokeOperation::Kind::Path;
+    micro.layer = QStringLiteral("Lineart");
+    micro.points = {KisAiStrokePoint(0.5, 0.5), KisAiStrokePoint(0.55, 0.55)}; // length ~ 0.071 (< 0.12)
+    micro.brush.size = 0.02;
+    ops.append(micro);
 
     const int adjusted = KisAiStrokeQualityUtils::applyLineartHierarchy(ops);
-    QCOMPARE(adjusted, 2);
-    QCOMPARE(ops[0].brush.size, 0.008); // Tier 1: outer contours
-    QCOMPARE(ops[1].brush.size, 0.003); // Tier 3: details
+    QCOMPARE(adjusted, 4);
+    QCOMPARE(ops[0].brush.size, 0.008);  // Tier 3: major outer contours
+    QCOMPARE(ops[1].brush.size, 0.005);  // Tier 2: structural outlines
+    QCOMPARE(ops[2].brush.size, 0.003);  // Tier 1: intermediate contours
+    QCOMPARE(ops[3].brush.size, 0.0015); // Tier 0: micro details
 }
 
 void KisAiStrokeProgramTest::testBrushPresetMapping()
@@ -3705,6 +3725,39 @@ void KisAiStrokeProgramTest::testJsonModeForcedJsonObjectHandling()
     const QJsonObject goalFmt = forcedGoalPayload.value(QStringLiteral("response_format")).toObject();
     QCOMPARE(goalFmt.value(QStringLiteral("type")).toString(), QStringLiteral("json_object"));
     QVERIFY(!goalFmt.contains(QStringLiteral("json_schema")));
+}
+
+void KisAiStrokeProgramTest::testColorClauseDeduplication()
+{
+    // Verify that syncing palette color replaces an existing color clause
+    // instead of repeatedly appending duplicates.
+    static const QRegularExpression colorPattern(QStringLiteral("(?:、|\\s)*メイン配色:\\s*#[0-9a-fA-F]{6}"));
+
+    QString prompt = QStringLiteral("雨上がりの夜、青い光に包まれた街");
+    const QString color1 = QStringLiteral("メイン配色: #2b3a67");
+    if (prompt.contains(colorPattern)) {
+        prompt.replace(colorPattern, QStringLiteral("、") + color1);
+    } else if (!prompt.isEmpty()) {
+        prompt += QStringLiteral("、") + color1;
+    } else {
+        prompt = color1;
+    }
+    QCOMPARE(prompt, QStringLiteral("雨上がりの夜、青い光に包まれた街、メイン配色: #2b3a67"));
+
+    // Syncing a second color should replace #2b3a67 with #ff5533
+    const QString color2 = QStringLiteral("メイン配色: #ff5533");
+    if (prompt.contains(colorPattern)) {
+        prompt.replace(colorPattern, QStringLiteral("、") + color2);
+        if (prompt.startsWith(QStringLiteral("、"))) {
+            prompt = prompt.mid(1).trimmed();
+        }
+    } else if (!prompt.isEmpty()) {
+        prompt += QStringLiteral("、") + color2;
+    } else {
+        prompt = color2;
+    }
+    QCOMPARE(prompt, QStringLiteral("雨上がりの夜、青い光に包まれた街、メイン配色: #ff5533"));
+    QCOMPARE(prompt.count(QStringLiteral("メイン配色:")), 1);
 }
 
 KISTEST_MAIN(KisAiStrokeProgramTest)

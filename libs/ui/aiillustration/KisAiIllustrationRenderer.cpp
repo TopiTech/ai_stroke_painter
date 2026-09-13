@@ -168,13 +168,13 @@ void drawPromptMotif(QPainter &painter, const QRectF &bounds, const QString &pro
     }
 
     if (lowerPrompt.contains(QLatin1String("city")) || prompt.contains(QStringLiteral("街")) || prompt.contains(QStringLiteral("都市"))) {
-        const qreal baseline = center.y() + radius * 0.75;
-        const qreal left = center.x() - radius * 1.4;
+        const qreal baseline = center.y() + (radius * 0.75);
+        const qreal left = center.x() - (radius * 1.4);
         painter.setBrush(hueColor(hue + 15, 50, 30, 235));
         for (int i = 0; i < 7; ++i) {
             const qreal width = radius * (0.24 + 0.08 * (i % 3));
             const qreal height = radius * (0.45 + 0.20 * ((i + 1) % 4));
-            painter.drawRoundedRect(QRectF(left + i * radius * 0.40, baseline - height, width, height), 2.0, 2.0);
+            painter.drawRoundedRect(QRectF(left + (i * radius * 0.40), baseline - height, width, height), 2.0, 2.0);
         }
         return;
     }

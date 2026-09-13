@@ -980,10 +980,14 @@ static bool renderFineLineStroke(
         // Sharp tapering for fineliner/maru_pen at endpoints (natural flick / 抜き)
         qreal tipFactor = 1.0;
         if ((profile == QLatin1String("fineliner") || profile == QLatin1String("maru_pen")) && !op.closed) {
-            if (i < 3) {
-                tipFactor = qBound<qreal>(0.35, (i + 1) / 3.0, 1.0);
-            } else if (i > sampleCount - 4) {
-                tipFactor = qBound<qreal>(0.30, (sampleCount - 1 - i) / 3.0, 1.0);
+            const int segCount = sampleCount - 1;
+            const int taperSteps = qMin(3, segCount / 2);
+            if (taperSteps > 0) {
+                if (i < taperSteps) {
+                    tipFactor = qBound<qreal>(0.35, qreal(i + 1) / qreal(taperSteps + 1), 1.0);
+                } else if (i >= segCount - taperSteps) {
+                    tipFactor = qBound<qreal>(0.30, qreal(segCount - i) / qreal(taperSteps + 1), 1.0);
+                }
             }
         }
 
