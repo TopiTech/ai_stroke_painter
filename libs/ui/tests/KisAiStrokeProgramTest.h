@@ -121,6 +121,7 @@ private Q_SLOTS:
     void testResampleEquidistantClosesTruncatedClosedCurve();
     void testResampleEquidistantStaysBounded();
     void testSchemaVersionCoercionRejectsHugeStringValue();
+    void testCharacterDomainArtDirectionSubstitutions();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

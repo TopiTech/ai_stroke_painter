@@ -85,6 +85,7 @@ private Q_SLOTS:
     void testCrossLayerClipToId();
     void testProceduralMacroExpansionGuidance();
     void testLintDropsNonFiniteGeometry();
+    void testLintKeepsCanvasCrossingStrokesAndFullBleedFills();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

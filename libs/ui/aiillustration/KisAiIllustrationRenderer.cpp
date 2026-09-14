@@ -149,8 +149,8 @@ void drawPromptMotif(QPainter &painter, const QRectF &bounds, const QString &pro
         cat.addPolygon(ears);
         painter.drawPath(cat);
         painter.setBrush(QColor(20, 27, 43, 220));
-        painter.drawEllipse(QPointF(center.x() - radius * 0.34, center.y()), radius * 0.10, radius * 0.16);
-        painter.drawEllipse(QPointF(center.x() + radius * 0.34, center.y()), radius * 0.10, radius * 0.16);
+        painter.drawEllipse(QPointF(center.x() - (radius * 0.34), center.y()), radius * 0.10, radius * 0.16);
+        painter.drawEllipse(QPointF(center.x() + (radius * 0.34), center.y()), radius * 0.10, radius * 0.16);
         return;
     }
 

@@ -1421,6 +1421,9 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         // can never be consumed by the request path below; reset it so the next
         // fresh request starts with a clean retry budget and prompt.
         m_retryInFlight = false;
+        if (m_uiMode != UiMode::Pro) {
+            setUiMode(UiMode::Pro);
+        }
         if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
             m_detailsToggleBtn->setChecked(true);
         }
@@ -1432,6 +1435,9 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     }
     if (model.isEmpty()) {
         m_retryInFlight = false;
+        if (m_uiMode != UiMode::Pro) {
+            setUiMode(UiMode::Pro);
+        }
         if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
             m_detailsToggleBtn->setChecked(true);
         }
@@ -1443,6 +1449,9 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     }
     if (apiKey.isEmpty()) {
         m_retryInFlight = false;
+        if (m_uiMode != UiMode::Pro) {
+            setUiMode(UiMode::Pro);
+        }
         if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
             m_detailsToggleBtn->setChecked(true);
         }
@@ -1953,6 +1962,9 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
     const QString apiKey = m_apiKeyEditor->text();
 
     if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
+        if (m_uiMode != UiMode::Pro) {
+            setUiMode(UiMode::Pro);
+        }
         if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
             m_detailsToggleBtn->setChecked(true);
         }
@@ -1963,6 +1975,9 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
         return;
     }
     if (model.isEmpty()) {
+        if (m_uiMode != UiMode::Pro) {
+            setUiMode(UiMode::Pro);
+        }
         if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
             m_detailsToggleBtn->setChecked(true);
         }
@@ -1973,6 +1988,9 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
         return;
     }
     if (apiKey.isEmpty()) {
+        if (m_uiMode != UiMode::Pro) {
+            setUiMode(UiMode::Pro);
+        }
         if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
             m_detailsToggleBtn->setChecked(true);
         }
@@ -2618,6 +2636,9 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
 
         QString errorMessage;
         if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
+            if (m_uiMode != UiMode::Pro) {
+                setUiMode(UiMode::Pro);
+            }
             if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
                 m_detailsToggleBtn->setChecked(true);
             }
@@ -2629,6 +2650,9 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
             return;
         }
         if (model.isEmpty()) {
+            if (m_uiMode != UiMode::Pro) {
+                setUiMode(UiMode::Pro);
+            }
             if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
                 m_detailsToggleBtn->setChecked(true);
             }
@@ -2640,6 +2664,9 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
             return;
         }
         if (apiKey.isEmpty()) {
+            if (m_uiMode != UiMode::Pro) {
+                setUiMode(UiMode::Pro);
+            }
             if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
                 m_detailsToggleBtn->setChecked(true);
             }

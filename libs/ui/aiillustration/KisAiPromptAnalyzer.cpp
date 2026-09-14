@@ -331,7 +331,7 @@ QString KisAiPromptAnalyzer::generateArtDirection(
             "   - Skin & Anatomy Base: Solid, continuous coverage for head, neck, and exposed anatomy with fill, establishing 3D planes.\n"
             "     Assign explicit ID (e.g. 'face_skin', 'body_base') to enable clip_to_id for all shadows and blush!\n"
             "     Use fill_profile: 'watercolor' for genuine wet-edge pigmentation and soft paper grain.\n"
-            "   - Hair Masses: Cohesive primary hair masses (id: 'hair_bangs', 'hair_back') using fill or ribbon.\n"
+            "   - Hair Masses: Cohesive primary hair masses (id: 'hair_bangs', 'hair_back', color: %1) using fill or ribbon.\n"
             "     Use ribbon with brush.profile: 'hair' for automatic procedural synthesis of multi-strand locks, flyaways, and halo accents!\n"
             "   - Eyes & Features: Almond sclera discs with fill, or use 'anime_eye' (iris_color: %2, secondary_color, style: 'sparkle').\n"
             "   - Attire & Drapery: Distinct opaque color masses defining garments, folds, and silhouette (e.g. id: 'cloth_base').\n"

@@ -47,9 +47,37 @@ bool allPointsOutside(const QVector<KisAiStrokePoint> &pts, qreal margin = 0.05)
 {
     if (pts.isEmpty())
         return true;
+
+    const QRectF canvasBox(-margin, -margin, 1.0 + 2.0 * margin, 1.0 + 2.0 * margin);
     for (const KisAiStrokePoint &p : pts) {
-        if (p.pos.x() >= -margin && p.pos.x() <= 1.0 + margin
-            && p.pos.y() >= -margin && p.pos.y() <= 1.0 + margin) {
+        if (canvasBox.contains(p.pos)) {
+            return false;
+        }
+    }
+
+    const qreal boxMin = -margin;
+    const qreal boxMax = 1.0 + margin;
+
+    qreal minX = pts[0].pos.x(), maxX = minX;
+    qreal minY = pts[0].pos.y(), maxY = minY;
+    for (int i = 1; i < pts.size(); ++i) {
+        minX = qMin(minX, pts[i].pos.x());
+        maxX = qMax(maxX, pts[i].pos.x());
+        minY = qMin(minY, pts[i].pos.y());
+        maxY = qMax(maxY, pts[i].pos.y());
+    }
+    if (maxX < boxMin || minX > boxMax || maxY < boxMin || minY > boxMax) {
+        return true;
+    }
+
+    // Check if any segment crosses the [0, 1]x[0, 1] canvas
+    for (int i = 0; i + 1 < pts.size(); ++i) {
+        const QLineF seg(pts[i].pos, pts[i + 1].pos);
+        QPointF isect;
+        if (seg.intersects(QLineF(0.0, 0.0, 1.0, 0.0), &isect) == QLineF::BoundedIntersection ||
+            seg.intersects(QLineF(1.0, 0.0, 1.0, 1.0), &isect) == QLineF::BoundedIntersection ||
+            seg.intersects(QLineF(1.0, 1.0, 0.0, 1.0), &isect) == QLineF::BoundedIntersection ||
+            seg.intersects(QLineF(0.0, 1.0, 0.0, 0.0), &isect) == QLineF::BoundedIntersection) {
             return false;
         }
     }
@@ -60,9 +88,42 @@ bool allPolyOutside(const QPolygonF &poly, qreal margin = 0.05)
 {
     if (poly.size() < 3)
         return true;
+
+    const QRectF canvasBox(-margin, -margin, 1.0 + 2.0 * margin, 1.0 + 2.0 * margin);
     for (const QPointF &p : poly) {
-        if (p.x() >= -margin && p.x() <= 1.0 + margin
-            && p.y() >= -margin && p.y() <= 1.0 + margin) {
+        if (canvasBox.contains(p)) {
+            return false;
+        }
+    }
+
+    const qreal boxMin = -margin;
+    const qreal boxMax = 1.0 + margin;
+
+    qreal minX = poly[0].x(), maxX = minX;
+    qreal minY = poly[0].y(), maxY = minY;
+    for (int i = 1; i < poly.size(); ++i) {
+        minX = qMin(minX, poly[i].x());
+        maxX = qMax(maxX, poly[i].x());
+        minY = qMin(minY, poly[i].y());
+        maxY = qMax(maxY, poly[i].y());
+    }
+    if (maxX < boxMin || minX > boxMax || maxY < boxMin || minY > boxMax) {
+        return true;
+    }
+
+    // Full-bleed or large fill enclosing canvas center
+    if (poly.containsPoint(QPointF(0.5, 0.5), Qt::OddEvenFill)) {
+        return false;
+    }
+
+    const int n = poly.size();
+    for (int i = 0; i < n; ++i) {
+        const QLineF edge(poly.at(i), poly.at((i + 1) % n));
+        QPointF isect;
+        if (edge.intersects(QLineF(0.0, 0.0, 1.0, 0.0), &isect) == QLineF::BoundedIntersection ||
+            edge.intersects(QLineF(1.0, 0.0, 1.0, 1.0), &isect) == QLineF::BoundedIntersection ||
+            edge.intersects(QLineF(1.0, 1.0, 0.0, 1.0), &isect) == QLineF::BoundedIntersection ||
+            edge.intersects(QLineF(0.0, 1.0, 0.0, 0.0), &isect) == QLineF::BoundedIntersection) {
             return false;
         }
     }
@@ -325,6 +386,11 @@ KisAiStrokeLintReport KisAiDeliberateStroke::lintStroke(
         if (rep.lengthPx < 2.0) {
             rep.drop = true;
             rep.reasons << QStringLiteral("micro-spine");
+            return rep;
+        }
+        if (allPointsOutside(spinePts)) {
+            rep.drop = true;
+            rep.reasons << QStringLiteral("off-canvas-spine");
             return rep;
         }
         if (!(op.widthStart > 0.0) || !(op.widthMid > 0.0) || !(op.widthEnd > 0.0)) {

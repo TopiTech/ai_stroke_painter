@@ -2558,4 +2558,102 @@ void KisAiStrokeRendererTest::testLintDropsNonFiniteGeometry()
     QVERIFY(!img.isNull());
 }
 
+void KisAiStrokeRendererTest::testLintKeepsCanvasCrossingStrokesAndFullBleedFills()
+{
+    // Regression: allPointsOutside and allPolyOutside previously checked if all vertices
+    // were outside [-margin, 1+margin]. A path crossing the canvas edge-to-edge or a full-bleed
+    // fill enclosing the canvas has all its vertices outside the boundary, but intersects the canvas.
+    // They must NOT be dropped, while truly off-canvas objects must be dropped.
+    const QSize canvas(1024, 1024);
+
+    // 1. Edge-to-edge crossing path
+    KisAiStrokeOperation crossingPath;
+    crossingPath.kind = KisAiStrokeOperation::Kind::Path;
+    crossingPath.id = QStringLiteral("crossing-path");
+    crossingPath.layer = QStringLiteral("Lineart");
+    crossingPath.brush.color = QColor(20, 20, 20);
+    crossingPath.brush.size = 0.004;
+    crossingPath.points = QVector<KisAiStrokePoint>{
+        KisAiStrokePoint(-0.1, 0.5, 0.8),
+        KisAiStrokePoint(1.1, 0.5, 0.8)};
+    const auto repCrossing = KisAiDeliberateStroke::lintStroke(crossingPath, canvas);
+    QVERIFY2(!repCrossing.drop, qPrintable(repCrossing.reasons.join(QLatin1Char(';'))));
+
+    // 2. Full-bleed background fill enclosing canvas
+    KisAiStrokeOperation fullBleedFill;
+    fullBleedFill.kind = KisAiStrokeOperation::Kind::Fill;
+    fullBleedFill.id = QStringLiteral("full-bleed-fill");
+    fullBleedFill.layer = QStringLiteral("Flats");
+    fullBleedFill.brush.color = QColor(200, 220, 240);
+    fullBleedFill.polygon = QVector<QPointF>{
+        QPointF(-0.1, -0.1), QPointF(1.1, -0.1),
+        QPointF(1.1, 1.1), QPointF(-0.1, 1.1)};
+    QVERIFY(!KisAiDeliberateStroke::lintStroke(fullBleedFill, canvas).drop);
+
+    // 3. Crossing polygon
+    KisAiStrokeOperation crossingPoly;
+    crossingPoly.kind = KisAiStrokeOperation::Kind::Fill;
+    crossingPoly.id = QStringLiteral("crossing-poly");
+    crossingPoly.layer = QStringLiteral("Flats");
+    crossingPoly.brush.color = QColor(200, 200, 200);
+    crossingPoly.polygon = QVector<QPointF>{
+        QPointF(-0.1, 0.5), QPointF(1.1, 0.2), QPointF(1.1, 0.8)};
+    QVERIFY(!KisAiDeliberateStroke::lintStroke(crossingPoly, canvas).drop);
+
+    // 4. Ribbon spine crossing canvas
+    KisAiStrokeOperation crossingRibbon;
+    crossingRibbon.kind = KisAiStrokeOperation::Kind::Ribbon;
+    crossingRibbon.id = QStringLiteral("crossing-ribbon");
+    crossingRibbon.layer = QStringLiteral("Lineart");
+    crossingRibbon.brush.color = QColor(20, 20, 20);
+    crossingRibbon.widthStart = 0.01;
+    crossingRibbon.widthMid = 0.01;
+    crossingRibbon.widthEnd = 0.01;
+    crossingRibbon.spine = QVector<QPointF>{
+        QPointF(-0.1, 0.5), QPointF(1.1, 0.5)};
+    QVERIFY(!KisAiDeliberateStroke::lintStroke(crossingRibbon, canvas).drop);
+
+    // 5. Truly off-canvas path must be dropped
+    KisAiStrokeOperation offPath;
+    offPath.kind = KisAiStrokeOperation::Kind::Path;
+    offPath.id = QStringLiteral("off-path");
+    offPath.layer = QStringLiteral("Lineart");
+    offPath.brush.color = QColor(20, 20, 20);
+    offPath.brush.size = 0.004;
+    offPath.points = QVector<KisAiStrokePoint>{
+        KisAiStrokePoint(2.0, 2.0, 0.8), KisAiStrokePoint(2.5, 2.5, 0.8)};
+    QVERIFY(KisAiDeliberateStroke::lintStroke(offPath, canvas).drop);
+
+    // 6. Truly off-canvas polygon must be dropped
+    KisAiStrokeOperation offPoly;
+    offPoly.kind = KisAiStrokeOperation::Kind::Fill;
+    offPoly.id = QStringLiteral("off-poly");
+    offPoly.layer = QStringLiteral("Flats");
+    offPoly.brush.color = QColor(20, 20, 20);
+    offPoly.polygon = QVector<QPointF>{
+        QPointF(2.0, 2.0), QPointF(3.0, 2.0), QPointF(2.5, 3.0)};
+    QVERIFY(KisAiDeliberateStroke::lintStroke(offPoly, canvas).drop);
+
+    // 7. Truly off-canvas ribbon spine must be dropped
+    KisAiStrokeOperation offRibbon;
+    offRibbon.kind = KisAiStrokeOperation::Kind::Ribbon;
+    offRibbon.id = QStringLiteral("off-ribbon");
+    offRibbon.layer = QStringLiteral("Flats");
+    offRibbon.brush.color = QColor(20, 20, 20);
+    offRibbon.widthStart = 0.01;
+    offRibbon.widthMid = 0.01;
+    offRibbon.widthEnd = 0.01;
+    offRibbon.spine = QVector<QPointF>{
+        QPointF(2.0, 2.0), QPointF(2.5, 2.5)};
+    QVERIFY(KisAiDeliberateStroke::lintStroke(offRibbon, canvas).drop);
+
+    // Verify rendering of crossing path paints actual ink in canvas center
+    KisAiStrokeProgram prog;
+    prog.canvasSize = canvas;
+    prog.operations.append(crossingPath);
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvas);
+    const QColor centerPixel = img.pixelColor(canvas.width() / 2, canvas.height() / 2);
+    QVERIFY(centerPixel.alpha() > 100);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

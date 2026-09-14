@@ -4163,6 +4163,37 @@ void KisAiStrokeProgramTest::testSchemaVersionCoercionRejectsHugeStringValue()
     QVERIFY2(ok, qPrintable(error));
 }
 
+void KisAiStrokeProgramTest::testCharacterDomainArtDirectionSubstitutions()
+{
+    // Regression: Character domain art direction directive had an unescaped %2 without %1,
+    // causing QString::arg to emit runtime warnings and fail to replace %2 or consume hairColor.
+    const QSize canvasSize(1024, 1024);
+
+    // 1. With explicit hair and eye colors
+    KisAiPromptAnalyzer::SemanticSpec specExplicit;
+    specExplicit.domain = KisAiPromptAnalyzer::DomainType::Character;
+    specExplicit.hairColor = QStringLiteral("#c8d0e0");
+    specExplicit.eyeColor = QStringLiteral("#3070d0");
+    const QString directiveExplicit = KisAiPromptAnalyzer::generateArtDirection(specExplicit, canvasSize);
+
+    QVERIFY(directiveExplicit.contains(QStringLiteral("'#c8d0e0'")));
+    QVERIFY(directiveExplicit.contains(QStringLiteral("'#3070d0'")));
+    QVERIFY(!directiveExplicit.contains(QStringLiteral("%1")));
+    QVERIFY(!directiveExplicit.contains(QStringLiteral("%2")));
+
+    // 2. With empty colors (fallback strings)
+    KisAiPromptAnalyzer::SemanticSpec specDefault;
+    specDefault.domain = KisAiPromptAnalyzer::DomainType::Character;
+    specDefault.hairColor = QString();
+    specDefault.eyeColor = QString();
+    const QString directiveDefault = KisAiPromptAnalyzer::generateArtDirection(specDefault, canvasSize);
+
+    QVERIFY(directiveDefault.contains(QStringLiteral("prompt-specified hue")));
+    QVERIFY(directiveDefault.contains(QStringLiteral("harmonious eye color")));
+    QVERIFY(!directiveDefault.contains(QStringLiteral("%1")));
+    QVERIFY(!directiveDefault.contains(QStringLiteral("%2")));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 
