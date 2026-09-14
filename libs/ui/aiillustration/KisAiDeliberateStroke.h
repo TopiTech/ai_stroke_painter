@@ -63,6 +63,19 @@ public:
         quint32 seed = 42);
 
     /**
+     * V5 R7-1: ink dynamics — velocity-linked pressure modulation.
+     * Slow sample spacing = ink pooling (pressure boosted, up to +15%),
+     * fast spacing = dry fade (pressure eased toward @p fadeFloor).
+     * Pure and deterministic; runs after stabilizeStroke so LLM points and
+     * resampled points both receive the same pen physics.
+     */
+    static QVector<KisAiStrokePoint> applyInkDynamics(
+        const QVector<KisAiStrokePoint> &points,
+        const QSize &canvasSize,
+        qreal poolingBoost = 0.15,
+        qreal fadeFloor = 0.55);
+
+    /**
      * Inspect one operation before any ink is committed.
      * Never paints; only classifies drop / repair / keep.
      */

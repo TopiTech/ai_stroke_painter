@@ -448,6 +448,10 @@ set(kritaui_LIB_SRCS
     aiillustration/KisAiLayoutEngine.cpp
     aiillustration/KisAiLightRig.cpp
     aiillustration/KisAiDeliberateStroke.cpp
+    aiillustration/KisAiModelRouter.cpp
+    aiillustration/KisAiRigLibrary.cpp
+    aiillustration/KisAiProgramPatch.cpp
+    aiillustration/KisAiVisionCritic.cpp
     KisMainWindow.cpp
     KisOpenPane.cpp
     KisPart.cpp

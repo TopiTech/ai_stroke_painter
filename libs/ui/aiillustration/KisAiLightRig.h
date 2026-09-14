@@ -52,8 +52,7 @@ public:
      *   with the original (guaranteed inside, hue-shifted, never pure black).
      * - Rim light: path along the light-facing edge of the largest mass.
      * Optional head anchor adds chin AO and a forehead hair-cast band.
-     */
-    struct HeadAnchor {
+     */    struct HeadAnchor {
         QPointF headCenter {0.5, 0.38};
         qreal headHeight {0.42};
         qreal headWidth {0.33};
@@ -63,8 +62,48 @@ public:
         const QVector<KisAiStrokeOperation> &flatsOps,
         const KisAiLightSettings &rig,
         const QSize &canvasSize,
-        const HeadAnchor *headAnchor = nullptr
-    );
+        const HeadAnchor *headAnchor = nullptr);
+
+    /**
+     * V5 R7-3: time-of-day look-up table — the single place where
+     * day/sunset/night decide key/fill/ambient/SSS/sky colors. Every layer
+     * below and every background gradient should derive from this LUT so a
+     * night scene can never again be painted with daylight tones.
+     */
+    struct TimeOfDayLut {
+        QColor keyTint;      // key light color
+        QColor fillTint;     // shadow-side fill color
+        QColor ambientTint;  // atmosphere wash over the whole frame
+        QColor sssTint;      // skin subsurface scattering tint
+        QColor bounceTint;   // floor bounce light color
+        QColor skyTop;       // background gradient top stop
+        QColor skyMid;       // background gradient middle stop
+        QColor skyBottom;    // background gradient bottom stop
+    };
+
+    static TimeOfDayLut timeOfDayLut(const QString &timeOfDay);
+
+    /**
+     * V5 R7-3: soft form-shadow layer (4-layer shading, layer 2 of 4).
+     * Wider terminator offset and ~half the core opacity, hue-shifted —
+     * gives volumes a soft roundness before the hard core shadow lands.
+     * Clipped to the source flats like every shading op.
+     */
+    static QVector<KisAiStrokeOperation> synthesizeFormShading(
+        const QVector<KisAiStrokeOperation> &flatsOps,
+        const KisAiLightSettings &rig,
+        const QSize &canvasSize);
+
+    /**
+     * V5 R7-3: floor bounce light (layer 4 supplement).
+     * A subtle upward screen-blended wash on the lower third of each large
+     * mass, tinted by the LUT bounce color (warm daylight bounce, cool
+     * moonlight bounce). Derives only from the rig — never from raw op colors.
+     */
+    static QVector<KisAiStrokeOperation> synthesizeBounceLight(
+        const QVector<KisAiStrokeOperation> &flatsOps,
+        const KisAiLightSettings &rig,
+        const QSize &canvasSize);
 };
 
 #endif // KIS_AI_LIGHT_RIG_H

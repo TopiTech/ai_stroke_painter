@@ -554,6 +554,65 @@ QVector<KisAiStrokeOperation> KisAiDeliberateStroke::orderOperationsForRendering
     return sorted;
 }
 
+QVector<KisAiStrokePoint> KisAiDeliberateStroke::applyInkDynamics(
+    const QVector<KisAiStrokePoint> &points,
+    const QSize &canvasSize,
+    qreal poolingBoost,
+    qreal fadeFloor)
+{
+    if (points.size() < 3)
+        return points;
+    const qreal minDim = qMax<qreal>(64.0, qMin(canvasSize.width(), canvasSize.height()));
+    fadeFloor = qBound<qreal>(0.0, fadeFloor, 1.0);
+    poolingBoost = qBound<qreal>(0.0, poolingBoost, 0.5);
+
+    // Segment lengths in px between consecutive samples.
+    QVector<qreal> segPx;
+    segPx.reserve(points.size() - 1);
+    qreal total = 0.0;
+    for (int i = 0; i + 1 < points.size(); ++i) {
+        const QPointF d = (points.at(i + 1).pos - points.at(i).pos) * minDim;
+        const qreal len = std::hypot(d.x(), d.y());
+        segPx.append(len);
+        total += len;
+    }
+    if (total <= 0.0)
+        return points;
+
+    QVector<KisAiStrokePoint> out = points;
+    for (int i = 0; i < out.size(); ++i) {
+        // Local speed proxy: mean segment length around this sample.
+        qreal local = 0.0;
+        int n = 0;
+        if (i > 0) { local += segPx.at(i - 1); ++n; }
+        if (i + 1 < points.size()) { local += segPx.at(i); ++n; }
+        if (n == 0)
+            continue;
+        local /= n;
+
+        // Baseline is the absolute pen step: a uniform stroke is neutral
+        // only when its spacing matches the renderer's resample cadence
+        // (approximately minDim/256 ≈ 4px on a 1024 canvas). Comparing
+        // against the stroke's own average would make every uniform stroke
+        // artificially neutral regardless of its actual speed.
+        const qreal baseline = qMax<qreal>(1.0, minDim / 256.0);
+        const qreal ratio = local / baseline;
+
+        qreal pressure = out.at(i).pressure;
+        if (ratio < 0.75) {
+            // Slow: pooling. Boost scales with how slow the pass was.
+            const qreal slowness = qBound<qreal>(0.0, (0.75 - ratio) / 0.75, 1.0);
+            pressure = qMin<qreal>(1.0, pressure + poolingBoost * slowness);
+        } else if (ratio > 1.25) {
+            // Fast: dry fade. Floor blends pressure toward the fade floor.
+            const qreal speed = qBound<qreal>(0.0, (ratio - 1.25) / 1.75, 1.0);
+            pressure = fadeFloor + (pressure - fadeFloor) * (1.0 - 0.35 * speed);
+        }
+        out[i].pressure = qBound<qreal>(0.0, pressure, 1.0);
+    }
+    return out;
+}
+
 int KisAiDeliberateStroke::adaptiveSupersampleScale(
     const QVector<KisAiStrokeOperation> &ops,
     const QSize &canvasSize)

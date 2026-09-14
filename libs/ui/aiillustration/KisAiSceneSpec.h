@@ -83,6 +83,71 @@ struct KRITAUI_EXPORT KisAiSceneNegative
 };
 
 /**
+ * V5 R1: SceneSpec v2 vocabulary — meaning-only fields that widen what the
+ * flagship LLM can direct without ever touching geometry.
+ * All fields are optional; missing blocks fall back to v3 defaults so old
+ * SceneSpec JSON keeps parsing identically.
+ */
+struct KRITAUI_EXPORT KisAiSceneStyleV2
+{
+    QString artStyleId {QStringLiteral("anime_cel")}; // anime_cel, watercolor, impasto, ink_sketch, cyber_neon, fine_line
+    QStringList customTags;   // Free-form art direction words (dictionary-matched downstream)
+    QString lineWeight {QStringLiteral("standard")}; // delicate, standard, bold
+    qreal detailLevel {0.6};  // [0,1] drives per-part detail budget in the LayoutEngine
+};
+
+struct KRITAUI_EXPORT KisAiSceneCameraV2
+{
+    QString focal {QStringLiteral("normal")}; // short, normal, long (head/body proportion feel)
+    QString tilt {QStringLiteral("level")};   // level, high_angle, low_angle
+};
+
+struct KRITAUI_EXPORT KisAiSceneColorScriptV2
+{
+    QColor shadow {QColor(0, 0, 0, 0)};   // Invalid = derive from KisAiLightRig
+    QColor midtone {QColor(0, 0, 0, 0)};
+    QColor highlight {QColor(0, 0, 0, 0)};
+    qreal accentWeight {0.25}; // intended accent area ratio [0,1]
+};
+
+struct KRITAUI_EXPORT KisAiSceneNarrativeV2
+{
+    QString time;        // Free-form (e.g. "golden_hour"); mapped onto timeOfDay
+    QString weather;     // clear, cloudy, rain, snow (BackdropRig slots)
+    QStringList props;   // Resolved into background element slots by BackdropRig
+};
+
+/**
+ * V5 R2: LLM-tunable rig parameters. Only known keys survive validation;
+ * the RigLibrary clamps every value into its invariant-safe range.
+ */
+struct KRITAUI_EXPORT KisAiSceneRigOverrides
+{
+    qreal eyeAperture {0.85};        // [0,1] 0 = closed, 1 = wide
+    qreal irisRatio {0.62};          // [0.35,0.85] iris / eye height
+    QString eyeHighlight {QString()}; // twin_dot, streak, soft (empty = rig default)
+    bool doubleLid {true};
+    qreal hairStrandDensity {0.55};  // [0,1]
+    qreal hairFlyaway {0.35};        // [0,1]
+    int hairHighlightBands {1};      // [0,3] main/sub/counter light bands
+    qreal mouthWidthScale {1.0};     // [0.6,1.4]
+    bool hasBrows {true};
+};
+
+/**
+ * V5 R5: deterministic N-best score for a candidate SceneSpec.
+ */
+struct KRITAUI_EXPORT KisAiSceneSpecScore
+{
+    qreal total {0.0};          // [0,1]
+    qreal paletteHarmony {0.0}; // [0,1]
+    qreal rigFeasibility {0.0}; // 1 - clampedRatio
+    qreal intentMatch {0.0};    // prompt adherence via keyword overlap
+    qreal negativeCompliance {1.0};
+    QStringList notes;
+};
+
+/**
  * V3 Phase 1 / V4: Meaning-only art direction (no coordinates).
  * The LLM decides WHAT/WHERE IN WORDS; the LayoutEngine owns geometry.
  */
@@ -99,6 +164,13 @@ struct KRITAUI_EXPORT KisAiSceneSpec
     KisAiSceneBackground background;
     KisAiSceneNegative negative;
 
+    // V5 R1/R2 additions (backward compatible: defaults keep old behaviour)
+    KisAiSceneStyleV2 style;
+    KisAiSceneCameraV2 camera;
+    KisAiSceneColorScriptV2 colorScript;
+    KisAiSceneNarrativeV2 narrative;
+    KisAiSceneRigOverrides rig;
+
     bool isCharacter() const { return subject.type == QLatin1String("character"); }
 };
 
@@ -109,6 +181,23 @@ class KRITAUI_EXPORT KisAiSceneSpecCodec
 {
 public:
     static QJsonObject sceneSpecJsonSchema();
+
+    /**
+     * V5 R5: deterministic N-best scorer for candidate SceneSpecs.
+     * Higher is better; all sub-scores are in [0,1] and independent of wall-clock.
+     */
+    static KisAiSceneSpecScore scoreSceneSpec(
+        const KisAiSceneSpec &spec,
+        const QStringList &candidateSpecs = QStringList());
+
+    /**
+     * V5 R5: pick the best candidate by deterministic score. Returns fallback
+     * (or a default spec for the prompt) when candidates is empty.
+     */
+    static KisAiSceneSpec selectBestSpec(
+        const QString &prompt,
+        const QSize &canvasSize,
+        const QVector<KisAiSceneSpec> &candidates);
 
     static bool parseSceneSpec(
         const QByteArray &responseBytes,

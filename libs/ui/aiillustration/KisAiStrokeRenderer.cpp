@@ -1260,9 +1260,12 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter, const KisAiStroke
 
     // D0: deliberate pre-pass — jitter removal + uniform resampling so long
     // LLM spans and dense facial clusters share one clean representation.
-    const QVector<KisAiStrokePoint> stablePoints =
+    // V5 R7-1: ink dynamics run after stabilization so slow passes pool ink
+    // and fast passes fade — deterministic pen physics for every path.
+    const QVector<KisAiStrokePoint> stablePoints = KisAiDeliberateStroke::applyInkDynamics(
         KisAiDeliberateStroke::stabilizeStroke(op.points, canvasSize, op.closed,
-                                               KisAiStrokeProgramCodec::stableSeed(op.id));
+                                               KisAiStrokeProgramCodec::stableSeed(op.id)),
+        canvasSize);
     const KisAiStrokeLintReport lint = KisAiDeliberateStroke::lintStroke(op, canvasSize);
     if (lint.drop) {
         return; // micro/off-canvas/degenerate strokes never reach ink

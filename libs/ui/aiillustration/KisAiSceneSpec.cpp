@@ -151,6 +151,107 @@ QJsonObject KisAiSceneSpecCodec::sceneSpecJsonSchema()
     negative.insert(QStringLiteral("properties"), negProps);
     props.insert(QStringLiteral("negative"), negative);
 
+    // ---- V5 R1: style / camera / color_script / narrative ----
+    QJsonObject style;
+    style.insert(QStringLiteral("type"), QStringLiteral("object"));
+    QJsonObject styleProps;
+    styleProps.insert(QStringLiteral("art_style"), strEnum({QStringLiteral("anime_cel"), QStringLiteral("watercolor"), QStringLiteral("impasto"), QStringLiteral("ink_sketch"), QStringLiteral("cyber_neon"), QStringLiteral("fine_line")}));
+    QJsonArray tags;
+    tags.append(QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}});
+    QJsonObject tagsArr;
+    tagsArr.insert(QStringLiteral("type"), QStringLiteral("array"));
+    tagsArr.insert(QStringLiteral("items"), tags.at(0));
+    tagsArr.insert(QStringLiteral("maxItems"), 8);
+    styleProps.insert(QStringLiteral("custom_tags"), tagsArr);
+    styleProps.insert(QStringLiteral("line_weight"), strEnum({QStringLiteral("delicate"), QStringLiteral("standard"), QStringLiteral("bold")}));
+    QJsonObject detail;
+    detail.insert(QStringLiteral("type"), QStringLiteral("number"));
+    detail.insert(QStringLiteral("minimum"), 0.0);
+    detail.insert(QStringLiteral("maximum"), 1.0);
+    styleProps.insert(QStringLiteral("detail_level"), detail);
+    style.insert(QStringLiteral("properties"), styleProps);
+    style.insert(QStringLiteral("additionalProperties"), false);
+    props.insert(QStringLiteral("style"), style);
+
+    QJsonObject camera;
+    camera.insert(QStringLiteral("type"), QStringLiteral("object"));
+    QJsonObject camProps;
+    camProps.insert(QStringLiteral("focal"), strEnum({QStringLiteral("short"), QStringLiteral("normal"), QStringLiteral("long")}));
+    camProps.insert(QStringLiteral("tilt"), strEnum({QStringLiteral("level"), QStringLiteral("high_angle"), QStringLiteral("low_angle")}));
+    camera.insert(QStringLiteral("properties"), camProps);
+    camera.insert(QStringLiteral("additionalProperties"), false);
+    props.insert(QStringLiteral("camera"), camera);
+
+    QJsonObject colorScript;
+    colorScript.insert(QStringLiteral("type"), QStringLiteral("object"));
+    QJsonObject csProps;
+    csProps.insert(QStringLiteral("shadow"), color());
+    csProps.insert(QStringLiteral("midtone"), color());
+    csProps.insert(QStringLiteral("highlight"), color());
+    QJsonObject accentW;
+    accentW.insert(QStringLiteral("type"), QStringLiteral("number"));
+    accentW.insert(QStringLiteral("minimum"), 0.0);
+    accentW.insert(QStringLiteral("maximum"), 1.0);
+    csProps.insert(QStringLiteral("accent_weight"), accentW);
+    colorScript.insert(QStringLiteral("properties"), csProps);
+    colorScript.insert(QStringLiteral("additionalProperties"), false);
+    props.insert(QStringLiteral("color_script"), colorScript);
+
+    QJsonObject narrative;
+    narrative.insert(QStringLiteral("type"), QStringLiteral("object"));
+    QJsonObject narProps;
+    narProps.insert(QStringLiteral("time"), QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}});
+    narProps.insert(QStringLiteral("weather"), strEnum({QStringLiteral("clear"), QStringLiteral("cloudy"), QStringLiteral("rain"), QStringLiteral("snow")}));
+    QJsonObject propsArr;
+    propsArr.insert(QStringLiteral("type"), QStringLiteral("array"));
+    propsArr.insert(QStringLiteral("items"), tags.at(0));
+    propsArr.insert(QStringLiteral("maxItems"), 6);
+    narProps.insert(QStringLiteral("props"), propsArr);
+    narrative.insert(QStringLiteral("properties"), narProps);
+    narrative.insert(QStringLiteral("additionalProperties"), false);
+    props.insert(QStringLiteral("narrative"), narrative);
+
+    // ---- V5 R2: rig parameter tuning ----
+    QJsonObject rigBlock;
+    rigBlock.insert(QStringLiteral("type"), QStringLiteral("object"));
+    QJsonObject rigProps;
+    QJsonObject aperture;
+    aperture.insert(QStringLiteral("type"), QStringLiteral("number"));
+    aperture.insert(QStringLiteral("minimum"), 0.0);
+    aperture.insert(QStringLiteral("maximum"), 1.0);
+    rigProps.insert(QStringLiteral("eye_aperture"), aperture);
+    QJsonObject iris;
+    iris.insert(QStringLiteral("type"), QStringLiteral("number"));
+    iris.insert(QStringLiteral("minimum"), 0.35);
+    iris.insert(QStringLiteral("maximum"), 0.85);
+    rigProps.insert(QStringLiteral("iris_ratio"), iris);
+    rigProps.insert(QStringLiteral("eye_highlight"), strEnum({QStringLiteral("twin_dot"), QStringLiteral("streak"), QStringLiteral("soft")}));
+    rigProps.insert(QStringLiteral("double_lid"), QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")}});
+    QJsonObject density;
+    density.insert(QStringLiteral("type"), QStringLiteral("number"));
+    density.insert(QStringLiteral("minimum"), 0.0);
+    density.insert(QStringLiteral("maximum"), 1.0);
+    rigProps.insert(QStringLiteral("hair_strand_density"), density);
+    QJsonObject flyaway;
+    flyaway.insert(QStringLiteral("type"), QStringLiteral("number"));
+    flyaway.insert(QStringLiteral("minimum"), 0.0);
+    flyaway.insert(QStringLiteral("maximum"), 1.0);
+    rigProps.insert(QStringLiteral("hair_flyaway"), flyaway);
+    QJsonObject bands;
+    bands.insert(QStringLiteral("type"), QStringLiteral("number"));
+    bands.insert(QStringLiteral("minimum"), 0.0);
+    bands.insert(QStringLiteral("maximum"), 3.0);
+    rigProps.insert(QStringLiteral("hair_highlight_bands"), bands);
+    QJsonObject mouth;
+    mouth.insert(QStringLiteral("type"), QStringLiteral("number"));
+    mouth.insert(QStringLiteral("minimum"), 0.6);
+    mouth.insert(QStringLiteral("maximum"), 1.4);
+    rigProps.insert(QStringLiteral("mouth_width_scale"), mouth);
+    rigProps.insert(QStringLiteral("has_brows"), QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")}});
+    rigBlock.insert(QStringLiteral("properties"), rigProps);
+    rigBlock.insert(QStringLiteral("additionalProperties"), false);
+    props.insert(QStringLiteral("rig"), rigBlock);
+
     QJsonObject schema;
     schema.insert(QStringLiteral("type"), QStringLiteral("object"));
     schema.insert(QStringLiteral("properties"), props);
@@ -314,6 +415,90 @@ bool KisAiSceneSpecCodec::parseSceneSpecObject(
             spec.negative.noText = neg.value(QStringLiteral("no_text")).toBool(true);
         if (neg.contains(QStringLiteral("no_extra_limbs")))
             spec.negative.noExtraLimbs = neg.value(QStringLiteral("no_extra_limbs")).toBool(true);
+    }
+
+    // ---- V5 R1/R2: v2 blocks (optional; defaults preserve v3 behaviour) ----
+    const QJsonObject styleObj = rootObj.value(QStringLiteral("style")).toObject();
+    if (!styleObj.isEmpty()) {
+        spec.style.artStyleId = normalizeEnum(styleObj.value(QStringLiteral("art_style")).toString(spec.style.artStyleId),
+                                              {QStringLiteral("anime_cel"), QStringLiteral("watercolor"), QStringLiteral("impasto"), QStringLiteral("ink_sketch"), QStringLiteral("cyber_neon"), QStringLiteral("fine_line")},
+                                              QStringLiteral("anime_cel"));
+        const QJsonArray tags = styleObj.value(QStringLiteral("custom_tags")).toArray();
+        for (const QJsonValue &v : tags) {
+            if (v.isString() && spec.style.customTags.size() < 8) {
+                const QString t = v.toString().trimmed().toLower();
+                if (!t.isEmpty())
+                    spec.style.customTags.append(t);
+            }
+        }
+        spec.style.lineWeight = normalizeEnum(styleObj.value(QStringLiteral("line_weight")).toString(spec.style.lineWeight),
+                                              {QStringLiteral("delicate"), QStringLiteral("standard"), QStringLiteral("bold")},
+                                              QStringLiteral("standard"));
+        if (styleObj.contains(QStringLiteral("detail_level"))) {
+            const double dl = styleObj.value(QStringLiteral("detail_level")).toDouble(spec.style.detailLevel);
+            spec.style.detailLevel = qBound<qreal>(0.0, dl, 1.0);
+        }
+    }
+
+    const QJsonObject camObj = rootObj.value(QStringLiteral("camera")).toObject();
+    if (!camObj.isEmpty()) {
+        spec.camera.focal = normalizeEnum(camObj.value(QStringLiteral("focal")).toString(spec.camera.focal),
+                                          {QStringLiteral("short"), QStringLiteral("normal"), QStringLiteral("long")},
+                                          QStringLiteral("normal"));
+        spec.camera.tilt = normalizeEnum(camObj.value(QStringLiteral("tilt")).toString(spec.camera.tilt),
+                                         {QStringLiteral("level"), QStringLiteral("high_angle"), QStringLiteral("low_angle")},
+                                         QStringLiteral("level"));
+    }
+
+    const QJsonObject csObj = rootObj.value(QStringLiteral("color_script")).toObject();
+    if (!csObj.isEmpty()) {
+        spec.colorScript.shadow = parseColorField(csObj, QStringLiteral("shadow"), spec.colorScript.shadow);
+        spec.colorScript.midtone = parseColorField(csObj, QStringLiteral("midtone"), spec.colorScript.midtone);
+        spec.colorScript.highlight = parseColorField(csObj, QStringLiteral("highlight"), spec.colorScript.highlight);
+        if (csObj.contains(QStringLiteral("accent_weight"))) {
+            const double aw = csObj.value(QStringLiteral("accent_weight")).toDouble(spec.colorScript.accentWeight);
+            spec.colorScript.accentWeight = qBound<qreal>(0.0, aw, 1.0);
+        }
+    }
+
+    const QJsonObject narObj = rootObj.value(QStringLiteral("narrative")).toObject();
+    if (!narObj.isEmpty()) {
+        if (narObj.contains(QStringLiteral("time")))
+            spec.narrative.time = narObj.value(QStringLiteral("time")).toString().trimmed().toLower();
+        spec.narrative.weather = normalizeEnum(narObj.value(QStringLiteral("weather")).toString(spec.narrative.weather),
+                                               {QStringLiteral("clear"), QStringLiteral("cloudy"), QStringLiteral("rain"), QStringLiteral("snow")},
+                                               QStringLiteral("clear"));
+        const QJsonArray narProps = narObj.value(QStringLiteral("props")).toArray();
+        for (const QJsonValue &v : narProps) {
+            if (v.isString() && spec.narrative.props.size() < 6) {
+                const QString p = v.toString().trimmed().toLower();
+                if (!p.isEmpty())
+                    spec.narrative.props.append(p);
+            }
+        }
+    }
+
+    const QJsonObject rigObj = rootObj.value(QStringLiteral("rig")).toObject();
+    if (!rigObj.isEmpty()) {
+        if (rigObj.contains(QStringLiteral("eye_aperture")))
+            spec.rig.eyeAperture = qBound<qreal>(0.0, rigObj.value(QStringLiteral("eye_aperture")).toDouble(spec.rig.eyeAperture), 1.0);
+        if (rigObj.contains(QStringLiteral("iris_ratio")))
+            spec.rig.irisRatio = qBound<qreal>(0.35, rigObj.value(QStringLiteral("iris_ratio")).toDouble(spec.rig.irisRatio), 0.85);
+        spec.rig.eyeHighlight = normalizeEnum(rigObj.value(QStringLiteral("eye_highlight")).toString(spec.rig.eyeHighlight),
+                                              {QStringLiteral("twin_dot"), QStringLiteral("streak"), QStringLiteral("soft")},
+                                              spec.rig.eyeHighlight);
+        if (rigObj.contains(QStringLiteral("double_lid")))
+            spec.rig.doubleLid = rigObj.value(QStringLiteral("double_lid")).toBool(spec.rig.doubleLid);
+        if (rigObj.contains(QStringLiteral("hair_strand_density")))
+            spec.rig.hairStrandDensity = qBound<qreal>(0.0, rigObj.value(QStringLiteral("hair_strand_density")).toDouble(spec.rig.hairStrandDensity), 1.0);
+        if (rigObj.contains(QStringLiteral("hair_flyaway")))
+            spec.rig.hairFlyaway = qBound<qreal>(0.0, rigObj.value(QStringLiteral("hair_flyaway")).toDouble(spec.rig.hairFlyaway), 1.0);
+        if (rigObj.contains(QStringLiteral("hair_highlight_bands")))
+            spec.rig.hairHighlightBands = qBound(0, int(rigObj.value(QStringLiteral("hair_highlight_bands")).toDouble(spec.rig.hairHighlightBands)), 3);
+        if (rigObj.contains(QStringLiteral("mouth_width_scale")))
+            spec.rig.mouthWidthScale = qBound<qreal>(0.6, rigObj.value(QStringLiteral("mouth_width_scale")).toDouble(spec.rig.mouthWidthScale), 1.4);
+        if (rigObj.contains(QStringLiteral("has_brows")))
+            spec.rig.hasBrows = rigObj.value(QStringLiteral("has_brows")).toBool(spec.rig.hasBrows);
     }
 
     if (rootObj.contains(QStringLiteral("prompt")) && rootObj.value(QStringLiteral("prompt")).isString())
@@ -510,4 +695,159 @@ KisAiSceneSpec KisAiSceneSpecCodec::defaultSpecForPrompt(
         spec.clothing.color = QColor(160, 48, 64);
     }
     return spec;
+}
+
+// ========================================================================
+// V5 R5: deterministic N-best SceneSpec scoring
+// ========================================================================
+namespace
+{
+qreal paletteHarmonyScore(const KisAiSceneSpec &spec)
+{
+    // Harmony = complementary-but-not-clashing key vs accent hues and a sane
+    // key-light value. Deterministic, no randomness.
+    const QColor key = spec.palette.keyColor;
+    if (!key.isValid() || spec.palette.accents.isEmpty())
+        return 0.6;
+    const QColor accent = spec.palette.accents.first();
+    if (!accent.isValid())
+        return 0.6;
+
+    int keyH = key.hue();
+    int accH = accent.hue();
+    if (keyH < 0) keyH = 0;
+    if (accH < 0) accH = 0;
+    int hueDist = qAbs(keyH - accH);
+    if (hueDist > 180)
+        hueDist = 360 - hueDist;
+
+    // Sweet spots: analogous (<=60) or split-complement (~120..150).
+    qreal score = 0.55;
+    if (hueDist <= 60)
+        score = 0.85;
+    else if (hueDist >= 110 && hueDist <= 160)
+        score = 0.90;
+    else if (hueDist <= 90)
+        score = 0.70;
+
+    // Very dark key with very dark accents reads as mud.
+    if (key.value() < 60 && accent.value() < 60)
+        score -= 0.25;
+    return qBound<qreal>(0.0, score, 1.0);
+}
+
+qreal rigFeasibilityScore(const KisAiSceneSpec &spec, QStringList *notes)
+{
+    // The parser already clamps into invariant ranges; feasibility measures
+    // how far the requested values sit from canonical rig defaults.
+    const KisAiSceneRigOverrides &r = spec.rig;
+    qreal deviation = 0.0;
+    deviation += qAbs(r.eyeAperture - 0.85) / 0.85;
+    deviation += qAbs(r.irisRatio - 0.62) / 0.27;
+    deviation += qAbs(r.hairStrandDensity - 0.55) / 0.55;
+    deviation += qAbs(r.hairFlyaway - 0.35) / 0.35;
+    deviation += qAbs(r.mouthWidthScale - 1.0) / 0.4;
+    deviation += qAbs(r.hairHighlightBands - 1) / 2.0;
+    const qreal normalized = deviation / 6.0; // average over the 6 terms
+    if (normalized > 0.5 && notes)
+        notes->append(QStringLiteral("rig params deviate strongly from canonical defaults"));
+    return qBound<qreal>(0.0, 1.0 - normalized * 0.5, 1.0);
+}
+
+qreal intentMatchScore(const KisAiSceneSpec &spec)
+{
+    // Deterministic keyword coverage: does the spec vocabulary answer the
+    // prompt? Reuses the same tokenization style as defaultSpecForPrompt.
+    const QString lower = spec.prompt.toLower();
+    if (lower.trimmed().isEmpty())
+        return 0.5;
+
+    QStringList evidence;
+    if (lower.contains(QStringLiteral("night")) || lower.contains(QStringLiteral("moon")) || lower.contains(QStringLiteral("starry")))
+        evidence.append(spec.light.timeOfDay == QLatin1String("night") ? QStringLiteral("t_night") : QString());
+    if (lower.contains(QStringLiteral("sunset")) || lower.contains(QStringLiteral("dusk")) || lower.contains(QStringLiteral("evening")))
+        evidence.append(spec.light.timeOfDay == QLatin1String("sunset") ? QStringLiteral("t_sunset") : QString());
+    if (lower.contains(QStringLiteral("twin")))
+        evidence.append(spec.head.hairStyle == QLatin1String("twin_tails") ? QStringLiteral("t_twin") : QString());
+    if (lower.contains(QStringLiteral("bob")))
+        evidence.append(spec.head.hairStyle == QLatin1String("bob") ? QStringLiteral("t_bob") : QString());
+    if (lower.contains(QStringLiteral("hoodie")) || lower.contains(QStringLiteral("parka")))
+        evidence.append(spec.clothing.style == QLatin1String("hoodie") ? QStringLiteral("t_hoodie") : QString());
+    if (lower.contains(QStringLiteral("uniform")) || lower.contains(QStringLiteral("school")) || lower.contains(QStringLiteral("sailor")))
+        evidence.append(spec.clothing.style == QLatin1String("school_uniform") ? QStringLiteral("t_uniform") : QString());
+    if (lower.contains(QStringLiteral("kimono")) || lower.contains(QStringLiteral("yukata")))
+        evidence.append(spec.clothing.style == QLatin1String("kimono") ? QStringLiteral("t_kimono") : QString());
+    if (lower.contains(QStringLiteral("close")) && lower.contains(QStringLiteral("face")))
+        evidence.append(spec.composition.framing == QLatin1String("face_closeup") ? QStringLiteral("t_closeup") : QString());
+    if (lower.contains(QStringLiteral("full")) && lower.contains(QStringLiteral("body")))
+        evidence.append(spec.composition.framing == QLatin1String("full_body") ? QStringLiteral("t_fullbody") : QString());
+    if (lower.contains(QStringLiteral("watercolor")))
+        evidence.append(spec.style.artStyleId == QLatin1String("watercolor") ? QStringLiteral("t_wc") : QString());
+    if (lower.contains(QStringLiteral("neon")) || lower.contains(QStringLiteral("cyber")))
+        evidence.append(spec.style.artStyleId == QLatin1String("cyber_neon") ? QStringLiteral("t_neon") : QString());
+
+    int checked = 0;
+    int matched = 0;
+    for (const QString &e : evidence) {
+        checked++;
+        if (!e.isEmpty())
+            matched++;
+    }
+    if (checked == 0)
+        return 0.7; // nothing checkable; neutral
+    return qBound<qreal>(0.0, qreal(matched) / checked, 1.0);
+}
+} // namespace
+
+KisAiSceneSpecScore KisAiSceneSpecCodec::scoreSceneSpec(
+    const KisAiSceneSpec &spec,
+    const QStringList &candidateSpecs)
+{
+    Q_UNUSED(candidateSpecs);
+    KisAiSceneSpecScore s;
+    s.paletteHarmony = paletteHarmonyScore(spec);
+    s.rigFeasibility = rigFeasibilityScore(spec, &s.notes);
+    s.intentMatch = intentMatchScore(spec);
+
+    qreal negativeCompliance = 1.0;
+    if (!spec.negative.noParticlesOnFace)
+        negativeCompliance -= 0.2;
+    if (!spec.negative.noText)
+        negativeCompliance -= 0.2;
+    if (!spec.negative.noExtraLimbs)
+        negativeCompliance -= 0.3;
+    s.negativeCompliance = qBound<qreal>(0.0, negativeCompliance, 1.0);
+
+    s.total = 0.30 * s.intentMatch
+        + 0.25 * s.paletteHarmony
+        + 0.25 * s.rigFeasibility
+        + 0.20 * s.negativeCompliance;
+    return s;
+}
+
+KisAiSceneSpec KisAiSceneSpecCodec::selectBestSpec(
+    const QString &prompt,
+    const QSize &canvasSize,
+    const QVector<KisAiSceneSpec> &candidates)
+{
+    if (candidates.isEmpty())
+        return defaultSpecForPrompt(prompt, canvasSize);
+
+    const KisAiSceneSpec *best = nullptr;
+    KisAiSceneSpecScore bestScore;
+    for (const KisAiSceneSpec &c : candidates) {
+        KisAiSceneSpec spec = c;
+        if (spec.prompt.trimmed().isEmpty())
+            spec.prompt = prompt;
+        spec.canvasSize = canvasSize.isValid() ? canvasSize : spec.canvasSize;
+        const KisAiSceneSpecScore s = scoreSceneSpec(spec);
+        if (!best || s.total > bestScore.total) {
+            best = &c;
+            bestScore = s;
+        }
+    }
+    KisAiSceneSpec result = *best;
+    result.prompt = result.prompt.trimmed().isEmpty() ? prompt : result.prompt;
+    result.canvasSize = canvasSize.isValid() ? canvasSize : result.canvasSize;
+    return result;
 }

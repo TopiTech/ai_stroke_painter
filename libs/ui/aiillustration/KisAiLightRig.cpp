@@ -352,3 +352,159 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
 
     return shading;
 }
+
+// ========================================================================
+// V5 R7-3/R7-4: time-of-day LUT + 4-layer shading completion
+// ========================================================================
+KisAiLightRig::TimeOfDayLut KisAiLightRig::timeOfDayLut(const QString &timeOfDay)
+{
+    TimeOfDayLut lut;
+    if (timeOfDay == QLatin1String("night")) {
+        lut.keyTint = QColor(214, 226, 255);      // cool moon key
+        lut.fillTint = QColor(30, 42, 88);        // deep blue fill
+        lut.ambientTint = QColor(24, 34, 76);     // night atmosphere
+        lut.sssTint = QColor(150, 160, 220);      // cool SSS, subdued
+        lut.bounceTint = QColor(70, 90, 150);     // moon bounce off ground
+        lut.skyTop = QColor(8, 12, 34);
+        lut.skyMid = QColor(22, 32, 72);
+        lut.skyBottom = QColor(48, 58, 104);
+    } else if (timeOfDay == QLatin1String("sunset")) {
+        lut.keyTint = QColor(255, 176, 108);      // orange key
+        lut.fillTint = QColor(88, 62, 118);       // violet fill
+        lut.ambientTint = QColor(180, 110, 90);   // warm dusk atmosphere
+        lut.sssTint = QColor(255, 138, 118);      // amplified warm SSS
+        lut.bounceTint = QColor(230, 150, 100);   // warm ground bounce
+        lut.skyTop = QColor(64, 52, 120);
+        lut.skyMid = QColor(214, 118, 96);
+        lut.skyBottom = QColor(252, 206, 150);
+    } else { // day
+        lut.keyTint = QColor(255, 252, 240);
+        lut.fillTint = QColor(52, 64, 104);
+        lut.ambientTint = QColor(190, 208, 235);
+        lut.sssTint = QColor(255, 154, 138);      // classic skin SSS coral
+        lut.bounceTint = QColor(226, 214, 196);   // neutral warm bounce
+        lut.skyTop = QColor(96, 156, 232);
+        lut.skyMid = QColor(164, 208, 244);
+        lut.skyBottom = QColor(226, 240, 252);
+    }
+    return lut;
+}
+
+QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeFormShading(
+    const QVector<KisAiStrokeOperation> &flatsOps,
+    const KisAiLightSettings &rig,
+    const QSize &canvasSize)
+{
+    Q_UNUSED(canvasSize);
+    QVector<KisAiStrokeOperation> form;
+    const QPointF lightDir = normalizedDirection(rig.direction);
+    const QPointF perpT(-lightDir.y(), lightDir.x());
+
+    int emitted = 0;
+    for (const KisAiStrokeOperation &op : flatsOps) {
+        if (op.kind != KisAiStrokeOperation::Kind::Fill && op.kind != KisAiStrokeOperation::Kind::GradientFill)
+            continue;
+        if (op.polygon.size() < 3)
+            continue;
+        if (polygonAreaLocal(op.polygon) < 2.0e-4)
+            continue;
+
+        const QRectF b = op.polygon.boundingRect();
+        const QPointF center = b.center();
+        const qreal r = qMax(b.width(), b.height()) * 1.5;
+
+        // Softer, wider terminator than the core pass (2x offset).
+        const QPointF cTerm = center + (lightDir * r * 0.16);
+        QPolygonF shadowHalfPlane;
+        shadowHalfPlane << (cTerm - perpT * r * 2.0)
+                        << (cTerm + perpT * r * 2.0)
+                        << (cTerm + perpT * r * 2.0 - lightDir * r * 3.0)
+                        << (cTerm - perpT * r * 2.0 - lightDir * r * 3.0);
+
+        QPainterPath original;
+        original.addPolygon(op.polygon);
+        QPainterPath planePath;
+        planePath.addPolygon(shadowHalfPlane);
+        QPainterPath formPath = original.intersected(planePath);
+        const QPolygonF formPoly = formPath.toFillPolygon();
+        if (formPoly.size() < 3 || polygonAreaLocal(formPoly) < 1.0e-4)
+            continue;
+
+        KisAiStrokeOperation soft;
+        soft.kind = KisAiStrokeOperation::Kind::Fill;
+        soft.id = QStringLiteral("%1_form_shadow").arg(op.id);
+        soft.layer = QStringLiteral("Shading");
+        soft.brush.profile = QStringLiteral("watercolor");
+        soft.brush.color = shadowColor(op.brush.color, rig);
+        // About half the core opacity: a whisper, not a statement.
+        soft.brush.opacity = 0.14;
+        soft.brush.size = 0.03;
+        soft.polygon = formPoly;
+        soft.fillStyle = QStringLiteral("directional");
+        soft.angleDeg = std::atan2(-lightDir.y(), -lightDir.x()) * 180.0 / M_PI;
+        soft.blendMode = QStringLiteral("multiply");
+        soft.clipToId = op.id;
+        form.append(soft);
+
+        if (++emitted >= 24)
+            break;
+    }
+    return form;
+}
+
+QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeBounceLight(
+    const QVector<KisAiStrokeOperation> &flatsOps,
+    const KisAiLightSettings &rig,
+    const QSize &canvasSize)
+{
+    Q_UNUSED(canvasSize);
+    QVector<KisAiStrokeOperation> bounce;
+    const TimeOfDayLut lut = timeOfDayLut(rig.timeOfDay);
+
+    int emitted = 0;
+    for (const KisAiStrokeOperation &op : flatsOps) {
+        if (op.kind != KisAiStrokeOperation::Kind::Fill && op.kind != KisAiStrokeOperation::Kind::GradientFill)
+            continue;
+        if (op.polygon.size() < 3)
+            continue;
+        const qreal area = polygonAreaLocal(op.polygon);
+        if (area < 1.0e-3)
+            continue; // bounce only matters on real masses
+
+        // Lower-third intersection of the mass (light bounces up from below).
+        const QRectF b = op.polygon.boundingRect();
+        const QRectF lowerThird(b.left(), b.top() + b.height() * 2.0 / 3.0,
+                                b.width(), b.height() / 3.0);
+        QPainterPath original;
+        original.addPolygon(op.polygon);
+        QPainterPath bandPath;
+        bandPath.addRect(lowerThird);
+        const QPolygonF bandPoly = original.intersected(bandPath).toFillPolygon();
+        if (bandPoly.size() < 3 || polygonAreaLocal(bandPoly) < 1.0e-4)
+            continue;
+
+        KisAiStrokeOperation wash;
+        wash.kind = KisAiStrokeOperation::Kind::Fill;
+        wash.id = QStringLiteral("%1_bounce_light").arg(op.id);
+        wash.layer = QStringLiteral("Shading");
+        wash.brush.profile = QStringLiteral("airbrush");
+        // Bounce color derives from the LUT, brightened toward the base color.
+        const QColor base = op.brush.color;
+        wash.brush.color = QColor(
+            qBound(0, (base.red() + lut.bounceTint.red()) / 2 + 22, 255),
+            qBound(0, (base.green() + lut.bounceTint.green()) / 2 + 22, 255),
+            qBound(0, (base.blue() + lut.bounceTint.blue()) / 2 + 22, 255),
+            255);
+        wash.brush.opacity = 0.16;
+        wash.brush.size = 0.03;
+        wash.polygon = bandPoly;
+        wash.fillStyle = QStringLiteral("wash");
+        wash.blendMode = QStringLiteral("screen");
+        wash.clipToId = op.id;
+        bounce.append(wash);
+
+        if (++emitted >= 12)
+            break;
+    }
+    return bounce;
+}
