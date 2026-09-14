@@ -115,6 +115,7 @@ struct KRITAUI_EXPORT KisAiStrokeOperation
     // Layer blending & Clipping (Phase 2)
     QString blendMode {QStringLiteral("normal")}; // normal, multiply, screen, color_dodge, overlay, linear_burn, add
     QString clipToId;                             // Base operation ID to clip this stroke/fill to
+    QString fillProfile {QStringLiteral("flat")}; // flat, watercolor, gradient
 };
 
 struct KRITAUI_EXPORT KisAiCritiqueRegion

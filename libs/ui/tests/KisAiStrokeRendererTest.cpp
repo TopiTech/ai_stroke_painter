@@ -2423,4 +2423,82 @@ void KisAiStrokeRendererTest::testPhase2DynamicPerspectiveAndAngles()
     QVERIFY(jawProfile.first().pos != jawFrontal.first().pos);
 }
 
+void KisAiStrokeRendererTest::testCrossLayerClipToId()
+{
+    const QSize canvasSize(200, 200);
+    KisAiStrokeProgram prog;
+    prog.canvasSize = canvasSize;
+
+    // Flats layer: base face silhouette in the center (0.3 - 0.7) -> 60px to 140px
+    KisAiStrokeOperation baseFace;
+    baseFace.kind = KisAiStrokeOperation::Kind::Fill;
+    baseFace.id = QStringLiteral("base_face");
+    baseFace.layer = QStringLiteral("Flats");
+    baseFace.brush.color = QColor(255, 220, 200);
+    baseFace.polygon = {
+        QPointF(0.3, 0.3),
+        QPointF(0.7, 0.3),
+        QPointF(0.7, 0.7),
+        QPointF(0.3, 0.7)
+    };
+    prog.operations.append(baseFace);
+
+    // Shading layer: huge full-canvas polygon, but strictly clip_to_id: "base_face"
+    KisAiStrokeOperation shadowOp;
+    shadowOp.kind = KisAiStrokeOperation::Kind::Fill;
+    shadowOp.id = QStringLiteral("face_shadow");
+    shadowOp.layer = QStringLiteral("Shading");
+    shadowOp.clipToId = QStringLiteral("base_face");
+    shadowOp.blendMode = QStringLiteral("multiply");
+    shadowOp.brush.color = QColor(60, 20, 40, 200);
+    shadowOp.polygon = {
+        QPointF(0.0, 0.0),
+        QPointF(1.0, 0.0),
+        QPointF(1.0, 1.0),
+        QPointF(0.0, 1.0)
+    };
+    prog.operations.append(shadowOp);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvasSize);
+    QVERIFY(!img.isNull());
+
+    // Point (100, 100) inside base_face must be shaded (non-zero alpha)
+    const QColor centerPixel = img.pixelColor(100, 100);
+    QVERIFY(centerPixel.alpha() > 100);
+
+    // Point (20, 20) outside base_face must be completely transparent because shadow was clipped!
+    const QColor outsidePixel = img.pixelColor(20, 20);
+    QCOMPARE(outsidePixel.alpha(), 0);
+}
+
+void KisAiStrokeRendererTest::testProceduralMacroExpansionGuidance()
+{
+    const QSize canvasSize(300, 300);
+    KisAiStrokeProgram prog;
+    prog.canvasSize = canvasSize;
+
+    KisAiStrokeOperation hairOp;
+    hairOp.kind = KisAiStrokeOperation::Kind::Ribbon;
+    hairOp.id = QStringLiteral("main_hair");
+    hairOp.layer = QStringLiteral("Flats");
+    hairOp.brush.profile = QStringLiteral("hair");
+    hairOp.brush.color = QColor(45, 30, 60);
+    hairOp.spine = {
+        QPointF(0.3, 0.2),
+        QPointF(0.5, 0.5),
+        QPointF(0.6, 0.8)
+    };
+    hairOp.widthStart = 0.03;
+    hairOp.widthMid = 0.05;
+    hairOp.widthEnd = 0.01;
+    prog.operations.append(hairOp);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvasSize);
+    QVERIFY(!img.isNull());
+
+    // Rendered hair clump with strands must have substantial ink coverage along the spine
+    const QColor spinePixel = img.pixelColor(150, 150);
+    QVERIFY(spinePixel.alpha() > 100);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

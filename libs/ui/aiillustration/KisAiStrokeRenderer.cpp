@@ -315,6 +315,23 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
         }
     }
 
+    // Build cross-layer silhouette dictionary for clip_to_id targeted clipping
+    QMap<QString, QPolygonF> globalSilhouettes;
+    for (const KisAiStrokeOperation &op : expandedOps) {
+        if (!op.id.isEmpty()) {
+            if (op.polygon.size() >= 3) {
+                globalSilhouettes[op.id] = op.polygon;
+            } else if (op.kind == KisAiStrokeOperation::Kind::Path && op.points.size() >= 3 && op.closed) {
+                QPolygonF poly;
+                poly.reserve(op.points.size());
+                for (const auto &p : op.points) {
+                    poly.append(p.pos);
+                }
+                globalSilhouettes[op.id] = poly;
+            }
+        }
+    }
+
     QPainter compPainter(&compositeImage);
     compPainter.setRenderHint(QPainter::Antialiasing, true);
     compPainter.setRenderHint(QPainter::SmoothPixmapTransform, true);
@@ -329,7 +346,8 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
         const bool isHighlights = (layerKey.compare(QLatin1String("Highlights"), Qt::CaseInsensitive) == 0);
         const bool isFx = (layerKey.compare(QLatin1String("FX"), Qt::CaseInsensitive) == 0);
 
-        QImage layerImage = isFx ? renderOperationsToImage(ops, size, faceExclusionPath) : renderOperationsToImage(ops, size);
+        QImage layerImage = isFx ? renderOperationsToImage(ops, size, faceExclusionPath, globalSilhouettes)
+                                 : renderOperationsToImage(ops, size, QPainterPath(), globalSilhouettes);
 
         if (isFlats) {
             flatsImage = layerImage;
@@ -352,7 +370,7 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
 
             QImage formImage;
             if (!formOps.isEmpty()) {
-                formImage = renderOperationsToImage(formOps, size);
+                formImage = renderOperationsToImage(formOps, size, QPainterPath(), globalSilhouettes);
                 applySoftEdgeDiffusion(formImage, 4);
             } else {
                 formImage = QImage(size, QImage::Format_ARGB32_Premultiplied);
@@ -360,7 +378,7 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
             }
 
             if (!castOps.isEmpty()) {
-                QImage castImage = renderOperationsToImage(castOps, size);
+                QImage castImage = renderOperationsToImage(castOps, size, QPainterPath(), globalSilhouettes);
                 applySoftEdgeDiffusion(castImage, 1);
                 QPainter p(&formImage);
                 p.setCompositionMode(QPainter::CompositionMode_SourceOver);
@@ -599,6 +617,23 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
         bloomSource.fill(Qt::transparent);
     }
 
+    // Build cross-layer silhouette dictionary for clip_to_id targeted clipping
+    QMap<QString, QPolygonF> globalSilhouettes;
+    for (const KisAiStrokeOperation &op : expandedOps) {
+        if (!op.id.isEmpty()) {
+            if (op.polygon.size() >= 3) {
+                globalSilhouettes[op.id] = op.polygon;
+            } else if (op.kind == KisAiStrokeOperation::Kind::Path && op.points.size() >= 3 && op.closed) {
+                QPolygonF poly;
+                poly.reserve(op.points.size());
+                for (const auto &p : op.points) {
+                    poly.append(p.pos);
+                }
+                globalSilhouettes[op.id] = poly;
+            }
+        }
+    }
+
     for (const QString &layerKey : orderedLayers) {
         const QVector<KisAiStrokeOperation> &ops = layerBuckets[layerKey];
         if (ops.isEmpty())
@@ -610,7 +645,8 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
         const bool isBackground = (layerKey.compare(QLatin1String("Background"), Qt::CaseInsensitive) == 0);
         const bool isFx = (layerKey.compare(QLatin1String("FX"), Qt::CaseInsensitive) == 0);
 
-        QImage layerImage = isFx ? renderOperationsToImage(ops, canvasSize, faceExclusionPath) : renderOperationsToImage(ops, canvasSize);
+        QImage layerImage = isFx ? renderOperationsToImage(ops, canvasSize, faceExclusionPath, globalSilhouettes)
+                                 : renderOperationsToImage(ops, canvasSize, QPainterPath(), globalSilhouettes);
 
         if (isFlats) {
             flatsImage = layerImage;
@@ -633,7 +669,7 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
 
             QImage formImage;
             if (!formOps.isEmpty()) {
-                formImage = renderOperationsToImage(formOps, canvasSize);
+                formImage = renderOperationsToImage(formOps, canvasSize, QPainterPath(), globalSilhouettes);
                 applySoftEdgeDiffusion(formImage, 4);
             } else {
                 formImage = QImage(canvasSize, QImage::Format_ARGB32_Premultiplied);
@@ -641,7 +677,7 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
             }
 
             if (!castOps.isEmpty()) {
-                QImage castImage = renderOperationsToImage(castOps, canvasSize);
+                QImage castImage = renderOperationsToImage(castOps, canvasSize, QPainterPath(), globalSilhouettes);
                 applySoftEdgeDiffusion(castImage, 1);
                 QPainter p(&formImage);
                 p.setCompositionMode(QPainter::CompositionMode_SourceOver);
@@ -834,7 +870,8 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
 
 QImage KisAiStrokeRenderer::renderOperationsToImage(const QVector<KisAiStrokeOperation> &operations,
                                                     const QSize &canvasSize,
-                                                    const QPainterPath &faceExclusionPath)
+                                                    const QPainterPath &faceExclusionPath,
+                                                    const QMap<QString, QPolygonF> &globalSilhouettes)
 {
     // D0: meaning-aware supersampling — faces/eyes deserve 3x on modest
     // canvases while plain backgrounds stay cheap. Memory-bounded.
@@ -864,19 +901,35 @@ QImage KisAiStrokeRenderer::renderOperationsToImage(const QVector<KisAiStrokeOpe
             if (lint.drop)
                 continue;
 
-            // Phase 2: Targeted silhouette clipping (clip_to_id)
+            // Phase 2/3: Targeted silhouette clipping (clip_to_id)
             if (!op.clipToId.isEmpty()) {
                 bool clipped = false;
-                for (const KisAiStrokeOperation &baseOp : orderedOps) {
-                    if (baseOp.id == op.clipToId && baseOp.polygon.size() >= 3) {
+                // 1. Cross-layer global silhouette lookup (e.g. Flats base parts)
+                if (globalSilhouettes.contains(op.clipToId)) {
+                    const QPolygonF &basePoly = globalSilhouettes.value(op.clipToId);
+                    if (basePoly.size() >= 3) {
                         painter.save();
                         QPainterPath clipP;
-                        clipP.addPolygon(scalePolygon(baseOp.polygon, workingSize));
+                        clipP.addPolygon(scalePolygon(basePoly, workingSize));
                         painter.setClipPath(clipP, Qt::IntersectClip);
                         rasterizeOperation(painter, op, workingSize, scale, scaledFacePath);
                         painter.restore();
                         clipped = true;
-                        break;
+                    }
+                }
+                // 2. Intra-layer fallback search
+                if (!clipped) {
+                    for (const KisAiStrokeOperation &baseOp : orderedOps) {
+                        if (baseOp.id == op.clipToId && baseOp.polygon.size() >= 3) {
+                            painter.save();
+                            QPainterPath clipP;
+                            clipP.addPolygon(scalePolygon(baseOp.polygon, workingSize));
+                            painter.setClipPath(clipP, Qt::IntersectClip);
+                            rasterizeOperation(painter, op, workingSize, scale, scaledFacePath);
+                            painter.restore();
+                            clipped = true;
+                            break;
+                        }
                     }
                 }
                 if (clipped)

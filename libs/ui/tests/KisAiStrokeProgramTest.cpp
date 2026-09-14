@@ -4019,6 +4019,83 @@ void KisAiStrokeProgramTest::testSceneSpecRejectsOversizedBody()
     QCOMPARE(okSpec.head.hairColor, QColor(0x2b, 0x3a, 0x67));
 }
 
+void KisAiStrokeProgramTest::testStructuredOutputsJsonSchemaCompleteness()
+{
+    const QJsonObject schema = KisAiStrokeProgramCodec::strokeProgramJsonSchema();
+    QVERIFY(!schema.isEmpty());
+    QCOMPARE(schema.value(QStringLiteral("type")).toString(), QStringLiteral("object"));
+
+    const QJsonObject rootProps = schema.value(QStringLiteral("properties")).toObject();
+    QVERIFY(rootProps.contains(QStringLiteral("schema_version")));
+    QVERIFY(rootProps.contains(QStringLiteral("operations")));
+    QVERIFY(rootProps.contains(QStringLiteral("agent_critique")));
+    QVERIFY(rootProps.contains(QStringLiteral("target_focus_area")));
+    QVERIFY(rootProps.contains(QStringLiteral("readiness_score")));
+    QVERIFY(rootProps.contains(QStringLiteral("critique_regions")));
+    QVERIFY(rootProps.contains(QStringLiteral("regions")));
+
+    const QJsonObject opItem = rootProps.value(QStringLiteral("operations")).toObject().value(QStringLiteral("items")).toObject();
+    const QJsonObject opProps = opItem.value(QStringLiteral("properties")).toObject();
+
+    // Verify vital new operation properties are registered in schema
+    QVERIFY(opProps.contains(QStringLiteral("fill_profile")));
+    QVERIFY(opProps.contains(QStringLiteral("blend_mode")));
+    QVERIFY(opProps.contains(QStringLiteral("clip_to_id")));
+    QVERIFY(opProps.contains(QStringLiteral("is_shading")));
+    QVERIFY(opProps.contains(QStringLiteral("shading_type")));
+    QVERIFY(opProps.contains(QStringLiteral("shading_intensity")));
+
+    // Verify AnimeEye properties in schema
+    QVERIFY(opProps.contains(QStringLiteral("iris_color")));
+    QVERIFY(opProps.contains(QStringLiteral("secondary_color")));
+    QVERIFY(opProps.contains(QStringLiteral("expression")));
+    QVERIFY(opProps.contains(QStringLiteral("is_right")));
+    QVERIFY(opProps.contains(QStringLiteral("size")));
+}
+
+void KisAiStrokeProgramTest::testLenientParsingCasingAndAliases()
+{
+    const QString json = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"fill\",\n"
+        "      \"id\": \"face_base\",\n"
+        "      \"layer\": \"Flats\",\n"
+        "      \"fill-profile\": \"watercolor\",\n"
+        "      \"blend-mode\": \"normal\",\n"
+        "      \"polygon\": [[0.2,0.2],[0.8,0.2],[0.8,0.8],[0.2,0.8]],\n"
+        "      \"brush\": {\"profile\": \"brush\", \"color\": \"#ffd9c2\", \"size\": 0.05, \"is_eraser\": false}\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"id\": \"eye_highlight\",\n"
+        "      \"layer\": \"Highlights\",\n"
+        "      \"clip-to-id\": \"face_base\",\n"
+        "      \"blend-mode\": \"color-dodge\",\n"
+        "      \"points\": [[0.4,0.4,0.8],[0.45,0.42,0.5]],\n"
+        "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#ffffff\", \"size\": 0.003, \"is_eraser\": false}\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+
+    KisAiStrokeProgram prog;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(json.toUtf8(), &prog, &error), qPrintable(error));
+    QCOMPARE(prog.operations.size(), 2);
+
+    const KisAiStrokeOperation &op1 = prog.operations.at(0);
+    QCOMPARE(op1.fillProfile, QStringLiteral("watercolor"));
+    QCOMPARE(op1.brush.profile, QStringLiteral("watercolor")); // Auto-mapped for wet edge
+    QCOMPARE(op1.fillStyle, QStringLiteral("wash"));
+
+    const KisAiStrokeOperation &op2 = prog.operations.at(1);
+    QCOMPARE(op2.clipToId, QStringLiteral("face_base"));
+    QCOMPARE(op2.blendMode, QStringLiteral("color_dodge")); // Hyphen converted to underscore
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

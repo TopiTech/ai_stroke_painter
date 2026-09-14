@@ -382,6 +382,26 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
                                                      {QStringLiteral("minimum"), 1},
                                                      {QStringLiteral("maximum"), 200}};
     opProps[QStringLiteral("shape")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    opProps[QStringLiteral("fill_profile")] = QJsonObject{
+        {QStringLiteral("type"), QStringLiteral("string")},
+        {QStringLiteral("enum"), QJsonArray{QStringLiteral("flat"), QStringLiteral("watercolor"), QStringLiteral("gradient")}}};
+    opProps[QStringLiteral("is_shading")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")}};
+    opProps[QStringLiteral("shading_type")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    opProps[QStringLiteral("shading_intensity")] = QJsonObject{
+        {QStringLiteral("type"), QStringLiteral("number")},
+        {QStringLiteral("minimum"), 0.0},
+        {QStringLiteral("maximum"), 1.0}};
+    opProps[QStringLiteral("size")] = QJsonObject{
+        {QStringLiteral("type"), QStringLiteral("array")},
+        {QStringLiteral("items"), pointItem},
+        {QStringLiteral("minItems"), 2},
+        {QStringLiteral("maxItems"), 2}};
+    opProps[QStringLiteral("iris_color")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    opProps[QStringLiteral("secondary_color")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    opProps[QStringLiteral("expression")] = QJsonObject{
+        {QStringLiteral("type"), QStringLiteral("string")},
+        {QStringLiteral("enum"), QJsonArray{QStringLiteral("open"), QStringLiteral("smile"), QStringLiteral("half"), QStringLiteral("closed"), QStringLiteral("wink")}}};
+    opProps[QStringLiteral("is_right")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")}};
     opItem[QStringLiteral("properties")] = opProps;
     opItem[QStringLiteral("required")] =
         QJsonArray{QStringLiteral("kind"), QStringLiteral("id"), QStringLiteral("layer"), QStringLiteral("brush")};
@@ -396,6 +416,30 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
     rootProps[QStringLiteral("total_steps")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")}};
     rootProps[QStringLiteral("goal_reached")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")}};
     rootProps[QStringLiteral("completion_score")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("number")}};
+    rootProps[QStringLiteral("agent_critique")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    rootProps[QStringLiteral("target_focus_area")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    rootProps[QStringLiteral("readiness_score")] = QJsonObject{
+        {QStringLiteral("type"), QStringLiteral("number")},
+        {QStringLiteral("minimum"), 0.0},
+        {QStringLiteral("maximum"), 1.0}};
+
+    QJsonObject regionItem;
+    regionItem[QStringLiteral("type")] = QStringLiteral("object");
+    QJsonObject regProps;
+    regProps[QStringLiteral("area")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    regProps[QStringLiteral("issue")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    regProps[QStringLiteral("action")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    regProps[QStringLiteral("priority")] = QJsonObject{
+        {QStringLiteral("type"), QStringLiteral("integer")},
+        {QStringLiteral("minimum"), 1},
+        {QStringLiteral("maximum"), 5}};
+    regionItem[QStringLiteral("properties")] = regProps;
+    rootProps[QStringLiteral("critique_regions")] = QJsonObject{
+        {QStringLiteral("type"), QStringLiteral("array")},
+        {QStringLiteral("items"), regionItem}};
+    rootProps[QStringLiteral("regions")] = QJsonObject{
+        {QStringLiteral("type"), QStringLiteral("array")},
+        {QStringLiteral("items"), regionItem}};
     rootProps[QStringLiteral("operations")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("array")},
                                                           {QStringLiteral("items"), opItem},
                                                           {QStringLiteral("minItems"), 1},
@@ -487,14 +531,18 @@ QString KisAiStrokeProgramCodec::buildOperationKindsSection()
         "- 'gradient_fill': Atmospheric sky, environment, or broad directional light washes. Polygon [ [x, y], ... ], colors [ '#hex', ... ], "
         "angle_deg (0=horizontal, 90=vertical), is_radial (true/false), center [cx, cy], radius.\n"
         "- 'fill': Volumetric color masses, plane blocking, and form/cast shadows. Polygon [ [x, y], ... ], brush { "
-        "'profile': 'watercolor'/'brush'/'marker'/'airbrush', 'color': '#hex' }, style ('wash'/'directional'/'contour'), angle_deg.\n"
+        "'profile': 'watercolor'/'brush'/'marker'/'airbrush', 'color': '#hex' }, style ('wash'/'directional'/'contour'), angle_deg. "
+        "Use 'fill_profile': 'watercolor' for genuine wet-edge pigmentation and paper grain texture! When brush.profile is 'foliage'/'petals' or id contains 'sakura'/'foliage', the engine automatically synthesizes billowing petal/leaf clusters.\n"
         "- 'path': Exquisite linework, anatomical contours, facial features, hair strands. Points [ [x, y, pressure], ... ] (pressure: 0.1-1.0). "
         "brush { 'profile': 'gpen'/'pencil'/'fineliner'/'maru_pen'/'airbrush'/'watercolor'/'brush', 'color': '#hex', 'size': 0.0015-0.008, opacity: 0.0-1.0 }.\n"
-        "- 'ribbon': Tapered organic strokes (hair locks, drapery folds, limbs). Spine [ [x, y], ... ], width_start, width_mid, width_end (0.004-0.04).\n"
+        "- 'ribbon': Tapered organic strokes (hair locks, drapery folds, limbs). Spine [ [x, y], ... ], width_start, width_mid, width_end (0.004-0.04). "
+        "IMPORTANT: When brush.profile is 'hair' or id contains 'hair', the engine automatically procedurally synthesizes realistic multi-strand hair clumps, flyaways, and luminous halo accents!\n"
         "- 'hatch': Fine technical cross-hatching or manga screentone. Polygon [ [x, y], ... ], angle_deg (0-180), spacing (0.005-0.02), cross_hatch (true/false).\n"
-        "- 'anime_eye': Optional procedural eye assembly when standard anime eyes fit the prompt. center [cx, cy], size [w, h], iris_color '#hex', secondary_color '#hex', style ('sparkle'/'dual_dot'/'gradient'), expression ('open'/'smile'/'half'), is_right (true/false).\n"
+        "- 'anime_eye': Modern high-fidelity procedural eye assembly (multi-layer iris, limbal ring, emission crescent, catchlights & bloom). center [cx, cy], size [w, h], iris_color '#hex', secondary_color '#hex', style ('sparkle'/'dual_dot'/'gradient'), expression ('open'/'smile'/'half'), is_right (true/false).\n"
         "- 'particles': Atmospheric particles (ONLY when theme calls for it: petals, stars, embers). Bounds [x1, y1, x2, y2], count (8-24), shape ('petal'/'sparkle'/'star'/'dot').\n"
-        "- 'manga_lines': Dynamic focus/speed lines. center [cx, cy], inner_radius, outer_radius, density (16-64)."
+        "- 'manga_lines': Dynamic focus/speed lines. center [cx, cy], inner_radius, outer_radius, density (16-64).\n"
+        "- 'clip_to_id': Assign to any operation (e.g. shadow or highlight) to strictly clip its rasterization to the silhouette of a base part (e.g. clip_to_id: 'face_skin').\n"
+        "- 'blend_mode': 'color_dodge' for vivid specular luminescence, 'multiply' for true shadows, 'screen' for soft fog, 'normal' for default."
     );
 }
 
@@ -518,49 +566,61 @@ QString KisAiStrokeProgramCodec::buildOutputSchemaExampleSection()
         "    },\n"
         "    {\n"
         "      \"kind\": \"fill\",\n"
-        "      \"id\": \"subject_base\",\n"
+        "      \"id\": \"face_skin\",\n"
         "      \"layer\": \"Flats\",\n"
-        "      \"polygon\": [[0.25,0.22],[0.75,0.22],[0.80,0.85],[0.20,0.85]],\n"
-        "      \"brush\": {\"profile\": \"brush\", \"color\": \"#ffd9c2\", \"size\": 0.04, \"is_eraser\": false},\n"
+        "      \"polygon\": [[0.30,0.25],[0.70,0.25],[0.65,0.72],[0.50,0.82],[0.35,0.72]],\n"
+        "      \"brush\": {\"profile\": \"watercolor\", \"color\": \"#ffd9c2\", \"size\": 0.04, \"is_eraser\": false},\n"
+        "      \"fill_profile\": \"watercolor\",\n"
         "      \"style\": \"wash\"\n"
         "    },\n"
         "    {\n"
         "      \"kind\": \"fill\",\n"
-        "      \"id\": \"form_shadow_soft\",\n"
+        "      \"id\": \"face_form_shadow\",\n"
         "      \"layer\": \"Shading\",\n"
-        "      \"polygon\": [[0.45,0.30],[0.74,0.30],[0.78,0.84],[0.42,0.84]],\n"
+        "      \"clip_to_id\": \"face_skin\",\n"
+        "      \"blend_mode\": \"multiply\",\n"
+        "      \"polygon\": [[0.45,0.28],[0.70,0.28],[0.65,0.72],[0.48,0.78]],\n"
         "      \"brush\": {\"profile\": \"watercolor\", \"color\": \"#d48b7a\", \"size\": 0.03, \"is_eraser\": false},\n"
         "      \"style\": \"directional\",\n"
         "      \"angle_deg\": 120\n"
         "    },\n"
         "    {\n"
-        "      \"kind\": \"fill\",\n"
-        "      \"id\": \"cast_shadow_crisp\",\n"
-        "      \"layer\": \"Shading\",\n"
-        "      \"polygon\": [[0.35,0.38],[0.65,0.38],[0.60,0.44],[0.38,0.44]],\n"
-        "      \"brush\": {\"profile\": \"brush\", \"color\": \"#a85c52\", \"size\": 0.02, \"is_eraser\": false},\n"
-        "      \"style\": \"contour\"\n"
+        "      \"kind\": \"anime_eye\",\n"
+        "      \"id\": \"hero_left_eye\",\n"
+        "      \"layer\": \"Flats\",\n"
+        "      \"center\": [0.42, 0.46],\n"
+        "      \"size\": [0.10, 0.13],\n"
+        "      \"iris_color\": \"#286ef5\",\n"
+        "      \"secondary_color\": \"#8cebff\",\n"
+        "      \"style\": \"sparkle\",\n"
+        "      \"expression\": \"open\",\n"
+        "      \"is_right\": false\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"ribbon\",\n"
+        "      \"id\": \"hair_bangs\",\n"
+        "      \"layer\": \"Flats\",\n"
+        "      \"spine\": [[0.35,0.20],[0.42,0.38],[0.40,0.52]],\n"
+        "      \"width_start\": 0.02,\n"
+        "      \"width_mid\": 0.035,\n"
+        "      \"width_end\": 0.006,\n"
+        "      \"brush\": {\"profile\": \"hair\", \"color\": \"#2c1e3d\", \"size\": 0.03, \"is_eraser\": false}\n"
         "    },\n"
         "    {\n"
         "      \"kind\": \"path\",\n"
-        "      \"id\": \"primary_contour\",\n"
+        "      \"id\": \"jaw_contour\",\n"
         "      \"layer\": \"Lineart\",\n"
-        "      \"points\": [[0.25,0.22,0.3],[0.22,0.50,0.8],[0.20,0.85,0.4]],\n"
-        "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#1e1828\", \"size\": 0.0035, \"is_eraser\": false}\n"
+        "      \"points\": [[0.30,0.38,0.4],[0.35,0.72,0.8],[0.50,0.82,0.9],[0.65,0.72,0.8],[0.70,0.38,0.4]],\n"
+        "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#1a1224\", \"size\": 0.0035, \"is_eraser\": false}\n"
         "    },\n"
         "    {\n"
         "      \"kind\": \"path\",\n"
-        "      \"id\": \"delicate_eyelash\",\n"
-        "      \"layer\": \"Lineart\",\n"
-        "      \"points\": [[0.38,0.42,0.3],[0.44,0.40,0.9],[0.48,0.41,0.2]],\n"
-        "      \"brush\": {\"profile\": \"maru_pen\", \"color\": \"#1c1626\", \"size\": 0.0020, \"is_eraser\": false}\n"
-        "    },\n"
-        "    {\n"
-        "      \"kind\": \"path\",\n"
-        "      \"id\": \"catchlight_specular\",\n"
+        "      \"id\": \"hair_halo_luster\",\n"
         "      \"layer\": \"Highlights\",\n"
-        "      \"points\": [[0.43,0.41,0.9],[0.435,0.415,0.4]],\n"
-        "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#ffffff\", \"size\": 0.0025, \"is_eraser\": false}\n"
+        "      \"clip_to_id\": \"hair_bangs\",\n"
+        "      \"blend_mode\": \"color_dodge\",\n"
+        "      \"points\": [[0.36,0.32,0.8],[0.42,0.34,0.9],[0.48,0.33,0.7]],\n"
+        "      \"brush\": {\"profile\": \"airbrush\", \"color\": \"#a2d5f2\", \"size\": 0.008, \"opacity\": 0.85, \"is_eraser\": false}\n"
         "    }\n"
         "  ]\n"
         "}"
@@ -2689,9 +2749,18 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
             op.kind = normalizeKind(findField(o, {QStringLiteral("kind"), QStringLiteral("type")}).toString());
             op.id = findField(o, {QStringLiteral("id"), QStringLiteral("name")}).toString();
             op.layer = normalizeLayerName(findField(o, {QStringLiteral("layer"), QStringLiteral("layer_name")}, QStringLiteral("Lineart")).toString(QStringLiteral("Lineart")));
-            op.blendMode = findField(o, {QStringLiteral("blend_mode"), QStringLiteral("blendMode"), QStringLiteral("composite")}, QStringLiteral("normal")).toString(QStringLiteral("normal")).toLower();
-            op.clipToId = findField(o, {QStringLiteral("clip_to_id"), QStringLiteral("clip_to"), QStringLiteral("clipToId")}).toString();
+            op.blendMode = findField(o, {QStringLiteral("blend_mode"), QStringLiteral("blendMode"), QStringLiteral("blend-mode"), QStringLiteral("blend"), QStringLiteral("composite")}, QStringLiteral("normal")).toString(QStringLiteral("normal")).toLower().replace(QLatin1Char('-'), QLatin1Char('_'));
+            op.clipToId = findField(o, {QStringLiteral("clip_to_id"), QStringLiteral("clip_to"), QStringLiteral("clipToId"), QStringLiteral("clip-to-id"), QStringLiteral("clip")}).toString();
+            op.fillProfile = findField(o, {QStringLiteral("fill_profile"), QStringLiteral("fillProfile"), QStringLiteral("fill-profile")}, QStringLiteral("flat")).toString(QStringLiteral("flat")).toLower().replace(QLatin1Char('-'), QLatin1Char('_'));
             op.brush = parseBrush(findField(o, {QStringLiteral("brush")}).toObject());
+            if (op.fillProfile == QLatin1String("watercolor")) {
+                if (op.brush.profile.isEmpty() || op.brush.profile == QLatin1String("brush") || op.brush.profile == QLatin1String("pen")) {
+                    op.brush.profile = QStringLiteral("watercolor");
+                }
+                if (op.fillStyle.isEmpty() || op.fillStyle == QLatin1String("flat")) {
+                    op.fillStyle = QStringLiteral("wash");
+                }
+            }
 
             if (op.kind == KisAiStrokeOperation::Kind::Path) {
                 op.closed = toBoolField(findField(o, {QStringLiteral("closed")}), false);

@@ -173,7 +173,8 @@ private:
     static QImage renderOperationsToImage(
         const QVector<KisAiStrokeOperation> &operations,
         const QSize &canvasSize,
-        const QPainterPath &faceExclusionPath = QPainterPath()
+        const QPainterPath &faceExclusionPath = QPainterPath(),
+        const QMap<QString, QPolygonF> &globalSilhouettes = QMap<QString, QPolygonF>()
     );
 
     static void rasterizeOperation(

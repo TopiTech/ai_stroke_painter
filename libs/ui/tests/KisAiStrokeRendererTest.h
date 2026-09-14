@@ -82,6 +82,8 @@ private Q_SLOTS:
     void testPhase2ModernHighFidelityAnimeEye();
     void testPhase2ArtisticPaperGrainAndWetEdge();
     void testPhase2DynamicPerspectiveAndAngles();
+    void testCrossLayerClipToId();
+    void testProceduralMacroExpansionGuidance();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H
