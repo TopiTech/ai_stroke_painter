@@ -57,6 +57,7 @@ struct KRITAUI_EXPORT KisAiStrokeOperation
         Hatch,
         MangaLines,
         AnimeEye,
+        AnimeMouth,
         Unknown
     };
 
@@ -111,6 +112,13 @@ struct KRITAUI_EXPORT KisAiStrokeOperation
     QString eyeStyle {QStringLiteral("sparkle")}; // sparkle, dual_dot, gradient
     QString eyeExpression {QStringLiteral("open")}; // open, smile, half, closed
     bool eyeIsRight {false};
+
+    // AnimeMouth (Procedural high-fidelity anime mouth/lip assembly)
+    QPointF mouthCenter {0.5, 0.65};
+    QSizeF mouthSize {0.06, 0.03};
+    QString mouthExpression {QStringLiteral("smile")}; // smile, open_smile, small_open, closed_line, cat_mouth, pout
+    QColor mouthLipColor {QColor(225, 115, 125)};
+    bool mouthHasHighlight {true};
 
     // Layer blending & Clipping (Phase 2)
     QString blendMode {QStringLiteral("normal")}; // normal, multiply, screen, color_dodge, overlay, linear_burn, add

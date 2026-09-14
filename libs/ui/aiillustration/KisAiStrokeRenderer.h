@@ -225,6 +225,13 @@ private:
         int supersampleScale = 1
     );
 
+    static void drawAnimeMouthOperation(
+        QPainter &painter,
+        const KisAiStrokeOperation &op,
+        const QSize &canvasSize,
+        int supersampleScale = 1
+    );
+
     static void drawHatchOperation(
         QPainter &painter,
         const KisAiStrokeOperation &op,

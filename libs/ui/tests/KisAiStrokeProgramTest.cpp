@@ -4208,6 +4208,46 @@ void KisAiStrokeProgramTest::testNeutralSchemaExampleNoSpecificAnatomy()
     QVERIFY(schemaSection.contains(QStringLiteral("primary_contour")));
 }
 
+void KisAiStrokeProgramTest::testAnimeMouthParsingAndValidation()
+{
+    const QString json = QStringLiteral(R"({
+        "schema_version": 2,
+        "prompt": "anime smile portrait",
+        "operations": [
+            {
+                "kind": "anime_mouth",
+                "id": "hero_mouth",
+                "layer": "Lineart",
+                "center": [0.50, 0.65],
+                "size": [0.08, 0.04],
+                "expression": "open_smile",
+                "lip_color": "#ff758c",
+                "has_highlight": true,
+                "brush": { "profile": "gpen", "color": "#1a1224" }
+            }
+        ]
+    })");
+
+    const QJsonObject rootObj = QJsonDocument::fromJson(json.toUtf8()).object();
+    KisAiStrokeProgram program;
+    QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(rootObj, &program));
+    QCOMPARE(program.operations.size(), 1);
+
+    const KisAiStrokeOperation &op = program.operations.first();
+    QCOMPARE(op.kind, KisAiStrokeOperation::Kind::AnimeMouth);
+    QCOMPARE(op.id, QStringLiteral("hero_mouth"));
+    QCOMPARE(op.mouthExpression, QStringLiteral("open_smile"));
+    QCOMPARE(op.mouthCenter, QPointF(0.50, 0.65));
+    QCOMPARE(op.mouthSize, QSizeF(0.08, 0.04));
+    QCOMPARE(op.mouthLipColor, QColor(QStringLiteral("#ff758c")));
+    QVERIFY(op.mouthHasHighlight);
+
+    // Verify refinement and validation keeps it valid
+    KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(program);
+    QCOMPARE(refined.operations.size(), 1);
+    QCOMPARE(refined.operations.first().kind, KisAiStrokeOperation::Kind::AnimeMouth);
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

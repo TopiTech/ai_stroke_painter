@@ -202,6 +202,8 @@ qreal opMassEstimate(const KisAiStrokeOperation &op, const QSize &canvas)
     }
     case KisAiStrokeOperation::Kind::AnimeEye:
         return op.eyeSize.width() * op.eyeSize.height() * 4.0;
+    case KisAiStrokeOperation::Kind::AnimeMouth:
+        return op.mouthSize.width() * op.mouthSize.height() * 2.0;
     case KisAiStrokeOperation::Kind::Particles:
         return 1.0e-5 * qMax(0, op.particleCount);
     case KisAiStrokeOperation::Kind::MangaLines:
@@ -467,6 +469,22 @@ KisAiStrokeLintReport KisAiDeliberateStroke::lintStroke(
         }
         return rep;
     }
+    case KisAiStrokeOperation::Kind::AnimeMouth: {
+        const qreal wPx = op.mouthSize.width() * canvas.width();
+        const qreal hPx = op.mouthSize.height() * canvas.height();
+        rep.lengthPx = qMax(wPx, hPx);
+        if (wPx < 2.0 || hPx < 1.0) {
+            rep.drop = true;
+            rep.reasons << QStringLiteral("micro-mouth");
+            return rep;
+        }
+        if (!std::isfinite(op.mouthCenter.x()) || !std::isfinite(op.mouthCenter.y())) {
+            rep.drop = true;
+            rep.needsRepair = true;
+            rep.reasons << QStringLiteral("non-finite-mouth-center");
+        }
+        return rep;
+    }
     default: {
         rep.drop = true;
         rep.reasons << QStringLiteral("unknown-kind");
@@ -543,7 +561,8 @@ int KisAiDeliberateStroke::adaptiveSupersampleScale(
     const int maxEdge = qMax(canvasSize.width(), canvasSize.height());
     bool hasFaceWork = false;
     for (const KisAiStrokeOperation &op : ops) {
-        if (op.kind == KisAiStrokeOperation::Kind::AnimeEye || isFaceDetail(op.id)
+        if (op.kind == KisAiStrokeOperation::Kind::AnimeEye || op.kind == KisAiStrokeOperation::Kind::AnimeMouth
+            || isFaceDetail(op.id)
             || op.id.contains(QLatin1String("face_contour"))) {
             hasFaceWork = true;
             break;
@@ -655,6 +674,14 @@ KisAiStrokeCommitReview KisAiDeliberateStroke::reviewStroke(
         const qreal h = op.eyeSize.height() * canvas.height();
         rev.dirtyRect = QRectF(c.x() - w, c.y() - h, w * 2.0, h * 2.0);
         rev.inkCoverage = op.eyeSize.width() * op.eyeSize.height();
+        break;
+    }
+    case KisAiStrokeOperation::Kind::AnimeMouth: {
+        const QPointF c(op.mouthCenter.x() * canvas.width(), op.mouthCenter.y() * canvas.height());
+        const qreal w = op.mouthSize.width() * canvas.width();
+        const qreal h = op.mouthSize.height() * canvas.height();
+        rev.dirtyRect = QRectF(c.x() - w * 0.75, c.y() - h * 0.75, w * 1.5, h * 1.5);
+        rev.inkCoverage = op.mouthSize.width() * op.mouthSize.height();
         break;
     }
     default:

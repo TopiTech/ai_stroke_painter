@@ -2721,4 +2721,59 @@ void KisAiStrokeRendererTest::testHairClumpStrandConvergence()
     }
 }
 
+void KisAiStrokeRendererTest::testAnimeMouthRenderingAndFinishingSuite()
+{
+    const QSize canvasSize(300, 300);
+    KisAiStrokeProgram prog;
+    prog.canvasSize = canvasSize;
+
+    KisAiStrokeOperation mouthOp;
+    mouthOp.kind = KisAiStrokeOperation::Kind::AnimeMouth;
+    mouthOp.id = QStringLiteral("hero_mouth");
+    mouthOp.layer = QStringLiteral("Lineart");
+    mouthOp.mouthCenter = QPointF(0.50, 0.50);
+    mouthOp.mouthSize = QSizeF(0.20, 0.10);
+    mouthOp.mouthExpression = QStringLiteral("open_smile");
+    mouthOp.mouthLipColor = QColor(240, 110, 125);
+    mouthOp.mouthHasHighlight = true;
+    prog.operations.append(mouthOp);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvasSize);
+    QVERIFY(!img.isNull());
+
+    // Mouth cavity area (150, 158) should be painted with open mouth cavity tone
+    const QColor mouthPixel = img.pixelColor(150, 158);
+    QVERIFY(mouthPixel.alpha() > 100);
+
+    // Test Harmonic Colored Lineart (色トレス)
+    const QColor baseBlack(20, 15, 25);
+    const QColor skinFlats(255, 220, 205);
+    const QColor harmonicSkinLine = KisAiStrokeQualityUtils::calculateHarmonicLineColor(baseBlack, skinFlats, true);
+    QVERIFY(harmonicSkinLine.red() > baseBlack.red());
+    QCOMPARE(harmonicSkinLine.alpha(), baseBlack.alpha());
+
+    // Test SSS Fringe generation
+    KisAiStrokeOperation skinShadow;
+    skinShadow.kind = KisAiStrokeOperation::Kind::Fill;
+    skinShadow.id = QStringLiteral("face_skin_shadow");
+    skinShadow.layer = QStringLiteral("Shading");
+    skinShadow.polygon = {QPointF(0.3, 0.3), QPointF(0.7, 0.3), QPointF(0.7, 0.7), QPointF(0.3, 0.7)};
+    const auto fringes = KisAiStrokeQualityUtils::generateSkinSssFringe(skinShadow, canvasSize);
+    QCOMPARE(fringes.size(), 1);
+    QCOMPARE(fringes.first().layer, QStringLiteral("Shading"));
+    QCOMPARE(fringes.first().brush.color, QColor(255, 95, 110));
+
+    // Test Finishing Suite Image Generators
+    const QImage vig = KisAiStrokeQualityUtils::generateVignetteImage(canvasSize, 0.15);
+    QVERIFY(!vig.isNull());
+    QCOMPARE(vig.size(), canvasSize);
+    QCOMPARE(vig.pixelColor(150, 150).alpha(), 0);
+    QVERIFY(vig.pixelColor(5, 5).alpha() > 0);
+
+    const QImage grain = KisAiStrokeQualityUtils::generateFilmGrain(canvasSize, 0.08, 42);
+    QVERIFY(!grain.isNull());
+    QCOMPARE(grain.size(), canvasSize);
+    QVERIFY(grain.pixelColor(50, 50).alpha() > 0);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

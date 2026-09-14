@@ -328,8 +328,9 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
                                                               QStringLiteral("ribbon"),
                                                               QStringLiteral("particles"),
                                                               QStringLiteral("hatch"),
-                                                              QStringLiteral("manga_lines"),
-                                                              QStringLiteral("anime_eye")}}};
+                                                               QStringLiteral("manga_lines"),
+                                                               QStringLiteral("anime_eye"),
+                                                               QStringLiteral("anime_mouth")}}};
     opProps[QStringLiteral("id")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("layer")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("blend_mode")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")},
@@ -398,9 +399,12 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
         {QStringLiteral("maxItems"), 2}};
     opProps[QStringLiteral("iris_color")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("secondary_color")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    opProps[QStringLiteral("lip_color")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    opProps[QStringLiteral("has_highlight")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")}};
     opProps[QStringLiteral("expression")] = QJsonObject{
         {QStringLiteral("type"), QStringLiteral("string")},
-        {QStringLiteral("enum"), QJsonArray{QStringLiteral("open"), QStringLiteral("smile"), QStringLiteral("half"), QStringLiteral("closed"), QStringLiteral("wink")}}};
+        {QStringLiteral("enum"), QJsonArray{QStringLiteral("open"), QStringLiteral("smile"), QStringLiteral("half"), QStringLiteral("closed"), QStringLiteral("wink"),
+                                            QStringLiteral("open_smile"), QStringLiteral("small_open"), QStringLiteral("closed_line"), QStringLiteral("cat_mouth"), QStringLiteral("pout")}}};
     opProps[QStringLiteral("is_right")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")}};
     opItem[QStringLiteral("properties")] = opProps;
     opItem[QStringLiteral("required")] =
@@ -520,7 +524,8 @@ QString KisAiStrokeProgramCodec::buildArtisticGuidelinesSection()
         "- Dual Shadow Separation: Combine soft 'fill' (style: wash/directional) for facial curvature with sharp 'fill' (style: contour) for hard cast shadows under hair and chin.\n"
         "- Subsurface Color Warmth: Avoid muddy grey/black shading. On skin and warm surfaces, shift shadow hues toward rich peach, rose, or warm violet to convey blood flow and translucency.\n"
         "- Master Linework Craftsmanship: Never draw coarse 2-3 point zigzags. Use smooth 4-8 point Catmull-Rom curves. Vary pressure from 0.2 (light flick entry/exit) to 0.9 (heavy grounded crest).\n"
-        "- Eye Fidelity: For anime characters and portraits, prefer using 'anime_eye' operations for hero eyes to achieve sparkling, perfectly structured anime irises with catchlights.\n"
+        "- Eye & Mouth Fidelity: For anime characters and portraits, prefer using 'anime_eye' and 'anime_mouth' operations for facial hero features to achieve sparkling anime irises and gracefully sculpted lips with corner ink pooling.\n"
+        "- Colored Lineart Harmony: Lineart naturally blends with underlying colors (warm coral-brown for skin, deep harmonic hues for hair), creating soft professional unity.\n"
         "- Solid Hair Masses: Always establish opaque foundational hair volumes on 'Flats' first before drawing individual strands, preventing transparent or wireframe hair.\n"
         "- Exquisite Facial Landmarks: Dedicate delicate individual strokes for upper lash arcs, double eyelids, iris rings, pupil cores, and subtle lip creases.\n"
         "- Hair Volume & Strands: Group hair into primary masses, sculpt shadow planes beneath them, and finish with flowing ribbon strands and tapered flyaways."
@@ -542,6 +547,7 @@ QString KisAiStrokeProgramCodec::buildOperationKindsSection()
         "IMPORTANT: When brush.profile is 'hair' or id contains 'hair', the engine automatically procedurally synthesizes realistic multi-strand hair clumps, flyaways, and luminous halo accents!\n"
         "- 'hatch': Fine technical cross-hatching or manga screentone. Polygon [ [x, y], ... ], angle_deg (0-180), spacing (0.005-0.02), cross_hatch (true/false).\n"
         "- 'anime_eye': Modern high-fidelity procedural eye assembly (multi-layer iris, limbal ring, emission crescent, catchlights & bloom). center [cx, cy], size [w, h], iris_color '#hex', secondary_color '#hex', style ('sparkle'/'dual_dot'/'gradient'), expression ('open'/'smile'/'half'), is_right (true/false).\n"
+        "- 'anime_mouth': Modern procedural anime mouth/lip assembly (graceful upper lip inking, corner pooling dots, subtle teeth/tongue layers, specular lip shine). center [cx, cy], size [w, h], lip_color '#hex', expression ('smile'/'open_smile'/'small_open'/'closed_line'/'cat_mouth'/'pout'), has_highlight (true/false).\n"
         "- 'particles': Atmospheric particles (ONLY when theme calls for it: petals, stars, embers). Bounds [x1, y1, x2, y2], count (8-24), shape ('petal'/'sparkle'/'star'/'dot').\n"
         "- 'manga_lines': Dynamic focus/speed lines. center [cx, cy], inner_radius, outer_radius, density (16-64).\n"
         "- 'clip_to_id': Assign to any operation (e.g. shadow or highlight) to strictly clip its rasterization to the silhouette of a base part (e.g. clip_to_id: 'face_skin').\n"
@@ -2576,6 +2582,9 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
         if (k.contains(QLatin1String("anime_eye")) || k.contains(QLatin1String("eye"))) {
             return KisAiStrokeOperation::Kind::AnimeEye;
         }
+        if (k.contains(QLatin1String("anime_mouth")) || k.contains(QLatin1String("mouth")) || k.contains(QLatin1String("lip"))) {
+            return KisAiStrokeOperation::Kind::AnimeMouth;
+        }
         if (k.contains(QLatin1String("path")) || k.contains(QLatin1String("stroke")) || k.contains(QLatin1String("line"))
             || k.contains(QLatin1String("contour"))) {
             return KisAiStrokeOperation::Kind::Path;
@@ -2977,6 +2986,32 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 op.eyeStyle = findField(o, {QStringLiteral("style"), QStringLiteral("eye_style")}, QStringLiteral("sparkle")).toString(QStringLiteral("sparkle"));
                 op.eyeExpression = findField(o, {QStringLiteral("expression"), QStringLiteral("eye_expression")}, QStringLiteral("open")).toString(QStringLiteral("open"));
                 op.eyeIsRight = findField(o, {QStringLiteral("is_right"), QStringLiteral("right")}, false).toBool(false);
+            } else if (op.kind == KisAiStrokeOperation::Kind::AnimeMouth) {
+                const QJsonValue centerVal = findField(o, {QStringLiteral("center"), QStringLiteral("mouth_center")});
+                if (!centerVal.isUndefined() && !centerVal.isNull()) {
+                    const auto cp = parsePoint(centerVal);
+                    if (cp.second >= 0.0) {
+                        op.mouthCenter = cp.first;
+                        if (qMax(op.mouthCenter.x(), op.mouthCenter.y()) > kPixelCoordinateThreshold) {
+                            op.mouthCenter = QPointF(op.mouthCenter.x() / canvasW, op.mouthCenter.y() / canvasH);
+                        }
+                    }
+                }
+                const QJsonArray szArr = findField(o, {QStringLiteral("size"), QStringLiteral("mouth_size")}).toArray();
+                if (szArr.size() >= 2) {
+                    qreal mw = toDoubleField(szArr.at(0), 0.06);
+                    qreal mh = toDoubleField(szArr.at(1), 0.03);
+                    if (qMax(mw, mh) > kPixelCoordinateThreshold) {
+                        mw /= canvasW;
+                        mh /= canvasH;
+                    }
+                    op.mouthSize = QSizeF(qBound(0.01, mw, 0.40), qBound(0.005, mh, 0.30));
+                } else {
+                    op.mouthSize = QSizeF(0.06, 0.03);
+                }
+                op.mouthLipColor = parseColor(findField(o, {QStringLiteral("lip_color"), QStringLiteral("color")}).toString(), QColor(225, 115, 125));
+                op.mouthExpression = findField(o, {QStringLiteral("expression"), QStringLiteral("mouth_expression")}, QStringLiteral("smile")).toString(QStringLiteral("smile"));
+                op.mouthHasHighlight = findField(o, {QStringLiteral("has_highlight"), QStringLiteral("highlight")}, true).toBool(true);
             }
 
             if (op.kind != KisAiStrokeOperation::Kind::Unknown) {
@@ -3370,6 +3405,14 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             renderable = true;
             break;
         }
+        case KisAiStrokeOperation::Kind::AnimeMouth: {
+            op.mouthCenter = clampedPoint(op.mouthCenter, &localReport.repairedValues);
+            const qreal w = qBound<qreal>(0.01, op.mouthSize.width(), 0.40);
+            const qreal h = qBound<qreal>(0.005, op.mouthSize.height(), 0.30);
+            op.mouthSize = QSizeF(w, h);
+            renderable = true;
+            break;
+        }
         case KisAiStrokeOperation::Kind::MangaLines: {
             // A5: Manga lines must only be in the FX layer
             if (op.layer != QLatin1String("FX")) {
@@ -3561,6 +3604,10 @@ qreal KisAiStrokeProgramCodec::qualityScore(const KisAiStrokeProgram &program)
             geometryPoints += 16;
             ++continuousStrokes;
             totalPolygonArea += 0.05;
+        } else if (op.kind == KisAiStrokeOperation::Kind::AnimeMouth) {
+            geometryPoints += 8;
+            ++continuousStrokes;
+            totalPolygonArea += 0.02;
         }
     }
 

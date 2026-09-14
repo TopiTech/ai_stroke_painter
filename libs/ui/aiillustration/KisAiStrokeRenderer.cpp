@@ -208,10 +208,46 @@ QVector<KisAiStrokeOperation> KisAiStrokeRenderer::expandProceduralOperations(
             const QVector<KisAiStrokeOperation> foliage =
                 KisAiStrokeQualityUtils::synthesizeFoliageClusters(op, canvasSize);
             expanded.append(foliage);
+        } else if (op.kind == KisAiStrokeOperation::Kind::Path && op.points.size() >= 7 &&
+                   (op.id.contains(QLatin1String("jaw"), Qt::CaseInsensitive) ||
+                    op.id.contains(QLatin1String("chin"), Qt::CaseInsensitive) ||
+                    op.id.contains(QLatin1String("face_contour"), Qt::CaseInsensitive))) {
+            // V5: Facial contour beautifier (golden ratio anime jaw smoothing)
+            KisAiStrokeOperation smoothedOp = op;
+            smoothedOp.points = KisAiStrokeQualityUtils::beautifyFacialContour(op.points, canvasSize);
+            expanded.append(smoothedOp);
         } else {
             expanded.append(op);
+
+            // V5: Subsurface scattering (SSS) fringe for skin shading polygons
+            if (op.kind == KisAiStrokeOperation::Kind::Fill &&
+                op.layer.compare(QLatin1String("Shading"), Qt::CaseInsensitive) == 0) {
+                const auto sssFringes = KisAiStrokeQualityUtils::generateSkinSssFringe(op, canvasSize);
+                for (const auto &f : sssFringes) {
+                    expanded.append(f);
+                }
+            }
         }
     }
+
+    // V5: Generate corner inking pooling dots for Lineart junctions
+    const auto inkingDots = KisAiStrokeQualityUtils::generateCornerInkingDots(expanded, canvasSize);
+    for (const auto &dot : inkingDots) {
+        expanded.append(dot);
+    }
+
+    // V5: Generate specular rim lights facing main light
+    const auto rimLights = KisAiStrokeQualityUtils::generateRimLightStrokes(expanded, canvasSize);
+    for (const auto &rim : rimLights) {
+        expanded.append(rim);
+    }
+
+    // V5: Generate procedural cheek blush if eyes are present
+    const auto blushes = KisAiStrokeQualityUtils::generateProceduralBlush(expanded, canvasSize);
+    for (const auto &blush : blushes) {
+        expanded.append(blush);
+    }
+
     return expanded;
 }
 
@@ -846,6 +882,62 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
         }
         childAboveNode = gradeLayer;
         ++layersAdded;
+
+        // V5: Cinematic Vignette Real-canvas Layer
+        QImage vignetteImg = KisAiStrokeQualityUtils::generateVignetteImage(canvasSize, 0.14);
+        if (!vignetteImg.isNull()) {
+            KisPaintLayerSP vigLayer = nullptr;
+            KisNodeSP exVig = group->firstChild();
+            while (exVig) {
+                if (exVig->name() == QStringLiteral("🎨 AI: Vignette")) {
+                    vigLayer = dynamic_cast<KisPaintLayer*>(exVig.data());
+                    break;
+                }
+                exVig = exVig->nextSibling();
+            }
+            if (vigLayer) {
+                vigLayer->paintDevice()->clear();
+                vigLayer->paintDevice()->convertFromQImage(vignetteImg, nullptr);
+                vigLayer->setDirty(bounds);
+            } else {
+                vigLayer = new KisPaintLayer(image, QStringLiteral("🎨 AI: Vignette"), qRound(0.70 * 255));
+                vigLayer->paintDevice()->convertFromQImage(vignetteImg, nullptr);
+                vigLayer->setCompositeOpId(COMPOSITE_MULT);
+                vigLayer->setColorLabelIndex(8); // Grey
+                vigLayer->setDirty(bounds);
+                adapter.addNode(vigLayer, group, childAboveNode);
+            }
+            childAboveNode = vigLayer;
+            ++layersAdded;
+        }
+
+        // V5: Micro Film / Paper Grain Texture Real-canvas Layer
+        QImage grainImg = KisAiStrokeQualityUtils::generateFilmGrain(canvasSize, 0.07, 42);
+        if (!grainImg.isNull()) {
+            KisPaintLayerSP grainLayer = nullptr;
+            KisNodeSP exGrain = group->firstChild();
+            while (exGrain) {
+                if (exGrain->name() == QStringLiteral("🎨 AI: Film Grain")) {
+                    grainLayer = dynamic_cast<KisPaintLayer*>(exGrain.data());
+                    break;
+                }
+                exGrain = exGrain->nextSibling();
+            }
+            if (grainLayer) {
+                grainLayer->paintDevice()->clear();
+                grainLayer->paintDevice()->convertFromQImage(grainImg, nullptr);
+                grainLayer->setDirty(bounds);
+            } else {
+                grainLayer = new KisPaintLayer(image, QStringLiteral("🎨 AI: Film Grain"), qRound(0.60 * 255));
+                grainLayer->paintDevice()->convertFromQImage(grainImg, nullptr);
+                grainLayer->setCompositeOpId(COMPOSITE_OVERLAY);
+                grainLayer->setColorLabelIndex(5); // Blue
+                grainLayer->setDirty(bounds);
+                adapter.addNode(grainLayer, group, childAboveNode);
+            }
+            childAboveNode = grainLayer;
+            ++layersAdded;
+        }
     }
 
     adapter.endMacro();
@@ -994,6 +1086,9 @@ void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter, const KisAiStrok
     case KisAiStrokeOperation::Kind::AnimeEye:
         drawAnimeEyeOperation(painter, op, canvasSize, supersampleScale);
         break;
+    case KisAiStrokeOperation::Kind::AnimeMouth:
+        drawAnimeMouthOperation(painter, op, canvasSize, supersampleScale);
+        break;
     default:
         break;
     }
@@ -1093,6 +1188,17 @@ static bool renderFineLineStroke(
     const int segCount = sampleCount - 1;
     const int taperSteps = qMin(5, qMax(2, segCount / 4));
 
+    // V5: Harmonic Colored Lineart (色トレス) for skin contours
+    QColor segmentColor = color;
+    const QString lowerId = op.id.toLower();
+    const bool isSkinContour = (op.layer.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) == 0) &&
+        (lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face")) ||
+         lowerId.contains(QLatin1String("jaw")) || lowerId.contains(QLatin1String("chin")) ||
+         lowerId.contains(QLatin1String("cheek")) || lowerId.contains(QLatin1String("nose")));
+    if (isSkinContour) {
+        segmentColor = KisAiStrokeQualityUtils::calculateHarmonicLineColor(color, QColor(255, 220, 205), true);
+    }
+
     for (int i = 0; i < segCount; ++i) {
         const QPointF &p1 = curveSamples.at(i).pos;
         const QPointF &p2 = curveSamples.at(i + 1).pos;
@@ -1112,7 +1218,20 @@ static bool renderFineLineStroke(
             }
         }
 
-        QPen pen(color, w * tipFactor, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+        // V5: Curvature modulation for dynamic G-pen variation (slight expansion on sharp turns)
+        qreal curvatureFactor = 1.0;
+        if (i > 0 && i < segCount - 1) {
+            const QPointF v1 = p1 - curveSamples.at(i - 1).pos;
+            const QPointF v2 = curveSamples.at(i + 2).pos - p2;
+            const qreal l1 = std::hypot(v1.x(), v1.y());
+            const qreal l2 = std::hypot(v2.x(), v2.y());
+            if (l1 > 1.0e-3 && l2 > 1.0e-3) {
+                const qreal cross = std::abs(v1.x() * v2.y() - v1.y() * v2.x());
+                curvatureFactor = 1.0 + qMin<qreal>(0.25, (cross / (l1 * l2)) * 0.25);
+            }
+        }
+
+        QPen pen(segmentColor, w * tipFactor * curvatureFactor, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
         painter.setPen(pen);
         painter.setBrush(Qt::NoBrush);
         painter.drawLine(p1, p2);
@@ -2789,6 +2908,117 @@ void KisAiStrokeRenderer::drawAnimeEyeOperation(QPainter &painter, const KisAiSt
     QPen lowerPen2(lowerLashColor, qMax<qreal>(0.8, lashThickness * 0.28), Qt::SolidLine, Qt::RoundCap);
     painter.setPen(lowerPen2);
     painter.drawPath(lowerLash2);
+
+    painter.restore();
+}
+
+void KisAiStrokeRenderer::drawAnimeMouthOperation(
+    QPainter &painter,
+    const KisAiStrokeOperation &op,
+    const QSize &canvasSize,
+    int supersampleScale)
+{
+    Q_UNUSED(supersampleScale);
+    const QPointF centerPt = scalePoint(op.mouthCenter, canvasSize);
+    const qreal w = op.mouthSize.width() * canvasSize.width();
+    const qreal h = op.mouthSize.height() * canvasSize.height();
+    if (w < 2.0 || h < 1.0)
+        return;
+
+    painter.save();
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const qreal halfW = w * 0.5;
+    const QColor lipBase = op.mouthLipColor.isValid() ? op.mouthLipColor : QColor(225, 115, 125);
+    QColor darkInk = lipBase.darker(220);
+    darkInk.setAlpha(240);
+
+    const QString expr = op.mouthExpression.toLower();
+    const bool isOpen = (expr == QLatin1String("open_smile") || expr == QLatin1String("small_open") || expr == QLatin1String("open"));
+    const bool isSmile = (expr == QLatin1String("smile") || expr == QLatin1String("open_smile"));
+    const bool isCatMouth = (expr == QLatin1String("cat_mouth"));
+
+    // 1. Open mouth cavity (if open)
+    if (isOpen) {
+        QPainterPath cavityPath;
+        const qreal openH = h * 0.85;
+        cavityPath.moveTo(centerPt.x() - halfW * 0.85, centerPt.y());
+        cavityPath.quadTo(centerPt.x(), centerPt.y() - h * 0.15, centerPt.x() + halfW * 0.85, centerPt.y());
+        cavityPath.quadTo(centerPt.x(), centerPt.y() + openH, centerPt.x() - halfW * 0.85, centerPt.y());
+
+        // Deep mouth shadow
+        painter.setPen(Qt::NoPen);
+        QColor mouthDark = lipBase.darker(280);
+        mouthDark.setAlpha(255);
+        painter.setBrush(mouthDark);
+        painter.drawPath(cavityPath);
+
+        // Tongue (soft pink curve at bottom)
+        QPainterPath tonguePath;
+        tonguePath.moveTo(centerPt.x() - halfW * 0.55, centerPt.y() + openH * 0.45);
+        tonguePath.quadTo(centerPt.x(), centerPt.y() + openH * 0.20, centerPt.x() + halfW * 0.55, centerPt.y() + openH * 0.45);
+        tonguePath.quadTo(centerPt.x(), centerPt.y() + openH * 0.95, centerPt.x() - halfW * 0.55, centerPt.y() + openH * 0.45);
+        painter.setBrush(lipBase.lighter(120));
+        painter.drawPath(tonguePath);
+
+        // Upper teeth subtle white bar
+        QPainterPath teethPath;
+        teethPath.moveTo(centerPt.x() - halfW * 0.65, centerPt.y() + 1.0);
+        teethPath.quadTo(centerPt.x(), centerPt.y() - h * 0.10, centerPt.x() + halfW * 0.65, centerPt.y() + 1.0);
+        teethPath.quadTo(centerPt.x(), centerPt.y() + openH * 0.25, centerPt.x() - halfW * 0.65, centerPt.y() + 1.0);
+        painter.setBrush(QColor(255, 255, 255, 220));
+        painter.drawPath(teethPath);
+    }
+
+    // 2. Upper Lip Inking line (exquisite varying curve)
+    QPainterPath upperLip;
+    if (isCatMouth) {
+        upperLip.moveTo(centerPt.x() - halfW, centerPt.y());
+        upperLip.quadTo(centerPt.x() - halfW * 0.5, centerPt.y() - h * 0.4, centerPt.x(), centerPt.y());
+        upperLip.quadTo(centerPt.x() + halfW * 0.5, centerPt.y() - h * 0.4, centerPt.x() + halfW, centerPt.y());
+    } else {
+        const qreal archH = isSmile ? -h * 0.35 : (isOpen ? -h * 0.15 : 0.0);
+        upperLip.moveTo(centerPt.x() - halfW, centerPt.y() + (isSmile ? -h * 0.1 : 0.0));
+        upperLip.cubicTo(centerPt.x() - halfW * 0.35, centerPt.y() + archH,
+                         centerPt.x() - halfW * 0.10, centerPt.y() + archH + h * 0.08,
+                         centerPt.x(), centerPt.y() + archH + h * 0.05);
+        upperLip.cubicTo(centerPt.x() + halfW * 0.10, centerPt.y() + archH + h * 0.08,
+                         centerPt.x() + halfW * 0.35, centerPt.y() + archH,
+                         centerPt.x() + halfW, centerPt.y() + (isSmile ? -h * 0.1 : 0.0));
+    }
+
+    const qreal lipThickness = qMax<qreal>(1.2, w * 0.045);
+    QPen upperPen(darkInk, lipThickness, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    painter.setPen(upperPen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(upperLip);
+
+    // 3. Corner Pooling dots (口角のキュッとしたインク溜まり)
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(darkInk);
+    const qreal dotR = lipThickness * 0.85;
+    painter.drawEllipse(QPointF(centerPt.x() - halfW, centerPt.y() + (isSmile ? -h * 0.1 : 0.0)), dotR, dotR);
+    painter.drawEllipse(QPointF(centerPt.x() + halfW, centerPt.y() + (isSmile ? -h * 0.1 : 0.0)), dotR, dotR);
+
+    // 4. Lower Lip line & specular gloss
+    if (!isOpen) {
+        QPainterPath lowerLip;
+        lowerLip.moveTo(centerPt.x() - halfW * 0.32, centerPt.y() + h * 0.45);
+        lowerLip.quadTo(centerPt.x(), centerPt.y() + h * 0.55, centerPt.x() + halfW * 0.32, centerPt.y() + h * 0.45);
+        QColor underLipCol = lipBase.darker(150);
+        underLipCol.setAlpha(180);
+        QPen lowerPen(underLipCol, lipThickness * 0.75, Qt::SolidLine, Qt::RoundCap);
+        painter.setPen(lowerPen);
+        painter.drawPath(lowerLip);
+    }
+
+    // Specular lip gloss highlight
+    if (op.mouthHasHighlight) {
+        const QPointF glossPos(centerPt.x() + halfW * 0.12, centerPt.y() + (isOpen ? h * 0.75 : h * 0.32));
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(QColor(255, 255, 255, 200));
+        painter.drawEllipse(glossPos, qMax<qreal>(0.8, w * 0.035), qMax<qreal>(0.6, h * 0.07));
+    }
 
     painter.restore();
 }

@@ -88,6 +88,7 @@ private Q_SLOTS:
     void testLintKeepsCanvasCrossingStrokesAndFullBleedFills();
     void testShadingExcludesWatercolorFringe();
     void testHairClumpStrandConvergence();
+    void testAnimeMouthRenderingAndFinishingSuite();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

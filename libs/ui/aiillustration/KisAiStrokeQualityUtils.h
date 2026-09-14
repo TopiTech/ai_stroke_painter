@@ -269,6 +269,94 @@ public:
         const QPolygonF &polygon,
         const QSize &canvasSize
     );
+
+    // =========================================================================
+    // 7. Advanced Artistic Fidelity & Inking Utilities (V5)
+    // =========================================================================
+
+    /**
+     * Corner Inking / Ambient Occlusion dots.
+     * Detects stroke-stroke intersections and sharp corners (< 125 deg)
+     * and generates small ink pooling dots to simulate real pen bleed.
+     */
+    static QVector<KisAiStrokeOperation> generateCornerInkingDots(
+        const QVector<KisAiStrokeOperation> &operations,
+        const QSize &canvasSize
+    );
+
+    /**
+     * Intelligent Colored Lineart (色トレス).
+     * Modulates dark ink line colors based on the underlying Flats color.
+     * Skin contours become deep coral/mahogany, hair contours become deep harmonic tones.
+     */
+    static QColor calculateHarmonicLineColor(
+        const QColor &baseInkColor,
+        const QColor &underlyingFlatsColor,
+        bool isSkin
+    );
+
+    /**
+     * Subsurface Scattering (SSS) fringe for skin form shadows.
+     * Generates a warm, vibrant coral/crimson feather edge along the terminator of skin shadows.
+     */
+    static QVector<KisAiStrokeOperation> generateSkinSssFringe(
+        const KisAiStrokeOperation &shadingOp,
+        const QSize &canvasSize
+    );
+
+    /**
+     * Facial Contour Beautifier.
+     * Snaps and smooths coarse jaw/chin/cheek paths into elegant, proportional anime facial curves.
+     */
+    static QVector<KisAiStrokePoint> beautifyFacialContour(
+        const QVector<KisAiStrokePoint> &rawPoints,
+        const QSize &canvasSize
+    );
+
+    /**
+     * Rim light generator.
+     * Generates delicate specular rim highlight strokes along the outer silhouette edges facing key/back light.
+     */
+    static QVector<KisAiStrokeOperation> generateRimLightStrokes(
+        const QVector<KisAiStrokeOperation> &operations,
+        const QSize &canvasSize,
+        const QPointF &lightDir = QPointF(0.707, -0.707)
+    );
+
+    /**
+     * Procedural cheek blush and soft glow generator.
+     * Injects soft radial cheek blush when eyes/face are present.
+     */
+    static QVector<KisAiStrokeOperation> generateProceduralBlush(
+        const QVector<KisAiStrokeOperation> &operations,
+        const QSize &canvasSize
+    );
+
+    /**
+     * Generate film / paper grain noise overlay.
+     */
+    static QImage generateFilmGrain(
+        const QSize &size,
+        qreal intensity = 0.08,
+        quint32 seed = 1337
+    );
+
+    /**
+     * Generate cinematic vignette image.
+     */
+    static QImage generateVignetteImage(
+        const QSize &size,
+        qreal strength = 0.15
+    );
+
+    /**
+     * Generate atmospheric ambient overlay gradient.
+     */
+    static QImage generateAmbientOverlay(
+        const QSize &size,
+        int artStyle = 0,
+        int timeOfDay = 0
+    );
 };
 
 #endif // KIS_AI_STROKE_QUALITY_UTILS_H

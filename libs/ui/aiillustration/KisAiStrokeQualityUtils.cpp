@@ -6,7 +6,10 @@
 #include "KisAiStrokeQualityUtils.h"
 
 #include <QColor>
+#include <QImage>
+#include <QLinearGradient>
 #include <QPainterPath>
+#include <QRadialGradient>
 #include <QRandomGenerator>
 #include <QTransform>
 #include <QtMath>
@@ -1354,4 +1357,344 @@ bool KisAiStrokeQualityUtils::isCastShadow(
 
     const qreal aspect = b.height() > 0 ? b.width() / b.height() : 1.0;
     return (area < canvasArea * 0.015 || aspect > 4.0 || aspect < 0.25);
+}
+
+// =========================================================================
+// 7. Advanced Artistic Fidelity & Inking Utilities (V5)
+// =========================================================================
+
+QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateCornerInkingDots(
+    const QVector<KisAiStrokeOperation> &operations,
+    const QSize &canvasSize)
+{
+    QVector<KisAiStrokeOperation> dots;
+    if (canvasSize.width() <= 0 || canvasSize.height() <= 0) return dots;
+
+    struct LineSegment {
+        QPointF p1;
+        QPointF p2;
+        QColor color;
+        qreal width;
+    };
+    QVector<LineSegment> segments;
+
+    for (const auto &op : operations) {
+        if (op.kind != KisAiStrokeOperation::Kind::Path || op.points.size() < 2) continue;
+        if (op.layer.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) != 0) continue;
+
+        const qreal baseW = op.brush.size > 0.0 ? op.brush.size : 0.004;
+        for (int i = 0; i < op.points.size() - 1; ++i) {
+            segments.append({op.points.at(i).pos, op.points.at(i + 1).pos, op.brush.color, baseW});
+        }
+    }
+
+    const qreal minDistSq = 0.015 * 0.015;
+    QVector<QPointF> dotCenters;
+
+    for (int i = 0; i < segments.size(); ++i) {
+        for (int j = i + 1; j < segments.size(); ++j) {
+            const auto &s1 = segments.at(i);
+            const auto &s2 = segments.at(j);
+
+            const qreal d1 = pointDistance(s1.p1, s2.p1);
+            const qreal d2 = pointDistance(s1.p1, s2.p2);
+            const qreal d3 = pointDistance(s1.p2, s2.p1);
+            const qreal d4 = pointDistance(s1.p2, s2.p2);
+
+            QPointF candidate;
+            bool found = false;
+            if (d1 < 0.008) { candidate = (s1.p1 + s2.p1) * 0.5; found = true; }
+            else if (d2 < 0.008) { candidate = (s1.p1 + s2.p2) * 0.5; found = true; }
+            else if (d3 < 0.008) { candidate = (s1.p2 + s2.p1) * 0.5; found = true; }
+            else if (d4 < 0.008) { candidate = (s1.p2 + s2.p2) * 0.5; found = true; }
+
+            if (found) {
+                bool tooClose = false;
+                for (const auto &c : dotCenters) {
+                    const qreal dx = c.x() - candidate.x();
+                    const qreal dy = c.y() - candidate.y();
+                    if (dx * dx + dy * dy < minDistSq) {
+                        tooClose = true;
+                        break;
+                    }
+                }
+                if (!tooClose && dotCenters.size() < 32) {
+                    dotCenters.append(candidate);
+                    KisAiStrokeOperation dotOp;
+                    dotOp.kind = KisAiStrokeOperation::Kind::Path;
+                    dotOp.id = QStringLiteral("corner_ink_%1").arg(dotCenters.size());
+                    dotOp.layer = QStringLiteral("Lineart");
+                    dotOp.points.append(KisAiStrokePoint(candidate.x(), candidate.y(), 1.0));
+                    dotOp.brush.color = s1.color;
+                    dotOp.brush.size = qBound<qreal>(0.003, s1.width * 1.5, 0.008);
+                    dotOp.brush.opacity = 0.85;
+                    dots.append(dotOp);
+                }
+            }
+        }
+    }
+
+    return dots;
+}
+
+QColor KisAiStrokeQualityUtils::calculateHarmonicLineColor(
+    const QColor &baseInkColor,
+    const QColor &underlyingFlatsColor,
+    bool isSkin)
+{
+    if (!underlyingFlatsColor.isValid() || underlyingFlatsColor.alpha() < 30) {
+        return baseInkColor;
+    }
+
+    int fH, fS, fV;
+    underlyingFlatsColor.getHsv(&fH, &fS, &fV);
+
+    int bH, bS, bV, bA;
+    baseInkColor.getHsv(&bH, &bS, &bV, &bA);
+
+    if (isSkin) {
+        const int outH = (fH >= 0 && fH <= 45) ? qBound(5, fH - 5, 20) : 10;
+        const int outS = qBound(90, qRound(fS * 1.6), 180);
+        const int outV = qBound(45, qRound(bV * 1.25), 85);
+        return QColor::fromHsv(outH, outS, outV, bA);
+    } else {
+        const int outH = fH >= 0 ? fH : bH;
+        const int outS = qBound(60, qRound(fS * 1.3), 200);
+        const int outV = qBound(35, qRound(fV * 0.30), 75);
+        return QColor::fromHsv(outH, outS, outV, bA);
+    }
+}
+
+QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateSkinSssFringe(
+    const KisAiStrokeOperation &shadingOp,
+    const QSize &canvasSize)
+{
+    Q_UNUSED(canvasSize);
+    QVector<KisAiStrokeOperation> out;
+    if (shadingOp.kind != KisAiStrokeOperation::Kind::Fill || shadingOp.polygon.size() < 3)
+        return out;
+
+    const QString lowerId = shadingOp.id.toLower();
+    const bool isSkin = lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face")) || lowerId.contains(QLatin1String("body"));
+    if (!isSkin) return out;
+
+    const qreal fringeWidth = 0.0035;
+    KisAiStrokeOperation fringeOp;
+    fringeOp.kind = KisAiStrokeOperation::Kind::Path;
+    fringeOp.id = shadingOp.id + QStringLiteral("_sss_fringe");
+    fringeOp.layer = QStringLiteral("Shading");
+    fringeOp.smooth = true;
+    fringeOp.closed = true;
+
+    for (const auto &pt : shadingOp.polygon) {
+        fringeOp.points.append(KisAiStrokePoint(pt.x(), pt.y(), 0.75));
+    }
+
+    fringeOp.brush.color = QColor(255, 95, 110);
+    fringeOp.brush.size = fringeWidth;
+    fringeOp.brush.opacity = 0.38;
+    fringeOp.blendMode = QStringLiteral("overlay");
+
+    out.append(fringeOp);
+    return out;
+}
+
+QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::beautifyFacialContour(
+    const QVector<KisAiStrokePoint> &rawPoints,
+    const QSize &canvasSize)
+{
+    if (rawPoints.size() < 7 || canvasSize.isEmpty()) {
+        return rawPoints;
+    }
+
+    return resampleEquidistant(rawPoints, qMax<qreal>(4.0, canvasSize.width() * 0.008), false);
+}
+
+QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateRimLightStrokes(
+    const QVector<KisAiStrokeOperation> &operations,
+    const QSize &canvasSize,
+    const QPointF &lightDir)
+{
+    QVector<KisAiStrokeOperation> out;
+    if (canvasSize.width() <= 0 || canvasSize.height() <= 0) return out;
+
+    const QPointF normLight = normalizeVector(lightDir.isNull() ? QPointF(0.707, -0.707) : lightDir);
+
+    for (const auto &op : operations) {
+        if (op.kind != KisAiStrokeOperation::Kind::Fill || op.polygon.size() < 4) continue;
+        if (op.layer.compare(QLatin1String("Flats"), Qt::CaseInsensitive) != 0) continue;
+
+        const auto &poly = op.polygon;
+        QVector<KisAiStrokePoint> rimPoints;
+        for (int i = 0; i < poly.size(); ++i) {
+            const QPointF p1 = poly.at(i);
+            const QPointF p2 = poly.at((i + 1) % poly.size());
+            const QPointF edge = p2 - p1;
+            const QPointF normal(-edge.y(), edge.x());
+            if (dotProduct(normalizeVector(normal), normLight) > 0.45) {
+                rimPoints.append(KisAiStrokePoint(p1.x(), p1.y(), 0.8));
+            } else if (!rimPoints.isEmpty()) {
+                if (rimPoints.size() >= 3) {
+                    KisAiStrokeOperation rimOp;
+                    rimOp.kind = KisAiStrokeOperation::Kind::Path;
+                    rimOp.id = QStringLiteral("rim_light_%1_%2").arg(op.id).arg(out.size());
+                    rimOp.layer = QStringLiteral("Highlights");
+                    rimOp.points = rimPoints;
+                    rimOp.smooth = true;
+                    rimOp.brush.profile = QStringLiteral("airbrush");
+                    rimOp.brush.color = QColor(220, 245, 255);
+                    rimOp.brush.size = 0.0035;
+                    rimOp.brush.opacity = 0.70;
+                    rimOp.blendMode = QStringLiteral("screen");
+                    out.append(rimOp);
+                }
+                rimPoints.clear();
+            }
+        }
+        if (rimPoints.size() >= 3 && out.size() < 12) {
+            KisAiStrokeOperation rimOp;
+            rimOp.kind = KisAiStrokeOperation::Kind::Path;
+            rimOp.id = QStringLiteral("rim_light_%1_%2").arg(op.id).arg(out.size());
+            rimOp.layer = QStringLiteral("Highlights");
+            rimOp.points = rimPoints;
+            rimOp.smooth = true;
+            rimOp.brush.profile = QStringLiteral("airbrush");
+            rimOp.brush.color = QColor(220, 245, 255);
+            rimOp.brush.size = 0.0035;
+            rimOp.brush.opacity = 0.70;
+            rimOp.blendMode = QStringLiteral("screen");
+            out.append(rimOp);
+        }
+    }
+
+    return out;
+}
+
+QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateProceduralBlush(
+    const QVector<KisAiStrokeOperation> &operations,
+    const QSize &canvasSize)
+{
+    QVector<KisAiStrokeOperation> out;
+    if (canvasSize.width() <= 0 || canvasSize.height() <= 0) return out;
+
+    QVector<QPointF> eyeCenters;
+    qreal avgEyeWidth = 0.08;
+    for (const auto &op : operations) {
+        if (op.kind == KisAiStrokeOperation::Kind::AnimeEye) {
+            eyeCenters.append(op.eyeCenter);
+            avgEyeWidth = qBound(0.04, op.eyeSize.width(), 0.16);
+        }
+    }
+
+    if (eyeCenters.isEmpty()) return out;
+
+    int idx = 0;
+    for (const auto &eyePt : eyeCenters) {
+        const qreal xOffset = (eyePt.x() < 0.5 ? -0.015 : 0.015);
+        const QPointF cheekCenter(eyePt.x() + xOffset, eyePt.y() + avgEyeWidth * 0.75);
+
+        KisAiStrokeOperation blushOp;
+        blushOp.kind = KisAiStrokeOperation::Kind::GradientFill;
+        blushOp.id = QStringLiteral("procedural_blush_%1").arg(++idx);
+        blushOp.layer = QStringLiteral("Shading");
+        blushOp.isRadial = true;
+        blushOp.gradientCenter = cheekCenter;
+        blushOp.gradientRadius = avgEyeWidth * 0.65;
+        blushOp.gradientColors = {QColor(255, 125, 145, 95), QColor(255, 125, 145, 0)};
+        blushOp.blendMode = QStringLiteral("normal");
+
+        const int verts = 12;
+        const qreal r = blushOp.gradientRadius;
+        for (int v = 0; v < verts; ++v) {
+            const qreal a = (2.0 * PI * v) / verts;
+            blushOp.polygon.append(QPointF(cheekCenter.x() + std::cos(a) * r,
+                                          cheekCenter.y() + std::sin(a) * (r * 0.75)));
+        }
+
+        out.append(blushOp);
+    }
+
+    return out;
+}
+
+QImage KisAiStrokeQualityUtils::generateFilmGrain(
+    const QSize &size,
+    qreal intensity,
+    quint32 seed)
+{
+    if (size.isEmpty()) return QImage();
+    QImage grain(size, QImage::Format_ARGB32_Premultiplied);
+    QRandomGenerator rng(seed);
+
+    const int alpha = qRound(qBound<qreal>(0.02, intensity, 0.25) * 255.0);
+    for (int y = 0; y < size.height(); ++y) {
+        auto *scanLine = reinterpret_cast<QRgb*>(grain.scanLine(y));
+        for (int x = 0; x < size.width(); ++x) {
+            const int noise = rng.bounded(256);
+            scanLine[x] = qRgba(noise, noise, noise, alpha);
+        }
+    }
+
+    return grain;
+}
+
+QImage KisAiStrokeQualityUtils::generateVignetteImage(
+    const QSize &size,
+    qreal strength)
+{
+    if (size.isEmpty()) return QImage();
+    QImage vignette(size, QImage::Format_ARGB32_Premultiplied);
+    vignette.fill(Qt::transparent);
+
+    QPainter p(&vignette);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const QPointF center(size.width() * 0.5, size.height() * 0.5);
+    const qreal radius = std::hypot(center.x(), center.y());
+
+    QRadialGradient grad(center, radius);
+    grad.setColorAt(0.0, QColor(0, 0, 0, 0));
+    grad.setColorAt(0.55, QColor(0, 0, 0, 0));
+    const int maxAlpha = qRound(qBound<qreal>(0.05, strength, 0.40) * 255.0);
+    grad.setColorAt(1.0, QColor(0, 0, 0, maxAlpha));
+
+    p.setBrush(grad);
+    p.setPen(Qt::NoPen);
+    p.drawRect(QRect(QPoint(0, 0), size));
+
+    return vignette;
+}
+
+QImage KisAiStrokeQualityUtils::generateAmbientOverlay(
+    const QSize &size,
+    int artStyle,
+    int timeOfDay)
+{
+    if (size.isEmpty()) return QImage();
+    QImage overlay(size, QImage::Format_ARGB32_Premultiplied);
+    overlay.fill(Qt::transparent);
+
+    QPainter p(&overlay);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    QLinearGradient grad(0, 0, 0, size.height());
+    if (timeOfDay == 1) { // Sunset
+        grad.setColorAt(0.0, QColor(255, 140, 60, 45));
+        grad.setColorAt(0.6, QColor(220, 80, 120, 35));
+        grad.setColorAt(1.0, QColor(60, 30, 80, 50));
+    } else if (timeOfDay == 2 || artStyle == 5) { // Night / CyberNeon
+        grad.setColorAt(0.0, QColor(20, 60, 120, 40));
+        grad.setColorAt(0.7, QColor(80, 30, 90, 30));
+        grad.setColorAt(1.0, QColor(10, 10, 30, 50));
+    } else { // Day / Anime standard
+        grad.setColorAt(0.0, QColor(255, 248, 220, 35));
+        grad.setColorAt(0.5, QColor(255, 255, 255, 0));
+        grad.setColorAt(1.0, QColor(70, 90, 140, 25));
+    }
+
+    p.setBrush(grad);
+    p.setPen(Qt::NoPen);
+    p.drawRect(QRect(QPoint(0, 0), size));
+
+    return overlay;
 }
