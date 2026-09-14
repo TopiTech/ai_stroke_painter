@@ -72,12 +72,17 @@ qreal edgeDensityOfTile(const QImage &image, const QRect &tile)
 
 QImage cropAndUpscale(const QImage &canvas, const QRectF &region)
 {
+    if (canvas.isNull() || canvas.width() <= 0 || canvas.height() <= 0)
+        return {};
+
     const QRect src(
         qBound(0, qRound(region.left() * canvas.width()), canvas.width() - 1),
         qBound(0, qRound(region.top() * canvas.height()), canvas.height() - 1),
         qMax(2, qRound(region.width() * canvas.width())),
         qMax(2, qRound(region.height() * canvas.height())));
     const QImage cropped = canvas.copy(src.intersected(canvas.rect()));
+    if (cropped.isNull() || cropped.width() <= 0 || cropped.height() <= 0)
+        return {};
     const int minSide = qMin(cropped.width(), cropped.height());
     if (minSide >= 384)
         return cropped;
@@ -130,31 +135,36 @@ QVector<KisAiCriticCrop> KisAiVisionCritic::selectCrops(
     if (canvas.isNull() || maxCrops <= 0)
         return crops;
 
+    // Ensure 32-bit scanline access safety across arbitrary input formats.
+    const QImage safeCanvas = (canvas.format() == QImage::Format_ARGB32 || canvas.format() == QImage::Format_RGB32)
+        ? canvas
+        : canvas.convertToFormat(QImage::Format_ARGB32);
+
     // 1. Face crop (highest priority when a face exists).
     if (faceBox.isValid() && faceBox.width() > 0.01) {
         KisAiCriticCrop face;
         face.region = faceBox.intersected(QRectF(0, 0, 1, 1));
         face.reason = QStringLiteral("face");
-        face.image = cropAndUpscale(canvas, face.region);
+        face.image = cropAndUpscale(safeCanvas, face.region);
         crops.append(face);
     }
 
     // 2. Edge-density winner among the 4x4 grid, excluding the face box.
-    if (canvas.width() >= 64 && canvas.height() >= 64) {
-        const int tw = canvas.width() / GRID;
-        const int th = canvas.height() / GRID;
+    if (safeCanvas.width() >= 64 && safeCanvas.height() >= 64) {
+        const int tw = safeCanvas.width() / GRID;
+        const int th = safeCanvas.height() / GRID;
         qreal bestScore = -1.0;
         QRectF bestTile;
         for (int gy = 0; gy < GRID; ++gy) {
             for (int gx = 0; gx < GRID; ++gx) {
                 const QRect tile(gx * tw, gy * th, tw, th);
-                const QRectF norm(qreal(tile.left()) / canvas.width(),
-                                  qreal(tile.top()) / canvas.height(),
-                                  qreal(tile.width()) / canvas.width(),
-                                  qreal(tile.height()) / canvas.height());
+                const QRectF norm(qreal(tile.left()) / safeCanvas.width(),
+                                  qreal(tile.top()) / safeCanvas.height(),
+                                  qreal(tile.width()) / safeCanvas.width(),
+                                  qreal(tile.height()) / safeCanvas.height());
                 if (faceBox.isValid() && faceBox.intersects(norm))
                     continue;
-                const qreal score = edgeDensityOfTile(canvas, tile);
+                const qreal score = edgeDensityOfTile(safeCanvas, tile);
                 if (score > bestScore) {
                     bestScore = score;
                     bestTile = norm;
@@ -165,7 +175,7 @@ QVector<KisAiCriticCrop> KisAiVisionCritic::selectCrops(
             KisAiCriticCrop detail;
             detail.region = bestTile;
             detail.reason = QStringLiteral("edge_density");
-            detail.image = cropAndUpscale(canvas, bestTile);
+            detail.image = cropAndUpscale(safeCanvas, bestTile);
             crops.append(detail);
         }
     }
@@ -442,13 +452,14 @@ qreal KisAiVisionCritic::psnr(const QImage &a, const QImage &b)
         const QRgb *rowA = reinterpret_cast<const QRgb *>(ia.constScanLine(y));
         const QRgb *rowB = reinterpret_cast<const QRgb *>(ib.constScanLine(y));
         for (int x = 0; x < ia.width(); ++x) {
-            const QColor ca(rowA[x]);
-            const QColor cb(rowB[x]);
-            const int dr = ca.red() - cb.red();
-            const int dg = ca.green() - cb.green();
-            const int db = ca.blue() - cb.blue();
-            sumSq += qreal(dr * dr + dg * dg + db * db);
-            count += 3;
+            const QRgb pxA = rowA[x];
+            const QRgb pxB = rowB[x];
+            const int dr = qRed(pxA) - qRed(pxB);
+            const int dg = qGreen(pxA) - qGreen(pxB);
+            const int db = qBlue(pxA) - qBlue(pxB);
+            const int da = qAlpha(pxA) - qAlpha(pxB);
+            sumSq += qreal(dr * dr + dg * dg + db * db + da * da);
+            count += 4;
         }
     }
     if (count == 0 || sumSq <= 0.0)

@@ -218,6 +218,7 @@ private:
     QComboBox *m_jsonModeCombo {nullptr};
     QComboBox *m_visionQualityCombo {nullptr};
     QComboBox *m_strokeProtocolCombo {nullptr};
+    QComboBox *m_qualityModeCombo {nullptr};
     QCheckBox *m_compositionPlanCheck {nullptr};
     QCheckBox *m_suppressParticlesCheck {nullptr};
     QComboBox *m_reasoningEffortCombo {nullptr};

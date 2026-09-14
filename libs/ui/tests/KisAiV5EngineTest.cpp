@@ -30,6 +30,7 @@ KisAiSceneSpec specFromJson(const QString &json)
     QStringList warnings;
     const bool ok = KisAiSceneSpecCodec::parseSceneSpec(json.toUtf8(), &spec, &err, &warnings);
     Q_ASSERT(ok);
+    Q_UNUSED(ok);
     Q_UNUSED(err);
     Q_UNUSED(warnings);
     return spec;
@@ -313,6 +314,12 @@ void KisAiV5EngineTest::testRigFacePartsGenerated()
     lids.eyeLeft.doubleLid = true;
     lids.eyeRight.doubleLid = true;
     QCOMPARE(KisAiRigLibrary::doubleLidOps(lids).size(), 2);
+    // Asymmetric lid test: left only enabled
+    lids.eyeLeft.doubleLid = true;
+    lids.eyeRight.doubleLid = false;
+    const QVector<KisAiStrokeOperation> leftOnly = KisAiRigLibrary::doubleLidOps(lids);
+    QCOMPARE(leftOnly.size(), 1);
+    QCOMPARE(leftOnly.first().id, QStringLiteral("rig_eye_l_lid"));
     lids.eyeLeft.doubleLid = false;
     lids.eyeRight.doubleLid = false;
     QVERIFY(KisAiRigLibrary::doubleLidOps(lids).isEmpty());
@@ -505,6 +512,12 @@ void KisAiV5EngineTest::testCriticCropSelectionDeterministic()
 
     // Crop budget respected.
     QCOMPARE(KisAiVisionCritic::selectCrops(canvas, faceBox, prior, 2).size(), 2);
+
+    // Safety regression tests: null canvas and non-32-bit image formats
+    QVERIFY(KisAiVisionCritic::selectCrops(QImage(), faceBox, prior, 4).isEmpty());
+    const QImage rgb888Canvas = canvas.convertToFormat(QImage::Format_RGB888);
+    const QVector<KisAiCriticCrop> rgb888Crops = KisAiVisionCritic::selectCrops(rgb888Canvas, faceBox, prior, 4);
+    QCOMPARE(rgb888Crops.size(), crops1.size());
 }
 
 void KisAiV5EngineTest::testCritiqueParseAndMerge()
@@ -553,6 +566,14 @@ void KisAiV5EngineTest::testPsnrAndConvergence()
 
     QVERIFY(!KisAiVisionCritic::hasConverged(10.0, 15.0)); // improving
     QVERIFY(KisAiVisionCritic::hasConverged(10.0, 11.0));  // stalled
+
+    // Alpha channel sensitivity: transparent canvas vs solid black must differ significantly
+    QImage transparentImg(64, 64, QImage::Format_ARGB32);
+    transparentImg.fill(QColor(0, 0, 0, 0));
+    QImage solidBlackImg(64, 64, QImage::Format_ARGB32);
+    solidBlackImg.fill(QColor(0, 0, 0, 255));
+    const qreal alphaDiffPsnr = KisAiVisionCritic::psnr(transparentImg, solidBlackImg);
+    QVERIFY(alphaDiffPsnr < 15.0); // Major difference detected via alpha channel, not falsely 60.0 dB
 }
 
 // ========================================================================

@@ -7,22 +7,24 @@
 
 #include "KisAiStrokeProgram.h"
 
+#include <atomic>
+
 namespace
 {
-KisAiModelRouter::QualityMode s_qualityMode = KisAiModelRouter::QualityMode::Quality;
+std::atomic<KisAiModelRouter::QualityMode> s_qualityMode{KisAiModelRouter::QualityMode::Quality};
 
 bool isKnownFlagship(const QString &model)
 {
     // Best-effort classification of current-generation flagship families.
     // Unknown models keep the user's explicit selection unchanged.
-    const QString m = model.toLower();
-    if (m.isEmpty())
+    const QString modelLower = model.toLower();
+    if (modelLower.isEmpty())
         return false;
-    return m.startsWith(QLatin1String("gpt-5"))
-        || m.startsWith(QLatin1String("o3")) || m.startsWith(QLatin1String("o4"))
-        || m.contains(QLatin1String("opus")) || m.contains(QLatin1String("sonnet"))
-        || m.contains(QLatin1String("gemini-2.5")) || m.contains(QLatin1String("gemini-3"))
-        || m.contains(QLatin1String("deepseek-v3")) || m.contains(QLatin1String("qwen3-max"));
+    return modelLower.startsWith(QLatin1String("gpt-5"))
+        || modelLower.startsWith(QLatin1String("o3")) || modelLower.startsWith(QLatin1String("o4"))
+        || modelLower.contains(QLatin1String("opus")) || modelLower.contains(QLatin1String("sonnet"))
+        || modelLower.contains(QLatin1String("gemini-2.5")) || modelLower.contains(QLatin1String("gemini-3"))
+        || modelLower.contains(QLatin1String("deepseek-v3")) || modelLower.contains(QLatin1String("qwen3-max"));
 }
 
 QString flagshipFallbackModel()
@@ -39,12 +41,12 @@ QString midTierModel()
 
 void KisAiModelRouter::setQualityMode(QualityMode mode)
 {
-    s_qualityMode = mode;
+    s_qualityMode.store(mode, std::memory_order_relaxed);
 }
 
 KisAiModelRouter::QualityMode KisAiModelRouter::qualityMode()
 {
-    return s_qualityMode;
+    return s_qualityMode.load(std::memory_order_relaxed);
 }
 
 KisAiModelRouter::StagePlan KisAiModelRouter::planFor(Stage stage, const QString &preferredModel)

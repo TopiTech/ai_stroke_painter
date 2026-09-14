@@ -247,10 +247,15 @@ kis_add_test(KisAiIllustrationRendererTest.cpp
     TEST_NAME KisAiIllustrationRendererTest
     LINK_LIBRARIES kritaui kritatestsdk
 )
+kis_add_test(KisAiV5EngineTest.cpp
+    TEST_NAME KisAiV5EngineTest
+    LINK_LIBRARIES kritaui kritatestsdk
+)
 set_tests_properties(
     libs-ui-KisAiStrokeProgramTest
     libs-ui-KisAiStrokeRendererTest
     libs-ui-KisAiIllustrationRendererTest
+    libs-ui-KisAiV5EngineTest
     PROPERTIES
         LABELS "AIStroke"
-        TIMEOUT 60)
+        TIMEOUT 120)

@@ -15,9 +15,9 @@ namespace
 {
 QString normalizeEnum(const QString &value, const QStringList &allowed, const QString &fallback)
 {
-    const QString v = value.trimmed().toLower();
-    if (allowed.contains(v))
-        return v;
+    QString lowerVal = value.trimmed().toLower();
+    if (allowed.contains(lowerVal))
+        return lowerVal;
     return fallback;
 }
 

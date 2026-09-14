@@ -21,7 +21,6 @@ namespace
 {
 constexpr qreal PI = 3.14159265358979323846;
 constexpr qreal DEG2RAD = PI / 180.0;
-constexpr qreal RAD2DEG = 180.0 / PI;
 
 qreal clamp01(qreal v)
 {

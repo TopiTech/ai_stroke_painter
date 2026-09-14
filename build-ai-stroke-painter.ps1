@@ -1,4 +1,4 @@
-﻿#requires -Version 7.0
+#requires -Version 7.0
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
@@ -36,7 +36,7 @@ if ($LASTEXITCODE -ne 0) {
 # 実行ファイル名は ai-stroke-painter ですが、CMake のアプリケーションターゲット名は krita です。
 Write-Host 'Building the application and AI Stroke Painter tests...' -ForegroundColor Cyan
 cmake --build $buildDir `
-    --target krita KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest `
+    --target krita KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest KisAiV5EngineTest `
     --parallel
 
 if ($LASTEXITCODE -ne 0) {

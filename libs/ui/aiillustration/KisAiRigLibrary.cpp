@@ -338,7 +338,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::doubleLidOps(const KisAiRigParame
     };
 
     for (const auto &eye : eyes) {
-        if (!(params.eyeLeft.doubleLid && params.eyeRight.doubleLid))
+        const bool hasLid = (std::strcmp(eye.side, "l") == 0) ? params.eyeLeft.doubleLid : params.eyeRight.doubleLid;
+        if (!hasLid)
             continue;
         QVector<KisAiStrokePoint> pts;
         const int steps = 5;

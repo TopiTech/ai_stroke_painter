@@ -559,12 +559,15 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::backgroundForSpec(
 
 QVector<KisAiStrokeOperation> KisAiLayoutEngine::clothingForSpec(
     const KisAiSceneSpec &spec,
-    const QPointF &hc,
-    qreal hw,
-    qreal hh,
+    const QPointF &headCenter,
+    qreal headWidth,
+    qreal headHeight,
     const QSize &canvasSize)
 {
     Q_UNUSED(canvasSize);
+    const QPointF &hc = headCenter;
+    const qreal hw = headWidth;
+    const qreal hh = headHeight;
     QVector<KisAiStrokeOperation> ops;
     const QColor skin = spec.head.skinTone;
     const QString style = spec.clothing.style;

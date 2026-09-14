@@ -11,6 +11,7 @@
 #include "KisAiStrokeRenderer.h"
 #include "KisAiSceneSpec.h"
 #include "KisAiLayoutEngine.h"
+#include "KisAiModelRouter.h"
 #include "KisDocument.h"
 #include "KisMainWindow.h"
 #include "KisPart.h"
@@ -694,6 +695,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_apiKeyEditor->setEchoMode(QLineEdit::Password);
     m_apiKeyEditor->setPlaceholderText(i18n("API キー (sk-...)"));
     m_apiKeyEditor->setAccessibleName(i18n("API key"));
+    connect(m_endpointEditor, &QLineEdit::returnPressed, this, &KisAiIllustrationDocker::generateIllustration);
+    connect(m_modelEditor, &QLineEdit::returnPressed, this, &KisAiIllustrationDocker::generateIllustration);
+    connect(m_apiKeyEditor, &QLineEdit::returnPressed, this, &KisAiIllustrationDocker::generateIllustration);
 
     m_saveApiKeyCheck = new QCheckBox(i18n("🔑 API キーをこの端末に保存する"), m_detailsContainer);
     m_saveApiKeyCheck->setChecked(false);
@@ -814,17 +818,34 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_reasoningEffortCombo->setAccessibleName(i18n("Reasoning effort"));
     m_reasoningEffortCombo->setToolTip(i18n("推論モデル（o1, o3, etc.）の reasoning_effort レベル"));
 
+    // V5 Model Router: Quality preset mode
+    m_qualityModeCombo = new QComboBox(m_detailsContainer);
+    m_qualityModeCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    m_qualityModeCombo->setMinimumContentsLength(10);
+    m_qualityModeCombo->addItem(i18n("⚡ 高速 (Fast) - 低遅延・critic 1周"), static_cast<int>(KisAiModelRouter::QualityMode::Fast));
+    m_qualityModeCombo->addItem(i18n("🎯 標準 (Quality) - フラッグシップ・critic 2周"), static_cast<int>(KisAiModelRouter::QualityMode::Quality));
+    m_qualityModeCombo->addItem(i18n("👑 最高峰 (Max) - 深層思考・多重批評・N-best 5案"), static_cast<int>(KisAiModelRouter::QualityMode::Max));
+    m_qualityModeCombo->setAccessibleName(i18n("AI Quality preset"));
+    m_qualityModeCombo->setToolTip(i18n("V5 Model Router 品質モード: ステージごとのモデル選択、温度、思考時間、および批評ラウンド予算を設定します。"));
+    m_qualityModeCombo->setCurrentIndex(static_cast<int>(KisAiModelRouter::qualityMode()));
+    connect(m_qualityModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
+        const auto mode = static_cast<KisAiModelRouter::QualityMode>(m_qualityModeCombo->itemData(index).toInt());
+        KisAiModelRouter::setQualityMode(mode);
+    });
+
     m_customInstructionsEdit = new QPlainTextEdit(m_detailsContainer);
     m_customInstructionsEdit->setTabChangesFocus(true);
     m_customInstructionsEdit->setAccessibleName(i18n("Custom instructions"));
-    m_customInstructionsEdit->setPlaceholderText(i18n("システムプロンプトに追加する独自の作画指示・画風・禁止事項"));
+    m_customInstructionsEdit->setPlaceholderText(i18n("システムプロンプトに追加する独自の作画指示・画風・禁止事項 (Ctrl+Enter で生成)"));
     m_customInstructionsEdit->setMaximumHeight(70);
+    m_customInstructionsEdit->installEventFilter(this);
 
     remoteForm->addRow(i18n("エンドポイント"), m_endpointEditor);
     remoteForm->addRow(i18n("モデル"), m_modelEditor);
     remoteForm->addRow(i18n("API キー"), m_apiKeyEditor);
     remoteForm->addRow(QString(), m_saveApiKeyCheck);
     remoteForm->addRow(m_strokeBudgetLabel, m_strokeBudgetSpin);
+    remoteForm->addRow(i18n("品質モード"), m_qualityModeCombo);
     remoteForm->addRow(i18n("Temperature"), m_temperatureSpin);
     remoteForm->addRow(i18n("Top-P"), m_topPSpin);
     remoteForm->addRow(i18n("トラッピング幅"), m_trappingPxSpin);
@@ -1239,7 +1260,7 @@ KisAiIllustrationDocker::~KisAiIllustrationDocker()
 
 bool KisAiIllustrationDocker::eventFilter(QObject *watched, QEvent *event)
 {
-    if (watched == m_promptEditor && event->type() == QEvent::KeyPress) {
+    if ((watched == m_promptEditor || watched == m_customInstructionsEdit) && event->type() == QEvent::KeyPress) {
         auto *keyEvent = static_cast<QKeyEvent *>(event);
         if ((keyEvent->modifiers() & Qt::ControlModifier) &&
             (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)) {
@@ -3709,6 +3730,15 @@ void KisAiIllustrationDocker::loadSettings()
     if (m_customInstructionsEdit) {
         m_customInstructionsEdit->setPlainText(settings.value(QStringLiteral("AIIllustration/customInstructions"), QString()).toString());
     }
+    if (m_qualityModeCombo) {
+        const int qmVal = settings.value(QStringLiteral("AIIllustration/qualityMode"), static_cast<int>(KisAiModelRouter::QualityMode::Quality)).toInt();
+        const auto qm = static_cast<KisAiModelRouter::QualityMode>(qBound(0, qmVal, 2));
+        KisAiModelRouter::setQualityMode(qm);
+        const int qmIdx = m_qualityModeCombo->findData(static_cast<int>(qm));
+        if (qmIdx >= 0) {
+            m_qualityModeCombo->setCurrentIndex(qmIdx);
+        }
+    }
 
     const int savedUiMode = settings.value(QStringLiteral("AIIllustration/uiMode"), 0).toInt();
     m_uiMode = (savedUiMode == 1) ? UiMode::Pro : UiMode::Simple;
@@ -3802,6 +3832,7 @@ void KisAiIllustrationDocker::saveSettings()
     }
     if (m_visionQualityCombo) settings.setValue(QStringLiteral("AIIllustration/visionQuality"), m_visionQualityCombo->currentData().toString());
     if (m_strokeProtocolCombo) settings.setValue(QStringLiteral("AIIllustration/strokeProtocol"), m_strokeProtocolCombo->currentData().toInt());
+    if (m_qualityModeCombo) settings.setValue(QStringLiteral("AIIllustration/qualityMode"), m_qualityModeCombo->currentData().toInt());
     if (m_reasoningEffortCombo) settings.setValue(QStringLiteral("AIIllustration/reasoningEffort"), m_reasoningEffortCombo->currentData().toString());
     if (m_customInstructionsEdit) settings.setValue(QStringLiteral("AIIllustration/customInstructions"), m_customInstructionsEdit->toPlainText());
     settings.setValue(QStringLiteral("AIIllustration/uiMode"), (m_uiMode == UiMode::Pro) ? 1 : 0);
