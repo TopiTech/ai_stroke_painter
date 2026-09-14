@@ -9,7 +9,11 @@
 #include <QDir>
 #include <QElapsedTimer>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPointF>
 #include <QPolygonF>
 #include <QSet>
