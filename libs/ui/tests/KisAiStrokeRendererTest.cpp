@@ -2656,4 +2656,69 @@ void KisAiStrokeRendererTest::testLintKeepsCanvasCrossingStrokesAndFullBleedFill
     QVERIFY(centerPixel.alpha() > 100);
 }
 
+void KisAiStrokeRendererTest::testShadingExcludesWatercolorFringe()
+{
+    const QSize canvasSize(256, 256);
+    KisAiStrokeProgram prog;
+    prog.canvasSize = canvasSize;
+
+    // A flats base so shading has something to clip to
+    KisAiStrokeOperation flats;
+    flats.kind = KisAiStrokeOperation::Kind::Fill;
+    flats.id = QStringLiteral("base_flats");
+    flats.layer = QStringLiteral("Flats");
+    flats.brush.color = QColor(240, 210, 195);
+    flats.polygon = {QPointF(0.1, 0.1), QPointF(0.9, 0.1), QPointF(0.9, 0.9), QPointF(0.1, 0.9)};
+    prog.operations.append(flats);
+
+    // Shading with watercolor profile - should NOT have dark contour fringe pen
+    KisAiStrokeOperation shading;
+    shading.kind = KisAiStrokeOperation::Kind::Fill;
+    shading.id = QStringLiteral("face_shadow");
+    shading.layer = QStringLiteral("Shading");
+    shading.brush.profile = QStringLiteral("watercolor");
+    shading.brush.color = QColor(180, 100, 90, 120);
+    shading.fillStyle = QStringLiteral("wash");
+    shading.polygon = {QPointF(0.3, 0.3), QPointF(0.7, 0.3), QPointF(0.7, 0.7), QPointF(0.3, 0.7)};
+    prog.operations.append(shading);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvasSize);
+    QVERIFY(!img.isNull());
+
+    // Shading inside must be rendered smoothly without extreme boundary spikes
+    const QColor insideColor = img.pixelColor(128, 128);
+    QVERIFY(insideColor.red() > 50); // Not crushed to pitch black
+}
+
+void KisAiStrokeRendererTest::testHairClumpStrandConvergence()
+{
+    KisAiStrokeOperation ribbonOp;
+    ribbonOp.kind = KisAiStrokeOperation::Kind::Ribbon;
+    ribbonOp.id = QStringLiteral("converging_hair");
+    ribbonOp.layer = QStringLiteral("Flats");
+    ribbonOp.spine = {QPointF(0.5, 0.1), QPointF(0.52, 0.4), QPointF(0.51, 0.7), QPointF(0.50, 0.9)};
+    ribbonOp.widthStart = 0.04;
+    ribbonOp.widthMid = 0.03;
+    ribbonOp.widthEnd = 0.008;
+    ribbonOp.brush.color = QColor(100, 120, 180);
+
+    const auto clump = KisAiStrokeQualityUtils::synthesizeHairClump(ribbonOp, QSize(500, 500), 42);
+    QCOMPARE(clump.mainMass.layer, QStringLiteral("Flats"));
+    QVERIFY(clump.mainMass.brush.opacity >= 0.90);
+    QVERIFY(clump.strands.size() >= 4);
+
+    // Verify strands converge: distance between leftmost and rightmost strand at tip must be smaller than at root
+    if (clump.strands.size() >= 2) {
+        const auto &leftStrand = clump.strands.first().points;
+        const auto &rightStrand = clump.strands.last().points;
+        QVERIFY(leftStrand.size() >= 2 && rightStrand.size() >= 2);
+
+        const qreal rootDist = std::hypot(leftStrand.first().pos.x() - rightStrand.first().pos.x(),
+                                          leftStrand.first().pos.y() - rightStrand.first().pos.y());
+        const qreal tipDist = std::hypot(leftStrand.last().pos.x() - rightStrand.last().pos.x(),
+                                         leftStrand.last().pos.y() - rightStrand.last().pos.y());
+        QVERIFY(tipDist < rootDist); // Tip must be narrower than root (convergence)
+    }
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

@@ -720,10 +720,10 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_temperatureSpin = new QDoubleSpinBox(m_detailsContainer);
     m_temperatureSpin->setRange(0.0, 2.0);
     m_temperatureSpin->setSingleStep(0.05);
-    m_temperatureSpin->setValue(0.50); // A6: Stable 0.50 default for geometry precision
+    m_temperatureSpin->setValue(0.35); // Stable 0.35 default for high-precision geometry & anime fidelity
     m_temperatureSpin->setDecimals(2);
     m_temperatureSpin->setAccessibleName(i18n("Sampling temperature"));
-    m_temperatureSpin->setToolTip(i18n("サンプリング温度 (0.0=確定的/構造維持, 0.5=推奨安定, 1.0=創造的)"));
+    m_temperatureSpin->setToolTip(i18n("サンプリング温度 (0.0=確定的/構造維持, 0.35=推奨安定・高精度幾何, 0.70=創造的)"));
 
     m_topPSpin = new QDoubleSpinBox(m_detailsContainer);
     m_topPSpin->setRange(0.05, 1.0);

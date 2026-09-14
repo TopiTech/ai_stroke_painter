@@ -4194,6 +4194,20 @@ void KisAiStrokeProgramTest::testCharacterDomainArtDirectionSubstitutions()
     QVERIFY(!directiveDefault.contains(QStringLiteral("%2")));
 }
 
+void KisAiStrokeProgramTest::testNeutralSchemaExampleNoSpecificAnatomy()
+{
+    const QString schemaSection = KisAiStrokeProgramCodec::buildOutputSchemaExampleSection();
+    // Verify that the schema example does NOT contain specific character anatomy anchors that cause copy-paste distortion
+    QVERIFY(!schemaSection.contains(QStringLiteral("jaw_contour")));
+    QVERIFY(!schemaSection.contains(QStringLiteral("face_skin")));
+    QVERIFY(!schemaSection.contains(QStringLiteral("hero_left_eye")));
+    QVERIFY(!schemaSection.contains(QStringLiteral("hair_bangs")));
+    // Verify that neutral geometric primitives are present instead
+    QVERIFY(schemaSection.contains(QStringLiteral("subject_silhouette")));
+    QVERIFY(schemaSection.contains(QStringLiteral("subject_shadow")));
+    QVERIFY(schemaSection.contains(QStringLiteral("primary_contour")));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

@@ -86,6 +86,8 @@ private Q_SLOTS:
     void testProceduralMacroExpansionGuidance();
     void testLintDropsNonFiniteGeometry();
     void testLintKeepsCanvasCrossingStrokesAndFullBleedFills();
+    void testShadingExcludesWatercolorFringe();
+    void testHairClumpStrandConvergence();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

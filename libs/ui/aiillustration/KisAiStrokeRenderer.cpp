@@ -371,7 +371,8 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
             QImage formImage;
             if (!formOps.isEmpty()) {
                 formImage = renderOperationsToImage(formOps, size, QPainterPath(), globalSilhouettes);
-                applySoftEdgeDiffusion(formImage, 4);
+                const int formDiffusionRadius = qMax(4, qRound(qMin(size.width(), size.height()) * 0.010));
+                applySoftEdgeDiffusion(formImage, formDiffusionRadius);
             } else {
                 formImage = QImage(size, QImage::Format_ARGB32_Premultiplied);
                 formImage.fill(Qt::transparent);
@@ -670,7 +671,8 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
             QImage formImage;
             if (!formOps.isEmpty()) {
                 formImage = renderOperationsToImage(formOps, canvasSize, QPainterPath(), globalSilhouettes);
-                applySoftEdgeDiffusion(formImage, 4);
+                const int formDiffusionRadius = qMax(4, qRound(qMin(canvasSize.width(), canvasSize.height()) * 0.010));
+                applySoftEdgeDiffusion(formImage, formDiffusionRadius);
             } else {
                 formImage = QImage(canvasSize, QImage::Format_ARGB32_Premultiplied);
                 formImage.fill(Qt::transparent);
@@ -1628,14 +1630,6 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
 
     QPolygonF poly = scalePolygon(op.polygon, canvasSize);
 
-    // Smooth jagged polygon vertices to eliminate raw low-poly faceting
-    if (poly.size() >= 3) {
-        poly = KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(poly, 135.0, 4);
-    }
-
-    QColor color = op.brush.color;
-    color.setAlphaF(qBound<qreal>(0.0, op.brush.opacity * color.alphaF(), 1.0));
-
     const QString lowerId = op.id.toLower();
     const bool isBlush = lowerId.contains(QLatin1String("blush")) || lowerId.contains(QLatin1String("cheek"));
     const bool isHair = lowerId.contains(QLatin1String("hair"));
@@ -1644,6 +1638,16 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
 
     const QString normLayer = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
     const bool isShading = (normLayer == QLatin1String("Shading"));
+
+    // Smooth jagged polygon vertices to eliminate raw low-poly faceting
+    if (poly.size() >= 3) {
+        const qreal angleThreshold = isShading ? 150.0 : 135.0;
+        const int iterations = isShading ? 6 : 4;
+        poly = KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(poly, angleThreshold, iterations);
+    }
+
+    QColor color = op.brush.color;
+    color.setAlphaF(qBound<qreal>(0.0, op.brush.opacity * color.alphaF(), 1.0));
 
     // Phase 1: Special treatment for Blush: soft radial wash instead of harsh circular boundary
     if (isBlush) {
@@ -1691,30 +1695,27 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
         QLinearGradient grad(gradStart, gradEnd);
 
         if (isSkin && isShading) {
-            // SSS (Subsurface Scattering): Warm coral/peach rim at terminator boundary prevents muddy dead grey skin
-            QColor sssWarm = color.lighter(130);
-            sssWarm.setRed(qBound(0, sssWarm.red() + 45, 255));
-            sssWarm.setGreen(qBound(0, sssWarm.green() + 12, 255));
-            sssWarm.setAlphaF(color.alphaF() * 0.45);
+            // Soft anime form shadow: gentle warm transition, preventing dark mottled bruising
+            QColor sssWarm = color.lighter(120);
+            sssWarm.setAlphaF(color.alphaF() * 0.30);
 
             QColor coreShadow = color;
-            coreShadow.setAlphaF(color.alphaF() * 0.95);
+            coreShadow.setAlphaF(color.alphaF() * 0.65);
 
-            QColor ambientBounce = color.lighter(115);
-            ambientBounce.setAlphaF(color.alphaF() * 0.65);
+            QColor ambientBounce = color.lighter(110);
+            ambientBounce.setAlphaF(color.alphaF() * 0.50);
 
             grad.setColorAt(0.0, sssWarm);       // Soft warm terminator transition
-            grad.setColorAt(0.35, coreShadow);   // Peak form shadow density
-            grad.setColorAt(0.80, coreShadow);
-            grad.setColorAt(1.0, ambientBounce); // Subtle ambient bounce fill light
+            grad.setColorAt(0.50, coreShadow);   // Moderate shadow density
+            grad.setColorAt(1.0, ambientBounce); // Gentle ambient fill light
         } else if (isShading) {
-            // General Volumetric Form Shadow with natural falloff and subtle bounce reflection
+            // General Volumetric Form Shadow with natural falloff and bounded density
             QColor colLight = color;
-            colLight.setAlphaF(color.alphaF() * 0.40);
+            colLight.setAlphaF(color.alphaF() * 0.30);
             QColor colCore = color;
-            colCore.setAlphaF(color.alphaF() * 0.95);
+            colCore.setAlphaF(color.alphaF() * 0.70);
             QColor colBounce = color;
-            colBounce.setAlphaF(color.alphaF() * 0.70);
+            colBounce.setAlphaF(color.alphaF() * 0.50);
 
             grad.setColorAt(0.0, colLight);
             grad.setColorAt(0.5, colCore);
@@ -1735,9 +1736,10 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
         painter.drawPolygon(poly);
 
         // Artistic Watercolor Wet-Edge Fringe: water pooling along paint boundaries
+        // CRITICAL: Exclude Shading layer to prevent ugly, stained-glass contour lines and mottled skin bruising
         const bool isWatercolor = (op.brush.profile.compare(QLatin1String("watercolor"), Qt::CaseInsensitive) == 0) ||
                                   (op.fillStyle.compare(QLatin1String("wash"), Qt::CaseInsensitive) == 0);
-        if (isWatercolor && !isBlush) {
+        if (isWatercolor && !isBlush && !isShading) {
             QColor fringe = color.darker(115);
             fringe.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.75, 1.0));
             QPen fringePen(fringe, 1.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);

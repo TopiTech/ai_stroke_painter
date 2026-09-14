@@ -1116,6 +1116,11 @@ KisAiStrokeQualityUtils::HairClumpSynthesis KisAiStrokeQualityUtils::synthesizeH
 {
     HairClumpSynthesis out;
     out.mainMass = ribbonOp;
+    // Ensure the foundational hair mass is opaque and solidly blocks background/skin
+    out.mainMass.layer = QStringLiteral("Flats");
+    out.mainMass.brush.opacity = qMax<qreal>(0.92, ribbonOp.brush.opacity);
+    out.mainMass.widthStart = qMax<qreal>(0.015, ribbonOp.widthStart);
+    out.mainMass.widthMid = qMax<qreal>(0.018, ribbonOp.widthMid);
 
     const QVector<QPointF> &spine = ribbonOp.spine;
     if (spine.size() < 2 || canvasSize.width() <= 0 || canvasSize.height() <= 0) {
@@ -1124,15 +1129,16 @@ KisAiStrokeQualityUtils::HairClumpSynthesis KisAiStrokeQualityUtils::synthesizeH
 
     QRandomGenerator rng(seed);
     const qreal baseDim = qMax<qreal>(1.0, qMin(canvasSize.width(), canvasSize.height()));
-    const qreal avgWidth = ((ribbonOp.widthStart + ribbonOp.widthMid + ribbonOp.widthEnd) / 3.0) * baseDim;
+    const qreal avgWidth = ((out.mainMass.widthStart + out.mainMass.widthMid + out.mainMass.widthEnd) / 3.0) * baseDim;
 
     // 1. Generate internal flowing hair strands (Lineart / Shading)
-    const int strandCount = qBound(3, qRound(avgWidth * 0.15) + 3, 7);
+    // Keep strand count balanced (4 to 5) to prevent dense parallel barcode artifact
+    const int strandCount = qBound(4, qRound(avgWidth * 0.10) + 3, 5);
     const QColor strandColor = calculateHueShiftedShadow(ribbonOp.brush.color, QColor(30, 25, 45), 0.40);
 
     for (int s = 0; s < strandCount; ++s) {
-        const qreal lateralOffset = ((qreal(s) / qMax(1, strandCount - 1)) - 0.5) * 1.6; // [-0.8, 0.8]
-        const qreal offsetPx = lateralOffset * (avgWidth * 0.40);
+        const qreal lateralOffset = ((qreal(s) / qMax(1, strandCount - 1)) - 0.5) * 1.5; // [-0.75, 0.75]
+        const qreal baseOffsetPx = lateralOffset * (avgWidth * 0.40);
 
         KisAiStrokeOperation strandOp;
         strandOp.kind = KisAiStrokeOperation::Kind::Path;
@@ -1140,7 +1146,7 @@ KisAiStrokeQualityUtils::HairClumpSynthesis KisAiStrokeQualityUtils::synthesizeH
         strandOp.layer = QStringLiteral("Lineart");
         strandOp.brush.profile = QStringLiteral("gpen");
         strandOp.brush.color = strandColor;
-        strandOp.brush.size = qMax<qreal>(0.0012, (avgWidth * 0.12) / baseDim);
+        strandOp.brush.size = qMax<qreal>(0.0012, (avgWidth * 0.10) / baseDim);
         strandOp.brush.opacity = 0.65 + rng.generateDouble() * 0.25;
 
         strandOp.points.reserve(spine.size());
@@ -1157,14 +1163,16 @@ KisAiStrokeQualityUtils::HairClumpSynthesis KisAiStrokeQualityUtils::synthesizeH
             const qreal tLen = std::hypot(tangent.x(), tangent.y());
             const QPointF normal = (tLen > 1.0e-5) ? QPointF(-tangent.y() / tLen, tangent.x() / tLen) : QPointF(0, 1);
 
-            // Subtle wave along strand
-            const qreal wave = std::sin(qreal(i) * 1.2 + s * 1.5) * (avgWidth * 0.08);
-            const QPointF displacedPx = curr + normal * (offsetPx + wave);
+            const qreal progress = qreal(i) / qMax(1, spine.size() - 1);
+            // Converge smoothly toward the lock tip (0.25 offset at tip vs 1.0 at root) to eliminate parallel sukkari lines
+            const qreal convergenceFactor = 1.0 - progress * 0.70;
+            // Elegant S-curve wave along strand
+            const qreal wave = std::sin(qreal(i) * 1.1 + s * 1.4) * (avgWidth * 0.07) * (1.0 - progress * 0.4);
+            const QPointF displacedPx = curr + normal * (baseOffsetPx * convergenceFactor + wave);
 
             const qreal normX = clamp01(displacedPx.x() / canvasSize.width());
             const qreal normY = clamp01(displacedPx.y() / canvasSize.height());
-            const qreal t = qreal(i) / qMax(1, spine.size() - 1);
-            const qreal pressure = std::sin(t * PI) * 0.85 + 0.15;
+            const qreal pressure = std::sin(progress * PI) * 0.80 + 0.20;
             strandOp.points.append(KisAiStrokePoint(normX, normY, pressure));
         }
 
