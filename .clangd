@@ -1,0 +1,6 @@
+CompileFlags:
+  CompilationDatabase: "build-ai"
+  Add:
+    - "-Qunused-arguments"
+    - "-Wno-unknown-warning-option"
+    - "-Wno-unused-command-line-argument"
