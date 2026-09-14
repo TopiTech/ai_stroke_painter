@@ -321,30 +321,30 @@ QString KisAiPromptAnalyzer::generateArtDirection(
     switch (spec.domain) {
     case DomainType::Character: {
         out += QStringLiteral(
-            "[DOMAIN ART DIRECTION: Character / Figure Portrait]\n"
+            "[DOMAIN ART DIRECTION: Character / Figure Portrait & Dynamic Figure]\n"
             "GUIDELINES & PRIORITIES:\n"
-            "- Strictly derive character gender, age, skin tone, hairstyle, attire, and emotional expression from the USER REQUEST.\n"
-            "- STRICT NO RANDOM PARTICLES: Do NOT emit 'particles' or scattered dots across faces or bodies. Keep skin, eyes, and hair clean.\n"
-            "- Avoid mechanical 'hatch' across smooth skin surfaces; use soft 'fill' (brush: watercolor/brush, style: wash) for natural shading.\n"
-            "- Render organic forms using 'fill', 'path', and 'ribbon'. Avoid dozens of tiny circular patches for hair; use cohesive ribbons and silhouettes.\n"
-            "1. Layer 'Flats' (Base Volumes & Silhouettes):\n"
-            "   - Skin / Body Base: Solid, continuous coverage for head, neck, and exposed anatomy with fill (color derived from subject prompt).\n"
-            "   - Hair Silhouette: Primary cohesive hair volume masses framing the head using ribbon/fill (color: '%1' or prompt-specified hue).\n"
-            "   - Eye Sockets & Irises: Almond sclera discs and circular iris color blocks with fill, or preferably use 'anime_eye' operations.\n"
-            "   - Clothing & Adornments: Distinct opaque color masses defining garments and silhouette.\n"
-            "2. Layer 'Shading' (3D Depth & Ambient Occlusion - MULTIPLY BLEND):\n"
-            "   - Cast Shadows: Soft shadows under hair clumps, chin/jawline, and fabric drapery with opacity 0.3-0.5.\n"
-            "   - Form Shadows: Curvature transitions across facial planes, nose bridge, and anatomical landmarks.\n"
-            "   - Contact AO: Deep crevice shadows between overlapping locks and garment folds.\n"
-            "3. Layer 'Lineart' (Anatomical & Clothing Contours - 1.5 to 3.5 px):\n"
-            "   - Eyes: Use 'anime_eye' (e.g. center: [0.38, 0.44], size: [0.10, 0.12], iris_color: '%2') for flawless anime eyes with iris gradient, lashes, pupil, and catchlights.\n"
-            "   - Expressive Contours: Elegant curved paths using Catmull-Rom splines for jawline and mouth.\n"
-            "   - Hair & Fabric Strands: Flowing tapered paths and ribbons indicating movement and volume.\n"
-            "4. Layer 'Highlights' & 'FX' (Specular Polish):\n"
-            "   - Catchlights: Crisp glints inside eye pupils to convey vitality.\n"
-            "   - Surface Luster: Restrained specular points on focal highlights, lip gloss, jewelry, or hair angel halo.\n"
-            "   - STRICT: Zero random particles or stippling on face/body.\n"
-        ).arg(spec.hairColor, spec.eyeColor);
+            "- Strictly derive character gender, age, skin tone, hairstyle, attire, pose, and emotional expression from the USER REQUEST.\n"
+            "- Dynamic Staging: Place and orient the character according to prompt intent (full body, dynamic action, profile, high/low angle, or expressive portrait).\n"
+            "- STRICT NO RANDOM PARTICLES: Do NOT emit scattered noise dots across faces or bodies. Keep skin, eyes, and hair pristine.\n"
+            "- Avoid mechanical 'hatch' across smooth skin surfaces; use soft volumetric 'fill' (brush: watercolor/brush, style: wash or directional) for natural curvature.\n"
+            "1. Layer 'Flats' (Volumetric Masses & 3D Planes):\n"
+            "   - Skin & Anatomy Base: Solid, continuous coverage for head, neck, and exposed anatomy with fill, establishing 3D planes.\n"
+            "   - Hair Masses: Primary cohesive hair masses framing the head using ribbon/fill (color: %1 or prompt-specified tone).\n"
+            "   - Eyes & Features: Almond sclera discs and circular/oval iris masses with fill, or 'anime_eye' appropriately scaled and centered to match character gaze.\n"
+            "   - Attire & Drapery: Distinct opaque color masses defining garments, folds, and silhouette.\n"
+            "2. Layer 'Shading' (3D Depth & Volumetric Lighting - MULTIPLY BLEND):\n"
+            "   - Form Shadows (Tier 1): Soft gradient transitions across facial curvature, nose bridge, and anatomical masses (warm-shifted shadow tones).\n"
+            "   - Cast Shadows (Tier 2): Sharp occlusion shadows under bangs, jawline/chin, and cloth folds.\n"
+            "   - Deep Contact AO: Darkest crevices between overlapping locks and garment creases.\n"
+            "3. Layer 'Lineart' (Master Inking - 1.5 to 4.0 px):\n"
+            "   - Eyes & Expression: Draw sharp, delicate lash arches, pupil cores, iris details, and double eyelids with gpen or maru_pen, or position 'anime_eye' with iris_color: %2.\n"
+            "   - Expressive Contours: Fluid S/C-curves with Catmull-Rom splines for jawline, mouth, and anatomy.\n"
+            "   - Hair & Drapery Strands: Individual flowing tapered paths and ribbons indicating volume and motion.\n"
+            "4. Layer 'Highlights' & 'FX' (Specular Vitality):\n"
+            "   - Eye Catchlights: Brilliant specular points (#ffffff) inside pupils to convey life.\n"
+            "   - Luminous Polish: Refined specular points on lip gloss, nose tip, hair halo sheen, and rim lighting along silhouettes.\n"
+        ).arg(!spec.hairColor.isEmpty() ? QStringLiteral("'%1'").arg(spec.hairColor) : QStringLiteral("prompt-specified hue"),
+             !spec.eyeColor.isEmpty() ? QStringLiteral("'%1'").arg(spec.eyeColor) : QStringLiteral("harmonious eye color"));
         break;
     }
     case DomainType::Landscape: {

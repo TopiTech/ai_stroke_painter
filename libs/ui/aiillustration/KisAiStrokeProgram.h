@@ -111,6 +111,10 @@ struct KRITAUI_EXPORT KisAiStrokeOperation
     QString eyeStyle {QStringLiteral("sparkle")}; // sparkle, dual_dot, gradient
     QString eyeExpression {QStringLiteral("open")}; // open, smile, half, closed
     bool eyeIsRight {false};
+
+    // Layer blending & Clipping (Phase 2)
+    QString blendMode {QStringLiteral("normal")}; // normal, multiply, screen, color_dodge, overlay, linear_burn, add
+    QString clipToId;                             // Base operation ID to clip this stroke/fill to
 };
 
 struct KRITAUI_EXPORT KisAiCritiqueRegion

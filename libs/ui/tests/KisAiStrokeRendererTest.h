@@ -76,6 +76,12 @@ private Q_SLOTS:
     void testGoalModeLayersPreservationOnFinalStep();
     void testHairStrandsAndBangsBleedGeneration();
     void testShortStrokeTaperingEndpoints();
+    void testVolumetricShadingAndMasterInking();
+    void testPhase2MultiTierCurvatureShading();
+    void testPhase2ColorDodgeAndTargetedClipping();
+    void testPhase2ModernHighFidelityAnimeEye();
+    void testPhase2ArtisticPaperGrainAndWetEdge();
+    void testPhase2DynamicPerspectiveAndAngles();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

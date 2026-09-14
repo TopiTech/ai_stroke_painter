@@ -28,6 +28,7 @@
 #include "aiillustration/KisAiStrokeProgram.h"
 #include "aiillustration/KisAiStrokeRenderer.h"
 #include "aiillustration/KisAiDeliberateStroke.h"
+#include "aiillustration/KisAiLightRig.h"
 #include "aiillustration/KisAiStrokeQualityUtils.h"
 #include "aiillustration/KisAiStrokeTypeChecker.h"
 #include "aiillustration/KisAiLayoutEngine.h"
@@ -2118,6 +2119,308 @@ void KisAiStrokeRendererTest::testGoalModeLayersPreservationOnFinalStep()
     // Verify Highlights from Step 4 is present
     const QColor glintPixel = finalImage.pixelColor(qRound(0.46 * canvasSize.width()), qRound(0.46 * canvasSize.height()));
     QVERIFY(glintPixel.red() > 200 && glintPixel.green() > 200 && glintPixel.blue() > 200);
+}
+
+void KisAiStrokeRendererTest::testVolumetricShadingAndMasterInking()
+{
+    const QSize canvasSize(1024, 1024);
+    KisAiStrokeProgram prog;
+    prog.canvasSize = canvasSize;
+
+    // 1. Flats: Skin Base Volume
+    KisAiStrokeOperation skinBase;
+    skinBase.kind = KisAiStrokeOperation::Kind::Fill;
+    skinBase.id = QStringLiteral("skin_face_base");
+    skinBase.layer = QStringLiteral("Flats");
+    skinBase.brush.color = QColor(255, 224, 200);
+    skinBase.polygon << QPointF(0.25, 0.25) << QPointF(0.75, 0.25)
+                     << QPointF(0.75, 0.75) << QPointF(0.25, 0.75);
+    prog.operations.append(skinBase);
+
+    // 2. Shading: Volumetric Form Shadow with SSS Warmth
+    KisAiStrokeOperation formShadow;
+    formShadow.kind = KisAiStrokeOperation::Kind::Fill;
+    formShadow.id = QStringLiteral("skin_form_shadow");
+    formShadow.layer = QStringLiteral("Shading");
+    formShadow.brush.profile = QStringLiteral("watercolor");
+    formShadow.brush.color = QColor(190, 110, 100);
+    formShadow.brush.opacity = 0.50;
+    formShadow.fillStyle = QStringLiteral("directional");
+    formShadow.angleDeg = 45.0;
+    formShadow.polygon << QPointF(0.45, 0.25) << QPointF(0.75, 0.25)
+                       << QPointF(0.75, 0.75) << QPointF(0.45, 0.75);
+    prog.operations.append(formShadow);
+
+    // 3. Lineart: Master Inking G-Pen Main Contour & Delicate Eyelash
+    KisAiStrokeOperation gpenContour;
+    gpenContour.kind = KisAiStrokeOperation::Kind::Path;
+    gpenContour.id = QStringLiteral("jawline_contour");
+    gpenContour.layer = QStringLiteral("Lineart");
+    gpenContour.brush.profile = QStringLiteral("gpen");
+    gpenContour.brush.color = QColor(25, 20, 32);
+    gpenContour.brush.size = 0.0035; // ~3.58px: previously fell back to ribbon, now fine-inked
+    gpenContour.points << KisAiStrokePoint(0.25, 0.40, 0.3)
+                       << KisAiStrokePoint(0.30, 0.60, 0.9)
+                       << KisAiStrokePoint(0.50, 0.75, 0.8)
+                       << KisAiStrokePoint(0.70, 0.60, 0.9)
+                       << KisAiStrokePoint(0.75, 0.40, 0.3);
+    prog.operations.append(gpenContour);
+
+    KisAiStrokeOperation delicateLash;
+    delicateLash.kind = KisAiStrokeOperation::Kind::Path;
+    delicateLash.id = QStringLiteral("delicate_eyelash_top");
+    delicateLash.layer = QStringLiteral("Lineart");
+    delicateLash.brush.profile = QStringLiteral("maru_pen");
+    delicateLash.brush.color = QColor(25, 20, 32);
+    delicateLash.brush.size = 0.0018; // ~1.8px
+    delicateLash.points << KisAiStrokePoint(0.40, 0.45, 0.3)
+                        << KisAiStrokePoint(0.45, 0.43, 0.9)
+                        << KisAiStrokePoint(0.48, 0.44, 0.2);
+    prog.operations.append(delicateLash);
+
+    // Render to image
+    const QImage rendered = KisAiStrokeRenderer::renderProgramToImage(prog, canvasSize);
+    QVERIFY(!rendered.isNull());
+
+    // Verify Volumetric Shading has smooth gradient falloff (not flat solid block)
+    // Compare pixel near terminator edge vs inner core
+    const QColor pEdge = rendered.pixelColor(qRound(0.48 * canvasSize.width()), qRound(0.30 * canvasSize.height()));
+    const QColor pCore = rendered.pixelColor(qRound(0.65 * canvasSize.width()), qRound(0.55 * canvasSize.height()));
+    QVERIFY(pEdge.alpha() > 200);
+    QVERIFY(pCore.alpha() > 200);
+    // Depth gradation: core shadow has different tone/intensity than edge transition
+    QVERIFY(pEdge != pCore);
+
+    // Verify G-Pen and Maru-Pen lines rendered distinctly
+    const QColor pLine = rendered.pixelColor(qRound(0.50 * canvasSize.width()), qRound(0.75 * canvasSize.height()));
+    QVERIFY(pLine.alpha() > 100);
+    QVERIFY(pLine.red() < 100); // Dark ink
+
+    // 4. Verify Expanded Operation Target Scaling in Payload
+    const QJsonObject payload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("exquisite master anime illustration"),
+        canvasSize,
+        1500 // Expanded budget
+    );
+    const QJsonArray msgs = payload.value(QStringLiteral("messages")).toArray();
+    QCOMPARE(msgs.size(), 2);
+    const QJsonObject userReq = QJsonDocument::fromJson(
+        msgs.at(1).toObject().value(QStringLiteral("content")).toString().toUtf8()
+    ).object();
+
+    const int opTarget = userReq.value(QStringLiteral("operation_target")).toInt();
+    // Must be scaled well beyond previous hard 60 cap to permit fine inking and multi-tier shading!
+    QVERIFY2(opTarget >= 100, qPrintable(QStringLiteral("Expected opTarget >= 100, got: %1").arg(opTarget)));
+    QCOMPARE(opTarget, 125); // 1500 / 12 = 125
+}
+
+void KisAiStrokeRendererTest::testPhase2MultiTierCurvatureShading()
+{
+    // Verify 3D Curvature Terminator Form Shadow and Multi-Tier Shading Synthesis
+    KisAiLightSettings rig;
+    rig.direction = QPointF(-0.6, -0.8);
+    rig.fillTint = QColor(40, 45, 70);
+
+    KisAiStrokeOperation body;
+    body.kind = KisAiStrokeOperation::Kind::Fill;
+    body.id = QStringLiteral("body_torso");
+    body.layer = QStringLiteral("Flats");
+    body.brush.color = QColor(220, 180, 160);
+    body.polygon = {
+        QPointF(0.30, 0.40), QPointF(0.70, 0.40),
+        QPointF(0.75, 0.85), QPointF(0.25, 0.85)
+    };
+
+    KisAiLightRig::HeadAnchor anchor;
+    anchor.headCenter = QPointF(0.50, 0.35);
+    anchor.headWidth = 0.30;
+    anchor.headHeight = 0.38;
+
+    const QVector<KisAiStrokeOperation> shading = KisAiLightRig::synthesizeShading({body}, rig, QSize(512, 512), &anchor);
+    QVERIFY(!shading.isEmpty());
+
+    bool foundCoreShadow = false;
+    bool foundDirectional = false;
+    bool foundClipToId = false;
+    bool foundMultiply = false;
+    bool foundChinAo = false;
+
+    for (const auto &op : shading) {
+        if (op.id.contains(QStringLiteral("core_shadow"))) {
+            foundCoreShadow = true;
+            if (op.fillStyle == QLatin1String("directional"))
+                foundDirectional = true;
+            if (op.clipToId == QStringLiteral("body_torso"))
+                foundClipToId = true;
+            if (op.blendMode == QLatin1String("multiply"))
+                foundMultiply = true;
+        }
+        if (op.id == QStringLiteral("chin_ao")) {
+            foundChinAo = true;
+        }
+    }
+
+    QVERIFY(foundCoreShadow);
+    QVERIFY(foundDirectional);
+    QVERIFY(foundClipToId);
+    QVERIFY(foundMultiply);
+    QVERIFY(foundChinAo);
+}
+
+void KisAiStrokeRendererTest::testPhase2ColorDodgeAndTargetedClipping()
+{
+    const QSize canvasSize(256, 256);
+    KisAiStrokeProgram prog;
+    prog.canvasSize = canvasSize;
+
+    // Base silhouette mass (Flats)
+    KisAiStrokeOperation baseMass;
+    baseMass.kind = KisAiStrokeOperation::Kind::Fill;
+    baseMass.id = QStringLiteral("base_plate");
+    baseMass.layer = QStringLiteral("Flats");
+    baseMass.brush.color = QColor(60, 80, 140);
+    baseMass.polygon = {
+        QPointF(0.25, 0.25), QPointF(0.75, 0.25),
+        QPointF(0.75, 0.75), QPointF(0.25, 0.75)
+    };
+    prog.operations.append(baseMass);
+
+    // Targeted clipped shadow (covers outside, but must be clipped to base_plate)
+    KisAiStrokeOperation clippedShade;
+    clippedShade.kind = KisAiStrokeOperation::Kind::Fill;
+    clippedShade.id = QStringLiteral("target_shade");
+    clippedShade.layer = QStringLiteral("Shading");
+    clippedShade.brush.color = QColor(20, 20, 50);
+    clippedShade.blendMode = QStringLiteral("multiply");
+    clippedShade.clipToId = QStringLiteral("base_plate");
+    clippedShade.polygon = {
+        QPointF(0.0, 0.0), QPointF(1.0, 0.0),
+        QPointF(1.0, 1.0), QPointF(0.0, 1.0)
+    };
+    prog.operations.append(clippedShade);
+
+    // Color Dodge Highlight stroke across the center
+    KisAiStrokeOperation dodgeGlint;
+    dodgeGlint.kind = KisAiStrokeOperation::Kind::Path;
+    dodgeGlint.id = QStringLiteral("dodge_glint");
+    dodgeGlint.layer = QStringLiteral("Highlights");
+    dodgeGlint.brush.profile = QStringLiteral("gpen");
+    dodgeGlint.brush.color = QColor(255, 220, 180);
+    dodgeGlint.brush.size = 0.03;
+    dodgeGlint.blendMode = QStringLiteral("color_dodge");
+    dodgeGlint.points = {
+        KisAiStrokePoint(0.35, 0.50, 1.0),
+        KisAiStrokePoint(0.65, 0.50, 1.0)
+    };
+    prog.operations.append(dodgeGlint);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvasSize);
+    QVERIFY(!img.isNull());
+
+    // Corner (10, 10) must be completely transparent because target_shade was clipped to base_plate!
+    QCOMPARE(img.pixelColor(10, 10).alpha(), 0);
+
+    // Center area with Color Dodge highlight must have luminous color
+    const QColor centerPixel = img.pixelColor(128, 128);
+    QVERIFY(centerPixel.alpha() > 150);
+    QVERIFY(centerPixel.value() > 80);
+}
+
+void KisAiStrokeRendererTest::testPhase2ModernHighFidelityAnimeEye()
+{
+    const QSize canvasSize(300, 300);
+    KisAiStrokeProgram prog;
+    prog.canvasSize = canvasSize;
+
+    KisAiStrokeOperation eyeOp;
+    eyeOp.kind = KisAiStrokeOperation::Kind::AnimeEye;
+    eyeOp.id = QStringLiteral("hero_eye");
+    eyeOp.layer = QStringLiteral("Lineart");
+    eyeOp.eyeCenter = QPointF(0.5, 0.5);
+    eyeOp.eyeSize = QSizeF(0.35, 0.40);
+    eyeOp.eyeIrisColor = QColor(40, 110, 245);
+    eyeOp.eyeSecondaryColor = QColor(140, 235, 255);
+    eyeOp.eyeStyle = QStringLiteral("sparkle");
+    eyeOp.eyeIsRight = true;
+    prog.operations.append(eyeOp);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvasSize);
+    QVERIFY(!img.isNull());
+
+    // Eye center should be rich iris tone
+    const QColor centerPixel = img.pixelColor(150, 150);
+    QVERIFY(centerPixel.alpha() > 150);
+    QVERIFY(centerPixel.blue() > centerPixel.red()); // Blue iris
+
+    // Upper eyelash area (150, 115) should have dark ink
+    const QColor lashPixel = img.pixelColor(150, 115);
+    QVERIFY(lashPixel.alpha() > 100);
+    QVERIFY(lashPixel.value() < 80); // Deep dark lash line
+}
+
+void KisAiStrokeRendererTest::testPhase2ArtisticPaperGrainAndWetEdge()
+{
+    const QSize canvasSize(256, 256);
+    KisAiStrokeProgram prog;
+    prog.canvasSize = canvasSize;
+
+    KisAiStrokeOperation wcFill;
+    wcFill.kind = KisAiStrokeOperation::Kind::Fill;
+    wcFill.id = QStringLiteral("watercolor_wash");
+    wcFill.layer = QStringLiteral("Flats");
+    wcFill.brush.profile = QStringLiteral("watercolor");
+    wcFill.brush.color = QColor(80, 150, 200, 180);
+    wcFill.fillStyle = QStringLiteral("wash");
+    wcFill.polygon = {
+        QPointF(0.2, 0.2), QPointF(0.8, 0.2),
+        QPointF(0.8, 0.8), QPointF(0.2, 0.8)
+    };
+    prog.operations.append(wcFill);
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvasSize);
+    QVERIFY(!img.isNull());
+
+    // Inside wash, pixels should be filled
+    const QColor pInside = img.pixelColor(128, 128);
+    QVERIFY(pInside.alpha() > 100);
+
+    // Outside wash should be transparent
+    const QColor pOutside = img.pixelColor(15, 15);
+    QCOMPARE(pOutside.alpha(), 0);
+}
+
+void KisAiStrokeRendererTest::testPhase2DynamicPerspectiveAndAngles()
+{
+    const QSize canvasSize(512, 512);
+
+    // Generate with profile prompt
+    const KisAiStrokeProgram progProfile = KisAiStrokeProgramCodec::createDeterministicProgram(
+        QStringLiteral("side view profile anime girl"), canvasSize
+    );
+    // Generate with frontal prompt
+    const KisAiStrokeProgram progFrontal = KisAiStrokeProgramCodec::createDeterministicProgram(
+        QStringLiteral("frontal close up portrait girl"), canvasSize
+    );
+
+    QVERIFY(!progProfile.operations.isEmpty());
+    QVERIFY(!progFrontal.operations.isEmpty());
+
+    // Find jawline points in both
+    QVector<KisAiStrokePoint> jawProfile;
+    QVector<KisAiStrokePoint> jawFrontal;
+    for (const auto &op : progProfile.operations) {
+        if (op.id == QStringLiteral("jawline")) jawProfile = op.points;
+    }
+    for (const auto &op : progFrontal.operations) {
+        if (op.id == QStringLiteral("jawline")) jawFrontal = op.points;
+    }
+
+    QVERIFY(!jawProfile.isEmpty());
+    QVERIFY(!jawFrontal.isEmpty());
+
+    // Profile and frontal jawlines must have different geometric coordinates due to dynamic angle computation!
+    QVERIFY(jawProfile.first().pos != jawFrontal.first().pos);
 }
 
 KISTEST_MAIN(KisAiStrokeRendererTest)

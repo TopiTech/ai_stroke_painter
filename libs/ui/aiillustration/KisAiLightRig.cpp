@@ -14,7 +14,7 @@
 
 namespace
 {
-qreal clamp01Local(qreal v)
+[[maybe_unused]] qreal clamp01Local(qreal v)
 {
     if (!std::isfinite(v))
         return 0.0;
@@ -124,6 +124,9 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         }
     }
 
+    const qreal shadowAngleDeg = std::atan2(-lightDir.y(), -lightDir.x()) * 180.0 / M_PI;
+    const QPointF perpT(-lightDir.y(), lightDir.x());
+
     int shadowIndex = 0;
     for (const KisAiStrokeOperation &op : flatsOps) {
         if (op.kind != KisAiStrokeOperation::Kind::Fill && op.kind != KisAiStrokeOperation::Kind::GradientFill)
@@ -133,24 +136,36 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         if (polygonAreaLocal(op.polygon) < 2.0e-4)
             continue; // micro patches earn no shadow; keeps noise down
 
-        // Exclude facial skin, neck, and front hair fringe from coarse shifted core shadows.
-        // Facial and fringe shadows are handled anatomically by neck_shadow, eyelid_shade, hair_cast_shadow, etc.
         const QString lowerId = op.id.toLower();
-        if (lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face")) ||
-            lowerId.contains(QLatin1String("ear")) || lowerId.contains(QLatin1String("neck")) ||
-            lowerId.contains(QLatin1String("fringe")) || lowerId.contains(QLatin1String("bangs"))) {
+        // Fringe bangs are anatomically shadowed by hair_cast_shadow
+        if (lowerId.contains(QLatin1String("fringe")) || lowerId.contains(QLatin1String("bangs"))) {
             continue;
         }
 
+        const bool isFaceSkin = lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face")) ||
+                                lowerId.contains(QLatin1String("ear"));
+
+        const QRectF b = op.polygon.boundingRect();
+        const QPointF center = b.center();
+        const qreal r = qMax(b.width(), b.height()) * 1.5;
+
+        // Construct 3D curvature terminator plane:
+        // Positioned across the center of the form and oriented opposite the key light direction,
+        // producing a natural half-tone terminator falloff instead of artificial shifted paper silhouettes.
+        const qreal termOffset = isFaceSkin ? (r * 0.15) : (r * 0.08);
+        const QPointF cTerm = center + (lightDir * termOffset);
+
+        QPolygonF shadowHalfPlane;
+        shadowHalfPlane << (cTerm - perpT * r * 2.0)
+                        << (cTerm + perpT * r * 2.0)
+                        << (cTerm + perpT * r * 2.0 - lightDir * r * 3.0)
+                        << (cTerm - perpT * r * 2.0 - lightDir * r * 3.0);
+
         QPainterPath original;
         original.addPolygon(op.polygon);
-        QPainterPath shifted;
-        QPolygonF shiftedPoly;
-        shiftedPoly.reserve(op.polygon.size());
-        for (const QPointF &pt : op.polygon)
-            shiftedPoly.append(QPointF(clamp01Local(pt.x() + shadowOffset.x()), clamp01Local(pt.y() + shadowOffset.y())));
-        shifted.addPolygon(shiftedPoly);
-        QPainterPath shadowPath = original.intersected(shifted);
+        QPainterPath planePath;
+        planePath.addPolygon(shadowHalfPlane);
+        QPainterPath shadowPath = original.intersected(planePath);
 
         // Subtract head/face anchor so back hair shadows never cast over the front of the face!
         if (headAnchor && (lowerId.contains(QLatin1String("hair")) || lowerId.contains(QLatin1String("back")))) {
@@ -169,14 +184,17 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         shadow.layer = QStringLiteral("Shading");
         shadow.brush.profile = QStringLiteral("watercolor");
         shadow.brush.color = shadowColor(op.brush.color, rig);
-        shadow.brush.opacity = 0.35;
+        shadow.brush.opacity = isFaceSkin ? 0.22 : 0.38;
         shadow.brush.size = 0.03;
         shadow.polygon = coreShadow;
-        shadow.fillStyle = QStringLiteral("wash");
+        shadow.fillStyle = QStringLiteral("directional");
+        shadow.angleDeg = shadowAngleDeg;
+        shadow.blendMode = QStringLiteral("multiply");
+        shadow.clipToId = op.id;
         shading.append(shadow);
         ++shadowIndex;
-        if (shadowIndex >= 12)
-            break; // budget: shading hints, not wallpaper
+        if (shadowIndex >= 24)
+            break;
     }
 
     // Rim light along the light-facing edge of the largest mass.
@@ -232,6 +250,7 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
             }
             rim.closed = false;
             rim.smooth = true;
+            rim.blendMode = QStringLiteral("color_dodge");
             shading.append(rim);
         }
     }
@@ -257,6 +276,7 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
             const qreal t = 2.0 * M_PI * i / 12.0;
             ao.polygon.append(QPointF(aoC.x() + (aoW * std::cos(t)), aoC.y() + (aoH * std::sin(t))));
         }
+        ao.blendMode = QStringLiteral("multiply");
         shading.append(ao);
 
         // Contact AO: Neck base / collar junction (接触影)
@@ -269,6 +289,7 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         neckAo.brush.opacity = 0.24;
         neckAo.brush.size = 0.02;
         neckAo.fillStyle = QStringLiteral("wash");
+        neckAo.blendMode = QStringLiteral("multiply");
         const qreal nAoW = hw * 0.32, nAoH = hh * 0.04;
         const QPointF nAoC(hc.x(), hc.y() + (hh * 0.72));
         for (int i = 0; i <= 12; ++i) {
@@ -284,6 +305,7 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         hairCast.brush.profile = QStringLiteral("watercolor");
         hairCast.brush.color = shadowColor(QColor(255, 224, 192), rig);
         hairCast.brush.opacity = 0.18;
+        hairCast.blendMode = QStringLiteral("multiply");
         hairCast.brush.size = 0.02;
         hairCast.fillStyle = QStringLiteral("wash");
 

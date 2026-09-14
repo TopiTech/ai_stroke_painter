@@ -255,14 +255,16 @@ KisAiStrokeLintReport KisAiDeliberateStroke::lintStroke(
             return rep;
         }
         // Adaptive micro-path threshold: fine linework, stippling, facial details,
-        // and short hair strands tolerate shorter lengths down to 0.45px.
+        // eyelashes, double eyelids, and hair strands tolerate delicate lengths down to 0.45px.
         const QString prof = op.brush.profile.toLower();
         const bool isFine = prof == QLatin1String("fineliner") || prof == QLatin1String("maru_pen")
             || prof == QLatin1String("feathering") || prof == QLatin1String("stipple")
             || prof == QLatin1String("pencil")
             || isFaceDetail(op.id) || op.id.contains(QLatin1String("strand"))
             || op.id.contains(QLatin1String("hatch")) || op.id.contains(QLatin1String("wrinkle"))
-            || op.id.contains(QLatin1String("trim")) || op.id.contains(QLatin1String("eyelash"));
+            || op.id.contains(QLatin1String("trim")) || op.id.contains(QLatin1String("eyelash"))
+            || op.id.contains(QLatin1String("lash")) || op.id.contains(QLatin1String("lid"))
+            || op.id.contains(QLatin1String("catchlight")) || op.id.contains(QLatin1String("pupil"));
         const qreal minLen = isFine ? 0.45 : 1.2;
         if (rep.lengthPx < minLen) {
             rep.drop = true;

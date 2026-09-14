@@ -791,9 +791,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_strokeProtocolCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_strokeProtocolCombo->setMinimumContentsLength(10);
     m_strokeProtocolCombo->setAccessibleName(i18n("Stroke protocol"));
-    m_strokeProtocolCombo->addItem(i18n("v3 SceneSpec 意味生成 (推奨・黄金比保証)"), 0);
-    m_strokeProtocolCombo->addItem(i18n("v2 StrokeProgram 座標生成 (互換)"), 1);
-    m_strokeProtocolCombo->setToolTip(i18n("LLMに意味・光・表情のみを出力させ決定論的幾何エンジンで描画するか(v3)、従来通り座標を出力させるか(v2)を指定します。"));
+    m_strokeProtocolCombo->addItem(i18n("自律ストロークアーティスト (自由構図・高品質立体描画・推奨)"), 1);
+    m_strokeProtocolCombo->addItem(i18n("定型リグ配置 (SceneSpec 黄金比テンプレート)"), 0);
+    m_strokeProtocolCombo->setToolTip(i18n("AIがプロンプトのポーズ・構図・立体感を直接捉えて自由かつ繊細にストロークを描画するか(自律・推奨)、固定幾何リグで描画するか(定型)を指定します。"));
 
     m_compositionPlanCheck = new QCheckBox(i18n("2段階構図生成 (Composition Plan)"), m_detailsContainer);
     m_compositionPlanCheck->setChecked(false);
@@ -3643,9 +3643,9 @@ void KisAiIllustrationDocker::loadSettings()
         }
     }
 
-    // V3 作画プロトコル (0: v3 SceneSpec 既定, 1: v2 StrokeProgram)
+    // 作画プロトコル (1: 自律ストロークアーティスト推奨, 0: 定型SceneSpec)
     if (m_strokeProtocolCombo) {
-        const int protocol = settings.value(QStringLiteral("AIIllustration/strokeProtocol"), 0).toInt();
+        const int protocol = settings.value(QStringLiteral("AIIllustration/strokeProtocol"), 1).toInt();
         const int idx = m_strokeProtocolCombo->findData(protocol);
         if (idx >= 0) {
             m_strokeProtocolCombo->setCurrentIndex(idx);

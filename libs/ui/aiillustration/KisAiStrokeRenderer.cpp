@@ -385,7 +385,14 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
         if (isShading) {
             compPainter.setCompositionMode(QPainter::CompositionMode_Multiply);
         } else if (isHighlights) {
-            compPainter.setCompositionMode(QPainter::CompositionMode_Screen);
+            bool hasDodge = false;
+            for (const auto &hop : ops) {
+                if (hop.blendMode == QLatin1String("color_dodge")) {
+                    hasDodge = true;
+                    break;
+                }
+            }
+            compPainter.setCompositionMode(hasDodge ? QPainter::CompositionMode_ColorDodge : QPainter::CompositionMode_Screen);
         } else if (isFx) {
             compPainter.setCompositionMode(QPainter::CompositionMode_Plus);
         } else {
@@ -693,8 +700,14 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
                 layer->setCompositeOpId(COMPOSITE_MULT);
                 layer->setColorLabelIndex(7); // Purple
             } else if (isHighlights) {
-                // A2b: Screen blend mode matching preview and preventing harsh blowout/disappearance
-                layer->setCompositeOpId(COMPOSITE_SCREEN);
+                bool hasDodge = false;
+                for (const auto &hop : ops) {
+                    if (hop.blendMode == QLatin1String("color_dodge")) {
+                        hasDodge = true;
+                        break;
+                    }
+                }
+                layer->setCompositeOpId(hasDodge ? COMPOSITE_DODGE : COMPOSITE_SCREEN);
                 layer->setColorLabelIndex(3); // Yellow
             } else if (isFlats) {
                 layer->setCompositeOpId(COMPOSITE_OVER);
@@ -850,6 +863,26 @@ QImage KisAiStrokeRenderer::renderOperationsToImage(const QVector<KisAiStrokeOpe
             const KisAiStrokeLintReport lint = KisAiDeliberateStroke::lintStroke(op, canvasSize);
             if (lint.drop)
                 continue;
+
+            // Phase 2: Targeted silhouette clipping (clip_to_id)
+            if (!op.clipToId.isEmpty()) {
+                bool clipped = false;
+                for (const KisAiStrokeOperation &baseOp : orderedOps) {
+                    if (baseOp.id == op.clipToId && baseOp.polygon.size() >= 3) {
+                        painter.save();
+                        QPainterPath clipP;
+                        clipP.addPolygon(scalePolygon(baseOp.polygon, workingSize));
+                        painter.setClipPath(clipP, Qt::IntersectClip);
+                        rasterizeOperation(painter, op, workingSize, scale, scaledFacePath);
+                        painter.restore();
+                        clipped = true;
+                        break;
+                    }
+                }
+                if (clipped)
+                    continue;
+            }
+
             rasterizeOperation(painter, op, workingSize, scale, scaledFacePath);
         }
     }
@@ -865,6 +898,18 @@ void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter, const KisAiStrok
 
     if (op.brush.isEraser) {
         painter.setCompositionMode(QPainter::CompositionMode_Clear);
+    } else if (op.blendMode == QLatin1String("color_dodge")) {
+        painter.setCompositionMode(QPainter::CompositionMode_ColorDodge);
+    } else if (op.blendMode == QLatin1String("multiply")) {
+        painter.setCompositionMode(QPainter::CompositionMode_Multiply);
+    } else if (op.blendMode == QLatin1String("screen")) {
+        painter.setCompositionMode(QPainter::CompositionMode_Screen);
+    } else if (op.blendMode == QLatin1String("overlay")) {
+        painter.setCompositionMode(QPainter::CompositionMode_Overlay);
+    } else if (op.blendMode == QLatin1String("linear_burn") || op.blendMode == QLatin1String("darken")) {
+        painter.setCompositionMode(QPainter::CompositionMode_Darken);
+    } else if (op.blendMode == QLatin1String("add") || op.blendMode == QLatin1String("plus")) {
+        painter.setCompositionMode(QPainter::CompositionMode_Plus);
     } else {
         painter.setCompositionMode(QPainter::CompositionMode_SourceOver);
     }
@@ -932,9 +977,14 @@ static bool renderFineLineStroke(
         || profile == QLatin1String("charcoal") || profile == QLatin1String("crayon")
         || profile == QLatin1String("marker"));
 
-    const bool isThinStroke = (maxW <= 2.6 * supersampleScale && !isSpecialEffect);
+    // Exquisite inking: allow master inking (gpen, maru_pen, fineliner, pencil) up to 5.5px
+    // to render with smooth subpixel vector segments and natural pressure tapering
+    const bool isInkProfile = (profile == QLatin1String("gpen") || profile == QLatin1String("pencil")
+        || profile == QLatin1String("fineliner") || profile == QLatin1String("maru_pen")
+        || profile == QLatin1String("brush") || profile == QLatin1String("auto"));
+    const bool isDelicateStroke = (maxW <= 5.5 * supersampleScale && isInkProfile && !isSpecialEffect);
 
-    if (!isExplicitFine && !isThinStroke) {
+    if (!isExplicitFine && !isDelicateStroke) {
         return false; // Let ribbonPoly handle wider painterly strokes
     }
 
@@ -946,9 +996,6 @@ static bool renderFineLineStroke(
         QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/stipple")));
         painter.setPen(Qt::NoPen);
         QColor dotCol = color;
-        // qBound(min, val, max): the lower bound must be a constant so the 300
-        // cap actually holds. The previous qBound(sampleCount*2, sampleCount*4, 300)
-        // let the growing lower bound win past ~150 samples and unbounded the cost.
         const int dotCount = qBound(8, sampleCount * 2, 300);
         for (int i = 0; i < dotCount; ++i) {
             const int idx = rng.bounded(sampleCount);
@@ -985,25 +1032,28 @@ static bool renderFineLineStroke(
         return true;
     }
 
-    // For fineliner, maru_pen, or thin strokes:
-    // Render with varying width segment-by-segment for natural pressure taper,
-    // avoiding polygon bowtie spikes entirely.
-    for (int i = 0; i < sampleCount - 1; ++i) {
+    // For fineliner, maru_pen, gpen, or delicate strokes:
+    // Render with continuous varying width segment-by-segment for natural pressure taper,
+    // avoiding polygon bowtie spikes and ribbon faceting entirely.
+    const int segCount = sampleCount - 1;
+    const int taperSteps = qMin(5, qMax(2, segCount / 4));
+
+    for (int i = 0; i < segCount; ++i) {
         const QPointF &p1 = curveSamples.at(i).pos;
         const QPointF &p2 = curveSamples.at(i + 1).pos;
         const qreal w = qMax<qreal>(0.5, (curveSamples.at(i).width + curveSamples.at(i + 1).width) * 0.5);
 
-        // Sharp tapering for fineliner/maru_pen at endpoints (natural flick / 抜き)
+        // Sharp tapering at stroke endpoints (natural flick / 抜き and entry / 入り)
         qreal tipFactor = 1.0;
-        if ((profile == QLatin1String("fineliner") || profile == QLatin1String("maru_pen")) && !op.closed) {
-            const int segCount = sampleCount - 1;
-            const int taperSteps = qMin(3, segCount / 2);
-            if (taperSteps > 0) {
-                if (i < taperSteps) {
-                    tipFactor = qBound<qreal>(0.35, qreal(i + 1) / qreal(taperSteps + 1), 1.0);
-                } else if (i >= segCount - taperSteps) {
-                    tipFactor = qBound<qreal>(0.30, qreal(segCount - i) / qreal(taperSteps + 1), 1.0);
-                }
+        if (!op.closed && segCount > 2) {
+            if (i < taperSteps) {
+                const qreal progress = qreal(i + 1) / qreal(taperSteps + 1);
+                // Sigmoid ease-in for delicate touch
+                tipFactor = qBound<qreal>(0.25, 0.25 + 0.75 * (progress * progress * (3.0 - 2.0 * progress)), 1.0);
+            } else if (i >= segCount - taperSteps) {
+                const qreal progress = qreal(segCount - i) / qreal(taperSteps + 1);
+                // Sharp release for crisp tail / flick
+                tipFactor = qBound<qreal>(0.15, 0.15 + 0.85 * (progress * progress), 1.0);
             }
         }
 
@@ -1539,6 +1589,9 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
     const bool isSkin = lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face"));
     const bool isNose = lowerId.contains(QLatin1String("nose"));
 
+    const QString normLayer = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
+    const bool isShading = (normLayer == QLatin1String("Shading"));
+
     // Phase 1: Special treatment for Blush: soft radial wash instead of harsh circular boundary
     if (isBlush) {
         const QRectF b = poly.boundingRect();
@@ -1557,34 +1610,107 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
     }
 
     // Phase 1: Special treatment for Nose shading: prevent ugly black holes
-    // (op.layer must be compared via the normalized name; every other branch in
-    // this pipeline operates on normalized layer names).
-    if (isNose && KisAiStrokeProgramCodec::normalizeLayerName(op.layer) == QLatin1String("Shading") && color.value() < 50) {
+    if (isNose && isShading && color.value() < 50) {
         color.setRgb(120, 75, 65, qBound(0, qRound(color.alphaF() * 255 * 0.4), 80));
     }
 
     if (op.fillStyle.compare(QLatin1String("scanline"), Qt::CaseInsensitive) == 0) {
         // Comic halftone screen fill
         KisAiStrokeQualityUtils::drawHalftonePattern(painter, poly, color, 8.0, 2.5, op.angleDeg != 0.0 ? op.angleDeg : 45.0, false);
-    } else if (op.fillStyle.compare(QLatin1String("wash"), Qt::CaseInsensitive) == 0 ||
-               op.brush.profile.compare(QLatin1String("watercolor"), Qt::CaseInsensitive) == 0) {
-        // Watercolor wash with subtle vertical illumination gradient
+        return;
+    }
+
+    // Volumetric 3D Form & Wash Shading: eliminates flat "coloring book" look
+    const bool isDirectional = (op.fillStyle.compare(QLatin1String("directional"), Qt::CaseInsensitive) == 0) || op.angleDeg != 0.0;
+    const bool isWash = (op.fillStyle.compare(QLatin1String("wash"), Qt::CaseInsensitive) == 0) ||
+                        (op.brush.profile.compare(QLatin1String("watercolor"), Qt::CaseInsensitive) == 0) ||
+                        (op.brush.profile.compare(QLatin1String("brush"), Qt::CaseInsensitive) == 0) ||
+                        isShading;
+
+    if (isDirectional || isWash) {
         const QRectF b = poly.boundingRect();
-        QLinearGradient washGrad(b.topLeft(), b.bottomLeft());
-        QColor colTop = color;
-        colTop.setAlphaF(color.alphaF() * 0.95);
-        QColor colBot = color;
-        colBot.setAlphaF(color.alphaF() * 0.70);
-        washGrad.setColorAt(0.0, colTop);
-        washGrad.setColorAt(1.0, colBot);
+        const qreal rad = (op.angleDeg != 0.0 ? op.angleDeg : (isShading ? 115.0 : 90.0)) * M_PI / 180.0;
+        const QPointF center = b.center();
+        const qreal extent = std::hypot(b.width(), b.height()) * 0.5;
+        const QPointF gradStart = center - QPointF(std::cos(rad) * extent, std::sin(rad) * extent);
+        const QPointF gradEnd   = center + QPointF(std::cos(rad) * extent, std::sin(rad) * extent);
+
+        QLinearGradient grad(gradStart, gradEnd);
+
+        if (isSkin && isShading) {
+            // SSS (Subsurface Scattering): Warm coral/peach rim at terminator boundary prevents muddy dead grey skin
+            QColor sssWarm = color.lighter(130);
+            sssWarm.setRed(qBound(0, sssWarm.red() + 45, 255));
+            sssWarm.setGreen(qBound(0, sssWarm.green() + 12, 255));
+            sssWarm.setAlphaF(color.alphaF() * 0.45);
+
+            QColor coreShadow = color;
+            coreShadow.setAlphaF(color.alphaF() * 0.95);
+
+            QColor ambientBounce = color.lighter(115);
+            ambientBounce.setAlphaF(color.alphaF() * 0.65);
+
+            grad.setColorAt(0.0, sssWarm);       // Soft warm terminator transition
+            grad.setColorAt(0.35, coreShadow);   // Peak form shadow density
+            grad.setColorAt(0.80, coreShadow);
+            grad.setColorAt(1.0, ambientBounce); // Subtle ambient bounce fill light
+        } else if (isShading) {
+            // General Volumetric Form Shadow with natural falloff and subtle bounce reflection
+            QColor colLight = color;
+            colLight.setAlphaF(color.alphaF() * 0.40);
+            QColor colCore = color;
+            colCore.setAlphaF(color.alphaF() * 0.95);
+            QColor colBounce = color;
+            colBounce.setAlphaF(color.alphaF() * 0.70);
+
+            grad.setColorAt(0.0, colLight);
+            grad.setColorAt(0.5, colCore);
+            grad.setColorAt(1.0, colBounce);
+        } else {
+            // Flats / Organic volumes: gentle plane illumination gradient
+            QColor colTop = color.lighter(108);
+            colTop.setAlphaF(color.alphaF());
+            QColor colBot = color.darker(110);
+            colBot.setAlphaF(color.alphaF());
+
+            grad.setColorAt(0.0, colTop);
+            grad.setColorAt(1.0, colBot);
+        }
 
         painter.setPen(Qt::NoPen);
-        painter.setBrush(washGrad);
+        painter.setBrush(grad);
         painter.drawPolygon(poly);
 
-        // Phase 1 fix: Do NOT draw dark fringe on hair or skin patches!
-        // It was creating dozens of bubble/scale boundaries (the "afro/bubbles" look).
-        if (!isHair && !isSkin && !isBlush) {
+        // Artistic Watercolor Wet-Edge Fringe: water pooling along paint boundaries
+        const bool isWatercolor = (op.brush.profile.compare(QLatin1String("watercolor"), Qt::CaseInsensitive) == 0) ||
+                                  (op.fillStyle.compare(QLatin1String("wash"), Qt::CaseInsensitive) == 0);
+        if (isWatercolor && !isBlush) {
+            QColor fringe = color.darker(115);
+            fringe.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.75, 1.0));
+            QPen fringePen(fringe, 1.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+            painter.setPen(fringePen);
+            painter.setBrush(Qt::NoBrush);
+            painter.drawPolygon(poly);
+
+            // Paper grain tooth inside watercolor wash
+            const QRectF washBounds = poly.boundingRect();
+            if (washBounds.width() > 10.0 && washBounds.height() > 10.0) {
+                QRandomGenerator grain(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/fill_paper")));
+                painter.setPen(Qt::NoPen);
+                QColor grainDot = color.darker(120);
+                grainDot.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.08, 0.20));
+                painter.setBrush(grainDot);
+                const int grainCount = qBound(12, qRound(std::hypot(washBounds.width(), washBounds.height()) * 0.8), 120);
+                for (int g = 0; g < grainCount; ++g) {
+                    const qreal gx = washBounds.left() + grain.generateDouble() * washBounds.width();
+                    const qreal gy = washBounds.top() + grain.generateDouble() * washBounds.height();
+                    if (!poly.containsPoint(QPointF(gx, gy), Qt::OddEvenFill))
+                        continue;
+                    const qreal gr = 0.5 + grain.generateDouble() * 1.2;
+                    painter.drawEllipse(QPointF(gx, gy), gr, gr);
+                }
+            }
+        } else if (!isHair && !isSkin && !isBlush && !isShading && op.fillStyle.compare(QLatin1String("wash"), Qt::CaseInsensitive) == 0) {
             QColor fringe = color;
             fringe.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.85, 1.0));
             QPen fringePen(fringe, 0.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
@@ -1596,6 +1722,27 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
         painter.setPen(Qt::NoPen);
         painter.setBrush(color);
         painter.drawPolygon(poly);
+
+        // Paper grain for flat watercolor fills
+        if (op.brush.profile.compare(QLatin1String("watercolor"), Qt::CaseInsensitive) == 0 && !isBlush) {
+            const QRectF washBounds = poly.boundingRect();
+            if (washBounds.width() > 10.0 && washBounds.height() > 10.0) {
+                QRandomGenerator grain(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/fill_paper_flat")));
+                painter.setPen(Qt::NoPen);
+                QColor grainDot = color.darker(115);
+                grainDot.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.08, 0.18));
+                painter.setBrush(grainDot);
+                const int grainCount = qBound(10, qRound(std::hypot(washBounds.width(), washBounds.height()) * 0.6), 80);
+                for (int g = 0; g < grainCount; ++g) {
+                    const qreal gx = washBounds.left() + grain.generateDouble() * washBounds.width();
+                    const qreal gy = washBounds.top() + grain.generateDouble() * washBounds.height();
+                    if (!poly.containsPoint(QPointF(gx, gy), Qt::OddEvenFill))
+                        continue;
+                    const qreal gr = 0.5 + grain.generateDouble() * 1.0;
+                    painter.drawEllipse(QPointF(gx, gy), gr, gr);
+                }
+            }
+        }
     }
 }
 
@@ -2372,25 +2519,30 @@ void KisAiStrokeRenderer::drawAnimeEyeOperation(QPainter &painter, const KisAiSt
     const qreal innerSign = -outerSign;
     const QRectF eyeRect(centerPt.x() - w * 0.5, centerPt.y() - h * 0.5, w, h);
 
-    // 1. Sclera (白目)
+    // 1. Sclera (白目: 自然な球面シェーディングと目頭の涙丘)
     QPainterPath scleraPath;
     scleraPath.moveTo(centerPt.x() - w * 0.48, centerPt.y());
     scleraPath.quadTo(centerPt.x(), centerPt.y() - h * 0.52, centerPt.x() + w * 0.48, centerPt.y());
     scleraPath.quadTo(centerPt.x(), centerPt.y() + h * 0.45, centerPt.x() - w * 0.48, centerPt.y());
 
     painter.setPen(Qt::NoPen);
-    painter.setBrush(QColor(250, 250, 255));
+    painter.setBrush(QColor(252, 252, 255));
     painter.drawPath(scleraPath);
 
-    // Upper Sclera Shadow (gentle ambient shadow cast by eyelid)
-    QLinearGradient scleraGrad(centerPt.x(), eyeRect.top(), centerPt.x(), centerPt.y());
-    scleraGrad.setColorAt(0.0, QColor(185, 190, 215, 160));
-    scleraGrad.setColorAt(0.50, QColor(220, 225, 240, 50));
-    scleraGrad.setColorAt(1.0, QColor(255, 255, 255, 0));
+    // Upper Sclera Shadow (gentle ambient shadow cast by upper eyelid & eyeball curvature)
+    QLinearGradient scleraGrad(centerPt.x(), eyeRect.top(), centerPt.x(), eyeRect.bottom());
+    scleraGrad.setColorAt(0.0, QColor(175, 180, 210, 180));
+    scleraGrad.setColorAt(0.38, QColor(215, 220, 238, 70));
+    scleraGrad.setColorAt(0.70, QColor(255, 255, 255, 0));
     painter.setBrush(scleraGrad);
     painter.drawPath(scleraPath);
 
-    // 2. Iris (虹彩)
+    // Lacrimal Caruncle (目頭の繊細な涙丘: 自然な血色感)
+    const QPointF carunclePos(centerPt.x() + innerSign * (w * 0.44), centerPt.y() + (h * 0.02));
+    painter.setBrush(QColor(255, 175, 185, 140));
+    painter.drawEllipse(carunclePos, qMax<qreal>(1.2, w * 0.04), qMax<qreal>(1.0, h * 0.04));
+
+    // 2. Iris (虹彩: 現代美麗イラストの多層構造)
     const qreal irisW = w * 0.62;
     const qreal irisH = h * 0.82;
     const QRectF irisRect(centerPt.x() - irisW * 0.5, centerPt.y() - irisH * 0.46, irisW, irisH);
@@ -2400,44 +2552,86 @@ void KisAiStrokeRenderer::drawAnimeEyeOperation(QPainter &painter, const KisAiSt
     painter.save();
     painter.setClipPath(scleraPath);
 
+    // 2a. Deep Iris Base Gradient
     QLinearGradient irisGrad(irisRect.center().x(), irisRect.top(), irisRect.center().x(), irisRect.bottom());
-    QColor darkTop = op.eyeIrisColor.darker(280);
+    QColor darkTop = op.eyeIrisColor.darker(300);
     darkTop.setAlpha(255);
     QColor midColor = op.eyeIrisColor;
     QColor bottomColor = op.eyeSecondaryColor.isValid() ? op.eyeSecondaryColor : op.eyeIrisColor.lighter(150);
 
     irisGrad.setColorAt(0.0, darkTop);
-    irisGrad.setColorAt(0.35, darkTop.lighter(120));
-    irisGrad.setColorAt(0.70, midColor);
+    irisGrad.setColorAt(0.30, darkTop.lighter(125));
+    irisGrad.setColorAt(0.65, midColor);
     irisGrad.setColorAt(1.0, bottomColor);
 
     painter.setPen(Qt::NoPen);
     painter.setBrush(irisGrad);
     painter.drawPath(irisPath);
 
-    // Lower crescent reflection inside iris
+    // 2b. Limbal Ring (虹彩外周の引き締め濃色リング)
+    QPen limbalPen(darkTop.darker(130), qMax<qreal>(1.2, irisW * 0.035));
+    painter.setPen(limbalPen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(irisPath);
+    painter.setPen(Qt::NoPen);
+
+    // 2c. Lower Emissive Luminescence Ring (虹彩下部の鮮やかな三日月発光)
     QPainterPath crescentPath;
-    const QRectF cresRect(irisRect.left() + irisW * 0.10, irisRect.top() + irisH * 0.45, irisW * 0.80, irisH * 0.50);
+    const QRectF cresRect(irisRect.left() + irisW * 0.08, irisRect.top() + irisH * 0.40, irisW * 0.84, irisH * 0.54);
     crescentPath.addEllipse(cresRect);
     QLinearGradient cresGrad(cresRect.center().x(), cresRect.top(), cresRect.center().x(), cresRect.bottom());
     cresGrad.setColorAt(0.0, QColor(bottomColor.red(), bottomColor.green(), bottomColor.blue(), 0));
-    cresGrad.setColorAt(1.0, QColor(bottomColor.red(), bottomColor.green(), bottomColor.blue(), 180));
+    cresGrad.setColorAt(0.6, QColor(bottomColor.red(), bottomColor.green(), bottomColor.blue(), 160));
+    cresGrad.setColorAt(1.0, QColor(bottomColor.red(), bottomColor.green(), bottomColor.blue(), 230));
     painter.setBrush(cresGrad);
     painter.drawPath(crescentPath);
 
-    // 3. Pupil (瞳孔)
-    const qreal pupilW = irisW * 0.38;
-    const qreal pupilH = irisH * 0.44;
-    const QRectF pupilRect(centerPt.x() - pupilW * 0.5, centerPt.y() - pupilH * 0.40, pupilW, pupilH);
-    QColor pupilColor = darkTop.darker(150);
-    pupilColor.setAlpha(240);
-    painter.setBrush(pupilColor);
+    // 2d. Radial Striations (虹彩内部の繊細な放射状光彩テクスチャ筋)
+    const QPointF pupilCenter(centerPt.x(), centerPt.y() - irisH * 0.12);
+    const int striationCount = 16;
+    for (int i = 0; i < striationCount; ++i) {
+        const qreal angle = (M_PI * 0.15) + (M_PI * 0.70) * (qreal(i) / qreal(striationCount - 1));
+        const qreal rInner = irisW * 0.22;
+        const qreal rOuter = irisW * (0.36 + (i % 3) * 0.05);
+        const QPointF p1(pupilCenter.x() + std::cos(angle) * rInner, pupilCenter.y() + std::sin(angle) * (rInner * 1.2));
+        const QPointF p2(pupilCenter.x() + std::cos(angle) * rOuter, pupilCenter.y() + std::sin(angle) * (rOuter * 1.2));
+        QColor stCol = (i % 2 == 0) ? bottomColor.lighter(130) : midColor.lighter(120);
+        stCol.setAlpha(120);
+        QPen stPen(stCol, qMax<qreal>(0.6, irisW * 0.015), Qt::SolidLine, Qt::RoundCap);
+        painter.setPen(stPen);
+        painter.drawLine(p1, p2);
+    }
+    painter.setPen(Qt::NoPen);
+
+    // 3. Pupil (瞳孔: 深淵のグラデーション核)
+    const qreal pupilW = irisW * 0.36;
+    const qreal pupilH = irisH * 0.42;
+    const QRectF pupilRect(pupilCenter.x() - pupilW * 0.5, pupilCenter.y() - pupilH * 0.5, pupilW, pupilH);
+    QRadialGradient pupilGrad(pupilCenter, pupilW * 0.6);
+    QColor pupilCore = darkTop.darker(170);
+    pupilCore.setAlpha(255);
+    QColor pupilEdge = darkTop.darker(120);
+    pupilEdge.setAlpha(200);
+    pupilGrad.setColorAt(0.0, pupilCore);
+    pupilGrad.setColorAt(0.75, pupilCore);
+    pupilGrad.setColorAt(1.0, pupilEdge);
+    painter.setBrush(pupilGrad);
     painter.drawEllipse(pupilRect);
 
-    // 4. Catchlights (ハイライト)
-    const qreal hlR = qMax<qreal>(2.0, irisW * 0.16);
+    // 4. Catchlights & Lens Flare (ハイライト: ブルームハローとガラス光沢)
+    const qreal hlR = qMax<qreal>(2.2, irisW * 0.17);
     const QPointF hlPos(centerPt.x() - irisW * 0.22, centerPt.y() - irisH * 0.22);
-    painter.setBrush(QColor(255, 255, 255, 245));
+
+    // Soft bloom halo behind main highlight
+    QRadialGradient bloomGrad(hlPos, hlR * 2.2);
+    bloomGrad.setColorAt(0.0, QColor(255, 255, 255, 140));
+    bloomGrad.setColorAt(0.5, QColor(255, 255, 255, 50));
+    bloomGrad.setColorAt(1.0, QColor(255, 255, 255, 0));
+    painter.setBrush(bloomGrad);
+    painter.drawEllipse(hlPos, hlR * 2.2, hlR * 2.2);
+
+    // Main highlight core
+    painter.setBrush(QColor(255, 255, 255, 255));
     if (op.eyeStyle == QLatin1String("sparkle")) {
         QPainterPath star;
         star.moveTo(hlPos.x(), hlPos.y() - hlR * 1.5);
@@ -2450,17 +2644,35 @@ void KisAiStrokeRenderer::drawAnimeEyeOperation(QPainter &painter, const KisAiSt
         painter.drawEllipse(hlPos, hlR, hlR);
     }
 
-    const qreal subHlR = hlR * 0.55;
-    const QPointF subHlPos(centerPt.x() + irisW * 0.20, centerPt.y() + irisH * 0.18);
-    painter.setBrush(QColor(255, 255, 255, 210));
+    // Secondary micro-sparkle highlights
+    const qreal subHlR = hlR * 0.50;
+    const QPointF subHlPos(centerPt.x() + irisW * 0.22, centerPt.y() + irisH * 0.18);
+    painter.setBrush(QColor(255, 255, 255, 220));
     painter.drawEllipse(subHlPos, subHlR, subHlR);
+
+    const qreal microHlR = hlR * 0.32;
+    const QPointF microHlPos(centerPt.x() - irisW * 0.15, centerPt.y() + irisH * 0.25);
+    painter.setBrush(QColor(255, 255, 255, 180));
+    painter.drawEllipse(microHlPos, microHlR, microHlR);
 
     painter.restore(); // end Sclera clip
 
-    // 5. Upper Eyelash & Eyeline (上まつ毛・アイライン)
-    QColor lashColor = darkTop.darker(130);
+    // 5. Upper Eyelash & Eyeline (上まつ毛・アイライン: セパレート毛束と先端テーパー)
+    QColor lashColor = darkTop.darker(140);
     lashColor.setAlpha(255);
-    const qreal lashThickness = qMax<qreal>(2.2, h * 0.09);
+    const qreal lashThickness = qMax<qreal>(2.4, h * 0.095);
+
+    // Soft eyeshadow / lid feathering above lash line
+    QPainterPath shadowLidPath;
+    shadowLidPath.moveTo(centerPt.x() + innerSign * w * 0.40, centerPt.y() - h * 0.05);
+    shadowLidPath.quadTo(centerPt.x() + outerSign * w * 0.05, centerPt.y() - h * 0.62,
+                         centerPt.x() + outerSign * w * 0.50, centerPt.y() - h * 0.18);
+    QColor lidWash = lashColor.lighter(130);
+    lidWash.setAlpha(60);
+    QPen lidWashPen(lidWash, lashThickness * 1.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    painter.setPen(lidWashPen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(shadowLidPath);
 
     // Main sweeping upper lash line: from inner corner (目頭) over pupil to outer corner (目尻)
     QPainterPath lashPath;
@@ -2473,39 +2685,55 @@ void KisAiStrokeRenderer::drawAnimeEyeOperation(QPainter &painter, const KisAiSt
 
     QPen lashPen(lashColor, lashThickness, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
     painter.setPen(lashPen);
-    painter.setBrush(Qt::NoBrush);
     painter.drawPath(lashPath);
 
-    // Accent upper lash tip (繊細なまつ毛のアクセント)
-    QPainterPath accentLash;
-    accentLash.moveTo(centerPt.x() + outerSign * w * 0.38, centerPt.y() - h * 0.35);
-    accentLash.quadTo(centerPt.x() + outerSign * w * 0.46, centerPt.y() - h * 0.44,
-                      centerPt.x() + outerSign * w * 0.50, centerPt.y() - h * 0.48);
-    QPen accentPen(lashColor, qMax<qreal>(1.2, lashThickness * 0.45), Qt::SolidLine, Qt::RoundCap);
-    painter.setPen(accentPen);
-    painter.drawPath(accentLash);
+    // Separate Lash Clump 1 (目尻の繊細な上まつ毛セパレート束)
+    QPainterPath accentLash1;
+    accentLash1.moveTo(centerPt.x() + outerSign * w * 0.38, centerPt.y() - h * 0.35);
+    accentLash1.quadTo(centerPt.x() + outerSign * w * 0.48, centerPt.y() - h * 0.46,
+                       centerPt.x() + outerSign * w * 0.54, centerPt.y() - h * 0.50);
+    QPen accentPen1(lashColor, qMax<qreal>(1.2, lashThickness * 0.45), Qt::SolidLine, Qt::RoundCap);
+    painter.setPen(accentPen1);
+    painter.drawPath(accentLash1);
 
-    // 6. Double Eyelid crease (二重まぶた: 自然な平行二重ライン)
+    // Separate Lash Clump 2 (副まつ毛・毛先の広がり)
+    QPainterPath accentLash2;
+    accentLash2.moveTo(centerPt.x() + outerSign * w * 0.46, centerPt.y() - h * 0.20);
+    accentLash2.quadTo(centerPt.x() + outerSign * w * 0.56, centerPt.y() - h * 0.32,
+                       centerPt.x() + outerSign * w * 0.62, centerPt.y() - h * 0.34);
+    QPen accentPen2(lashColor, qMax<qreal>(1.0, lashThickness * 0.35), Qt::SolidLine, Qt::RoundCap);
+    painter.setPen(accentPen2);
+    painter.drawPath(accentLash2);
+
+    // 6. Double Eyelid crease (二重まぶた: 自然で滑らかな平行二重ライン)
     QPainterPath creasePath;
-    creasePath.moveTo(centerPt.x() + innerSign * (w * 0.26), centerPt.y() - (h * 0.60));
+    creasePath.moveTo(centerPt.x() + innerSign * (w * 0.28), centerPt.y() - (h * 0.60));
     creasePath.quadTo(centerPt.x() + outerSign * (w * 0.05), centerPt.y() - (h * 0.68),
-                      centerPt.x() + outerSign * (w * 0.35), centerPt.y() - (h * 0.54));
+                      centerPt.x() + outerSign * (w * 0.36), centerPt.y() - (h * 0.54));
     QColor creaseColor = lashColor;
     creaseColor.setAlpha(185);
     QPen creasePen(creaseColor, qMax<qreal>(1.0, lashThickness * 0.32), Qt::SolidLine, Qt::RoundCap);
     painter.setPen(creasePen);
     painter.drawPath(creasePath);
 
-    // 7. Lower Eyelash (下まつ毛: 目尻側のソフトで繊細なアクセント)
-    QPainterPath lowerLash;
-    lowerLash.moveTo(centerPt.x() + outerSign * (w * 0.12), centerPt.y() + (h * 0.46));
-    lowerLash.quadTo(centerPt.x() + outerSign * (w * 0.28), centerPt.y() + (h * 0.48),
-                     centerPt.x() + outerSign * (w * 0.40), centerPt.y() + (h * 0.36));
+    // 7. Lower Eyelashes (下まつ毛: 目尻側のセパレート毛束)
+    QPainterPath lowerLash1;
+    lowerLash1.moveTo(centerPt.x() + outerSign * (w * 0.16), centerPt.y() + (h * 0.46));
+    lowerLash1.quadTo(centerPt.x() + outerSign * (w * 0.28), centerPt.y() + (h * 0.48),
+                      centerPt.x() + outerSign * (w * 0.38), centerPt.y() + (h * 0.38));
     QColor lowerLashColor = lashColor;
     lowerLashColor.setAlpha(175);
     QPen lowerPen(lowerLashColor, qMax<qreal>(1.0, lashThickness * 0.35), Qt::SolidLine, Qt::RoundCap);
     painter.setPen(lowerPen);
-    painter.drawPath(lowerLash);
+    painter.drawPath(lowerLash1);
+
+    QPainterPath lowerLash2;
+    lowerLash2.moveTo(centerPt.x() + outerSign * (w * 0.32), centerPt.y() + (h * 0.44));
+    lowerLash2.quadTo(centerPt.x() + outerSign * (w * 0.40), centerPt.y() + (h * 0.48),
+                      centerPt.x() + outerSign * (w * 0.44), centerPt.y() + (h * 0.52));
+    QPen lowerPen2(lowerLashColor, qMax<qreal>(0.8, lashThickness * 0.28), Qt::SolidLine, Qt::RoundCap);
+    painter.setPen(lowerPen2);
+    painter.drawPath(lowerLash2);
 
     painter.restore();
 }
