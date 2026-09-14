@@ -502,6 +502,7 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
             out += QStringLiteral(
                 "PHASE 3 MISSION: [SPECULAR HIGHLIGHTS & FX POLISH (COMPLETION)]\n"
                 "- Target Layers: 'Highlights' and 'FX'.\n"
+                "- CRITICAL: Do NOT redraw earlier foundation layers ('Background', 'Flats'). Output only new additions.\n"
                 "- Specular glints, catchlights, blooming effects, and particles. Bring to 100% completion.\n"
             );
         }
@@ -577,6 +578,8 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
         out += QStringLiteral(
             "PHASE 4 MISSION: [SPECULAR HIGHLIGHTS & POLISH]\n"
             "- Target Layers: 'Highlights' (Screen blend) and 'FX'.\n"
+            "- CRITICAL FOUNDATION PRESERVATION: Do NOT output operations for 'Background', 'Flats', or 'Shading'! Foundation layers are already established and cumulatively preserved. Focus 100% of your budget on delicate 'Highlights' and 'FX'.\n"
+            "- ACCUMULATIVE ADDITIONS ONLY: Do NOT output a full redrawn artwork. Output ONLY the new finishing operations for this phase.\n"
             "- Specular Glints: Eye catchlights (#ffffff, 2-5px glints on irises), lip glints, nose tip point, hair angel halo rim lighting.\n"
             "- STRICT NO RANDOM PARTICLES / NO STIPPLING: DO NOT emit 'particles' (stars/snow/dots) unless explicitly requested in the prompt! Never spray noise over faces.\n"
             "- STRICT: DO NOT use 'manga_lines' (radial speed lines) unless explicitly requested as an action/battle scene!\n"

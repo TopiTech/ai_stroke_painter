@@ -445,6 +445,12 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
     const qreal minDim = qMin(canvasSize.width(), canvasSize.height());
     const qreal effectiveTrapping = trappingPx < 0.0 ? qMax<qreal>(1.0, minDim / 1000.0 * 1.5) : trappingPx;
     KisAiStrokeProgram activeProgram = program;
+    if (inheritedFlatsProgram && inheritedFlatsProgram->operations.size() > activeProgram.operations.size()) {
+        // Defense-in-depth: if an accumulated program was supplied that contains more operations
+        // than the step program (e.g. from Goal Mode steps), use the accumulated program so
+        // previously rendered layers are not wiped out by layer->paintDevice()->clear().
+        activeProgram = *inheritedFlatsProgram;
+    }
     activeProgram.canvasSize = canvasSize;
     if (effectiveTrapping > 0.0) {
         activeProgram = KisAiStrokeQualityUtils::applyTrapping(activeProgram, effectiveTrapping);

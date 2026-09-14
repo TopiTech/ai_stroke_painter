@@ -73,6 +73,7 @@ private Q_SLOTS:
     void testFineLineRenderingSubpixel();
     void testAdaptiveResamplingPreservesNuance();
     void testLineartHierarchyDynamicTiers();
+    void testGoalModeLayersPreservationOnFinalStep();
     void testHairStrandsAndBangsBleedGeneration();
     void testShortStrokeTaperingEndpoints();
 };

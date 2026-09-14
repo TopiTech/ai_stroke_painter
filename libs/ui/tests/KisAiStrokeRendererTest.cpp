@@ -1997,4 +1997,127 @@ void KisAiStrokeRendererTest::testShortStrokeTaperingEndpoints()
     QVERIFY2(coloredPixels > 5, qPrintable(QStringLiteral("Short stroke drew too few pixels: %1").arg(coloredPixels)));
 }
 
+void KisAiStrokeRendererTest::testGoalModeLayersPreservationOnFinalStep()
+{
+    const QSize canvasSize(512, 512);
+
+    // Step 1: Foundation (Background + Flats)
+    KisAiStrokeProgram step1;
+    step1.schemaVersion = 2;
+    step1.currentStep = 1;
+    step1.totalSteps = 4;
+    step1.canvasSize = canvasSize;
+
+    KisAiStrokeOperation bg;
+    bg.kind = KisAiStrokeOperation::Kind::Fill;
+    bg.id = QStringLiteral("bg_sky");
+    bg.layer = QStringLiteral("Background");
+    bg.polygon = {QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)};
+    bg.brush.color = QColor(40, 60, 90);
+    step1.operations.append(bg);
+
+    KisAiStrokeOperation flatSkin;
+    flatSkin.kind = KisAiStrokeOperation::Kind::Fill;
+    flatSkin.id = QStringLiteral("skin_face");
+    flatSkin.layer = QStringLiteral("Flats");
+    flatSkin.polygon = {QPointF(0.3, 0.3), QPointF(0.7, 0.3), QPointF(0.7, 0.7), QPointF(0.3, 0.7)};
+    flatSkin.brush.color = QColor(255, 224, 200);
+    step1.operations.append(flatSkin);
+
+    // Step 2: Shading
+    KisAiStrokeProgram step2;
+    step2.schemaVersion = 2;
+    step2.currentStep = 2;
+    step2.totalSteps = 4;
+    step2.canvasSize = canvasSize;
+
+    KisAiStrokeOperation shade;
+    shade.kind = KisAiStrokeOperation::Kind::Fill;
+    shade.id = QStringLiteral("shade_face");
+    shade.layer = QStringLiteral("Shading");
+    shade.polygon = {QPointF(0.5, 0.3), QPointF(0.7, 0.3), QPointF(0.7, 0.7), QPointF(0.5, 0.7)};
+    shade.brush.color = QColor(200, 150, 130);
+    step2.operations.append(shade);
+
+    // Step 3: Lineart
+    KisAiStrokeProgram step3;
+    step3.schemaVersion = 2;
+    step3.currentStep = 3;
+    step3.totalSteps = 4;
+    step3.canvasSize = canvasSize;
+
+    KisAiStrokeOperation lineJaw;
+    lineJaw.kind = KisAiStrokeOperation::Kind::Path;
+    lineJaw.id = QStringLiteral("line_jaw");
+    lineJaw.layer = QStringLiteral("Lineart");
+    lineJaw.points = {KisAiStrokePoint(0.3, 0.3), KisAiStrokePoint(0.3, 0.7), KisAiStrokePoint(0.7, 0.7)};
+    lineJaw.brush.color = QColor(20, 20, 30);
+    lineJaw.brush.size = 0.01;
+    step3.operations.append(lineJaw);
+
+    // Step 4 (Final step): Highlights & FX, PLUS an additive line accent on Lineart layer
+    KisAiStrokeProgram step4;
+    step4.schemaVersion = 2;
+    step4.currentStep = 4;
+    step4.totalSteps = 4;
+    step4.canvasSize = canvasSize;
+
+    KisAiStrokeOperation glint;
+    glint.kind = KisAiStrokeOperation::Kind::Fill;
+    glint.id = QStringLiteral("eye_glint");
+    glint.layer = QStringLiteral("Highlights");
+    glint.polygon = {QPointF(0.45, 0.45), QPointF(0.48, 0.45), QPointF(0.48, 0.48), QPointF(0.45, 0.48)};
+    glint.brush.color = QColor(255, 255, 255);
+    step4.operations.append(glint);
+
+    KisAiStrokeOperation lineCatchlight;
+    lineCatchlight.kind = KisAiStrokeOperation::Kind::Path;
+    lineCatchlight.id = QStringLiteral("line_eyelash_accent");
+    lineCatchlight.layer = QStringLiteral("Lineart");
+    lineCatchlight.points = {KisAiStrokePoint(0.44, 0.43), KisAiStrokePoint(0.49, 0.43)};
+    lineCatchlight.brush.color = QColor(15, 15, 25);
+    lineCatchlight.brush.size = 0.005;
+    step4.operations.append(lineCatchlight);
+
+    // Accumulate across all 4 steps (as KisAiIllustrationDocker now does)
+    KisAiStrokeProgram accumulated = step1;
+    accumulated = KisAiStrokeProgramCodec::mergePrograms(accumulated, step2);
+    accumulated = KisAiStrokeProgramCodec::mergePrograms(accumulated, step3);
+    accumulated = KisAiStrokeProgramCodec::mergePrograms(accumulated, step4);
+
+    QCOMPARE(accumulated.currentStep, 4);
+    QCOMPARE(accumulated.totalSteps, 4);
+
+    // Verify all 6 operations survived into accumulated program
+    const auto layerCounts = KisAiStrokeProgramCodec::countLayerOperations(accumulated);
+    QCOMPARE(layerCounts.value(QStringLiteral("Background")), 1);
+    QCOMPARE(layerCounts.value(QStringLiteral("Flats")), 1);
+    QCOMPARE(layerCounts.value(QStringLiteral("Shading")), 1);
+    // Lineart must contain BOTH Step 3 lineJaw AND Step 4 lineCatchlight!
+    QCOMPARE(layerCounts.value(QStringLiteral("Lineart")), 2);
+    QCOMPARE(layerCounts.value(QStringLiteral("Highlights")), 1);
+
+    // Render the final accumulated result
+    const QImage finalImage = KisAiStrokeRenderer::renderProgramToImage(accumulated, canvasSize);
+    QVERIFY(!finalImage.isNull());
+
+    // Verify Flats skin region is not clear/blank (preserved from Step 1)
+    const QColor skinPixel = finalImage.pixelColor(qRound(0.35 * canvasSize.width()), qRound(0.5 * canvasSize.height()));
+    QVERIFY(skinPixel.alpha() > 200);
+    QVERIFY(skinPixel.red() > 180);
+
+    // Verify Background is present (preserved from Step 1)
+    const QColor bgPixel = finalImage.pixelColor(10, 10);
+    QVERIFY(bgPixel.alpha() > 200);
+    QVERIFY(bgPixel.blue() > 50);
+
+    // Verify Lineart from Step 3 drew colored pixels near jaw line
+    const QColor jawPixel = finalImage.pixelColor(qRound(0.3 * canvasSize.width()), qRound(0.5 * canvasSize.height()));
+    QVERIFY(jawPixel.alpha() > 100);
+
+    // Verify Highlights from Step 4 is present
+    const QColor glintPixel = finalImage.pixelColor(qRound(0.46 * canvasSize.width()), qRound(0.46 * canvasSize.height()));
+    QVERIFY(glintPixel.red() > 200 && glintPixel.green() > 200 && glintPixel.blue() > 200);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

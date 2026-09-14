@@ -4612,6 +4612,7 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(
         "2. [FOCUS]: Specify 'target_focus_area' (e.g. 'Face & Expression', 'Hair Strands & Volume', 'Form Shading & Ambient Occlusion', 'Specular Highlights & Atmosphere'). "
         "3. [READINESS EVALUATION]: Provide 'readiness_score' from 0.0 (bare outline) to 1.0 (finished presentation). If >= 0.85 and presentation-ready, set 'goal_reached' to true. "
         "4. [ACT]: Generate only the necessary, high-precision operations for phase '%3'. Set 'step_phase' to '%3', 'current_step' to %1, and 'goal_reached' to %4. "
+        "Your operations are cumulatively merged onto the canvas; do NOT attempt to redraw base silhouettes or previous phases from scratch. "
         "Output strictly valid RFC 8259 JSON without markdown fences.")
         .arg(step)
         .arg(totalSteps)
