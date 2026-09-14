@@ -4096,6 +4096,73 @@ void KisAiStrokeProgramTest::testLenientParsingCasingAndAliases()
     QCOMPARE(op2.blendMode, QStringLiteral("color_dodge")); // Hyphen converted to underscore
 }
 
+void KisAiStrokeProgramTest::testResampleEquidistantClosesTruncatedClosedCurve()
+{
+    // Regression: resampleEquidistant used to stop at an internal point cap and
+    // only re-append the final vertex for OPEN curves, so a dense CLOSED stroke
+    // that hit the cap rendered with a long straight chord from where sampling
+    // stopped back to the start point.
+    QVector<KisAiStrokePoint> points;
+    constexpr int kVertices = 4096;
+    for (int i = 0; i < kVertices; ++i) {
+        // High-frequency radial zigzag: forces many segments per unit length.
+        const qreal t = 2.0 * M_PI * i / kVertices;
+        const qreal r = 0.45 + 0.02 * ((i % 2) ? 1.0 : -1.0);
+        points.append(KisAiStrokePoint(0.5 + r * qCos(t), 0.5 + r * qSin(t), 0.8));
+    }
+
+    const QVector<KisAiStrokePoint> res = KisAiStrokeQualityUtils::resampleEquidistant(points, 1.0e-5, true);
+    QVERIFY(res.size() >= 2);
+
+    // A sealed ring must return to its origin. Before the fix this gap was >100px
+    // on a 4096px canvas; the tolerance below is 0.41px at 4096.
+    const QPointF d = res.last().pos - res.first().pos;
+    const qreal closingGap = qSqrt(d.x() * d.x() + d.y() * d.y());
+    QVERIFY2(closingGap < 1.0e-4, qPrintable(QStringLiteral("closing gap=%1").arg(closingGap)));
+}
+
+void KisAiStrokeProgramTest::testResampleEquidistantStaysBounded()
+{
+    // Regression guard for the memory bound the cap exists for: a caller passing
+    // an absurdly small step must not allocate unbounded memory.
+    QVector<KisAiStrokePoint> points;
+    for (int i = 0; i < 64; ++i) {
+        const qreal t = 2.0 * M_PI * i / 64.0;
+        points.append(KisAiStrokePoint(0.5 + 0.4 * qCos(t), 0.5 + 0.4 * qSin(t), 0.8));
+    }
+
+    const QVector<KisAiStrokePoint> res = KisAiStrokeQualityUtils::resampleEquidistant(points, 1.0e-9, true);
+    QVERIFY(res.size() >= 2);
+    QVERIFY2(res.size() <= 33002, qPrintable(QStringLiteral("count=%1").arg(res.size())));
+}
+
+void KisAiStrokeProgramTest::testSchemaVersionCoercionRejectsHugeStringValue()
+{
+    // Regression: a string schema_version like "1e300" passed coerceToNumber's
+    // finiteness check, then static_cast<int>(1e300) was undefined behaviour and
+    // the codec saw an out-of-range version, rejecting the whole program.
+    QJsonObject program;
+    program[QStringLiteral("schema_version")] = QStringLiteral("1e300");
+    QJsonArray ops;
+    QJsonObject op;
+    op[QStringLiteral("kind")] = QStringLiteral("path");
+    op[QStringLiteral("points")] = QJsonArray{QJsonArray{0.2, 0.2}, QJsonArray{0.8, 0.8}};
+    ops.append(op);
+    program[QStringLiteral("operations")] = ops;
+
+    QJsonObject coerced = program;
+    KisAiStrokeTypeChecker::checkAndCoerceProgram(&coerced);
+    const QJsonValue sv = coerced.value(QStringLiteral("schema_version"));
+    QVERIFY(sv.isDouble());
+    QCOMPARE(sv.toInt(), 2);
+
+    // And the program must still survive the real codec path.
+    KisAiStrokeProgram parsed;
+    QString error;
+    const bool ok = KisAiStrokeProgramCodec::parseProgramJson(coerced, &parsed, &error);
+    QVERIFY2(ok, qPrintable(error));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

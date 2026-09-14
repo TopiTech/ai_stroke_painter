@@ -118,6 +118,9 @@ private Q_SLOTS:
     void testSceneSpecRejectsOversizedBody();
     void testStructuredOutputsJsonSchemaCompleteness();
     void testLenientParsingCasingAndAliases();
+    void testResampleEquidistantClosesTruncatedClosedCurve();
+    void testResampleEquidistantStaysBounded();
+    void testSchemaVersionCoercionRejectsHugeStringValue();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

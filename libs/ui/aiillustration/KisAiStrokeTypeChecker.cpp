@@ -808,7 +808,12 @@ bool KisAiStrokeTypeChecker::checkAndCoerceProgram(
         const QJsonValue svVal = programObject->value(QStringLiteral("schema_version"));
         if (!svVal.isDouble()) {
             qreal schemaVersionVal = 2.0;
-            if (coerceToNumber(svVal, &schemaVersionVal)) {
+            // Range-check before the int conversion: a string like "1e300" passes
+            // coerceToNumber's finiteness test but overflows static_cast<int>
+            // (UB), after which the codec would see an out-of-range version and
+            // reject the whole program. Unsupported versions fall back to 2.
+            if (coerceToNumber(svVal, &schemaVersionVal)
+                && schemaVersionVal >= 1.0 && schemaVersionVal <= 2.0) {
                 (*programObject)[QStringLiteral("schema_version")] = static_cast<int>(schemaVersionVal);
                 if (report) ++report->coercedValues;
             } else {

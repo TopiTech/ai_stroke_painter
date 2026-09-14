@@ -235,9 +235,13 @@ KisAiStrokeLintReport KisAiDeliberateStroke::lintStroke(
         }
         for (const KisAiStrokePoint &p : op.points) {
             if (!finitePoint(p.pos) || !std::isfinite(p.pressure)) {
+                // Bail out: NaN compares false against every threshold below, so
+                // continuing would leave drop==false and push the bad vertex into
+                // pathLength/curvature/self-intersection diagnostics and on to QPainter.
+                rep.drop = true;
                 rep.needsRepair = true;
                 rep.reasons << QStringLiteral("non-finite-point");
-                break;
+                return rep;
             }
         }
         if (allPointsOutside(op.points)) {
@@ -310,9 +314,10 @@ KisAiStrokeLintReport KisAiDeliberateStroke::lintStroke(
         spinePts.reserve(spine.size());
         for (const QPointF &p : spine) {
             if (!finitePoint(p)) {
+                rep.drop = true;
                 rep.needsRepair = true;
                 rep.reasons << QStringLiteral("non-finite-spine");
-                break;
+                return rep;
             }
             spinePts.append(KisAiStrokePoint(p.x(), p.y(), 0.8));
         }
@@ -343,9 +348,10 @@ KisAiStrokeLintReport KisAiDeliberateStroke::lintStroke(
         }
         for (const QPointF &p : op.polygon) {
             if (!finitePoint(p)) {
+                rep.drop = true;
                 rep.needsRepair = true;
                 rep.reasons << QStringLiteral("non-finite-polygon");
-                break;
+                return rep;
             }
         }
         if (allPolyOutside(op.polygon)) {
@@ -389,6 +395,7 @@ KisAiStrokeLintReport KisAiDeliberateStroke::lintStroke(
             return rep;
         }
         if (!std::isfinite(op.eyeCenter.x()) || !std::isfinite(op.eyeCenter.y())) {
+            rep.drop = true;
             rep.needsRepair = true;
             rep.reasons << QStringLiteral("non-finite-eye-center");
         }

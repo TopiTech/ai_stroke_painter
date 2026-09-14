@@ -84,6 +84,7 @@ private Q_SLOTS:
     void testPhase2DynamicPerspectiveAndAngles();
     void testCrossLayerClipToId();
     void testProceduralMacroExpansionGuidance();
+    void testLintDropsNonFiniteGeometry();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

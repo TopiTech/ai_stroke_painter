@@ -2505,4 +2505,57 @@ void KisAiStrokeRendererTest::testProceduralMacroExpansionGuidance()
     QVERIFY(spinePixel.alpha() > 100);
 }
 
+void KisAiStrokeRendererTest::testLintDropsNonFiniteGeometry()
+{
+    // Regression: lintStroke flagged needsRepair for NaN geometry but only broke
+    // out of the validation loop, leaving drop==false. NaN compares false against
+    // every threshold, so the bad vertex was then fed to path length / curvature /
+    // self-intersection diagnostics and on to QPainter.
+    const QSize canvas(1024, 1024);
+
+    KisAiStrokeOperation nanPath;
+    nanPath.kind = KisAiStrokeOperation::Kind::Path;
+    nanPath.id = QStringLiteral("nan-path");
+    nanPath.layer = QStringLiteral("Lineart");
+    nanPath.brush.color = QColor(20, 20, 20);
+    nanPath.brush.size = 0.004;
+    nanPath.points = QVector<KisAiStrokePoint>{
+        KisAiStrokePoint(0.1, 0.1, 0.8),
+        KisAiStrokePoint(std::numeric_limits<qreal>::quiet_NaN(), 0.5, 0.8),
+        KisAiStrokePoint(0.9, 0.9, 0.8)};
+    QVERIFY(KisAiDeliberateStroke::lintStroke(nanPath, canvas).drop);
+
+    KisAiStrokeOperation nanSpine;
+    nanSpine.kind = KisAiStrokeOperation::Kind::Ribbon;
+    nanSpine.id = QStringLiteral("nan-spine");
+    nanSpine.layer = QStringLiteral("Flats");
+    nanSpine.brush.color = QColor(20, 20, 20);
+    nanSpine.widthStart = 0.01;
+    nanSpine.widthMid = 0.01;
+    nanSpine.widthEnd = 0.01;
+    nanSpine.spine = QVector<QPointF>{
+        QPointF(0.2, 0.2),
+        QPointF(0.5, std::numeric_limits<qreal>::infinity()),
+        QPointF(0.8, 0.6)};
+    QVERIFY(KisAiDeliberateStroke::lintStroke(nanSpine, canvas).drop);
+
+    KisAiStrokeOperation nanPoly;
+    nanPoly.kind = KisAiStrokeOperation::Kind::Fill;
+    nanPoly.id = QStringLiteral("nan-poly");
+    nanPoly.layer = QStringLiteral("Flats");
+    nanPoly.brush.color = QColor(20, 20, 20);
+    nanPoly.polygon = QVector<QPointF>{
+        QPointF(0.2, 0.2),
+        QPointF(std::numeric_limits<qreal>::quiet_NaN(), 0.6),
+        QPointF(0.8, 0.8)};
+    QVERIFY(KisAiDeliberateStroke::lintStroke(nanPoly, canvas).drop);
+
+    // A program carrying NaN geometry must never paint ink for that operation.
+    KisAiStrokeProgram prog;
+    prog.canvasSize = canvas;
+    prog.operations.append(nanPath);
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvas);
+    QVERIFY(!img.isNull());
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

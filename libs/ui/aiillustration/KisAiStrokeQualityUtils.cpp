@@ -125,7 +125,7 @@ QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::resampleEquidistant(
     // The output count is totalLength/step, so a caller passing a very small
     // normalised step could enqueue hundreds of thousands of points (and the
     // reserve() below would commit that memory up front). Bound both.
-    constexpr int kMaxResampledPoints = 8192;
+    constexpr int kMaxResampledPoints = 33000;
     const int estimatedPoints = qBound(0, qCeil(totalLength / step) + 2, kMaxResampledPoints);
     result.reserve(estimatedPoints);
     result.append(points.first());
@@ -158,7 +158,15 @@ QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::resampleEquidistant(
         }
     }
 
-    if (!closed && (result.isEmpty() || pointDistance(result.last().pos, points.last().pos) > step * 0.25)) {
+    // A closed curve that hit the cap must still be sealed: the loop walks up to
+    // totalLength but stops early when the bound is reached, so re-append the
+    // first vertex to close the ring. Without this the stroke renders with a
+    // long straight chord between the last emitted vertex and the start.
+    if (closed) {
+        if (pointDistance(result.last().pos, points.first().pos) > step * 0.25) {
+            result.append(points.first());
+        }
+    } else if (result.isEmpty() || pointDistance(result.last().pos, points.last().pos) > step * 0.25) {
         result.append(points.last());
     }
 

@@ -2144,7 +2144,7 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
 
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
     m_previewLabel->setPixmap(QPixmap::fromImage(image).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    if (addImageAsLayer(image, promptForLayerName(m_promptEditor->toPlainText()))) {
+    if (addImageAsLayer(image, promptForLayerName(m_promptEditor ? m_promptEditor->toPlainText() : QString()))) {
         setStatus(i18n("画像モデルの結果を新しいレイヤーに追加しました。"));
         KisAiGenerationSnapshot snapshot;
         snapshot.timestamp = QDateTime::currentDateTime();
@@ -2380,7 +2380,12 @@ void KisAiIllustrationDocker::setBusy(bool busy)
     }
     m_modeCombo->setEnabled(allowGeneralInput);
     if (m_goalModeCheck) {
-        m_goalModeCheck->setEnabled(allowGeneralInput);
+        // Goal mode only drives stroke-generation modes; keep the checkbox
+        // disabled for image/concept modes even though general input is allowed,
+        // so it can never appear operable while generateIllustration ignores it.
+        const bool goalCompatible = (m_currentMode == GenerationMode::LlmStrokes
+                                     || m_currentMode == GenerationMode::LocalStrokes);
+        m_goalModeCheck->setEnabled(allowGeneralInput && goalCompatible);
     }
     if (m_goalStepsSpin) {
         m_goalStepsSpin->setEnabled(allowGeneralInput);
@@ -3263,7 +3268,7 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
             snapshot.previewImage = pm.toImage();
             snapshot.artStyleIndex = m_artStyleCombo ? m_artStyleCombo->currentData().toInt() : 0;
             snapshot.styleName = m_artStyleCombo ? m_artStyleCombo->currentText() : QString();
-            snapshot.modeIndex = static_cast<int>(GenerationMode::LlmStrokes);
+            snapshot.modeIndex = static_cast<int>(m_currentMode);
             snapshot.strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
             addHistorySnapshot(snapshot);
         }
@@ -4374,7 +4379,12 @@ void KisAiIllustrationDocker::restoreHistorySnapshot(int index)
         }
     }
     if (m_modeCombo && snap.modeIndex >= 0) {
-        m_modeCombo->setCurrentIndex(snap.modeIndex);
+        // Map the stored enum through item data rather than assuming the combo
+        // order equals the enum order.
+        const int idx = m_modeCombo->findData(snap.modeIndex);
+        if (idx >= 0) {
+            m_modeCombo->setCurrentIndex(idx);
+        }
     }
     if (m_previewLabel && !snap.previewImage.isNull()) {
         const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
