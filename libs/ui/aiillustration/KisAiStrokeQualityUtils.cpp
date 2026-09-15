@@ -1523,46 +1523,73 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateRimLightStrokes(
         if (op.kind != KisAiStrokeOperation::Kind::Fill || op.polygon.size() < 4) continue;
         if (op.layer.compare(QLatin1String("Flats"), Qt::CaseInsensitive) != 0) continue;
 
+        // Skip small decorative clusters, foliage patches, and particles that cause messy wireframe clutter
+        const QString lowerId = op.id.toLower();
+        if (lowerId.contains(QLatin1String("cluster")) ||
+            lowerId.contains(QLatin1String("foliage")) ||
+            lowerId.contains(QLatin1String("petal")) ||
+            lowerId.contains(QLatin1String("sparkle")) ||
+            lowerId.contains(QLatin1String("particle")) ||
+            lowerId.contains(QLatin1String("dot")) ||
+            lowerId.contains(QLatin1String("haze"))) {
+            continue;
+        }
+
+        const QPolygonF pixelPoly = scalePolygon(op.polygon, canvasSize);
+        const QRectF b = pixelPoly.boundingRect();
+        if (b.width() < canvasSize.width() * 0.12 && b.height() < canvasSize.height() * 0.12) {
+            continue;
+        }
+
+        // Determine polygon winding so normal is strictly pointing outward
+        qreal signedArea = 0.0;
+        const int polySize = op.polygon.size();
+        for (int i = 0; i < polySize; ++i) {
+            const QPointF &pA = op.polygon.at(i);
+            const QPointF &pB = op.polygon.at((i + 1) % polySize);
+            signedArea += pA.x() * pB.y() - pB.x() * pA.y();
+        }
+        if (qAbs(signedArea) < 1.0e-9) continue;
+        const qreal normalSign = signedArea > 0.0 ? 1.0 : -1.0;
+
         const auto &poly = op.polygon;
         QVector<KisAiStrokePoint> rimPoints;
-        for (int i = 0; i < poly.size(); ++i) {
-            const QPointF p1 = poly.at(i);
-            const QPointF p2 = poly.at((i + 1) % poly.size());
-            const QPointF edge = p2 - p1;
-            const QPointF normal(-edge.y(), edge.x());
-            if (dotProduct(normalizeVector(normal), normLight) > 0.45) {
-                rimPoints.append(KisAiStrokePoint(p1.x(), p1.y(), 0.8));
-            } else if (!rimPoints.isEmpty()) {
-                if (rimPoints.size() >= 3) {
+
+        auto flushRim = [&](QVector<KisAiStrokePoint> &pts) {
+            if (pts.size() >= 3 && out.size() < 12) {
+                // Smooth rim light points to prevent harsh polygonal wireframe lines
+                QVector<KisAiStrokePoint> smoothed = resampleEquidistant(pts, qMax<qreal>(3.0, canvasSize.width() * 0.006), false);
+                if (smoothed.size() >= 2) {
                     KisAiStrokeOperation rimOp;
                     rimOp.kind = KisAiStrokeOperation::Kind::Path;
                     rimOp.id = QStringLiteral("rim_light_%1_%2").arg(op.id).arg(out.size());
                     rimOp.layer = QStringLiteral("Highlights");
-                    rimOp.points = rimPoints;
+                    rimOp.points = smoothed;
                     rimOp.smooth = true;
                     rimOp.brush.profile = QStringLiteral("airbrush");
                     rimOp.brush.color = QColor(220, 245, 255);
                     rimOp.brush.size = 0.0035;
-                    rimOp.brush.opacity = 0.70;
+                    rimOp.brush.opacity = 0.65;
                     rimOp.blendMode = QStringLiteral("screen");
                     out.append(rimOp);
                 }
-                rimPoints.clear();
+            }
+            pts.clear();
+        };
+
+        for (int i = 0; i < poly.size(); ++i) {
+            const QPointF p1 = poly.at(i);
+            const QPointF p2 = poly.at((i + 1) % poly.size());
+            const QPointF edge = p2 - p1;
+            const QPointF outwardNormal(edge.y() * normalSign, -edge.x() * normalSign);
+            if (dotProduct(normalizeVector(outwardNormal), normLight) > 0.50) {
+                rimPoints.append(KisAiStrokePoint(p1.x(), p1.y(), 0.8));
+            } else if (!rimPoints.isEmpty()) {
+                flushRim(rimPoints);
             }
         }
-        if (rimPoints.size() >= 3 && out.size() < 12) {
-            KisAiStrokeOperation rimOp;
-            rimOp.kind = KisAiStrokeOperation::Kind::Path;
-            rimOp.id = QStringLiteral("rim_light_%1_%2").arg(op.id).arg(out.size());
-            rimOp.layer = QStringLiteral("Highlights");
-            rimOp.points = rimPoints;
-            rimOp.smooth = true;
-            rimOp.brush.profile = QStringLiteral("airbrush");
-            rimOp.brush.color = QColor(220, 245, 255);
-            rimOp.brush.size = 0.0035;
-            rimOp.brush.opacity = 0.70;
-            rimOp.blendMode = QStringLiteral("screen");
-            out.append(rimOp);
+        if (!rimPoints.isEmpty()) {
+            flushRim(rimPoints);
         }
     }
 

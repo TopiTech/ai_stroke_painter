@@ -653,3 +653,378 @@ quint32 KisAiRigLibrary::partSeed(const QString &partName, quint32 baseSeed)
 {
     return KisAiStrokeProgramCodec::stableSeed(partName) ^ baseSeed;
 }
+
+QVector<KisAiStrokeOperation> KisAiRigLibrary::mountainOps(
+    const KisAiSceneSpec &spec, const QSize &canvasSize, quint32 seed)
+{
+    Q_UNUSED(canvasSize);
+    Q_UNUSED(seed);
+    QVector<KisAiStrokeOperation> ops;
+    const QString tod = spec.light.timeOfDay;
+
+    // 1. Exponential ridge silhouette for elegant volcanic peak (Mount Fuji profile)
+    const qreal xc = 0.50;
+    const qreal yTop = 0.26;
+    const qreal yBase = 0.64;
+    const qreal halfSpan = 0.44;
+    const qreal kDecay = 3.6;
+
+    QPolygonF mountainPoly;
+    mountainPoly.append(QPointF(xc - halfSpan, yBase));
+
+    // Left slope (rising to peak)
+    const int slopeSteps = 24;
+    for (int i = 0; i <= slopeSteps; ++i) {
+        const qreal t = qreal(i) / slopeSteps;
+        const qreal x = (xc - halfSpan) + t * halfSpan;
+        const qreal dist = (xc - x) / halfSpan;
+        const qreal y = yBase - (yBase - yTop) * std::exp(-kDecay * dist);
+        mountainPoly.append(QPointF(x, y));
+    }
+
+    // Right slope (descending to base)
+    for (int i = 1; i <= slopeSteps; ++i) {
+        const qreal t = qreal(i) / slopeSteps;
+        const qreal x = xc + t * halfSpan;
+        const qreal dist = (x - xc) / halfSpan;
+        const qreal y = yBase - (yBase - yTop) * std::exp(-kDecay * dist);
+        mountainPoly.append(QPointF(x, y));
+    }
+
+    mountainPoly.append(QPointF(xc + halfSpan, yBase));
+
+    // Palette derivation based on time of day
+    QColor mountainBody;
+    QColor snowColor;
+    QColor shadowColor;
+    if (tod == QLatin1String("night")) {
+        mountainBody = QColor(25, 35, 68);
+        snowColor = QColor(180, 195, 225);
+        shadowColor = QColor(12, 18, 40, 160);
+    } else if (tod == QLatin1String("sunset")) {
+        mountainBody = QColor(125, 60, 85);       // Red Fuji / warm evening slope
+        snowColor = QColor(255, 235, 240);        // Alpenglow pink
+        shadowColor = QColor(60, 25, 55, 170);   // Deep violet shadow
+    } else {
+        mountainBody = QColor(70, 95, 140);
+        snowColor = QColor(250, 252, 255);
+        shadowColor = QColor(35, 50, 85, 150);
+    }
+
+    // 1. Mountain Base Mass (Flats)
+    ops.append(makeFillOp(QStringLiteral("rig_mountain_body"), mountainPoly,
+                          mountainBody, 1.0, QStringLiteral("Flats")));
+
+    // 2. Snow Cap with serrated fractal snowmelt ridges (Snow Crevices)
+    const qreal snowDepth = (yBase - yTop) * 0.38;
+    QPolygonF snowPoly;
+    snowPoly.append(QPointF(xc, yTop));
+
+    // Snow contour left to right with harmonic crevices
+    const int snowSteps = 32;
+    for (int i = 0; i <= snowSteps; ++i) {
+        const qreal t = qreal(i) / snowSteps;
+        const qreal angle = (t - 0.5) * 2.0;
+        const qreal x = xc + angle * (halfSpan * 0.46);
+        const qreal dist = std::abs(x - xc) / halfSpan;
+        const qreal ridgeY = yBase - (yBase - yTop) * std::exp(-kDecay * dist);
+
+        // Harmonic serration creates realistic snowmelt tongue patterns down the ravines
+        const qreal harmonic = 0.30 * std::sin(t * 14.0 * M_PI) + 0.15 * std::cos(t * 28.0 * M_PI);
+        const qreal ySnow = yTop + snowDepth * (0.80 + 0.35 * (dist * 2.2) + harmonic);
+        const qreal clampedY = std::min(ySnow, ridgeY);
+        snowPoly.append(QPointF(x, clampedY));
+    }
+
+    // Connect along the top ridge to close the snow cap
+    for (int i = snowSteps; i >= 0; --i) {
+        const qreal t = qreal(i) / snowSteps;
+        const qreal angle = (t - 0.5) * 2.0;
+        const qreal x = xc + angle * (halfSpan * 0.46);
+        const qreal dist = std::abs(x - xc) / halfSpan;
+        const qreal ridgeY = yBase - (yBase - yTop) * std::exp(-kDecay * dist);
+        snowPoly.append(QPointF(x, ridgeY));
+    }
+
+    KisAiStrokeOperation snowOp = makeFillOp(QStringLiteral("rig_mountain_snow"), snowPoly,
+                                             snowColor, 0.96, QStringLiteral("Flats"));
+    snowOp.brush.profile = QStringLiteral("watercolor");
+    snowOp.fillStyle = QStringLiteral("wash");
+    ops.append(snowOp);
+
+    // 3. Facet Shading on the eastern/shaded slope (Shading layer)
+    QPolygonF shadeFacet;
+    shadeFacet.append(QPointF(xc, yTop));
+    for (int i = 0; i <= slopeSteps; ++i) {
+        const qreal t = qreal(i) / slopeSteps;
+        const qreal x = xc + t * halfSpan;
+        const qreal dist = (x - xc) / halfSpan;
+        const qreal y = yBase - (yBase - yTop) * std::exp(-kDecay * dist);
+        shadeFacet.append(QPointF(x, y));
+    }
+    shadeFacet.append(QPointF(xc + 0.05, yBase));
+    shadeFacet.append(QPointF(xc, yBase));
+
+    KisAiStrokeOperation shadeOp = makeFillOp(QStringLiteral("rig_mountain_shade"), shadeFacet,
+                                              shadowColor, 0.55, QStringLiteral("Shading"));
+    shadeOp.blendMode = QStringLiteral("multiply");
+    shadeOp.fillStyle = QStringLiteral("wash");
+    ops.append(shadeOp);
+
+    // 4. Soft aerial perspective haze at mountain foot (blends seamlessly into atmosphere)
+    QPolygonF hazePoly;
+    hazePoly.append(QPointF(xc - halfSpan * 1.1, yBase - 0.08));
+    hazePoly.append(QPointF(xc + halfSpan * 1.1, yBase - 0.08));
+    hazePoly.append(QPointF(xc + halfSpan * 1.1, yBase + 0.04));
+    hazePoly.append(QPointF(xc - halfSpan * 1.1, yBase + 0.04));
+    QColor hazeCol = tod == QLatin1String("sunset") ? QColor(245, 175, 155, 130) : QColor(210, 225, 245, 130);
+    KisAiStrokeOperation hazeOp = makeFillOp(QStringLiteral("rig_mountain_haze"), hazePoly,
+                                             hazeCol, 0.50, QStringLiteral("Flats"));
+    hazeOp.brush.profile = QStringLiteral("watercolor");
+    hazeOp.fillStyle = QStringLiteral("wash");
+    ops.append(hazeOp);
+
+    return ops;
+}
+
+QVector<KisAiStrokeOperation> KisAiRigLibrary::sakuraTreeOps(
+    const KisAiSceneSpec &spec, const QSize &canvasSize, quint32 seed)
+{
+    Q_UNUSED(canvasSize);
+    Q_UNUSED(seed);
+    QVector<KisAiStrokeOperation> ops;
+
+    const QString tod = spec.light.timeOfDay;
+    const QColor trunkColor = tod == QLatin1String("sunset") ? QColor(50, 32, 42) : QColor(36, 30, 40);
+    const QColor basePetalColor = QColor(255, 185, 205);
+    const QColor deepPetalColor = tod == QLatin1String("sunset") ? QColor(190, 80, 115) : QColor(165, 85, 125);
+    const QColor highlightPetalColor = QColor(255, 242, 248);
+
+    // 1. Trunk (Ribbon) rooted at bottom right, arcing gracefully toward center/upper-left
+    const qreal rootX = 0.82;
+    const qreal rootY = 0.95;
+
+    KisAiStrokeOperation trunk;
+    trunk.kind = KisAiStrokeOperation::Kind::Ribbon;
+    trunk.id = QStringLiteral("rig_sakura_trunk");
+    trunk.layer = QStringLiteral("Flats");
+    trunk.brush.profile = QStringLiteral("brush");
+    trunk.brush.color = trunkColor;
+    trunk.widthStart = 0.052;
+    trunk.widthMid = 0.034;
+    trunk.widthEnd = 0.016;
+    trunk.spine << QPointF(rootX, rootY)
+                << QPointF(rootX - 0.06, 0.72)
+                << QPointF(rootX - 0.12, 0.52)
+                << QPointF(rootX - 0.16, 0.38);
+    ops.append(trunk);
+
+    // Trunk lineart contour for bark definition
+    KisAiStrokeOperation trunkLine;
+    trunkLine.kind = KisAiStrokeOperation::Kind::Path;
+    trunkLine.id = QStringLiteral("rig_sakura_trunk_line");
+    trunkLine.layer = QStringLiteral("Lineart");
+    trunkLine.brush.profile = QStringLiteral("gpen");
+    trunkLine.brush.color = trunkColor.darker(135);
+    trunkLine.brush.size = 0.0035;
+    trunkLine.points << pt(rootX, rootY, 0.9)
+                     << pt(rootX - 0.06, 0.72, 0.8)
+                     << pt(rootX - 0.12, 0.52, 0.7)
+                     << pt(rootX - 0.16, 0.38, 0.5);
+    ops.append(trunkLine);
+
+    // 2. Primary & secondary branches
+    struct BranchSpec {
+        QPointF start;
+        QPointF mid;
+        QPointF end;
+        qreal widthStart;
+        qreal widthEnd;
+    };
+    const QVector<BranchSpec> branches = {
+        { QPointF(rootX - 0.08, 0.64), QPointF(rootX - 0.22, 0.56), QPointF(rootX - 0.38, 0.52), 0.018, 0.007 },
+        { QPointF(rootX - 0.12, 0.52), QPointF(rootX - 0.28, 0.42), QPointF(rootX - 0.46, 0.40), 0.016, 0.006 },
+        { QPointF(rootX - 0.14, 0.44), QPointF(rootX - 0.10, 0.32), QPointF(rootX - 0.06, 0.24), 0.014, 0.005 },
+        { QPointF(rootX - 0.16, 0.38), QPointF(rootX - 0.32, 0.30), QPointF(rootX - 0.52, 0.28), 0.015, 0.005 },
+        { QPointF(rootX - 0.28, 0.42), QPointF(rootX - 0.36, 0.34), QPointF(rootX - 0.44, 0.30), 0.010, 0.004 }
+    };
+
+    for (int b = 0; b < branches.size(); ++b) {
+        const auto &bs = branches.at(b);
+        KisAiStrokeOperation br;
+        br.kind = KisAiStrokeOperation::Kind::Ribbon;
+        br.id = QStringLiteral("rig_sakura_branch_%1").arg(b);
+        br.layer = QStringLiteral("Flats");
+        br.brush.profile = QStringLiteral("brush");
+        br.brush.color = trunkColor;
+        br.widthStart = bs.widthStart;
+        br.widthMid = (bs.widthStart + bs.widthEnd) * 0.55;
+        br.widthEnd = bs.widthEnd;
+        br.spine << bs.start << bs.mid << bs.end;
+        ops.append(br);
+
+        KisAiStrokeOperation brLine;
+        brLine.kind = KisAiStrokeOperation::Kind::Path;
+        brLine.id = QStringLiteral("rig_sakura_branch_line_%1").arg(b);
+        brLine.layer = QStringLiteral("Lineart");
+        brLine.brush.profile = QStringLiteral("gpen");
+        brLine.brush.color = trunkColor.darker(130);
+        brLine.brush.size = 0.0028;
+        brLine.points << pt(bs.start.x(), bs.start.y(), 0.7)
+                      << pt(bs.mid.x(), bs.mid.y(), 0.6)
+                      << pt(bs.end.x(), bs.end.y(), 0.3);
+        ops.append(brLine);
+    }
+
+    // 3. Volumetric Petal Masses along branch nodes
+    const QVector<QPointF> clusterNodes = {
+        QPointF(rootX - 0.38, 0.52), QPointF(rootX - 0.46, 0.40),
+        QPointF(rootX - 0.06, 0.24), QPointF(rootX - 0.52, 0.28),
+        QPointF(rootX - 0.32, 0.32), QPointF(rootX - 0.22, 0.36),
+        QPointF(rootX - 0.18, 0.26), QPointF(rootX - 0.36, 0.22),
+        QPointF(rootX - 0.48, 0.20), QPointF(rootX - 0.12, 0.18)
+    };
+
+    auto makeCloudPoly = [&](const QPointF &center, qreal rx, qreal ry, int seedShift) {
+        QPolygonF poly;
+        const int verts = 18;
+        for (int v = 0; v < verts; ++v) {
+            const qreal angle = (2.0 * M_PI * v) / verts;
+            const qreal wobble = 0.82 + 0.18 * std::sin(angle * 3.0 + seedShift) + 0.08 * std::cos(angle * 5.0);
+            poly.append(QPointF(center.x() + std::cos(angle) * rx * wobble,
+                                center.y() + std::sin(angle) * ry * wobble));
+        }
+        return poly;
+    };
+
+    for (int i = 0; i < clusterNodes.size(); ++i) {
+        const QPointF &node = clusterNodes.at(i);
+        const qreal rScale = 0.08 + (i % 3) * 0.02;
+
+        // Tier 1: Deep inner shade
+        QPolygonF deepPoly = makeCloudPoly(node + QPointF(0.0, 0.015), rScale * 1.1, rScale * 0.85, i * 3);
+        KisAiStrokeOperation deepOp = makeFillOp(QStringLiteral("rig_sakura_deep_%1").arg(i),
+                                                 deepPoly, deepPetalColor, 0.75, QStringLiteral("Flats"));
+        deepOp.brush.profile = QStringLiteral("watercolor");
+        deepOp.fillStyle = QStringLiteral("wash");
+        ops.append(deepOp);
+
+        // Tier 2: Mid vibrant bloom
+        QPolygonF midPoly = makeCloudPoly(node, rScale, rScale * 0.75, i * 5 + 1);
+        KisAiStrokeOperation midOp = makeFillOp(QStringLiteral("rig_sakura_mid_%1").arg(i),
+                                                midPoly, basePetalColor, 0.85, QStringLiteral("Flats"));
+        midOp.brush.profile = QStringLiteral("watercolor");
+        midOp.fillStyle = QStringLiteral("wash");
+        ops.append(midOp);
+
+        // Tier 3: Sunny top rim highlight
+        QPolygonF hlPoly = makeCloudPoly(node - QPointF(0.01, 0.015), rScale * 0.72, rScale * 0.55, i * 7 + 2);
+        KisAiStrokeOperation hlOp = makeFillOp(QStringLiteral("rig_sakura_hl_%1").arg(i),
+                                               hlPoly, highlightPetalColor, 0.70, QStringLiteral("Highlights"));
+        hlOp.brush.profile = QStringLiteral("airbrush");
+        hlOp.blendMode = QStringLiteral("screen");
+        ops.append(hlOp);
+    }
+
+    // 4. Wind-driven floating petals drifting gracefully across the canvas
+    KisAiStrokeOperation petals;
+    petals.kind = KisAiStrokeOperation::Kind::Particles;
+    petals.id = QStringLiteral("rig_sakura_drifting_petals");
+    petals.layer = QStringLiteral("FX");
+    petals.bounds = QRectF(0.05, 0.15, 0.90, 0.75);
+    petals.particleShape = QStringLiteral("petal");
+    petals.particleCount = 28;
+    petals.brush.color = highlightPetalColor;
+    petals.brush.size = 0.007;
+    petals.brush.opacity = 0.80;
+    ops.append(petals);
+
+    return ops;
+}
+
+QVector<KisAiStrokeOperation> KisAiRigLibrary::waterSurfaceOps(
+    const KisAiSceneSpec &spec, const QSize &canvasSize, qreal horizonY, quint32 seed)
+{
+    Q_UNUSED(canvasSize);
+    Q_UNUSED(seed);
+    QVector<KisAiStrokeOperation> ops;
+    const QString tod = spec.light.timeOfDay;
+
+    // 1. Water Base Gradient (Fresnel depth: distant horizon reflects sky, near foreground shows deep water tone)
+    QColor waterHorizon;
+    QColor waterForeground;
+    if (tod == QLatin1String("night")) {
+        waterHorizon = QColor(32, 42, 75);
+        waterForeground = QColor(10, 15, 32);
+    } else if (tod == QLatin1String("sunset")) {
+        waterHorizon = QColor(220, 130, 110);   // Glowing reflection of sunset
+        waterForeground = QColor(65, 35, 70);     // Deep violet water depth
+    } else {
+        waterHorizon = QColor(160, 195, 230);
+        waterForeground = QColor(40, 75, 120);
+    }
+
+    KisAiStrokeOperation waterWash;
+    waterWash.kind = KisAiStrokeOperation::Kind::GradientFill;
+    waterWash.id = QStringLiteral("rig_water_wash");
+    waterWash.layer = QStringLiteral("Flats");
+    waterWash.polygon = {
+        QPointF(0.0, horizonY), QPointF(1.0, horizonY),
+        QPointF(1.0, 1.0), QPointF(0.0, 1.0)
+    };
+    waterWash.gradientColors = { waterHorizon, waterForeground };
+    waterWash.angleDeg = 90.0;
+    waterWash.brush.profile = QStringLiteral("watercolor");
+    waterWash.brush.color = waterHorizon;
+    waterWash.brush.opacity = 1.0;
+    waterWash.fillStyle = QStringLiteral("directional");
+    ops.append(waterWash);
+
+    // 2. Inverted Soft Mirror Reflection of Mountain / Sky (Water watercolor wash)
+    const qreal xc = 0.50;
+    const qreal reflSpan = 0.40;
+    const qreal reflHeight = 0.22;
+    QPolygonF reflPoly;
+    reflPoly.append(QPointF(xc - reflSpan, horizonY));
+    reflPoly.append(QPointF(xc, horizonY + reflHeight));
+    reflPoly.append(QPointF(xc + reflSpan, horizonY));
+    QColor reflColor = tod == QLatin1String("sunset") ? QColor(145, 65, 90, 120) : QColor(45, 65, 105, 110);
+    KisAiStrokeOperation reflOp = makeFillOp(QStringLiteral("rig_water_mountain_refl"), reflPoly,
+                                             reflColor, 0.40, QStringLiteral("Flats"));
+    reflOp.brush.profile = QStringLiteral("watercolor");
+    reflOp.fillStyle = QStringLiteral("wash");
+    ops.append(reflOp);
+
+    // 3. Perspective-spaced ripple specular lines
+    const int rippleCount = 6;
+    const QColor rippleColor = tod == QLatin1String("sunset") ? QColor(255, 215, 185, 160) : QColor(230, 245, 255, 150);
+
+    for (int r = 0; r < rippleCount; ++r) {
+        const qreal t = qreal(r + 1) / (rippleCount + 1);
+        const qreal ry = horizonY + (1.0 - horizonY) * (t * t * 0.85 + 0.05);
+        const qreal halfW = 0.20 + t * 0.28;
+        const qreal strokeW = 0.0018 + t * 0.0035;
+
+        QVector<KisAiStrokePoint> ripplePts;
+        ripplePts << pt(xc - halfW, ry, 0.2)
+                  << pt(xc - halfW * 0.5, ry, 0.8)
+                  << pt(xc, ry, 0.9)
+                  << pt(xc + halfW * 0.5, ry, 0.8)
+                  << pt(xc + halfW, ry, 0.2);
+
+        KisAiStrokeOperation ripOp;
+        ripOp.kind = KisAiStrokeOperation::Kind::Path;
+        ripOp.id = QStringLiteral("rig_water_ripple_%1").arg(r);
+        ripOp.layer = QStringLiteral("Highlights");
+        ripOp.points = ripplePts;
+        ripOp.smooth = true;
+        ripOp.brush.profile = QStringLiteral("airbrush");
+        ripOp.brush.color = rippleColor;
+        ripOp.brush.size = strokeW;
+        ripOp.brush.opacity = 0.65;
+        ripOp.blendMode = QStringLiteral("screen");
+        ops.append(ripOp);
+    }
+
+    return ops;
+}

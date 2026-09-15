@@ -449,7 +449,7 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
             }
             compPainter.setCompositionMode(hasDodge ? QPainter::CompositionMode_ColorDodge : QPainter::CompositionMode_Screen);
         } else if (isFx) {
-            compPainter.setCompositionMode(QPainter::CompositionMode_Plus);
+            compPainter.setCompositionMode(QPainter::CompositionMode_Screen);
         } else {
             compPainter.setCompositionMode(QPainter::CompositionMode_SourceOver);
         }
@@ -744,7 +744,7 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
             } else if (isHighlights) {
                 bloomPainter.setCompositionMode(QPainter::CompositionMode_Screen);
             } else if (isFx) {
-                bloomPainter.setCompositionMode(QPainter::CompositionMode_Plus);
+                bloomPainter.setCompositionMode(QPainter::CompositionMode_Screen);
             } else {
                 bloomPainter.setCompositionMode(QPainter::CompositionMode_SourceOver);
             }
@@ -793,7 +793,7 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
                 layer->setCompositeOpId(COMPOSITE_OVER);
                 layer->setColorLabelIndex(4); // Orange
             } else if (isFx) {
-                layer->setCompositeOpId(COMPOSITE_ADD); // Additive blending for floating particles & sparkles
+                layer->setCompositeOpId(COMPOSITE_SCREEN); // Screen blending maintains luminescence without severe blowout
                 layer->setColorLabelIndex(2); // Green (FX)
             } else {
                 layer->setCompositeOpId(COMPOSITE_OVER);

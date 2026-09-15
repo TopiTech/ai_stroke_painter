@@ -149,6 +149,30 @@ public:
     /** Map free-form narrative.time onto the canonical timeOfDay enum. */
     static QString narrativeTimeToTimeOfDay(const QString &narrativeTime, const QString &fallback);
 
+    /**
+     * Mountain rig (e.g. Mount Fuji / distant peaks):
+     * Graceful exponential ridge curve, snow cap with fractal snowmelt ridges,
+     * directional facet shading, and atmospheric haze wash.
+     */
+    static QVector<KisAiStrokeOperation> mountainOps(
+        const KisAiSceneSpec &spec, const QSize &canvasSize, quint32 seed = 42);
+
+    /**
+     * Sakura tree rig:
+     * Natural skeletal branching (trunk, primary and secondary branches),
+     * layered organic watercolor petal clusters, and wind-blown floating petals.
+     */
+    static QVector<KisAiStrokeOperation> sakuraTreeOps(
+        const KisAiSceneSpec &spec, const QSize &canvasSize, quint32 seed = 42);
+
+    /**
+     * Water surface rig:
+     * Atmospheric aerial gradient wash, inverted soft reflection of sky and mountain,
+     * and perspective-spaced ripple specular highlights.
+     */
+    static QVector<KisAiStrokeOperation> waterSurfaceOps(
+        const KisAiSceneSpec &spec, const QSize &canvasSize, qreal horizonY = 0.62, quint32 seed = 42);
+
     /** Stable sub-seed for a named rig part (deterministic across sessions). */
     static quint32 partSeed(const QString &partName, quint32 baseSeed);
 };

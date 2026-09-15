@@ -228,6 +228,8 @@ QString KisAiVisionCritic::buildCritiqueSystemPrompt(const KisAiLightSettings &r
         "5. Hair: no bubble/afro artifacts; highlight bands follow the dome.\n"
         "6. Missing or extra parts (brows, mouth, nose point).\n"
         "7. Background: no elements colliding with the character silhouette.\n"
+        "8. Overexposure & Blowout: no massive pure-white saturated patches obliterating subject details (especially in FX/Bloom/Highlights).\n"
+        "9. Geometric artifacts: no unnatural sharp rectangular box borders, flat cutoffs, or polygonal wireframe mesh lines.\n"
         "Only include regions for defects you can actually see. An empty regions list is valid.")
         .arg(dir);
 }

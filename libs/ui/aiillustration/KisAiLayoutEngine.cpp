@@ -5,6 +5,7 @@
 
 #include "KisAiLayoutEngine.h"
 #include "KisAiLightRig.h"
+#include "KisAiRigLibrary.h"
 #include "KisAiStrokeQualityUtils.h"
 
 #include <QtMath>
@@ -985,22 +986,68 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::landscapeProgram(
     const KisAiSceneSpec &spec,
     const QSize &canvasSize)
 {
-    Q_UNUSED(canvasSize);
     QVector<KisAiStrokeOperation> ops = backgroundForSpec(spec, canvasSize);
     const KisAiLightSettings rig = KisAiLightRig::fromSpec(spec);
 
-    // Foreground meadow mass for depth.
-    QPolygonF meadow;
-    meadow.append(QPointF(0.0, 0.80));
-    meadow.append(QPointF(0.25, 0.74));
-    meadow.append(QPointF(0.55, 0.82));
-    meadow.append(QPointF(0.80, 0.76));
-    meadow.append(QPointF(1.0, 0.84));
-    meadow.append(QPointF(1.0, 1.0));
-    meadow.append(QPointF(0.0, 1.0));
-    const QColor meadowColor = spec.light.timeOfDay == QLatin1String("night") ? QColor(24, 40, 60) : QColor(96, 140, 110);
-    ops.append(makeFill(QStringLiteral("meadow"), QStringLiteral("Flats"), meadow,
-                        meadowColor, QStringLiteral("brush"), 1.0, QStringLiteral("contour")));
+    const QString lowerPrompt = spec.prompt.toLower();
+    const bool hasMountain = lowerPrompt.contains(QStringLiteral("mountain")) ||
+                             lowerPrompt.contains(QStringLiteral("fuji")) ||
+                             lowerPrompt.contains(QStringLiteral("山")) ||
+                             lowerPrompt.contains(QStringLiteral("peak")) ||
+                             lowerPrompt.contains(QStringLiteral("landscape")) ||
+                             lowerPrompt.contains(QStringLiteral("scenery"));
+
+    const bool hasSakura = lowerPrompt.contains(QStringLiteral("sakura")) ||
+                           lowerPrompt.contains(QStringLiteral("cherry")) ||
+                           lowerPrompt.contains(QStringLiteral("桜")) ||
+                           lowerPrompt.contains(QStringLiteral("tree")) ||
+                           lowerPrompt.contains(QStringLiteral("blossom")) ||
+                           lowerPrompt.contains(QStringLiteral("花"));
+
+    const bool hasWater = lowerPrompt.contains(QStringLiteral("water")) ||
+                          lowerPrompt.contains(QStringLiteral("lake")) ||
+                          lowerPrompt.contains(QStringLiteral("sea")) ||
+                          lowerPrompt.contains(QStringLiteral("ocean")) ||
+                          lowerPrompt.contains(QStringLiteral("river")) ||
+                          lowerPrompt.contains(QStringLiteral("湖")) ||
+                          lowerPrompt.contains(QStringLiteral("水")) ||
+                          lowerPrompt.contains(QStringLiteral("海")) ||
+                          lowerPrompt.contains(QStringLiteral("川")) ||
+                          lowerPrompt.contains(QStringLiteral("風景")) ||
+                          !lowerPrompt.contains(QStringLiteral("desert"));
+
+    constexpr qreal horizonY = 0.62;
+
+    // 1. Far Distance: Majestic Mountain (e.g. Mount Fuji)
+    if (hasMountain) {
+        ops.append(KisAiRigLibrary::mountainOps(spec, canvasSize, 42));
+    }
+
+    // 2. Midground / Foreground Ground: Water Surface or Meadow
+    if (hasWater) {
+        ops.append(KisAiRigLibrary::waterSurfaceOps(spec, canvasSize, horizonY, 42));
+    } else {
+        QPolygonF meadow;
+        meadow.append(QPointF(0.0, 0.80));
+        meadow.append(QPointF(0.25, 0.74));
+        meadow.append(QPointF(0.55, 0.82));
+        meadow.append(QPointF(0.80, 0.76));
+        meadow.append(QPointF(1.0, 0.84));
+        meadow.append(QPointF(1.0, 1.0));
+        meadow.append(QPointF(0.0, 1.0));
+        const QColor meadowColor = spec.light.timeOfDay == QLatin1String("night") ? QColor(24, 40, 60) : QColor(96, 140, 110);
+        ops.append(makeFill(QStringLiteral("meadow"), QStringLiteral("Flats"), meadow,
+                            meadowColor, QStringLiteral("brush"), 1.0, QStringLiteral("contour")));
+    }
+
+    // 3. Middleground Hero Feature: Sakura Tree with branching and blooming clusters
+    if (hasSakura) {
+        ops.append(KisAiRigLibrary::sakuraTreeOps(spec, canvasSize, 42));
+    }
+
+    // 4. Backdrop weather / atmospheric props (clouds, stars, etc.)
+    const KisAiRigParameterSet rigParams = KisAiRigLibrary::parametersFromSpec(spec);
+    ops.append(KisAiRigLibrary::backdropWeatherOps(rigParams, canvasSize, 42));
 
     QVector<KisAiStrokeOperation> flatsOnly;
     for (const KisAiStrokeOperation &op : ops) {

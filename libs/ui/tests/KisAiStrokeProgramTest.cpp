@@ -24,6 +24,7 @@
 #include "aiillustration/KisAiSceneSpec.h"
 #include "aiillustration/KisAiLayoutEngine.h"
 #include "aiillustration/KisAiLightRig.h"
+#include "aiillustration/KisAiRigLibrary.h"
 #include "aiillustration/KisAiStrokeQualityUtils.h"
 #include "KisAiTestUtils.h"
 
@@ -4246,6 +4247,59 @@ void KisAiStrokeProgramTest::testAnimeMouthParsingAndValidation()
     KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(program);
     QCOMPARE(refined.operations.size(), 1);
     QCOMPARE(refined.operations.first().kind, KisAiStrokeOperation::Kind::AnimeMouth);
+}
+
+void KisAiStrokeProgramTest::testLandscapeRigsAndMultiTierComposition()
+{
+    KisAiSceneSpec spec;
+    spec.prompt = QStringLiteral("壮大な富士山と満開の桜の木、夕暮れのグラデーション空、舞い散る花びら、伝統的な日本風景");
+    spec.subject.type = QStringLiteral("landscape");
+    spec.light.timeOfDay = QStringLiteral("sunset");
+
+    const QSize canvasSize(1024, 1024);
+    const KisAiStrokeProgram prog = KisAiLayoutEngine::generateProgram(spec, canvasSize);
+
+    bool hasMountain = false;
+    bool hasSnow = false;
+    bool hasWater = false;
+    bool hasSakuraTrunk = false;
+    bool hasSakuraPetals = false;
+    bool hasDisruptiveQuad = false;
+
+    for (const KisAiStrokeOperation &op : prog.operations) {
+        if (op.id.contains(QStringLiteral("mountain_body"))) {
+            hasMountain = true;
+        }
+        if (op.id.contains(QStringLiteral("mountain_snow"))) {
+            hasSnow = true;
+        }
+        if (op.id.contains(QStringLiteral("water_wash"))) {
+            hasWater = true;
+        }
+        if (op.id.contains(QStringLiteral("sakura_trunk"))) {
+            hasSakuraTrunk = true;
+        }
+        if (op.id.contains(QStringLiteral("sakura_drifting_petals"))) {
+            hasSakuraPetals = true;
+        }
+        if (op.kind == KisAiStrokeOperation::Kind::Fill && op.polygon.size() == 4 && op.id == QStringLiteral("subject_silhouette")) {
+            hasDisruptiveQuad = true;
+        }
+    }
+
+    QVERIFY(hasMountain);
+    QVERIFY(hasSnow);
+    QVERIFY(hasWater);
+    QVERIFY(hasSakuraTrunk);
+    QVERIFY(hasSakuraPetals);
+    QVERIFY(!hasDisruptiveQuad);
+
+    // Verify Rim Light safety: no wireframe rim strokes on tiny clusters/petals
+    const QVector<KisAiStrokeOperation> rims = KisAiStrokeQualityUtils::generateRimLightStrokes(prog.operations, canvasSize);
+    for (const KisAiStrokeOperation &rim : rims) {
+        QVERIFY(!rim.id.contains(QStringLiteral("cluster")));
+        QVERIFY(!rim.id.contains(QStringLiteral("petal")));
+    }
 }
 
 KISTEST_MAIN(KisAiStrokeProgramTest)
