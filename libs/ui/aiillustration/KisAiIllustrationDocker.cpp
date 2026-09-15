@@ -5,13 +5,16 @@
 
 #include "KisAiIllustrationDocker.h"
 
+#include "KisAiDeliberateStroke.h"
 #include "KisAiIllustrationRenderer.h"
-#include "KisAiPromptAnalyzer.h"
-#include "KisAiStrokeProgram.h"
-#include "KisAiStrokeRenderer.h"
-#include "KisAiSceneSpec.h"
 #include "KisAiLayoutEngine.h"
 #include "KisAiModelRouter.h"
+#include "KisAiProgramPatch.h"
+#include "KisAiPromptAnalyzer.h"
+#include "KisAiRefinementLoop.h"
+#include "KisAiSceneSpec.h"
+#include "KisAiStrokeProgram.h"
+#include "KisAiStrokeRenderer.h"
 #include "KisDocument.h"
 #include "KisMainWindow.h"
 #include "KisPart.h"
@@ -49,8 +52,8 @@
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QPainter>
-#include <QPlainTextEdit>
 #include <QPixmap>
+#include <QPlainTextEdit>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QRandomGenerator>
@@ -63,8 +66,8 @@
 #include <QTabBar>
 #include <QTextBlock>
 #include <QTextCursor>
-#include <QToolButton>
 #include <QTimer>
+#include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
 
@@ -76,6 +79,8 @@
 #if defined(Q_OS_WIN)
 #include <windows.h>
 #include <wincrypt.h>
+
+
 #endif
 
 namespace
@@ -286,7 +291,7 @@ QImage decodeModelImage(const QByteArray &response, QString *errorMessage)
     }
     return image;
 }
-}
+} // namespace
 
 KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     : QDockWidget(i18n("AI Illustration"), mainWindow)
@@ -307,16 +312,23 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         "QLabel#aiTitle { color: #f8fafc; font-size: 17px; font-weight: 700; }"
         "QLabel#aiSubtitle { color: #94a3b8; font-size: 11px; line-height: 1.4; }"
         "QLabel[class=\"aiCardTitle\"] { color: #7c8ba1; font-size: 11px; font-weight: 700; }"
-        "QFrame[class=\"aiCard\"] { background: #171d29; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; }"
+        "QFrame[class=\"aiCard\"] { background: #171d29; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: "
+        "8px; }"
         "QPlainTextEdit, QLineEdit, QSpinBox, QComboBox {"
-        " background: #0d1117; border: 1px solid #273142; border-radius: 6px; padding: 5px 8px; color: #f1f5f9; font-size: 12px; }"
-        "QPlainTextEdit:focus, QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border: 1px solid #3b82f6; background: #0f141d; }"
+        " background: #0d1117; border: 1px solid #273142; border-radius: 6px; padding: 5px 8px; color: #f1f5f9; "
+        "font-size: 12px; }"
+        "QPlainTextEdit:focus, QLineEdit:focus, QSpinBox:focus, QComboBox:focus { border: 1px solid #3b82f6; "
+        "background: #0f141d; }"
         "QCheckBox { color: #cbd5e1; font-size: 12px; spacing: 6px; }"
         "QCheckBox:hover { color: #f1f5f9; }"
-        "QPushButton#aiGenerateButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563eb, stop:1 #4f46e5);"
-        " color: #ffffff; border: none; border-radius: 6px; font-weight: 700; font-size: 13px; min-height: 36px; padding: 6px 14px; }"
-        "QPushButton#aiGenerateButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #6366f1); }"
-        "QPushButton#aiGenerateButton:pressed { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1d4ed8, stop:1 #4338ca); }"
+        "QPushButton#aiGenerateButton { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563eb, stop:1 "
+        "#4f46e5);"
+        " color: #ffffff; border: none; border-radius: 6px; font-weight: 700; font-size: 13px; min-height: 36px; "
+        "padding: 6px 14px; }"
+        "QPushButton#aiGenerateButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, "
+        "stop:1 #6366f1); }"
+        "QPushButton#aiGenerateButton:pressed { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1d4ed8, "
+        "stop:1 #4338ca); }"
         "QPushButton#aiGenerateButton:disabled { background: #1f2736; color: #55657d; }"
         "QPushButton#aiSecondaryButton { background: #1f2737; color: #cbd5e1; border: 1px solid #344258;"
         " border-radius: 6px; min-height: 28px; padding: 4px 10px; font-size: 12px; }"
@@ -332,24 +344,33 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         "QLabel#aiStatus { color: #94a3b8; padding: 2px 0px; font-size: 11px; }"
         "QLabel#aiStatus[error=\"true\"] { color: #f87171; font-weight: 600; }"
         "QFrame#aiRule { background: #273142; max-height: 1px; }"
-        "QToolButton#aiToggleDetails { color: #7c8ba1; background: transparent; border: none; font-size: 11px; text-align: left; padding: 2px 0px; font-weight: 500; }"
+        "QToolButton#aiToggleDetails { color: #7c8ba1; background: transparent; border: none; font-size: 11px; "
+        "text-align: left; padding: 2px 0px; font-weight: 500; }"
         "QToolButton#aiToggleDetails:hover { color: #cbd5e1; }"
         "QProgressBar { background: #0d1117; border: 1px solid #273142; border-radius: 3px; max-height: 6px; }"
-        "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #06b6d4); border-radius: 2px; }"
-        "QPlainTextEdit#aiDebugLog { background: #080b10; border: 1px solid #1e293b; border-radius: 4px; font-family: Consolas, 'Courier New', monospace; font-size: 11px; color: #94a3b8; }"
+        "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #06b6d4); "
+        "border-radius: 2px; }"
+        "QPlainTextEdit#aiDebugLog { background: #080b10; border: 1px solid #1e293b; border-radius: 4px; font-family: "
+        "Consolas, 'Courier New', monospace; font-size: 11px; color: #94a3b8; }"
         "QLabel#aiTestStatus { font-size: 11px; padding: 2px 0px; }"
-        "QTabBar::tab { background: #171d29; color: #94a3b8; padding: 5px 12px; border-top-left-radius: 6px; border-top-right-radius: 6px; font-weight: 600; font-size: 11px; margin-right: 2px; }"
+        "QTabBar::tab { background: #171d29; color: #94a3b8; padding: 5px 12px; border-top-left-radius: 6px; "
+        "border-top-right-radius: 6px; font-weight: 600; font-size: 11px; margin-right: 2px; }"
         "QTabBar::tab:selected { background: #2563eb; color: #ffffff; }"
         "QTabBar::tab:hover:!selected { background: #1e2736; color: #cbd5e1; }"
-        "QPushButton[class=\"aiVisualCard\"] { background: #131924; color: #cbd5e1; border: 1px solid #253144; border-radius: 6px; padding: 4px 6px; font-size: 11px; text-align: center; min-height: 24px; }"
+        "QPushButton[class=\"aiVisualCard\"] { background: #131924; color: #cbd5e1; border: 1px solid #253144; "
+        "border-radius: 6px; padding: 4px 6px; font-size: 11px; text-align: center; min-height: 24px; }"
         "QPushButton[class=\"aiVisualCard\"]:hover { background: #1c2637; border-color: #3b82f6; color: #ffffff; }"
-        "QPushButton[class=\"aiVisualCard\"][active=\"true\"] { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #1e3a8a, stop:1 #1d4ed8); border: 1px solid #60a5fa; color: #ffffff; font-weight: 700; }"
-        "QPushButton[class=\"aiHistoryThumb\"] { background: #0d1117; border: 1px solid #273142; border-radius: 6px; padding: 2px; }"
+        "QPushButton[class=\"aiVisualCard\"][active=\"true\"] { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, "
+        "stop:0 #1e3a8a, stop:1 #1d4ed8); border: 1px solid #60a5fa; color: #ffffff; font-weight: 700; }"
+        "QPushButton[class=\"aiHistoryThumb\"] { background: #0d1117; border: 1px solid #273142; border-radius: 6px; "
+        "padding: 2px; }"
         "QPushButton[class=\"aiHistoryThumb\"]:hover { border-color: #38bdf8; }"
-        "QPushButton#aiExpandPromptBtn { background: #1e1b4b; color: #c084fc; border: 1px solid #4338ca; border-radius: 5px; font-size: 11px; font-weight: 600; padding: 3px 8px; }"
+        "QPushButton#aiExpandPromptBtn { background: #1e1b4b; color: #c084fc; border: 1px solid #4338ca; "
+        "border-radius: 5px; font-size: 11px; font-weight: 600; padding: 3px 8px; }"
         "QPushButton#aiExpandPromptBtn:hover { background: #312e81; color: #e9d5ff; border-color: #6366f1; }"
         "QPushButton#aiExpandPromptBtn:pressed { background: #1e1b4b; }"
-        "QPushButton#aiSyncColorBtn { background: #142e2b; color: #34d399; border: 1px solid #065f46; border-radius: 5px; font-size: 11px; font-weight: 600; padding: 3px 8px; }"
+        "QPushButton#aiSyncColorBtn { background: #142e2b; color: #34d399; border: 1px solid #065f46; border-radius: "
+        "5px; font-size: 11px; font-weight: 600; padding: 3px 8px; }"
         "QPushButton#aiSyncColorBtn:hover { background: #064e3b; color: #a7f3d0; border-color: #10b981; }"));
 
     auto *layout = new QVBoxLayout(panel);
@@ -370,7 +391,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_uiModeTabs->setCursor(Qt::PointingHandCursor);
     layout->addWidget(m_uiModeTabs);
 
-    auto *subtitle = new QLabel(i18n("描きたい情景を言葉で指定すると、AIが絵筆のストロークを生成してキャンバスを描画します。"), panel);
+    auto *subtitle =
+        new QLabel(i18n("描きたい情景を言葉で指定すると、AIが絵筆のストロークを生成してキャンバスを描画します。"),
+                   panel);
     subtitle->setObjectName(QStringLiteral("aiSubtitle"));
     subtitle->setWordWrap(true);
     layout->addWidget(subtitle);
@@ -405,7 +428,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     m_expandPromptButton = new QPushButton(i18n("✨ AI推敲"), promptCard.frame);
     m_expandPromptButton->setObjectName(QStringLiteral("aiExpandPromptBtn"));
-    m_expandPromptButton->setToolTip(i18n("短い指示から、高品質なアニメイラスト用の豊かな情景描写へAIが自動展開します。"));
+    m_expandPromptButton->setToolTip(
+        i18n("短い指示から、高品質なアニメイラスト用の豊かな情景描写へAIが自動展開します。"));
     m_expandPromptButton->setCursor(Qt::PointingHandCursor);
     m_expandPromptButton->setFocusPolicy(Qt::StrongFocus);
     m_expandPromptButton->setAccessibleName(i18n("Expand prompt with AI"));
@@ -414,7 +438,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     m_syncColorButton = new QPushButton(i18n("🎨 前景色"), promptCard.frame);
     m_syncColorButton->setObjectName(QStringLiteral("aiSyncColorBtn"));
-    m_syncColorButton->setToolTip(i18n("現在Kritaで選んでいる前景色（描画色）をプロンプトへ配色指示として取り込みます。"));
+    m_syncColorButton->setToolTip(
+        i18n("現在Kritaで選んでいる前景色（描画色）をプロンプトへ配色指示として取り込みます。"));
     m_syncColorButton->setCursor(Qt::PointingHandCursor);
     m_syncColorButton->setFocusPolicy(Qt::StrongFocus);
     m_syncColorButton->setAccessibleName(i18n("Sync foreground color to prompt"));
@@ -428,10 +453,15 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     chipGrid->setSpacing(4);
     chipGrid->setContentsMargins(0, 0, 0, 0);
     const QList<QPair<QString, QString>> chips = {
-        {i18n("美少女"), QStringLiteral("アニメ美少女のクローズアップポートレート、大きな輝く青い瞳、二重まぶた、繊細なまつ毛、さらさらの銀髪、柔らかい頬の赤み、天使の輪")},
-        {i18n("桜風景"), QStringLiteral("壮大な富士山と満開の桜の木、夕暮れのグラデーション空、舞い散る花びら、伝統的な日本風景")},
-        {i18n("サイバー"), QStringLiteral("ネオン輝くサイバーパンク高層ビル群、夜の摩天楼、雨に反射する光、ホログラム広告、近未来都市")},
-        {i18n("浮世絵"), QStringLiteral("葛飾北斎風のダイナミックな大波、力強い水しぶき、伝統的な青と白のコントラスト、富士山")},
+        {i18n("美少女"),
+         QStringLiteral("アニメ美少女のクローズアップポートレート、大きな輝く青い瞳、二重まぶた、繊細なまつ毛、さらさら"
+                        "の銀髪、柔らかい頬の赤み、天使の輪")},
+        {i18n("桜風景"),
+         QStringLiteral("壮大な富士山と満開の桜の木、夕暮れのグラデーション空、舞い散る花びら、伝統的な日本風景")},
+        {i18n("サイバー"),
+         QStringLiteral("ネオン輝くサイバーパンク高層ビル群、夜の摩天楼、雨に反射する光、ホログラム広告、近未来都市")},
+        {i18n("浮世絵"),
+         QStringLiteral("葛飾北斎風のダイナミックな大波、力強い水しぶき、伝統的な青と白のコントラスト、富士山")},
         {i18n("黒猫"), QStringLiteral("月夜に佇む美しい黒猫、金色に輝く瞳、繊細なヒゲ、神秘的な夜空と星の光")},
     };
     int col = 0;
@@ -461,13 +491,26 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_presetCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_presetCombo->setMinimumContentsLength(10);
     m_presetCombo->addItem(i18n("プリセット一覧から選択…"), QString());
-    m_presetCombo->addItem(i18n("👤 美少女アニメ顔 (Anime Girl)"), QStringLiteral("アニメ美少女のクローズアップポートレート、大きな輝く青い瞳、二重まぶた、繊細なまつ毛、さらさらの銀髪、柔らかい頬の赤み、天使の輪"));
-    m_presetCombo->addItem(i18n("🌸 山と桜の風景 (Mountain & Sakura)"), QStringLiteral("壮大な富士山と満開の桜の木、夕暮れのグラデーション空、舞い散る花びら、伝統的な日本風景"));
-    m_presetCombo->addItem(i18n("🏙️ サイバーパンク都市 (Cyberpunk City)"), QStringLiteral("ネオン輝くサイバーパンク高層ビル群、夜の摩天楼、雨に反射する光、ホログラム広告、近未来都市"));
-    m_presetCombo->addItem(i18n("🌊 浮世絵風の大波 (Ukiyo-e Great Wave)"), QStringLiteral("葛飾北斎風のダイナミックな大波、力強い水しぶき、伝統的な青と白のコントラスト、富士山"));
-    m_presetCombo->addItem(i18n("✨ 魔法陣とルーン (Magic Circle)"), QStringLiteral("神秘的な幾何学魔法陣、古代ルーン文字、輝くエネルギー粒子、神聖な光のエフェクト"));
-    m_presetCombo->addItem(i18n("🐱 幻想的な黒猫 (Mystical Black Cat)"), QStringLiteral("月夜に佇む美しい黒猫、金色に輝く瞳、繊細なヒゲ、神秘的な夜空と星の光"));
-    m_presetCombo->addItem(i18n("🌹 バラの花束 (Botanical Rose)"), QStringLiteral("咲き誇る深紅のバラの花束、重なり合う繊細な花びら、朝露のハイライト、瑞々しい緑の葉"));
+    m_presetCombo->addItem(i18n("👤 美少女アニメ顔 (Anime Girl)"),
+                           QStringLiteral("アニメ美少女のクローズアップポートレート、大きな輝く青い瞳、二重まぶた、繊細"
+                                          "なまつ毛、さらさらの銀髪、柔らかい頬の赤み、天使の輪"));
+    m_presetCombo->addItem(
+        i18n("🌸 山と桜の風景 (Mountain & Sakura)"),
+        QStringLiteral("壮大な富士山と満開の桜の木、夕暮れのグラデーション空、舞い散る花びら、伝統的な日本風景"));
+    m_presetCombo->addItem(
+        i18n("🏙️ サイバーパンク都市 (Cyberpunk City)"),
+        QStringLiteral("ネオン輝くサイバーパンク高層ビル群、夜の摩天楼、雨に反射する光、ホログラム広告、近未来都市"));
+    m_presetCombo->addItem(
+        i18n("🌊 浮世絵風の大波 (Ukiyo-e Great Wave)"),
+        QStringLiteral("葛飾北斎風のダイナミックな大波、力強い水しぶき、伝統的な青と白のコントラスト、富士山"));
+    m_presetCombo->addItem(
+        i18n("✨ 魔法陣とルーン (Magic Circle)"),
+        QStringLiteral("神秘的な幾何学魔法陣、古代ルーン文字、輝くエネルギー粒子、神聖な光のエフェクト"));
+    m_presetCombo->addItem(i18n("🐱 幻想的な黒猫 (Mystical Black Cat)"),
+                           QStringLiteral("月夜に佇む美しい黒猫、金色に輝く瞳、繊細なヒゲ、神秘的な夜空と星の光"));
+    m_presetCombo->addItem(
+        i18n("🌹 バラの花束 (Botanical Rose)"),
+        QStringLiteral("咲き誇る深紅のバラの花束、重なり合う繊細な花びら、朝露のハイライト、瑞々しい緑の葉"));
     m_presetCombo->setAccessibleName(i18n("Quick illustration presets"));
     promptCard.layout->addWidget(m_presetCombo);
 
@@ -483,7 +526,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     m_promptEditor = new QPlainTextEdit(promptCard.frame);
     m_promptEditor->setTabChangesFocus(true);
-    m_promptEditor->setPlaceholderText(i18n("例: 雨上がりの夜、青い光に包まれた猫と花のある静かな路地 (Ctrl+Enter で生成)"));
+    m_promptEditor->setPlaceholderText(
+        i18n("例: 雨上がりの夜、青い光に包まれた猫と花のある静かな路地 (Ctrl+Enter で生成)"));
     m_promptEditor->setMinimumHeight(75);
     m_promptEditor->setMaximumHeight(130);
     m_promptEditor->setAccessibleName(i18n("Illustration prompt"));
@@ -656,7 +700,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_modeCombo = new QComboBox(engineCard.frame);
     m_modeCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_modeCombo->setMinimumContentsLength(10);
-    m_modeCombo->addItem(i18n("LLM 座標ストローク描画 (Chat Completions)"), static_cast<int>(GenerationMode::LlmStrokes));
+    m_modeCombo->addItem(i18n("LLM 座標ストローク描画 (Chat Completions)"),
+                         static_cast<int>(GenerationMode::LlmStrokes));
     m_modeCombo->addItem(i18n("ローカル座標ストローク描画"), static_cast<int>(GenerationMode::LocalStrokes));
     m_modeCombo->addItem(i18n("画像モデル API (DALL-E)"), static_cast<int>(GenerationMode::RemoteImage));
     m_modeCombo->addItem(i18n("ローカル・コンセプトスケッチ"), static_cast<int>(GenerationMode::LocalConcept));
@@ -677,7 +722,10 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     detailsLayout->setContentsMargins(0, 4, 0, 0);
     detailsLayout->setSpacing(6);
 
-    m_remoteOptionsLabel = new QLabel(i18n("OpenAI 互換の Chat Completions エンドポイントを指定します。Vision対応モデルを推奨します（画像非対応時はテキストにフォールバック）。"), m_detailsContainer);
+    m_remoteOptionsLabel = new QLabel(
+        i18n("OpenAI 互換の Chat Completions "
+             "エンドポイントを指定します。Vision対応モデルを推奨します（画像非対応時はテキストにフォールバック）。"),
+        m_detailsContainer);
     m_remoteOptionsLabel->setObjectName(QStringLiteral("aiSubtitle"));
     m_remoteOptionsLabel->setWordWrap(true);
     detailsLayout->addWidget(m_remoteOptionsLabel);
@@ -727,7 +775,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_temperatureSpin->setValue(0.35); // Stable 0.35 default for high-precision geometry & anime fidelity
     m_temperatureSpin->setDecimals(2);
     m_temperatureSpin->setAccessibleName(i18n("Sampling temperature"));
-    m_temperatureSpin->setToolTip(i18n("サンプリング温度 (0.0=確定的/構造維持, 0.35=推奨安定・高精度幾何, 0.70=創造的)"));
+    m_temperatureSpin->setToolTip(
+        i18n("サンプリング温度 (0.0=確定的/構造維持, 0.35=推奨安定・高精度幾何, 0.70=創造的)"));
 
     m_topPSpin = new QDoubleSpinBox(m_detailsContainer);
     m_topPSpin->setRange(0.05, 1.0);
@@ -797,16 +846,21 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_strokeProtocolCombo->setAccessibleName(i18n("Stroke protocol"));
     m_strokeProtocolCombo->addItem(i18n("自律ストロークアーティスト (自由構図・高品質立体描画・推奨)"), 1);
     m_strokeProtocolCombo->addItem(i18n("定型リグ配置 (SceneSpec 黄金比テンプレート)"), 0);
-    m_strokeProtocolCombo->setToolTip(i18n("AIがプロンプトのポーズ・構図・立体感を直接捉えて自由かつ繊細にストロークを描画するか(自律・推奨)、固定幾何リグで描画するか(定型)を指定します。"));
+    m_strokeProtocolCombo->setToolTip(
+        i18n("AIがプロンプトのポーズ・構図・立体感を直接捉えて自由かつ繊細にストロークを描画するか(自律・推奨)"
+             "、固定幾何リグで描画するか(定型)を指定します。"));
 
     m_compositionPlanCheck = new QCheckBox(i18n("2段階構図生成 (Composition Plan)"), m_detailsContainer);
     m_compositionPlanCheck->setChecked(false);
-    m_compositionPlanCheck->setToolTip(i18n("複雑な構図向けに、事前に構図計画を策定してから実ストロークを生成します。"));
+    m_compositionPlanCheck->setToolTip(
+        i18n("複雑な構図向けに、事前に構図計画を策定してから実ストロークを生成します。"));
 
     // V3 Phase 0.1: FX particle suppression toggle (default ON).
     m_suppressParticlesCheck = new QCheckBox(i18n("点々・パーティクルを抑制 (推奨)"), m_detailsContainer);
     m_suppressParticlesCheck->setChecked(true);
-    m_suppressParticlesCheck->setToolTip(i18n("顔や画面全体を覆う点描ノイズ・吹雪状パーティクルの生成と多重蓄積を抑止します。星空・雪・花びら等が必要な場合のみOFFにしてください。"));
+    m_suppressParticlesCheck->setToolTip(
+        i18n("顔や画面全体を覆う点描ノイズ・吹雪状パーティクルの生成と多重蓄積を抑止します。星空・雪・花びら等が必要な"
+             "場合のみOFFにしてください。"));
 
     m_reasoningEffortCombo = new QComboBox(m_detailsContainer);
     m_reasoningEffortCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
@@ -822,11 +876,15 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_qualityModeCombo = new QComboBox(m_detailsContainer);
     m_qualityModeCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_qualityModeCombo->setMinimumContentsLength(10);
-    m_qualityModeCombo->addItem(i18n("⚡ 高速 (Fast) - 低遅延・critic 1周"), static_cast<int>(KisAiModelRouter::QualityMode::Fast));
-    m_qualityModeCombo->addItem(i18n("🎯 標準 (Quality) - フラッグシップ・critic 2周"), static_cast<int>(KisAiModelRouter::QualityMode::Quality));
-    m_qualityModeCombo->addItem(i18n("👑 最高峰 (Max) - 深層思考・多重批評・N-best 5案"), static_cast<int>(KisAiModelRouter::QualityMode::Max));
+    m_qualityModeCombo->addItem(i18n("⚡ 高速 (Fast) - 低遅延・critic 1周"),
+                                static_cast<int>(KisAiModelRouter::QualityMode::Fast));
+    m_qualityModeCombo->addItem(i18n("🎯 標準 (Quality) - フラッグシップ・critic 2周"),
+                                static_cast<int>(KisAiModelRouter::QualityMode::Quality));
+    m_qualityModeCombo->addItem(i18n("👑 最高峰 (Max) - 深層思考・多重批評・N-best 5案"),
+                                static_cast<int>(KisAiModelRouter::QualityMode::Max));
     m_qualityModeCombo->setAccessibleName(i18n("AI Quality preset"));
-    m_qualityModeCombo->setToolTip(i18n("V5 Model Router 品質モード: ステージごとのモデル選択、温度、思考時間、および批評ラウンド予算を設定します。"));
+    m_qualityModeCombo->setToolTip(i18n(
+        "V5 Model Router 品質モード: ステージごとのモデル選択、温度、思考時間、および批評ラウンド予算を設定します。"));
     m_qualityModeCombo->setCurrentIndex(static_cast<int>(KisAiModelRouter::qualityMode()));
     connect(m_qualityModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this](int index) {
         const auto mode = static_cast<KisAiModelRouter::QualityMode>(m_qualityModeCombo->itemData(index).toInt());
@@ -836,7 +894,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_customInstructionsEdit = new QPlainTextEdit(m_detailsContainer);
     m_customInstructionsEdit->setTabChangesFocus(true);
     m_customInstructionsEdit->setAccessibleName(i18n("Custom instructions"));
-    m_customInstructionsEdit->setPlaceholderText(i18n("システムプロンプトに追加する独自の作画指示・画風・禁止事項 (Ctrl+Enter で生成)"));
+    m_customInstructionsEdit->setPlaceholderText(
+        i18n("システムプロンプトに追加する独自の作画指示・画風・禁止事項 (Ctrl+Enter で生成)"));
     m_customInstructionsEdit->setMaximumHeight(70);
     m_customInstructionsEdit->installEventFilter(this);
 
@@ -937,19 +996,26 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_artStyleCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_artStyleCombo->setMinimumContentsLength(10);
     m_artStyleCombo->addItem(i18n("🎨 おまかせ (Auto)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::General));
-    m_artStyleCombo->addItem(i18n("✨ アニメセル画 (Anime Cel)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel));
-    m_artStyleCombo->addItem(i18n("💧 透明水彩 (Watercolor)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor));
-    m_artStyleCombo->addItem(i18n("🖌️ 厚塗り・油彩 (Impasto)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Impasto));
-    m_artStyleCombo->addItem(i18n("✒️ マンガ・インク (Ink Sketch)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::InkSketch));
-    m_artStyleCombo->addItem(i18n("🖋️ 細密ペン画 (Fine Lineart)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::FineLineart));
-    m_artStyleCombo->addItem(i18n("⚡ サイバーネオン (Cyber Neon)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::CyberNeon));
+    m_artStyleCombo->addItem(i18n("✨ アニメセル画 (Anime Cel)"),
+                             static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel));
+    m_artStyleCombo->addItem(i18n("💧 透明水彩 (Watercolor)"),
+                             static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor));
+    m_artStyleCombo->addItem(i18n("🖌️ 厚塗り・油彩 (Impasto)"),
+                             static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Impasto));
+    m_artStyleCombo->addItem(i18n("✒️ マンガ・インク (Ink Sketch)"),
+                             static_cast<int>(KisAiPromptAnalyzer::ArtStyle::InkSketch));
+    m_artStyleCombo->addItem(i18n("🖋️ 細密ペン画 (Fine Lineart)"),
+                             static_cast<int>(KisAiPromptAnalyzer::ArtStyle::FineLineart));
+    m_artStyleCombo->addItem(i18n("⚡ サイバーネオン (Cyber Neon)"),
+                             static_cast<int>(KisAiPromptAnalyzer::ArtStyle::CyberNeon));
     m_artStyleCombo->setAccessibleName(i18n("Art style"));
     goalOptionsLayout->addRow(i18n("画風スタイル"), m_artStyleCombo);
 
     m_pausePerStepCheck = new QCheckBox(i18n("段階ごとに一時停止（手動加筆・確認を待つ）"), goalOptionsWidget);
     m_pausePerStepCheck->setFocusPolicy(Qt::StrongFocus);
     m_pausePerStepCheck->setAccessibleName(i18n("Pause after each step"));
-    m_pausePerStepCheck->setToolTip(i18n("各ステップ完了時に一時停止し、Kritaのブラシで自由に加筆してから次のステップへ進めます。"));
+    m_pausePerStepCheck->setToolTip(
+        i18n("各ステップ完了時に一時停止し、Kritaのブラシで自由に加筆してから次のステップへ進めます。"));
     m_pausePerStepCheck->setCursor(Qt::PointingHandCursor);
     goalOptionsLayout->addRow(QString(), m_pausePerStepCheck);
 
@@ -989,9 +1055,11 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_readinessBar->setValue(0);
     m_readinessBar->setFormat(i18n("自律完成度: %p%"));
     m_readinessBar->setAlignment(Qt::AlignCenter);
-    m_readinessBar->setStyleSheet(QStringLiteral(
-        "QProgressBar { background: #0d1117; border: 1px solid #273142; border-radius: 4px; height: 16px; text-align: center; color: #f8fafc; font-size: 10px; font-weight: 600; }"
-        "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #38bdf8, stop:1 #818cf8); border-radius: 3px; }"));
+    m_readinessBar->setStyleSheet(
+        QStringLiteral("QProgressBar { background: #0d1117; border: 1px solid #273142; border-radius: 4px; height: "
+                       "16px; text-align: center; color: #f8fafc; font-size: 10px; font-weight: 600; }"
+                       "QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #38bdf8, "
+                       "stop:1 #818cf8); border-radius: 3px; }"));
     inspectorLayout->addWidget(m_readinessBar);
 
     m_critiqueLabel = new QLabel(i18n("AIの視覚批評・自己分析がここに表示されます。"), m_goalInspectorCard);
@@ -999,8 +1067,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     // Critique text comes from the model; render it as plain text so HTML in
     // an untrusted response is never interpreted.
     m_critiqueLabel->setTextFormat(Qt::PlainText);
-    m_critiqueLabel->setStyleSheet(QStringLiteral(
-        "background: #0d1117; color: #94a3b8; border: 1px solid #273142; border-left: 3px solid #38bdf8; border-radius: 4px; padding: 6px 8px; font-size: 11px;"));
+    m_critiqueLabel->setStyleSheet(
+        QStringLiteral("background: #0d1117; color: #94a3b8; border: 1px solid #273142; border-left: 3px solid "
+                       "#38bdf8; border-radius: 4px; padding: 6px 8px; font-size: 11px;"));
     inspectorLayout->addWidget(m_critiqueLabel);
 
     auto *stepBtnRow = new QHBoxLayout();
@@ -1034,7 +1103,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         }
     });
     connect(m_nextStepButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::advanceGoalStep);
-    connect(m_finishGoalButton, &QPushButton::clicked, this, [this] { finishGoalMode(true); });
+    connect(m_finishGoalButton, &QPushButton::clicked, this, [this] {
+        finishGoalMode(true);
+    });
 
     // Card 4: Action & Preview
     CardWidget actionCard = createCard();
@@ -1044,7 +1115,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_generateButton->setObjectName(QStringLiteral("aiGenerateButton"));
     m_generateButton->setFocusPolicy(Qt::StrongFocus);
     m_generateButton->setAccessibleName(i18n("Generate illustration"));
-    m_generateButton->setAccessibleDescription(i18n("プロンプトからイラストを生成し、現在のキャンバスに新しいレイヤーを追加します。"));
+    m_generateButton->setAccessibleDescription(
+        i18n("プロンプトからイラストを生成し、現在のキャンバスに新しいレイヤーを追加します。"));
     m_cancelButton = new QPushButton(i18n("中止"), actionCard.frame);
     m_cancelButton->setObjectName(QStringLiteral("aiSecondaryButton"));
     m_cancelButton->setFocusPolicy(Qt::StrongFocus);
@@ -1061,7 +1133,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_progressBar->setVisible(false);
     actionCard.layout->addWidget(m_progressBar);
 
-    m_statusLabel = new QLabel(i18n("キャンバスがない場合は、生成時に新しい AI キャンバスを作成します。"), actionCard.frame);
+    m_statusLabel =
+        new QLabel(i18n("キャンバスがない場合は、生成時に新しい AI キャンバスを作成します。"), actionCard.frame);
     m_statusLabel->setObjectName(QStringLiteral("aiStatus"));
     m_statusLabel->setWordWrap(true);
     // Status text can carry server/model-supplied error detail; render it as
@@ -1074,7 +1147,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_previewLabel->setAlignment(Qt::AlignCenter);
     m_previewLabel->setWordWrap(true);
     m_previewLabel->setMinimumHeight(60);
-    m_previewLabel->setStyleSheet(QStringLiteral("background: #0d1117; border: 1px solid #273142; border-radius: 6px; color: #7f95b5; padding: 6px; font-size: 11px;"));
+    m_previewLabel->setStyleSheet(
+        QStringLiteral("background: #0d1117; border: 1px solid #273142; border-radius: 6px; color: #7f95b5; padding: "
+                       "6px; font-size: 11px;"));
     m_previewLabel->setAccessibleName(i18n("Generation preview"));
     actionCard.layout->addWidget(m_previewLabel);
 
@@ -1159,9 +1234,15 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     // back over the user's stored settings.
     loadSettings();
 
-    connect(m_newCanvasButton, &QPushButton::clicked, this, [this] { createCanvas(); });
-    connect(m_generateButton, &QPushButton::clicked, this, [this] { generateIllustration(); });
-    connect(m_cancelButton, &QPushButton::clicked, this, [this] { cancelRemoteRequest(); });
+    connect(m_newCanvasButton, &QPushButton::clicked, this, [this] {
+        createCanvas();
+    });
+    connect(m_generateButton, &QPushButton::clicked, this, [this] {
+        generateIllustration();
+    });
+    connect(m_cancelButton, &QPushButton::clicked, this, [this] {
+        cancelRemoteRequest();
+    });
     connect(m_modeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
         updateModeUi();
         saveSettings();
@@ -1181,32 +1262,74 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     connect(m_copyLogButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::copyDebugLog);
     connect(m_clearLogButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::clearDebugLog);
 
-    connect(m_endpointEditor, &QLineEdit::editingFinished, this, [this] { saveSettings(); });
-    connect(m_modelEditor, &QLineEdit::editingFinished, this, [this] { saveSettings(); });
-    connect(m_saveApiKeyCheck, &QCheckBox::toggled, this, [this] { saveSettings(); });
-    connect(m_widthSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
-    connect(m_heightSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
-    connect(m_strokeBudgetSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
-    connect(m_goalModeCheck, &QCheckBox::toggled, this, [this] { saveSettings(); });
-    connect(m_goalStepsSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
-    connect(m_artStyleCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
-    connect(m_pausePerStepCheck, &QCheckBox::toggled, this, [this] { saveSettings(); });
-    connect(m_temperatureSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] { saveSettings(); });
-    connect(m_topPSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] { saveSettings(); });
-    connect(m_trappingPxSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] { saveSettings(); });
-    connect(m_maxTokensSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
-    connect(m_maxRetriesSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
-    connect(m_timeoutSecSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] { saveSettings(); });
-    connect(m_jsonModeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
-    connect(m_visionQualityCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
-    connect(m_strokeProtocolCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
-    connect(m_compositionPlanCheck, &QCheckBox::toggled, this, [this] { saveSettings(); });
+    connect(m_endpointEditor, &QLineEdit::editingFinished, this, [this] {
+        saveSettings();
+    });
+    connect(m_modelEditor, &QLineEdit::editingFinished, this, [this] {
+        saveSettings();
+    });
+    connect(m_saveApiKeyCheck, &QCheckBox::toggled, this, [this] {
+        saveSettings();
+    });
+    connect(m_widthSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_heightSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_strokeBudgetSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_goalModeCheck, &QCheckBox::toggled, this, [this] {
+        saveSettings();
+    });
+    connect(m_goalStepsSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_artStyleCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_pausePerStepCheck, &QCheckBox::toggled, this, [this] {
+        saveSettings();
+    });
+    connect(m_temperatureSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_topPSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_trappingPxSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_maxTokensSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_maxRetriesSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_timeoutSecSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_jsonModeCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_visionQualityCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_strokeProtocolCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_compositionPlanCheck, &QCheckBox::toggled, this, [this] {
+        saveSettings();
+    });
     connect(m_suppressParticlesCheck, &QCheckBox::toggled, this, [this] {
         KisAiStrokeProgramCodec::setParticleSuppressionEnabled(
             m_suppressParticlesCheck ? m_suppressParticlesCheck->isChecked() : true);
         saveSettings();
     });
-    connect(m_reasoningEffortCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] { saveSettings(); });
+    connect(m_reasoningEffortCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        saveSettings();
+    });
     // Free-typed text: debounce instead of rewriting the whole QSettings tree
     // (including DPAPI re-encryption of the API key) on every keystroke.
     if (!m_settingsSaveDebounceTimer) {
@@ -1225,17 +1348,28 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     // Configure accessible keyboard navigation (Tab order) across primary controls.
     if (m_uiModeTabs && m_promptEditor) {
         QWidget::setTabOrder(m_uiModeTabs, m_promptEditor);
-        if (m_expandPromptButton) QWidget::setTabOrder(m_promptEditor, m_expandPromptButton);
-        if (m_expandPromptButton && m_syncColorButton) QWidget::setTabOrder(m_expandPromptButton, m_syncColorButton);
-        if (m_syncColorButton && m_widthSpin) QWidget::setTabOrder(m_syncColorButton, m_widthSpin);
-        if (m_widthSpin && m_heightSpin) QWidget::setTabOrder(m_widthSpin, m_heightSpin);
-        if (m_heightSpin && m_newCanvasButton) QWidget::setTabOrder(m_heightSpin, m_newCanvasButton);
-        if (m_newCanvasButton && m_modeCombo) QWidget::setTabOrder(m_newCanvasButton, m_modeCombo);
-        if (m_modeCombo && m_artStyleCombo) QWidget::setTabOrder(m_modeCombo, m_artStyleCombo);
-        if (m_artStyleCombo && m_strokeBudgetSpin) QWidget::setTabOrder(m_artStyleCombo, m_strokeBudgetSpin);
-        if (m_strokeBudgetSpin && m_goalModeCheck) QWidget::setTabOrder(m_strokeBudgetSpin, m_goalModeCheck);
-        if (m_goalModeCheck && m_generateButton) QWidget::setTabOrder(m_goalModeCheck, m_generateButton);
-        if (m_generateButton && m_cancelButton) QWidget::setTabOrder(m_generateButton, m_cancelButton);
+        if (m_expandPromptButton)
+            QWidget::setTabOrder(m_promptEditor, m_expandPromptButton);
+        if (m_expandPromptButton && m_syncColorButton)
+            QWidget::setTabOrder(m_expandPromptButton, m_syncColorButton);
+        if (m_syncColorButton && m_widthSpin)
+            QWidget::setTabOrder(m_syncColorButton, m_widthSpin);
+        if (m_widthSpin && m_heightSpin)
+            QWidget::setTabOrder(m_widthSpin, m_heightSpin);
+        if (m_heightSpin && m_newCanvasButton)
+            QWidget::setTabOrder(m_heightSpin, m_newCanvasButton);
+        if (m_newCanvasButton && m_modeCombo)
+            QWidget::setTabOrder(m_newCanvasButton, m_modeCombo);
+        if (m_modeCombo && m_artStyleCombo)
+            QWidget::setTabOrder(m_modeCombo, m_artStyleCombo);
+        if (m_artStyleCombo && m_strokeBudgetSpin)
+            QWidget::setTabOrder(m_artStyleCombo, m_strokeBudgetSpin);
+        if (m_strokeBudgetSpin && m_goalModeCheck)
+            QWidget::setTabOrder(m_strokeBudgetSpin, m_goalModeCheck);
+        if (m_goalModeCheck && m_generateButton)
+            QWidget::setTabOrder(m_goalModeCheck, m_generateButton);
+        if (m_generateButton && m_cancelButton)
+            QWidget::setTabOrder(m_generateButton, m_cancelButton);
     }
 
     updateModeUi();
@@ -1278,8 +1412,8 @@ bool KisAiIllustrationDocker::eventFilter(QObject *watched, QEvent *event)
 {
     if ((watched == m_promptEditor || watched == m_customInstructionsEdit) && event->type() == QEvent::KeyPress) {
         auto *keyEvent = static_cast<QKeyEvent *>(event);
-        if ((keyEvent->modifiers() & Qt::ControlModifier) &&
-            (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)) {
+        if ((keyEvent->modifiers() & Qt::ControlModifier)
+            && (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)) {
             if (m_goalModeActive && m_waitingForUserStepAdvance) {
                 advanceGoalStep();
             } else {
@@ -1287,7 +1421,9 @@ bool KisAiIllustrationDocker::eventFilter(QObject *watched, QEvent *event)
             }
             return true;
         }
-        if (keyEvent->key() == Qt::Key_Escape && (m_reply || m_goalModeActive || m_testReply || m_expandPromptReply || (m_retryTimer && m_retryTimer->isActive()))) {
+        if (keyEvent->key() == Qt::Key_Escape
+            && (m_reply || m_goalModeActive || m_testReply || m_expandPromptReply
+                || (m_retryTimer && m_retryTimer->isActive()))) {
             cancelRemoteRequest();
             return true;
         }
@@ -1297,8 +1433,8 @@ bool KisAiIllustrationDocker::eventFilter(QObject *watched, QEvent *event)
 
 void KisAiIllustrationDocker::keyPressEvent(QKeyEvent *event)
 {
-    if ((event->modifiers() & Qt::ControlModifier) &&
-        (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
+    if ((event->modifiers() & Qt::ControlModifier)
+        && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
         if (m_goalModeActive && m_waitingForUserStepAdvance) {
             advanceGoalStep();
         } else {
@@ -1307,7 +1443,9 @@ void KisAiIllustrationDocker::keyPressEvent(QKeyEvent *event)
         event->accept();
         return;
     }
-    if (event->key() == Qt::Key_Escape && (m_reply || m_goalModeActive || m_testReply || m_expandPromptReply || (m_retryTimer && m_retryTimer->isActive()))) {
+    if (event->key() == Qt::Key_Escape
+        && (m_reply || m_goalModeActive || m_testReply || m_expandPromptReply
+            || (m_retryTimer && m_retryTimer->isActive()))) {
         cancelRemoteRequest();
         event->accept();
         return;
@@ -1377,8 +1515,8 @@ void KisAiIllustrationDocker::generateIllustration()
     }
 
     const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
-    if (m_goalModeCheck && m_goalModeCheck->isChecked() &&
-        (mode == GenerationMode::LlmStrokes || mode == GenerationMode::LocalStrokes)) {
+    if (m_goalModeCheck && m_goalModeCheck->isChecked()
+        && (mode == GenerationMode::LlmStrokes || mode == GenerationMode::LocalStrokes)) {
         startGoalMode(prompt);
         return;
     }
@@ -1410,7 +1548,8 @@ void KisAiIllustrationDocker::generateLocalStrokes(const QString &prompt)
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
     const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize);
     if (!preview.isNull()) {
-        m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        m_previewLabel->setPixmap(
+            QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
         KisAiGenerationSnapshot snapshot;
         snapshot.timestamp = QDateTime::currentDateTime();
         snapshot.prompt = prompt;
@@ -1424,7 +1563,10 @@ void KisAiIllustrationDocker::generateLocalStrokes(const QString &prompt)
     KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
     if (view && view->image()) {
         QString statusMsg;
-        if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg)) {
+        if (KisAiStrokeRenderer::renderProgramToLayers(view->image(),
+                                                       m_mainWindow->viewManager(),
+                                                       program,
+                                                       &statusMsg)) {
             const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
             const int qualityPercent = qRound(qBound<qreal>(0.0, program.completionScore, 1.0) * 100.0);
             const QString detailMsg = i18n("%1 (%2 / 構造品質 %3%)", statusMsg, summary, qualityPercent);
@@ -1541,10 +1683,29 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     }
 
     const qreal configuredTemp = m_temperatureSpin ? m_temperatureSpin->value() : 0.70;
-    const qreal temperature = m_isSelfCorrectionRetry ? qMin<qreal>(0.20, configuredTemp) : configuredTemp;
-    const qreal topP = m_topPSpin ? m_topPSpin->value() : 1.0;
-    const int maxTokens = m_maxTokensSpin ? m_maxTokensSpin->value() : 0;
-    const QString reasoningEffort = m_reasoningEffortCombo ? m_reasoningEffortCombo->currentData().toString() : QString();
+    // V6 W3: stage-resolved sampling. SceneSpec keeps the user temperature
+    // (Router owns vision/patch stages); json strategy follows the Router
+    // fallback chain instead of the ad-hoc combo index.
+    const KisAiRefinementLoop::ResolvedSampling sceneSampling = KisAiRefinementLoop::samplingFor(
+        KisAiModelRouter::Stage::SceneSpec,
+        model,
+        endpoint,
+        m_isSelfCorrectionRetry ? qMin<qreal>(0.20, configuredTemp) : configuredTemp,
+        m_topPSpin ? m_topPSpin->value() : 1.0,
+        m_maxTokensSpin ? m_maxTokensSpin->value() : 0,
+        m_reasoningEffortCombo ? m_reasoningEffortCombo->currentData().toString() : QString(),
+        forceJsonObjectOnly);
+    const qreal temperature = sceneSampling.temperature;
+    const qreal topP = sceneSampling.topP;
+    const int maxTokens = sceneSampling.maxTokens;
+    const QString reasoningEffort = sceneSampling.reasoningEffort;
+    if (sceneSampling.useJsonSchema) {
+        enforceJson = true;
+        forceJsonObjectOnly = false;
+    } else if (sceneSampling.useJsonObject) {
+        enforceJson = true;
+        forceJsonObjectOnly = true;
+    }
     QString customInstructions = m_customInstructionsEdit ? m_customInstructionsEdit->toPlainText() : QString();
     if (!m_compositionDirectives.isEmpty()) {
         if (!customInstructions.isEmpty()) {
@@ -1568,18 +1729,18 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
 
     // If Composition Plan is enabled and not yet fetched, do Step 1 first
     const bool useCompositionPlan = m_compositionPlanCheck && m_compositionPlanCheck->isChecked()
-                                    && !m_isSelfCorrectionRetry && !m_retryInFlight
-                                    && m_compositionDirectives.isEmpty() && !m_waitingForCompositionPlan;
+        && !m_isSelfCorrectionRetry && !m_retryInFlight && m_compositionDirectives.isEmpty()
+        && !m_waitingForCompositionPlan;
 
     if (useCompositionPlan) {
         m_waitingForCompositionPlan = true;
         m_lastFailedPrompt = effectivePrompt;
-        const QJsonObject planPayload = KisAiStrokeProgramCodec::buildCompositionPlanPayload(
-            model, effectivePrompt, canvasSize, artStyle);
+        const QJsonObject planPayload =
+            KisAiStrokeProgramCodec::buildCompositionPlanPayload(model, effectivePrompt, canvasSize, artStyle);
 
-        logDebug(QStringLiteral("COMP_PLAN_REQ"),
-                 QStringLiteral("POST Composition Plan (model=%1, prompt=\"%2\")")
-                     .arg(model, effectivePrompt.left(60)));
+        logDebug(
+            QStringLiteral("COMP_PLAN_REQ"),
+            QStringLiteral("POST Composition Plan (model=%1, prompt=\"%2\")").arg(model, effectivePrompt.left(60)));
 
         m_activeRequestEndpoint = endpoint;
         m_isStreamingRequest = false;
@@ -1602,8 +1763,12 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         setBusy(true);
         setStatus(i18n("構図計画 (Composition Plan) を策定しています…"));
 
-        connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] { appendReplyData(m_reply.data()); });
-        connect(m_reply.data(), &QNetworkReply::finished, this, [this] { finishLlmStrokesRequest(); });
+        connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] {
+            appendReplyData(m_reply.data());
+        });
+        connect(m_reply.data(), &QNetworkReply::finished, this, [this] {
+            finishLlmStrokesRequest();
+        });
 
         if (!m_activityTimer) {
             m_activityTimer = new QTimer(this);
@@ -1624,35 +1789,31 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     const bool useSceneSpec = (strokeProtocol == 0) && !useCompositionPlan && !m_isSelfCorrectionRetry;
 
     const QJsonObject payload = useSceneSpec
-        ? KisAiSceneSpecCodec::buildSceneSpecPayload(
-            model,
-            effectivePrompt,
-            canvasSize,
-            artStyle,
-            reasoningEffort,
-            customInstructions,
-            true, // enableStreaming
-            enforceJson,
-            temperature,
-            topP,
-            maxTokens,
-            forceJsonObjectOnly
-        )
-        : KisAiStrokeProgramCodec::buildChatCompletionsPayload(
-            model,
-            effectivePrompt,
-            canvasSize,
-            strokeBudget,
-            reasoningEffort,
-            customInstructions,
-            true, // enableStreaming
-            enforceJson,
-            temperature,
-            topP,
-            maxTokens,
-            artStyle,
-            forceJsonObjectOnly
-        );
+        ? KisAiSceneSpecCodec::buildSceneSpecPayload(model,
+                                                     effectivePrompt,
+                                                     canvasSize,
+                                                     artStyle,
+                                                     reasoningEffort,
+                                                     customInstructions,
+                                                     true, // enableStreaming
+                                                     enforceJson,
+                                                     temperature,
+                                                     topP,
+                                                     maxTokens,
+                                                     forceJsonObjectOnly)
+        : KisAiStrokeProgramCodec::buildChatCompletionsPayload(model,
+                                                               effectivePrompt,
+                                                               canvasSize,
+                                                               strokeBudget,
+                                                               reasoningEffort,
+                                                               customInstructions,
+                                                               true, // enableStreaming
+                                                               enforceJson,
+                                                               temperature,
+                                                               topP,
+                                                               maxTokens,
+                                                               artStyle,
+                                                               forceJsonObjectOnly);
 
     logDebug(QStringLiteral("LLM_REQ"),
              QStringLiteral("POST %1 (model=%2, mode=%3, budget=%4, temp=%5, top_p=%6, prompt=\"%7\")")
@@ -1663,6 +1824,11 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
                       QString::number(temperature, 'f', 2),
                       QString::number(topP, 'f', 2),
                       prompt.left(60)));
+    // V6 W3/W6 telemetry: quality mode + N-best budget travel with the request.
+    logDebug(QStringLiteral("SPEC_NBEST"),
+             QStringLiteral("quality_mode=%1 candidates=%2")
+                 .arg(static_cast<int>(KisAiModelRouter::qualityMode()))
+                 .arg(useSceneSpec ? KisAiModelRouter::specCandidateCount() : 1));
 
     m_activeRequestEndpoint = endpoint;
     m_isStreamingRequest = true;
@@ -1683,10 +1849,15 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     }
 
     setBusy(true);
-    setStatus(i18n("%1 に LLM 座標ストローク生成を依頼しています…", KisAiIllustrationRenderer::displayEndpoint(endpoint)));
+    setStatus(
+        i18n("%1 に LLM 座標ストローク生成を依頼しています…", KisAiIllustrationRenderer::displayEndpoint(endpoint)));
 
-    connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] { appendReplyData(m_reply.data()); });
-    connect(m_reply.data(), &QNetworkReply::finished, this, [this] { finishLlmStrokesRequest(); });
+    connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] {
+        appendReplyData(m_reply.data());
+    });
+    connect(m_reply.data(), &QNetworkReply::finished, this, [this] {
+        finishLlmStrokesRequest();
+    });
 
     if (!m_activityTimer) {
         m_activityTimer = new QTimer(this);
@@ -1759,8 +1930,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         QString parseErr;
         if (requestSucceeded && KisAiStrokeProgramCodec::parseCompositionPlan(rawResponse, &directives, &parseErr)) {
             m_compositionDirectives = directives;
-            logDebug(QStringLiteral("COMP_PLAN_SUCCESS"),
-                     QStringLiteral("構図計画策定完了: %1").arg(directives));
+            logDebug(QStringLiteral("COMP_PLAN_SUCCESS"), QStringLiteral("構図計画策定完了: %1").arg(directives));
             setStatus(i18n("構図計画を反映し、ストロークを生成しています…"));
         } else {
             logDebug(QStringLiteral("COMP_PLAN_FALLBACK"),
@@ -1774,7 +1944,8 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     }
     if (requestTimedOut) {
         const qint64 elapsedSec = m_requestElapsedTimer.isValid() ? m_requestElapsedTimer.elapsed() / 1000 : 0;
-        logDebug(QStringLiteral("LLM_TIMEOUT"), QStringLiteral("リクエストがタイムアウトしました (%1秒経過)。").arg(elapsedSec));
+        logDebug(QStringLiteral("LLM_TIMEOUT"),
+                 QStringLiteral("リクエストがタイムアウトしました (%1秒経過)。").arg(elapsedSec));
         // Capture this before clearing the streamed content, otherwise the
         // "partial data then stall" case can never be reported.
         const bool receivedPartialData = !m_streamedContent.isEmpty();
@@ -1786,7 +1957,8 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
             return;
         }
         if (receivedPartialData) {
-            setStatus(i18n("LLM からのデータ受信が %1 秒間途絶えたため中止しました。", ACTIVITY_TIMEOUT_MS / 1000), true);
+            setStatus(i18n("LLM からのデータ受信が %1 秒間途絶えたため中止しました。", ACTIVITY_TIMEOUT_MS / 1000),
+                      true);
         } else {
             setStatus(i18n("LLM の初期応答が %1 秒以内に届かなかったため中止しました。", elapsedSec), true);
         }
@@ -1834,8 +2006,10 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         if (detail.isEmpty()) {
             detail = replyErrorString;
         }
-        logDebug(QStringLiteral("LLM_ERROR"), QStringLiteral("HTTP %1: %2\nRaw: %3")
-            .arg(httpStatus).arg(detail, QString::fromUtf8(rawResponse.left(500))));
+        logDebug(QStringLiteral("LLM_ERROR"),
+                 QStringLiteral("HTTP %1: %2\nRaw: %3")
+                     .arg(httpStatus)
+                     .arg(detail, QString::fromUtf8(rawResponse.left(500))));
 
         const bool isRetryableHttp = (httpStatus == 429 || (httpStatus >= 500 && httpStatus <= 504));
         const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
@@ -1868,17 +2042,21 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
 
     if (m_isStreamingRequest && !m_sseBuffer.isEmpty()) {
         bool isDone = false;
-        KisAiStrokeProgramCodec::parseSseStreamChunk(QByteArrayLiteral("\n\n"), &m_sseBuffer, &m_streamedContent, &isDone);
+        KisAiStrokeProgramCodec::parseSseStreamChunk(QByteArrayLiteral("\n\n"),
+                                                     &m_sseBuffer,
+                                                     &m_streamedContent,
+                                                     &isDone);
     }
 
-    const QByteArray response = !m_streamedContent.trimmed().isEmpty()
-        ? m_streamedContent.toUtf8()
-        : rawResponse;
+    const QByteArray response = !m_streamedContent.trimmed().isEmpty() ? m_streamedContent.toUtf8() : rawResponse;
     m_streamedContent.clear();
     m_sseBuffer.clear();
 
-    logDebug(QStringLiteral("LLM_RESP"), QStringLiteral("HTTP %1 (%2 bytes) 受信完了\nRaw: %3")
-        .arg(httpStatus).arg(response.size()).arg(QString::fromUtf8(response.left(1000))));
+    logDebug(QStringLiteral("LLM_RESP"),
+             QStringLiteral("HTTP %1 (%2 bytes) 受信完了\nRaw: %3")
+                 .arg(httpStatus)
+                 .arg(response.size())
+                 .arg(QString::fromUtf8(response.left(1000))));
 
     KisAiStrokeProgram program;
     QString parseError;
@@ -1907,9 +2085,9 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     // Trigger correction retry if Flats layer is missing, structural score is below 0.55,
     // or over half of the generated operations were dropped as invalid.
     const int flatsCount = KisAiStrokeProgramCodec::countLayerOperations(program).value(QStringLiteral("Flats"), 0);
-    const bool severelyDegradedQuality = (qualityReport.score < 0.55) ||
-                                         (flatsCount == 0 && !program.operations.isEmpty()) ||
-                                         (qualityReport.inputOperations > 4 && qualityReport.droppedOperations > qualityReport.inputOperations * 0.5);
+    const bool severelyDegradedQuality = (qualityReport.score < 0.55)
+        || (flatsCount == 0 && !program.operations.isEmpty())
+        || (qualityReport.inputOperations > 4 && qualityReport.droppedOperations > qualityReport.inputOperations * 0.5);
 
     const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
     if (severelyDegradedQuality && m_currentRetryCount < maxRetries) {
@@ -1919,7 +2097,8 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         } else if (qualityReport.score < 0.55) {
             qualityReason = i18n("構造品質スコア不足 (%1/1.0)", QString::number(qualityReport.score, 'f', 2));
         } else {
-            qualityReason = i18n("無効操作多数 (%1/%2 除外)", qualityReport.droppedOperations, qualityReport.inputOperations);
+            qualityReason =
+                i18n("無効操作多数 (%1/%2 除外)", qualityReport.droppedOperations, qualityReport.inputOperations);
         }
         logDebug(QStringLiteral("LLM_QUALITY_RETRY"), QStringLiteral("品質自己修復を発火: %1").arg(qualityReason));
         m_isQualityCorrectionRetry = true;
@@ -1932,14 +2111,29 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     m_isQualityCorrectionRetry = false;
     clearInFlightApiKey();
 
-    logDebug(QStringLiteral("LLM_PARSE_OK"), QStringLiteral("解析成功: %1 operations, completionScore=%2")
-        .arg(program.operations.size()).arg(program.completionScore));
+    logDebug(QStringLiteral("LLM_PARSE_OK"),
+             QStringLiteral("解析成功: %1 operations, completionScore=%2")
+                 .arg(program.operations.size())
+                 .arg(program.completionScore));
+
+    // V6 W3: offline deterministic critic gate (no network). Eye-pair
+    // symmetry warnings surface in the debug log so the next round can
+    // target them.
+    {
+        const QStringList symmetryWarnings = KisAiDeliberateStroke::eyePairSymmetryWarnings(program.operations);
+        if (!symmetryWarnings.isEmpty()) {
+            logDebug(QStringLiteral("CRITIC_ROUND"),
+                     QStringLiteral("symmetry warnings: %1").arg(symmetryWarnings.join(QStringLiteral(", "))));
+        }
+    }
 
     const qreal trappingPx = m_trappingPxSpin ? m_trappingPxSpin->value() : 1.5;
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
-    const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize, true, nullptr, trappingPx);
+    const QImage preview =
+        KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize, true, nullptr, trappingPx);
     if (!preview.isNull()) {
-        m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        m_previewLabel->setPixmap(
+            QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
         KisAiGenerationSnapshot snapshot;
         snapshot.timestamp = QDateTime::currentDateTime();
         snapshot.prompt = m_promptEditor ? m_promptEditor->toPlainText() : QString();
@@ -1955,7 +2149,13 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
     if (view && view->image()) {
         QString statusMsg;
-        if (KisAiStrokeRenderer::renderProgramToLayers(view->image(), m_mainWindow->viewManager(), program, &statusMsg, true, nullptr, trappingPx)) {
+        if (KisAiStrokeRenderer::renderProgramToLayers(view->image(),
+                                                       m_mainWindow->viewManager(),
+                                                       program,
+                                                       &statusMsg,
+                                                       true,
+                                                       nullptr,
+                                                       trappingPx)) {
             const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
             const int qualityPercent = qRound(qBound<qreal>(0.0, program.completionScore, 1.0) * 100.0);
             const QString detailMsg = i18n("%1 (%2 / 構造品質 %3%)", statusMsg, summary, qualityPercent);
@@ -1976,7 +2176,8 @@ void KisAiIllustrationDocker::generateLocalConcept(const QString &prompt)
     const QSize canvasSize = effectiveCanvasSize();
     const QImage result = KisAiIllustrationRenderer::createConceptImage(prompt, canvasSize);
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
-    m_previewLabel->setPixmap(QPixmap::fromImage(result).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    m_previewLabel->setPixmap(
+        QPixmap::fromImage(result).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
 
     if (addImageAsLayer(result, promptForLayerName(prompt))) {
         setStatus(i18n("コンセプトスケッチを新しいレイヤーに追加しました。"));
@@ -2040,7 +2241,7 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
 
     saveSettings();
 
-    QNetworkRequest request {QUrl(endpoint)};
+    QNetworkRequest request{QUrl(endpoint)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
@@ -2051,7 +2252,7 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
     }
 
     const QString sizeStr = imageSizeText(m_widthSpin, m_heightSpin);
-    const QJsonObject payload {
+    const QJsonObject payload{
         {QStringLiteral("model"), model},
         {QStringLiteral("prompt"), prompt},
         {QStringLiteral("size"), sizeStr},
@@ -2082,8 +2283,12 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
     setBusy(true);
     setStatus(i18n("%1 に画像生成を依頼しています…", KisAiIllustrationRenderer::displayEndpoint(endpoint)));
 
-    connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] { appendReplyData(m_reply.data()); });
-    connect(m_reply.data(), &QNetworkReply::finished, this, [this] { finishRemoteImageRequest(); });
+    connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] {
+        appendReplyData(m_reply.data());
+    });
+    connect(m_reply.data(), &QNetworkReply::finished, this, [this] {
+        finishRemoteImageRequest();
+    });
 
     if (!m_activityTimer) {
         m_activityTimer = new QTimer(this);
@@ -2139,8 +2344,11 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
         return;
     }
     if (requestTimedOut) {
-        logDebug(QStringLiteral("IMG_TIMEOUT"), QStringLiteral("画像モデルの応答がタイムアウトしました (%1 秒)。").arg(REMOTE_IMAGE_TIMEOUT_MS / 1000));
-        setStatus(i18n("画像モデルの応答が %1 秒以内に届かなかったため中止しました。", REMOTE_IMAGE_TIMEOUT_MS / 1000), true);
+        logDebug(
+            QStringLiteral("IMG_TIMEOUT"),
+            QStringLiteral("画像モデルの応答がタイムアウトしました (%1 秒)。").arg(REMOTE_IMAGE_TIMEOUT_MS / 1000));
+        setStatus(i18n("画像モデルの応答が %1 秒以内に届かなかったため中止しました。", REMOTE_IMAGE_TIMEOUT_MS / 1000),
+                  true);
         return;
     }
     if (responseTooLarge) {
@@ -2150,9 +2358,11 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
     }
     // Content-type validation: reject clearly non-JSON responses before parsing.
     if (!KisAiStrokeProgramCodec::isAcceptedResponseContentType(responseContentType, false)) {
-        logDebug(QStringLiteral("IMG_CONTENT_TYPE"), QStringLiteral("予期しないContent-Type: %1").arg(QString::fromUtf8(responseContentType)));
+        logDebug(QStringLiteral("IMG_CONTENT_TYPE"),
+                 QStringLiteral("予期しないContent-Type: %1").arg(QString::fromUtf8(responseContentType)));
         setStatus(i18n("画像モデルの応答が JSON 形式ではありません (Content-Type: %1)。",
-            QString::fromUtf8(responseContentType.isEmpty() ? QByteArray("unknown") : responseContentType)), true);
+                       QString::fromUtf8(responseContentType.isEmpty() ? QByteArray("unknown") : responseContentType)),
+                  true);
         return;
     }
     if (!requestSucceeded) {
@@ -2170,8 +2380,9 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
         if (detail.isEmpty()) {
             detail = replyErrorString;
         }
-        logDebug(QStringLiteral("IMG_ERROR"), QStringLiteral("HTTP %1: %2\nRaw: %3")
-            .arg(httpStatus).arg(detail, QString::fromUtf8(response.left(500))));
+        logDebug(
+            QStringLiteral("IMG_ERROR"),
+            QStringLiteral("HTTP %1: %2\nRaw: %3").arg(httpStatus).arg(detail, QString::fromUtf8(response.left(500))));
         if (!detail.isEmpty()) {
             setStatus(i18n("画像モデルへの接続または応答に失敗しました (HTTP %1): %2", httpStatus, detail), true);
         } else {
@@ -2185,7 +2396,8 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
         return;
     }
 
-    logDebug(QStringLiteral("IMG_RESP"), QStringLiteral("HTTP %1 (%2 bytes) 受信").arg(httpStatus).arg(response.size()));
+    logDebug(QStringLiteral("IMG_RESP"),
+             QStringLiteral("HTTP %1 (%2 bytes) 受信").arg(httpStatus).arg(response.size()));
 
     QString errorMessage;
     const QImage image = decodeModelImage(response, &errorMessage);
@@ -2195,10 +2407,12 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
         return;
     }
 
-    logDebug(QStringLiteral("IMG_DECODE_OK"), QStringLiteral("画像デコード成功: %1x%2").arg(image.width()).arg(image.height()));
+    logDebug(QStringLiteral("IMG_DECODE_OK"),
+             QStringLiteral("画像デコード成功: %1x%2").arg(image.width()).arg(image.height()));
 
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
-    m_previewLabel->setPixmap(QPixmap::fromImage(image).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    m_previewLabel->setPixmap(
+        QPixmap::fromImage(image).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
     if (addImageAsLayer(image, promptForLayerName(m_promptEditor ? m_promptEditor->toPlainText() : QString()))) {
         setStatus(i18n("画像モデルの結果を新しいレイヤーに追加しました。"));
         KisAiGenerationSnapshot snapshot;
@@ -2333,25 +2547,32 @@ void KisAiIllustrationDocker::updateModeUi()
     m_remoteOptionsLabel->setVisible(needsRemote);
     QSettings settings;
     if (isLlm) {
-        m_remoteOptionsLabel->setText(i18n("OpenAI 互換の Chat Completions エンドポイント (/v1/chat/completions) を指定します。Vision対応モデルを推奨します（画像非対応時はテキストに自動フォールバック）。"));
+        m_remoteOptionsLabel->setText(
+            i18n("OpenAI 互換の Chat Completions エンドポイント (/v1/chat/completions) "
+                 "を指定します。Vision対応モデルを推奨します（画像非対応時はテキストに自動フォールバック）。"));
         m_endpointEditor->setPlaceholderText(QStringLiteral("https://api.openai.com/v1/chat/completions"));
         m_modelEditor->setPlaceholderText(i18n("モデル名 (例: gpt-4o, o3-mini, deepseek-chat)"));
 
         const QString savedEndpoint = readSafeStoredEndpoint(settings,
                                                              QStringLiteral("AIIllustration/llmEndpoint"),
                                                              QStringLiteral("AIIllustration/endpoint"));
-        const QString savedModel = settings.value(QStringLiteral("AIIllustration/llmModel"),
-            settings.value(QStringLiteral("AIIllustration/model"))).toString();
-        m_endpointEditor->setText(savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/chat/completions") : savedEndpoint);
+        const QString savedModel = settings
+                                       .value(QStringLiteral("AIIllustration/llmModel"),
+                                              settings.value(QStringLiteral("AIIllustration/model")))
+                                       .toString();
+        m_endpointEditor->setText(savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/chat/completions")
+                                                          : savedEndpoint);
         m_modelEditor->setText(savedModel.isEmpty() ? QStringLiteral("gpt-4o") : savedModel);
     } else if (isRemoteImage) {
-        m_remoteOptionsLabel->setText(i18n("OpenAI 互換の画像生成エンドポイント (/v1/images/generations) を指定します。"));
+        m_remoteOptionsLabel->setText(
+            i18n("OpenAI 互換の画像生成エンドポイント (/v1/images/generations) を指定します。"));
         m_endpointEditor->setPlaceholderText(QStringLiteral("https://provider.example/v1/images/generations"));
         m_modelEditor->setPlaceholderText(i18n("画像モデル名 (例: dall-e-3)"));
 
         const QString savedEndpoint = readSafeStoredEndpoint(settings, QStringLiteral("AIIllustration/imageEndpoint"));
         const QString savedModel = settings.value(QStringLiteral("AIIllustration/imageModel")).toString();
-        m_endpointEditor->setText(savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/images/generations") : savedEndpoint);
+        m_endpointEditor->setText(
+            savedEndpoint.isEmpty() ? QStringLiteral("https://api.openai.com/v1/images/generations") : savedEndpoint);
         m_modelEditor->setText(savedModel.isEmpty() ? QStringLiteral("dall-e-3") : savedModel);
     }
 
@@ -2369,24 +2590,24 @@ void KisAiIllustrationDocker::updateModeUi()
     const bool isStrokeMode = (isLlm || newMode == GenerationMode::LocalStrokes);
     if (m_remoteForm) {
         // Row indices must match the addRow() order in the constructor.
-        setFormRowVisible(m_remoteForm, 0, needsRemote);   // Endpoint
-        setFormRowVisible(m_remoteForm, 1, needsRemote);   // Model
-        setFormRowVisible(m_remoteForm, 2, needsRemote);   // API Key
-        setFormRowVisible(m_remoteForm, 3, needsRemote);   // Save API Key checkbox
-        setFormRowVisible(m_remoteForm, 4, isLlm);         // Stroke Budget
-        setFormRowVisible(m_remoteForm, 5, isLlm);         // Temperature
-        setFormRowVisible(m_remoteForm, 6, isLlm);         // Top-P
-        setFormRowVisible(m_remoteForm, 7, isStrokeMode);  // Trapping px
-        setFormRowVisible(m_remoteForm, 8, isLlm);         // Max Tokens
-        setFormRowVisible(m_remoteForm, 9, needsRemote);   // Timeout
-        setFormRowVisible(m_remoteForm, 10, isLlm);        // Auto-retries
-        setFormRowVisible(m_remoteForm, 11, isLlm);        // JSON Mode
-        setFormRowVisible(m_remoteForm, 12, isLlm);        // Vision Quality
-        setFormRowVisible(m_remoteForm, 13, isLlm);        // Stroke Protocol
-        setFormRowVisible(m_remoteForm, 14, isLlm);        // Composition Plan
+        setFormRowVisible(m_remoteForm, 0, needsRemote); // Endpoint
+        setFormRowVisible(m_remoteForm, 1, needsRemote); // Model
+        setFormRowVisible(m_remoteForm, 2, needsRemote); // API Key
+        setFormRowVisible(m_remoteForm, 3, needsRemote); // Save API Key checkbox
+        setFormRowVisible(m_remoteForm, 4, isLlm); // Stroke Budget
+        setFormRowVisible(m_remoteForm, 5, isLlm); // Temperature
+        setFormRowVisible(m_remoteForm, 6, isLlm); // Top-P
+        setFormRowVisible(m_remoteForm, 7, isStrokeMode); // Trapping px
+        setFormRowVisible(m_remoteForm, 8, isLlm); // Max Tokens
+        setFormRowVisible(m_remoteForm, 9, needsRemote); // Timeout
+        setFormRowVisible(m_remoteForm, 10, isLlm); // Auto-retries
+        setFormRowVisible(m_remoteForm, 11, isLlm); // JSON Mode
+        setFormRowVisible(m_remoteForm, 12, isLlm); // Vision Quality
+        setFormRowVisible(m_remoteForm, 13, isLlm); // Stroke Protocol
+        setFormRowVisible(m_remoteForm, 14, isLlm); // Composition Plan
         setFormRowVisible(m_remoteForm, 15, isStrokeMode); // Suppress Particles
-        setFormRowVisible(m_remoteForm, 16, isLlm);        // Reasoning Effort
-        setFormRowVisible(m_remoteForm, 17, isLlm);        // Custom Instructions
+        setFormRowVisible(m_remoteForm, 16, isLlm); // Reasoning Effort
+        setFormRowVisible(m_remoteForm, 17, isLlm); // Custom Instructions
     }
 
     if (m_testConnectionButton) {
@@ -2405,7 +2626,6 @@ void KisAiIllustrationDocker::updateModeUi()
     }
 }
 
-
 void KisAiIllustrationDocker::setBusy(bool busy)
 {
     const bool allowGeneralInput = !busy && !m_goalModeActive;
@@ -2421,7 +2641,9 @@ void KisAiIllustrationDocker::setBusy(bool busy)
         m_strokeBudgetSpin->setEnabled(allowGeneralInput);
     }
     if (m_testConnectionButton) {
-        m_testConnectionButton->setEnabled(allowGeneralInput && (m_currentMode == GenerationMode::LlmStrokes || m_currentMode == GenerationMode::RemoteImage));
+        m_testConnectionButton->setEnabled(
+            allowGeneralInput
+            && (m_currentMode == GenerationMode::LlmStrokes || m_currentMode == GenerationMode::RemoteImage));
     }
     if (m_saveSettingsButton) {
         m_saveSettingsButton->setEnabled(allowGeneralInput);
@@ -2438,8 +2660,8 @@ void KisAiIllustrationDocker::setBusy(bool busy)
         // Goal mode only drives stroke-generation modes; keep the checkbox
         // disabled for image/concept modes even though general input is allowed,
         // so it can never appear operable while generateIllustration ignores it.
-        const bool goalCompatible = (m_currentMode == GenerationMode::LlmStrokes
-                                     || m_currentMode == GenerationMode::LocalStrokes);
+        const bool goalCompatible =
+            (m_currentMode == GenerationMode::LlmStrokes || m_currentMode == GenerationMode::LocalStrokes);
         m_goalModeCheck->setEnabled(allowGeneralInput && goalCompatible);
     }
     if (m_goalStepsSpin) {
@@ -2574,7 +2796,9 @@ void KisAiIllustrationDocker::setStatus(const QString &message, bool isError)
 void KisAiIllustrationDocker::resetActivityTimeout()
 {
     if (m_requestElapsedTimer.isValid() && m_requestElapsedTimer.elapsed() > MAX_REQUEST_TIMEOUT_MS) {
-        logDebug(QStringLiteral("TIMEOUT"), QStringLiteral("最大リクエスト時間 (%1 秒) を超過したためリクエストを打ち切ります。").arg(MAX_REQUEST_TIMEOUT_MS / 1000));
+        logDebug(QStringLiteral("TIMEOUT"),
+                 QStringLiteral("最大リクエスト時間 (%1 秒) を超過したためリクエストを打ち切ります。")
+                     .arg(MAX_REQUEST_TIMEOUT_MS / 1000));
         m_requestTimedOut = true;
         if (m_reply) {
             m_reply->abort();
@@ -2601,35 +2825,45 @@ void KisAiIllustrationDocker::updateProgressStatus()
         if (receivedChars > 0) {
             const int estimatedTokens = qMax(1, receivedChars / 3);
             const int detectedOps = m_streamedContent.count(QStringLiteral("\"kind\""));
-            const QString opsStr = detectedOps > 0
-                ? i18n(" / %1 本検出", detectedOps)
-                : QString();
+            const QString opsStr = detectedOps > 0 ? i18n(" / %1 本検出", detectedOps) : QString();
             if (m_goalModeActive) {
                 const QString visionTag = m_lastGoalRequestHadImage
                     ? i18n(" (Vision画像付)")
                     : (m_goalVisionFallbackActive ? i18n(" (テキストフォールバック)") : QString());
                 setStatus(i18n("Goal ステップ %1/%2: ストリーム受信中… (%3 秒経過 / 約 %4 トークン%5)",
-                    m_goalCurrentStep, m_goalTotalSteps, elapsedSec, estimatedTokens, opsStr));
+                               m_goalCurrentStep,
+                               m_goalTotalSteps,
+                               elapsedSec,
+                               estimatedTokens,
+                               opsStr));
                 if (m_goalPhaseLabel) {
                     m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2: 受信中 (%3 秒 / 約 %4 トークン%5)%6…",
-                        m_goalCurrentStep, m_goalTotalSteps, elapsedSec, estimatedTokens, opsStr, visionTag));
+                                                   m_goalCurrentStep,
+                                                   m_goalTotalSteps,
+                                                   elapsedSec,
+                                                   estimatedTokens,
+                                                   opsStr,
+                                                   visionTag));
                 }
             } else {
                 setStatus(i18n("%1 からストロークを受信中… (%2 秒経過 / 約 %3 トークン%4)",
-                    endpointName, elapsedSec, estimatedTokens, opsStr));
+                               endpointName,
+                               elapsedSec,
+                               estimatedTokens,
+                               opsStr));
             }
         } else {
             if (m_goalModeActive) {
                 setStatus(i18n("Goal ステップ %1/%2: LLM 思考・待機中… (%3 秒経過)",
-                    m_goalCurrentStep, m_goalTotalSteps, elapsedSec));
+                               m_goalCurrentStep,
+                               m_goalTotalSteps,
+                               elapsedSec));
             } else {
-                setStatus(i18n("%1 に接続中・思考待機中… (%2 秒経過)",
-                    endpointName, elapsedSec));
+                setStatus(i18n("%1 に接続中・思考待機中… (%2 秒経過)", endpointName, elapsedSec));
             }
         }
     } else {
-        setStatus(i18n("%1 にリクエスト送信中… (%2 秒経過)",
-            endpointName, elapsedSec));
+        setStatus(i18n("%1 にリクエスト送信中… (%2 秒経過)", endpointName, elapsedSec));
     }
 }
 
@@ -2723,8 +2957,8 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
         m_goalApiKey.clear();
     }
 
-    logDebug(QStringLiteral("GOAL_START"), QStringLiteral("Goalモード開始 (全 %1 段階, prompt=\"%2\")")
-        .arg(m_goalTotalSteps).arg(prompt.left(60)));
+    logDebug(QStringLiteral("GOAL_START"),
+             QStringLiteral("Goalモード開始 (全 %1 段階, prompt=\"%2\")").arg(m_goalTotalSteps).arg(prompt.left(60)));
 
     if (m_goalInspectorCard) {
         m_goalInspectorCard->setVisible(true);
@@ -2766,8 +3000,8 @@ void KisAiIllustrationDocker::executeGoalStep()
 
     const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
     const QSize canvasSize = effectiveCanvasSize();
-    const auto artStyle = static_cast<KisAiPromptAnalyzer::ArtStyle>(
-        m_artStyleCombo ? m_artStyleCombo->currentData().toInt() : 0);
+    const auto artStyle =
+        static_cast<KisAiPromptAnalyzer::ArtStyle>(m_artStyleCombo ? m_artStyleCombo->currentData().toInt() : 0);
 
     if (m_nextStepButton) {
         m_nextStepButton->setVisible(false);
@@ -2781,18 +3015,22 @@ void KisAiIllustrationDocker::executeGoalStep()
     if (mode == GenerationMode::LocalStrokes) {
         setBusy(true);
         if (m_goalPhaseLabel) {
-            m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2: ローカル作画実行中…", m_goalCurrentStep, m_goalTotalSteps));
+            m_goalPhaseLabel->setText(
+                i18n("🎯 ステップ %1/%2: ローカル作画実行中…", m_goalCurrentStep, m_goalTotalSteps));
         }
         setStatus(i18n("Goal ステップ %1/%2 のストロークを生成しています…", m_goalCurrentStep, m_goalTotalSteps));
 
-        const KisAiStrokeProgram program = KisAiStrokeProgramCodec::createDeterministicProgramStep(
-            m_goalPrompt, canvasSize, m_goalCurrentStep, m_goalTotalSteps);
+        const KisAiStrokeProgram program = KisAiStrokeProgramCodec::createDeterministicProgramStep(m_goalPrompt,
+                                                                                                   canvasSize,
+                                                                                                   m_goalCurrentStep,
+                                                                                                   m_goalTotalSteps);
 
         const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
         m_goalAccumulatedProgram = KisAiStrokeProgramCodec::mergePrograms(m_goalAccumulatedProgram, program);
         const QImage preview = KisAiStrokeRenderer::renderProgramToImage(m_goalAccumulatedProgram, previewTargetSize);
         if (!preview.isNull()) {
-            m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+            m_previewLabel->setPixmap(
+                QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
         }
 
         KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
@@ -2817,7 +3055,8 @@ void KisAiIllustrationDocker::executeGoalStep()
         }
 
         if (m_goalPhaseLabel) {
-            m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
+            m_goalPhaseLabel->setText(
+                i18n("🎯 ステップ %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
         }
         if (m_agentFocusLabel) {
             m_agentFocusLabel->setText(i18n("🎯 着目領域: %1", program.stepPhase));
@@ -2827,8 +3066,8 @@ void KisAiIllustrationDocker::executeGoalStep()
         }
         if (m_critiqueLabel) {
             m_critiqueLabel->setText(program.visualCritique.isEmpty()
-                ? i18n("ローカルプロシージャル作画ステップを完了しました。")
-                : program.visualCritique);
+                                         ? i18n("ローカルプロシージャル作画ステップを完了しました。")
+                                         : program.visualCritique);
         }
 
         setBusy(false);
@@ -2845,7 +3084,8 @@ void KisAiIllustrationDocker::executeGoalStep()
                 m_finishGoalButton->setVisible(true);
                 m_finishGoalButton->setEnabled(true);
             }
-            setStatus(i18n("ステップ %1 完了。加筆や確認後、「次のステップへ進む」を押してください。", m_goalCurrentStep));
+            setStatus(
+                i18n("ステップ %1 完了。加筆や確認後、「次のステップへ進む」を押してください。", m_goalCurrentStep));
         } else {
             QTimer::singleShot(300, this, [this] {
                 advanceGoalStep();
@@ -2901,16 +3141,35 @@ void KisAiIllustrationDocker::executeGoalStep()
         }
 
         const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 400;
-        const QString reasoningEffort = m_reasoningEffortCombo ? m_reasoningEffortCombo->currentData().toString() : QString();
-        const qreal configuredTemp = m_temperatureSpin ? m_temperatureSpin->value() : 0.70;
-        const qreal temperature = !m_goalSelfCorrectionFeedback.isEmpty() ? qMin<qreal>(0.20, configuredTemp) : configuredTemp;
-        const qreal topP = m_topPSpin ? m_topPSpin->value() : 1.0;
-        const int maxTokens = m_maxTokensSpin ? m_maxTokensSpin->value() : 0;
+        // V6 W3: Goal steps resolve through the Router (GoalStep stage).
+        const KisAiRefinementLoop::ResolvedSampling goalSampling = KisAiRefinementLoop::samplingFor(
+            KisAiModelRouter::Stage::GoalStep,
+            model,
+            endpoint,
+            !m_goalSelfCorrectionFeedback.isEmpty()
+                ? qMin<qreal>(0.20, m_temperatureSpin ? m_temperatureSpin->value() : 0.70)
+                : (m_temperatureSpin ? m_temperatureSpin->value() : 0.70),
+            m_topPSpin ? m_topPSpin->value() : 1.0,
+            m_maxTokensSpin ? m_maxTokensSpin->value() : 0,
+            m_reasoningEffortCombo ? m_reasoningEffortCombo->currentData().toString() : QString(),
+            forceJsonObjectOnly);
+        const QString reasoningEffort = goalSampling.reasoningEffort;
+        const qreal temperature = goalSampling.temperature;
+        const qreal topP = goalSampling.topP;
+        const int maxTokens = goalSampling.maxTokens;
+        if (goalSampling.useJsonSchema) {
+            enforceJson = true;
+            forceJsonObjectOnly = false;
+        } else if (goalSampling.useJsonObject) {
+            enforceJson = true;
+            forceJsonObjectOnly = true;
+        }
 
         const QString additionalInstruction = m_goalSelfCorrectionFeedback;
 
         const KisAiStrokeProgram *accumProg = (m_goalCurrentStep > 1 && !m_goalAccumulatedProgram.operations.isEmpty())
-            ? &m_goalAccumulatedProgram : nullptr;
+            ? &m_goalAccumulatedProgram
+            : nullptr;
         const QJsonObject payload = KisAiStrokeProgramCodec::buildGoalStepPayload(
             model,
             m_goalPrompt,
@@ -2931,16 +3190,18 @@ void KisAiIllustrationDocker::executeGoalStep()
             accumProg,
             m_lastGoalCritique,
             m_visionQualityCombo ? m_visionQualityCombo->currentData().toString() : QStringLiteral("auto"),
-            forceJsonObjectOnly
-        );
+            forceJsonObjectOnly);
 
-        logDebug(QStringLiteral("GOAL_REQ"), QStringLiteral(
-            "Step %1/%2 POST (model=%3, withImage=%4, fallbackActive=%5, temp=%6, top_p=%7, stream=true)")
-            .arg(m_goalCurrentStep).arg(m_goalTotalSteps).arg(model)
-            .arg(m_lastGoalRequestHadImage ? QStringLiteral("Yes") : QStringLiteral("No"))
-            .arg(m_goalVisionFallbackActive ? QStringLiteral("Yes") : QStringLiteral("No"))
-            .arg(QString::number(temperature, 'f', 2))
-            .arg(QString::number(topP, 'f', 2)));
+        logDebug(QStringLiteral("GOAL_REQ"),
+                 QStringLiteral(
+                     "Step %1/%2 POST (model=%3, withImage=%4, fallbackActive=%5, temp=%6, top_p=%7, stream=true)")
+                     .arg(m_goalCurrentStep)
+                     .arg(m_goalTotalSteps)
+                     .arg(model)
+                     .arg(m_lastGoalRequestHadImage ? QStringLiteral("Yes") : QStringLiteral("No"))
+                     .arg(m_goalVisionFallbackActive ? QStringLiteral("Yes") : QStringLiteral("No"))
+                     .arg(QString::number(temperature, 'f', 2))
+                     .arg(QString::number(topP, 'f', 2)));
 
         QNetworkRequest request{QUrl(endpoint)};
         request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
@@ -2969,16 +3230,21 @@ void KisAiIllustrationDocker::executeGoalStep()
             ? i18n(" (Vision画像付)")
             : (m_goalVisionFallbackActive ? i18n(" (テキストフォールバック)") : QString());
         setStatus(i18n("%1 に Goal ステップ %2/%3 を送信中%4…",
-            KisAiIllustrationRenderer::displayEndpoint(endpoint),
-            m_goalCurrentStep,
-            m_goalTotalSteps,
-            visionTag));
+                       KisAiIllustrationRenderer::displayEndpoint(endpoint),
+                       m_goalCurrentStep,
+                       m_goalTotalSteps,
+                       visionTag));
         if (m_goalPhaseLabel) {
-            m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2: LLM 生成中%3…", m_goalCurrentStep, m_goalTotalSteps, visionTag));
+            m_goalPhaseLabel->setText(
+                i18n("🎯 ステップ %1/%2: LLM 生成中%3…", m_goalCurrentStep, m_goalTotalSteps, visionTag));
         }
 
-        connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] { appendReplyData(m_reply.data()); });
-        connect(m_reply.data(), &QNetworkReply::finished, this, [this] { finishGoalStepRequest(); });
+        connect(m_reply.data(), &QNetworkReply::readyRead, this, [this] {
+            appendReplyData(m_reply.data());
+        });
+        connect(m_reply.data(), &QNetworkReply::finished, this, [this] {
+            finishGoalStepRequest();
+        });
 
         if (!m_activityTimer) {
             m_activityTimer = new QTimer(this);
@@ -3043,7 +3309,10 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     }
     if (requestTimedOut) {
         const qint64 elapsedSec = m_requestElapsedTimer.isValid() ? m_requestElapsedTimer.elapsed() / 1000 : 0;
-        logDebug(QStringLiteral("GOAL_TIMEOUT"), QStringLiteral("ステップ %1 のリクエストがタイムアウトしました (%2秒経過)。").arg(m_goalCurrentStep).arg(elapsedSec));
+        logDebug(QStringLiteral("GOAL_TIMEOUT"),
+                 QStringLiteral("ステップ %1 のリクエストがタイムアウトしました (%2秒経過)。")
+                     .arg(m_goalCurrentStep)
+                     .arg(elapsedSec));
         const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
         if (m_goalCurrentRetryCount < maxRetries) {
             m_streamedContent.clear();
@@ -3052,7 +3321,8 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
             return;
         }
         if (!m_streamedContent.isEmpty()) {
-            setStatus(i18n("LLM からのデータ受信が %1 秒間途絶えたため中止しました。", ACTIVITY_TIMEOUT_MS / 1000), true);
+            setStatus(i18n("LLM からのデータ受信が %1 秒間途絶えたため中止しました。", ACTIVITY_TIMEOUT_MS / 1000),
+                      true);
         } else {
             // Report the elapsed wall-clock time, not the legacy 120 s constant;
             // the request actually used the user-configured timeout.
@@ -3064,7 +3334,8 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         return;
     }
     if (responseTooLarge) {
-        logDebug(QStringLiteral("GOAL_OVERFLOW"), QStringLiteral("ステップ %1 の応答が上限を超えました。").arg(m_goalCurrentStep));
+        logDebug(QStringLiteral("GOAL_OVERFLOW"),
+                 QStringLiteral("ステップ %1 の応答が上限を超えました。").arg(m_goalCurrentStep));
         setStatus(i18n("LLM の応答が上限を超えています。"), true);
         m_streamedContent.clear();
         m_sseBuffer.clear();
@@ -3099,8 +3370,11 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
             detail = replyErrorString;
         }
 
-        logDebug(QStringLiteral("GOAL_ERROR"), QStringLiteral("Step %1 HTTP %2: %3\nRaw: %4")
-            .arg(m_goalCurrentStep).arg(httpStatus).arg(detail, QString::fromUtf8(rawResponse.left(500))));
+        logDebug(QStringLiteral("GOAL_ERROR"),
+                 QStringLiteral("Step %1 HTTP %2: %3\nRaw: %4")
+                     .arg(m_goalCurrentStep)
+                     .arg(httpStatus)
+                     .arg(detail, QString::fromUtf8(rawResponse.left(500))));
 
         m_streamedContent.clear();
         m_sseBuffer.clear();
@@ -3110,12 +3384,18 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         if (m_lastGoalRequestHadImage && !m_goalVisionFallbackActive) {
             m_goalVisionFallbackActive = true;
             m_lastGoalRequestHadImage = false;
-            logDebug(QStringLiteral("GOAL_FALLBACK"), QStringLiteral(
-                "⚠️ 画像付きリクエストが失敗したため (HTTP %1: %2)、テキストのみの指示にフォールバックしてステップ %3 を再試行します…")
-                .arg(httpStatus).arg(detail).arg(m_goalCurrentStep));
-            setStatus(i18n("⚠️ Vision画像エラーのため、テキストのみの指示にフォールバックして再試行します (HTTP %1)…", httpStatus), true);
+            logDebug(QStringLiteral("GOAL_FALLBACK"),
+                     QStringLiteral("⚠️ 画像付きリクエストが失敗したため (HTTP %1: "
+                                    "%2)、テキストのみの指示にフォールバックしてステップ %3 を再試行します…")
+                         .arg(httpStatus)
+                         .arg(detail)
+                         .arg(m_goalCurrentStep));
+            setStatus(i18n("⚠️ Vision画像エラーのため、テキストのみの指示にフォールバックして再試行します (HTTP %1)…",
+                           httpStatus),
+                      true);
             if (m_goalPhaseLabel) {
-                m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2: テキストフォールバック再試行中…", m_goalCurrentStep, m_goalTotalSteps));
+                m_goalPhaseLabel->setText(
+                    i18n("🎯 ステップ %1/%2: テキストフォールバック再試行中…", m_goalCurrentStep, m_goalTotalSteps));
             }
             QTimer::singleShot(600, this, [this] {
                 executeGoalStep();
@@ -3150,22 +3430,57 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
 
     if (m_isStreamingRequest && !m_sseBuffer.isEmpty()) {
         bool isDone = false;
-        KisAiStrokeProgramCodec::parseSseStreamChunk(QByteArrayLiteral("\n\n"), &m_sseBuffer, &m_streamedContent, &isDone);
+        KisAiStrokeProgramCodec::parseSseStreamChunk(QByteArrayLiteral("\n\n"),
+                                                     &m_sseBuffer,
+                                                     &m_streamedContent,
+                                                     &isDone);
     }
 
-    const QByteArray response = !m_streamedContent.trimmed().isEmpty()
-        ? m_streamedContent.toUtf8()
-        : rawResponse;
+    const QByteArray response = !m_streamedContent.trimmed().isEmpty() ? m_streamedContent.toUtf8() : rawResponse;
     m_streamedContent.clear();
     m_sseBuffer.clear();
 
-    logDebug(QStringLiteral("GOAL_RESP"), QStringLiteral("Step %1 HTTP %2 (%3 bytes) 受信完了\nRaw: %4")
-        .arg(m_goalCurrentStep).arg(httpStatus).arg(response.size()).arg(QString::fromUtf8(response.left(1000))));
+    logDebug(QStringLiteral("GOAL_RESP"),
+             QStringLiteral("Step %1 HTTP %2 (%3 bytes) 受信完了\nRaw: %4")
+                 .arg(m_goalCurrentStep)
+                 .arg(httpStatus)
+                 .arg(response.size())
+                 .arg(QString::fromUtf8(response.left(1000))));
 
     KisAiStrokeProgram program;
     QString parseError;
     KisAiJsonDiagnostic diagnostic;
-    if (!KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError, &diagnostic)) {
+    // V6 W3: patch-first for step>=2. A patch response refines the
+    // accumulated program in place (good regions survive); otherwise fall
+    // back to the legacy full-program parse + merge.
+    bool usedPatchPath = false;
+    if (m_goalCurrentStep >= 2 && !m_goalAccumulatedProgram.operations.isEmpty()) {
+        QVector<KisAiProgramPatch> patches;
+        QStringList patchRejected;
+        QString patchErr;
+        if (KisAiProgramPatchCodec::parsePatches(response, &patches, &patchRejected, &patchErr) && !patches.isEmpty()) {
+            KisAiSceneRigOverrides rigDelta;
+            QStringList applyRejected;
+            KisAiStrokeProgram patched = KisAiRefinementLoop::applyRigPatchesAndRelayout(
+                m_goalAccumulatedProgram,
+                KisAiSceneSpecCodec::defaultSpecForPrompt(m_goalPrompt, effectiveCanvasSize()),
+                effectiveCanvasSize(),
+                patches,
+                &rigDelta,
+                &applyRejected);
+            if (!applyRejected.isEmpty()) {
+                logDebug(QStringLiteral("PATCH_APPLY"),
+                         QStringLiteral("rejected %1: %2")
+                             .arg(applyRejected.size())
+                             .arg(applyRejected.join(QStringLiteral("; "))));
+            }
+            program = patched;
+            usedPatchPath = true;
+            logDebug(QStringLiteral("PATCH_APPLY"),
+                     QStringLiteral("step %1 patch-only: %2 applied").arg(m_goalCurrentStep).arg(patches.size()));
+        }
+    }
+    if (!usedPatchPath && !KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError, &diagnostic)) {
         m_lastJsonDiagnostic = diagnostic;
         logDebug(QStringLiteral("GOAL_PARSE_ERR"), QStringLiteral("%1\n%2").arg(parseError, diagnostic.formatForLog()));
         const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
@@ -3192,7 +3507,8 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     m_goalAccumulatedProgram = KisAiStrokeProgramCodec::mergePrograms(m_goalAccumulatedProgram, program);
     const QImage preview = KisAiStrokeRenderer::renderProgramToImage(m_goalAccumulatedProgram, previewTargetSize);
     if (!preview.isNull()) {
-        m_previewLabel->setPixmap(QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        m_previewLabel->setPixmap(
+            QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
     }
 
     KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
@@ -3218,7 +3534,8 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     }
 
     if (m_goalPhaseLabel) {
-        m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
+        m_goalPhaseLabel->setText(
+            i18n("🎯 ステップ %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
     }
     if (m_agentFocusLabel) {
         if (!program.targetFocusArea.isEmpty()) {
@@ -3242,8 +3559,9 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
 
     const bool agentEarlyFinish = (program.readinessScore >= 0.85 && program.goalReached && m_goalCurrentStep >= 2);
     if (agentEarlyFinish) {
-        logDebug(QStringLiteral("GOAL_AGENT"), QStringLiteral("Autonomous Agent achieved target readiness (%1 >= 0.85). Early completion triggered.")
-            .arg(program.readinessScore));
+        logDebug(QStringLiteral("GOAL_AGENT"),
+                 QStringLiteral("Autonomous Agent achieved target readiness (%1 >= 0.85). Early completion triggered.")
+                     .arg(program.readinessScore));
     }
 
     if (m_goalCurrentStep >= m_goalTotalSteps || agentEarlyFinish) {
@@ -3258,7 +3576,8 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
             m_finishGoalButton->setVisible(true);
             m_finishGoalButton->setEnabled(true);
         }
-        setStatus(i18n("ステップ %1 完了。キャンバスへの手動加筆・確認後、「次のステップへ進む」を押してください。", m_goalCurrentStep));
+        setStatus(i18n("ステップ %1 完了。キャンバスへの手動加筆・確認後、「次のステップへ進む」を押してください。",
+                       m_goalCurrentStep));
     } else {
         QTimer::singleShot(300, this, [this] {
             advanceGoalStep();
@@ -3297,8 +3616,11 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
     m_goalAccumulatedProgram = KisAiStrokeProgram();
     m_lastGoalCritique.clear();
 
-    logDebug(QStringLiteral("GOAL_FINISH"), QStringLiteral("Goalモード終了 (success=%1, step=%2/%3)")
-        .arg(success ? QStringLiteral("true") : QStringLiteral("false")).arg(m_goalCurrentStep).arg(m_goalTotalSteps));
+    logDebug(QStringLiteral("GOAL_FINISH"),
+             QStringLiteral("Goalモード終了 (success=%1, step=%2/%3)")
+                 .arg(success ? QStringLiteral("true") : QStringLiteral("false"))
+                 .arg(m_goalCurrentStep)
+                 .arg(m_goalTotalSteps));
 
     if (m_goalInspectorCard) {
         if (m_nextStepButton) {
@@ -3312,9 +3634,11 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
         if (m_goalPhaseLabel) {
             if (success) {
                 m_goalPhaseLabel->setText(i18n("🎯 Goal自律作画 完了 (全 %1 段階, 完成度 %2%)",
-                    m_goalCurrentStep, m_readinessBar ? m_readinessBar->value() : 100));
+                                               m_goalCurrentStep,
+                                               m_readinessBar ? m_readinessBar->value() : 100));
             } else {
-                m_goalPhaseLabel->setText(i18n("🎯 Goal作画 中断 (ステップ %1/%2)", m_goalCurrentStep, m_goalTotalSteps));
+                m_goalPhaseLabel->setText(
+                    i18n("🎯 Goal作画 中断 (ステップ %1/%2)", m_goalCurrentStep, m_goalTotalSteps));
             }
         }
         // The inspector's results are final once Goal mode ends; leaving the
@@ -3340,13 +3664,16 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
     setBusy(false);
 }
 
-void KisAiIllustrationDocker::scheduleGoalStepRetry(const QString &reasonMessage, bool isSelfCorrection, int retryAfterSec)
+void KisAiIllustrationDocker::scheduleGoalStepRetry(const QString &reasonMessage,
+                                                    bool isSelfCorrection,
+                                                    int retryAfterSec)
 {
     const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
     if (m_goalCurrentRetryCount >= maxRetries) {
         logDebug(QStringLiteral("GOAL_RETRY_ABORT"),
                  QStringLiteral("最大リトライ回数 (%1回) に達したためGoalモード中断: %2")
-                     .arg(maxRetries).arg(reasonMessage));
+                     .arg(maxRetries)
+                     .arg(reasonMessage));
         setStatus(reasonMessage, true);
         finishGoalMode(false);
         return;
@@ -3363,47 +3690,49 @@ void KisAiIllustrationDocker::scheduleGoalStepRetry(const QString &reasonMessage
     }
 
     if (isSelfCorrection) {
-        QString feedback = QStringLiteral("[CRITICAL RETRY / JSON ERROR: Your step %1 output could not be parsed as valid JSON.\n")
-            .arg(m_goalCurrentStep);
+        QString feedback =
+            QStringLiteral("[CRITICAL RETRY / JSON ERROR: Your step %1 output could not be parsed as valid JSON.\n")
+                .arg(m_goalCurrentStep);
         if (!m_lastJsonDiagnostic.errorMessage.isEmpty()) {
             feedback += QStringLiteral("Error: %1\n").arg(m_lastJsonDiagnostic.errorMessage);
         }
         if (m_lastJsonDiagnostic.errorLine > 0) {
             feedback += QStringLiteral("Near line %1, column %2.\n")
-                .arg(m_lastJsonDiagnostic.errorLine)
-                .arg(m_lastJsonDiagnostic.errorColumn);
+                            .arg(m_lastJsonDiagnostic.errorLine)
+                            .arg(m_lastJsonDiagnostic.errorColumn);
         }
         if (!m_lastJsonDiagnostic.errorSnippet.isEmpty()) {
             feedback += QStringLiteral("Snippet: %1\n").arg(m_lastJsonDiagnostic.errorSnippet);
         }
-        if (m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("end of file"), Qt::CaseInsensitive) ||
-            m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unterminated"), Qt::CaseInsensitive) ||
-            m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("truncate"), Qt::CaseInsensitive) ||
-            m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unclosed"), Qt::CaseInsensitive)) {
-            feedback += QStringLiteral("Notice: Output was cut off/truncated before completion. Keep operations count lower and close all JSON brackets properly.\n");
+        if (m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("end of file"), Qt::CaseInsensitive)
+            || m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unterminated"), Qt::CaseInsensitive)
+            || m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("truncate"), Qt::CaseInsensitive)
+            || m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unclosed"), Qt::CaseInsensitive)) {
+            feedback += QStringLiteral(
+                "Notice: Output was cut off/truncated before completion. Keep operations count lower and close all "
+                "JSON brackets properly.\n");
         }
-        feedback += QStringLiteral("CRITICAL: Output ONLY valid RFC 8259 JSON without any markdown formatting or commentary outside JSON.]");
+        feedback += QStringLiteral(
+            "CRITICAL: Output ONLY valid RFC 8259 JSON without any markdown formatting or commentary outside JSON.]");
         m_goalSelfCorrectionFeedback = feedback;
     } else {
         m_goalSelfCorrectionFeedback.clear();
     }
 
-    const QString retryTypeStr = isSelfCorrection
-        ? i18n("JSON自己修復")
-        : i18n("一時エラー再送");
+    const QString retryTypeStr = isSelfCorrection ? i18n("JSON自己修復") : i18n("一時エラー再送");
 
     const QString statusMsg = i18n("⚠️ Goal ステップ %1 %2 (%3/%4回目): %5 秒後に自動再試行します… [%6]",
-        m_goalCurrentStep,
-        retryTypeStr,
-        m_goalCurrentRetryCount,
-        maxRetries,
-        QString::number(delayMs / 1000.0, 'f', 1),
-        reasonMessage);
+                                   m_goalCurrentStep,
+                                   retryTypeStr,
+                                   m_goalCurrentRetryCount,
+                                   maxRetries,
+                                   QString::number(delayMs / 1000.0, 'f', 1),
+                                   reasonMessage);
 
     setStatus(statusMsg);
     if (m_goalPhaseLabel) {
-        m_goalPhaseLabel->setText(i18n("🎯 ステップ %1/%2: %3 再試行待機中…",
-            m_goalCurrentStep, m_goalTotalSteps, retryTypeStr));
+        m_goalPhaseLabel->setText(
+            i18n("🎯 ステップ %1/%2: %3 再試行待機中…", m_goalCurrentStep, m_goalTotalSteps, retryTypeStr));
     }
     logDebug(QStringLiteral("GOAL_RETRY_SCHEDULE"),
              QStringLiteral("Goal Step %1 %2 (回数: %3/%4, 待機: %5ms, 理由: %6)")
@@ -3431,9 +3760,9 @@ void KisAiIllustrationDocker::executeGoalStepRetry()
     if (!m_goalModeActive) {
         return;
     }
-    logDebug(QStringLiteral("GOAL_RETRY_EXEC"),
-             QStringLiteral("Goal ステップ %1 再試行実行中 (回数: %2)")
-                 .arg(m_goalCurrentStep).arg(m_goalCurrentRetryCount));
+    logDebug(
+        QStringLiteral("GOAL_RETRY_EXEC"),
+        QStringLiteral("Goal ステップ %1 再試行実行中 (回数: %2)").arg(m_goalCurrentStep).arg(m_goalCurrentRetryCount));
 
     executeGoalStep();
 }
@@ -3443,8 +3772,7 @@ void KisAiIllustrationDocker::scheduleRetry(const QString &reasonMessage, bool i
     const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
     if (m_currentRetryCount >= maxRetries) {
         logDebug(QStringLiteral("RETRY_ABORT"),
-                 QStringLiteral("最大リトライ回数 (%1回) に達したため中断: %2")
-                     .arg(maxRetries).arg(reasonMessage));
+                 QStringLiteral("最大リトライ回数 (%1回) に達したため中断: %2").arg(maxRetries).arg(reasonMessage));
         setStatus(reasonMessage, true);
         m_currentRetryCount = 0;
         m_isSelfCorrectionRetry = false;
@@ -3464,16 +3792,14 @@ void KisAiIllustrationDocker::scheduleRetry(const QString &reasonMessage, bool i
         delayMs = 800 * m_currentRetryCount;
     }
 
-    const QString retryTypeStr = isSelfCorrection
-        ? i18n("JSON自己修復")
-        : i18n("一時エラー再送");
+    const QString retryTypeStr = isSelfCorrection ? i18n("JSON自己修復") : i18n("一時エラー再送");
 
     const QString statusMsg = i18n("⚠️ %1 (%2/%3回目): %4 秒後に自動再試行します… [%5]",
-        retryTypeStr,
-        m_currentRetryCount,
-        maxRetries,
-        QString::number(delayMs / 1000.0, 'f', 1),
-        reasonMessage);
+                                   retryTypeStr,
+                                   m_currentRetryCount,
+                                   maxRetries,
+                                   QString::number(delayMs / 1000.0, 'f', 1),
+                                   reasonMessage);
 
     setStatus(statusMsg);
     logDebug(QStringLiteral("RETRY_SCHEDULE"),
@@ -3507,11 +3833,14 @@ void KisAiIllustrationDocker::executeRetry()
     if (m_isSelfCorrectionRetry) {
         QString correctionPrompt = m_lastFailedPrompt;
         if (m_isQualityCorrectionRetry) {
-            correctionPrompt += QStringLiteral("\n\n[QUALITY CORRECTION REQUEST]\n"
+            correctionPrompt += QStringLiteral(
+                "\n\n[QUALITY CORRECTION REQUEST]\n"
                 "Your previous output parsed as valid JSON, but had structural quality issues:\n");
             if (m_lastQualityReport.score < 0.55) {
-                correctionPrompt += QStringLiteral("- Low structural score: %1/1.0. Ensure rich silhouettes, clean contours, and registered layers.\n")
-                    .arg(QString::number(m_lastQualityReport.score, 'f', 2));
+                correctionPrompt += QStringLiteral(
+                                        "- Low structural score: %1/1.0. Ensure rich silhouettes, clean contours, and "
+                                        "registered layers.\n")
+                                        .arg(QString::number(m_lastQualityReport.score, 'f', 2));
             }
             if (!m_lastQualityReport.warnings.isEmpty()) {
                 correctionPrompt += QStringLiteral("- Specific issues detected:\n");
@@ -3519,44 +3848,55 @@ void KisAiIllustrationDocker::executeRetry()
                     correctionPrompt += QStringLiteral("  * %1\n").arg(w);
                 }
             }
-            correctionPrompt += QStringLiteral("- Please generate solid silhouette base color fills on 'Flats' layer first before adding Shading and Lineart.\n"
+            correctionPrompt += QStringLiteral(
+                "- Please generate solid silhouette base color fills on 'Flats' layer first before adding Shading and "
+                "Lineart.\n"
                 "- Ensure major subjects are filled with solid color masses to prevent empty transparent holes.\n"
-                "Please regenerate the StrokeProgram correcting these issues while strictly preserving the original user prompt.]");
+                "Please regenerate the StrokeProgram correcting these issues while strictly preserving the original "
+                "user prompt.]");
 
             logDebug(QStringLiteral("RETRY_EXEC"),
                      QStringLiteral("品質自己修復リクエストを実行中 (回数: %1/%2)")
-                         .arg(m_currentRetryCount).arg(m_maxRetryCount));
+                         .arg(m_currentRetryCount)
+                         .arg(m_maxRetryCount));
         } else {
-            correctionPrompt += QStringLiteral("\n\n[SYSTEM FEEDBACK / RETRY: Your previous output could not be parsed as valid JSON.\n");
+            correctionPrompt += QStringLiteral(
+                "\n\n[SYSTEM FEEDBACK / RETRY: Your previous output could not be parsed as valid JSON.\n");
             if (!m_lastJsonDiagnostic.errorMessage.isEmpty()) {
                 correctionPrompt += QStringLiteral("Error: %1\n").arg(m_lastJsonDiagnostic.errorMessage);
             }
             if (m_lastJsonDiagnostic.errorLine > 0) {
                 correctionPrompt += QStringLiteral("Near line %1, column %2.\n")
-                    .arg(m_lastJsonDiagnostic.errorLine)
-                    .arg(m_lastJsonDiagnostic.errorColumn);
+                                        .arg(m_lastJsonDiagnostic.errorLine)
+                                        .arg(m_lastJsonDiagnostic.errorColumn);
             }
             if (!m_lastJsonDiagnostic.errorSnippet.isEmpty()) {
                 correctionPrompt += QStringLiteral("Snippet: %1\n").arg(m_lastJsonDiagnostic.errorSnippet);
             }
-            if (m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("end of file"), Qt::CaseInsensitive) ||
-                m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unterminated"), Qt::CaseInsensitive) ||
-                m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("truncate"), Qt::CaseInsensitive) ||
-                m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unclosed"), Qt::CaseInsensitive)) {
-                correctionPrompt += QStringLiteral("Notice: The JSON was truncated before completion. Please generate a more concise response with fewer operations to fit within token limits, or close all opened objects and arrays properly.\n");
+            if (m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("end of file"), Qt::CaseInsensitive)
+                || m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unterminated"), Qt::CaseInsensitive)
+                || m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("truncate"), Qt::CaseInsensitive)
+                || m_lastJsonDiagnostic.errorMessage.contains(QStringLiteral("unclosed"), Qt::CaseInsensitive)) {
+                correctionPrompt += QStringLiteral(
+                    "Notice: The JSON was truncated before completion. Please generate a more concise response with "
+                    "fewer operations to fit within token limits, or close all opened objects and arrays properly.\n");
             }
-            correctionPrompt += QStringLiteral("CRITICAL: Output ONLY valid JSON conforming strictly to the KisAiStrokeProgram schema without markdown explanation or stray text.]");
+            correctionPrompt += QStringLiteral(
+                "CRITICAL: Output ONLY valid JSON conforming strictly to the KisAiStrokeProgram schema without "
+                "markdown explanation or stray text.]");
 
             logDebug(QStringLiteral("RETRY_EXEC"),
                      QStringLiteral("JSON自己修復リクエストを実行中 (回数: %1/%2)")
-                         .arg(m_currentRetryCount).arg(m_maxRetryCount));
+                         .arg(m_currentRetryCount)
+                         .arg(m_maxRetryCount));
         }
 
         generateLlmStrokes(correctionPrompt);
     } else {
         logDebug(QStringLiteral("RETRY_EXEC"),
                  QStringLiteral("通信リトライリクエストを実行中 (回数: %1/%2)")
-                     .arg(m_currentRetryCount).arg(m_maxRetryCount));
+                     .arg(m_currentRetryCount)
+                     .arg(m_maxRetryCount));
 
         generateLlmStrokes(m_lastFailedPrompt);
     }
@@ -3592,10 +3932,13 @@ void KisAiIllustrationDocker::loadSettings()
     const QString savedLlmEp = readSafeStoredEndpoint(settings,
                                                       QStringLiteral("AIIllustration/llmEndpoint"),
                                                       QStringLiteral("AIIllustration/endpoint"));
-    const QString savedLlmModel = settings.value(QStringLiteral("AIIllustration/llmModel"),
-        settings.value(QStringLiteral("AIIllustration/model"))).toString();
+    const QString savedLlmModel =
+        settings
+            .value(QStringLiteral("AIIllustration/llmModel"), settings.value(QStringLiteral("AIIllustration/model")))
+            .toString();
     if (m_endpointEditor) {
-        m_endpointEditor->setText(savedLlmEp.isEmpty() ? QStringLiteral("https://api.openai.com/v1/chat/completions") : savedLlmEp);
+        m_endpointEditor->setText(savedLlmEp.isEmpty() ? QStringLiteral("https://api.openai.com/v1/chat/completions")
+                                                       : savedLlmEp);
     }
     if (m_modelEditor) {
         m_modelEditor->setText(savedLlmModel.isEmpty() ? QStringLiteral("gpt-4o") : savedLlmModel);
@@ -3617,10 +3960,10 @@ void KisAiIllustrationDocker::loadSettings()
                 ? storedKey.toUtf8()
                 : QByteArray::fromBase64(storedKey.toLatin1());
             const QString legacyKey = QString::fromUtf8(legacyBytes);
-            const bool plausibleKey = !legacyKey.isEmpty()
-                && std::all_of(legacyKey.cbegin(), legacyKey.cend(), [](QChar c) {
-                       return c.isPrint() && !c.isSpace();
-                   });
+            const bool plausibleKey =
+                !legacyKey.isEmpty() && std::all_of(legacyKey.cbegin(), legacyKey.cend(), [](QChar c) {
+                    return c.isPrint() && !c.isSpace();
+                });
             QString protectedKey;
             if (plausibleKey && protectApiKeyForCurrentUser(legacyKey, &protectedKey)) {
                 settings.setValue(QStringLiteral("AIIllustration/apiKey"), protectedKey);
@@ -3646,29 +3989,53 @@ void KisAiIllustrationDocker::loadSettings()
     }
 
     // キャンバスサイズ
-    if (m_widthSpin) m_widthSpin->setValue(readBoundedSetting(settings, QStringLiteral("AIIllustration/canvasWidth"), 1024, m_widthSpin->minimum(), m_widthSpin->maximum()));
-    if (m_heightSpin) m_heightSpin->setValue(readBoundedSetting(settings, QStringLiteral("AIIllustration/canvasHeight"), 1024, m_heightSpin->minimum(), m_heightSpin->maximum()));
+    if (m_widthSpin)
+        m_widthSpin->setValue(readBoundedSetting(settings,
+                                                 QStringLiteral("AIIllustration/canvasWidth"),
+                                                 1024,
+                                                 m_widthSpin->minimum(),
+                                                 m_widthSpin->maximum()));
+    if (m_heightSpin)
+        m_heightSpin->setValue(readBoundedSetting(settings,
+                                                  QStringLiteral("AIIllustration/canvasHeight"),
+                                                  1024,
+                                                  m_heightSpin->minimum(),
+                                                  m_heightSpin->maximum()));
 
     // ストローク予算
-    if (m_strokeBudgetSpin) m_strokeBudgetSpin->setValue(readBoundedSetting(settings, QStringLiteral("AIIllustration/strokeBudget"), 500, m_strokeBudgetSpin->minimum(), m_strokeBudgetSpin->maximum()));
+    if (m_strokeBudgetSpin)
+        m_strokeBudgetSpin->setValue(readBoundedSetting(settings,
+                                                        QStringLiteral("AIIllustration/strokeBudget"),
+                                                        500,
+                                                        m_strokeBudgetSpin->minimum(),
+                                                        m_strokeBudgetSpin->maximum()));
 
     // Goal モード
     const bool goalEnabled = settings.value(QStringLiteral("AIIllustration/goalModeEnabled"), false).toBool();
-    if (m_goalModeCheck) m_goalModeCheck->setChecked(goalEnabled);
-    if (m_goalStepsSpin) m_goalStepsSpin->setValue(readBoundedSetting(settings, QStringLiteral("AIIllustration/goalSteps"), 4, m_goalStepsSpin->minimum(), m_goalStepsSpin->maximum()));
+    if (m_goalModeCheck)
+        m_goalModeCheck->setChecked(goalEnabled);
+    if (m_goalStepsSpin)
+        m_goalStepsSpin->setValue(readBoundedSetting(settings,
+                                                     QStringLiteral("AIIllustration/goalSteps"),
+                                                     4,
+                                                     m_goalStepsSpin->minimum(),
+                                                     m_goalStepsSpin->maximum()));
     const int artStyle = settings.value(QStringLiteral("AIIllustration/artStyle"), 0).toInt();
     if (m_artStyleCombo) {
         int idx = m_artStyleCombo->findData(artStyle);
-        if (idx >= 0) m_artStyleCombo->setCurrentIndex(idx);
+        if (idx >= 0)
+            m_artStyleCombo->setCurrentIndex(idx);
     }
     const bool pauseStep = settings.value(QStringLiteral("AIIllustration/pausePerStep"), false).toBool();
-    if (m_pausePerStepCheck) m_pausePerStepCheck->setChecked(pauseStep);
+    if (m_pausePerStepCheck)
+        m_pausePerStepCheck->setChecked(pauseStep);
 
     // デバッグモード
     const bool debugEnabled = settings.value(QStringLiteral("AIIllustration/debugModeEnabled"), false).toBool();
     if (m_debugModeCheck) {
         m_debugModeCheck->setChecked(debugEnabled);
-        if (m_debugCard) m_debugCard->setVisible(debugEnabled);
+        if (m_debugCard)
+            m_debugCard->setVisible(debugEnabled);
     }
 
     // 生成モード
@@ -3690,7 +4057,8 @@ void KisAiIllustrationDocker::loadSettings()
 
     // 2段階構図生成
     if (m_compositionPlanCheck) {
-        m_compositionPlanCheck->setChecked(settings.value(QStringLiteral("AIIllustration/compositionPlanEnabled"), false).toBool());
+        m_compositionPlanCheck->setChecked(
+            settings.value(QStringLiteral("AIIllustration/compositionPlanEnabled"), false).toBool());
     }
 
     // V3 Phase 0.1: 点々・パーティクル抑制 (既定ON)
@@ -3705,7 +4073,8 @@ void KisAiIllustrationDocker::loadSettings()
 
     // Vision 画質
     if (m_visionQualityCombo) {
-        const QString vq = settings.value(QStringLiteral("AIIllustration/visionQuality"), QStringLiteral("auto")).toString();
+        const QString vq =
+            settings.value(QStringLiteral("AIIllustration/visionQuality"), QStringLiteral("auto")).toString();
         const int idx = m_visionQualityCombo->findData(vq);
         if (idx >= 0) {
             m_visionQualityCombo->setCurrentIndex(idx);
@@ -3722,14 +4091,35 @@ void KisAiIllustrationDocker::loadSettings()
     }
 
     // AI 詳細設定
-    if (m_temperatureSpin) m_temperatureSpin->setValue(qBound(m_temperatureSpin->minimum(), settings.value(QStringLiteral("AIIllustration/temperature"), 0.70).toDouble(), m_temperatureSpin->maximum()));
-    if (m_topPSpin) m_topPSpin->setValue(qBound(m_topPSpin->minimum(), settings.value(QStringLiteral("AIIllustration/topP"), 1.0).toDouble(), m_topPSpin->maximum()));
-    if (m_maxTokensSpin) m_maxTokensSpin->setValue(readBoundedSetting(settings, QStringLiteral("AIIllustration/maxTokens"), 0, m_maxTokensSpin->minimum(), m_maxTokensSpin->maximum()));
+    if (m_temperatureSpin)
+        m_temperatureSpin->setValue(
+            qBound(m_temperatureSpin->minimum(),
+                   settings.value(QStringLiteral("AIIllustration/temperature"), 0.70).toDouble(),
+                   m_temperatureSpin->maximum()));
+    if (m_topPSpin)
+        m_topPSpin->setValue(qBound(m_topPSpin->minimum(),
+                                    settings.value(QStringLiteral("AIIllustration/topP"), 1.0).toDouble(),
+                                    m_topPSpin->maximum()));
+    if (m_maxTokensSpin)
+        m_maxTokensSpin->setValue(readBoundedSetting(settings,
+                                                     QStringLiteral("AIIllustration/maxTokens"),
+                                                     0,
+                                                     m_maxTokensSpin->minimum(),
+                                                     m_maxTokensSpin->maximum()));
     if (m_maxRetriesSpin) {
-        m_maxRetryCount = readBoundedSetting(settings, QStringLiteral("AIIllustration/maxRetries"), 2, m_maxRetriesSpin->minimum(), m_maxRetriesSpin->maximum());
+        m_maxRetryCount = readBoundedSetting(settings,
+                                             QStringLiteral("AIIllustration/maxRetries"),
+                                             2,
+                                             m_maxRetriesSpin->minimum(),
+                                             m_maxRetriesSpin->maximum());
         m_maxRetriesSpin->setValue(m_maxRetryCount);
     }
-    if (m_timeoutSecSpin) m_timeoutSecSpin->setValue(readBoundedSetting(settings, QStringLiteral("AIIllustration/timeoutSec"), 90, m_timeoutSecSpin->minimum(), m_timeoutSecSpin->maximum()));
+    if (m_timeoutSecSpin)
+        m_timeoutSecSpin->setValue(readBoundedSetting(settings,
+                                                      QStringLiteral("AIIllustration/timeoutSec"),
+                                                      90,
+                                                      m_timeoutSecSpin->minimum(),
+                                                      m_timeoutSecSpin->maximum()));
     if (m_jsonModeCombo) {
         const int jMode = settings.value(QStringLiteral("AIIllustration/jsonMode"), 0).toInt();
         if (jMode >= 0 && jMode < m_jsonModeCombo->count()) {
@@ -3744,10 +4134,14 @@ void KisAiIllustrationDocker::loadSettings()
         }
     }
     if (m_customInstructionsEdit) {
-        m_customInstructionsEdit->setPlainText(settings.value(QStringLiteral("AIIllustration/customInstructions"), QString()).toString());
+        m_customInstructionsEdit->setPlainText(
+            settings.value(QStringLiteral("AIIllustration/customInstructions"), QString()).toString());
     }
     if (m_qualityModeCombo) {
-        const int qmVal = settings.value(QStringLiteral("AIIllustration/qualityMode"), static_cast<int>(KisAiModelRouter::QualityMode::Quality)).toInt();
+        const int qmVal = settings
+                              .value(QStringLiteral("AIIllustration/qualityMode"),
+                                     static_cast<int>(KisAiModelRouter::QualityMode::Quality))
+                              .toInt();
         const auto qm = static_cast<KisAiModelRouter::QualityMode>(qBound(0, qmVal, 2));
         KisAiModelRouter::setQualityMode(qm);
         const int qmIdx = m_qualityModeCombo->findData(static_cast<int>(qm));
@@ -3825,32 +4219,56 @@ void KisAiIllustrationDocker::saveSettings()
         }
     }
 
-    if (m_widthSpin) settings.setValue(QStringLiteral("AIIllustration/canvasWidth"), m_widthSpin->value());
-    if (m_heightSpin) settings.setValue(QStringLiteral("AIIllustration/canvasHeight"), m_heightSpin->value());
-    if (m_strokeBudgetSpin) settings.setValue(QStringLiteral("AIIllustration/strokeBudget"), m_strokeBudgetSpin->value());
+    if (m_widthSpin)
+        settings.setValue(QStringLiteral("AIIllustration/canvasWidth"), m_widthSpin->value());
+    if (m_heightSpin)
+        settings.setValue(QStringLiteral("AIIllustration/canvasHeight"), m_heightSpin->value());
+    if (m_strokeBudgetSpin)
+        settings.setValue(QStringLiteral("AIIllustration/strokeBudget"), m_strokeBudgetSpin->value());
 
-    if (m_goalModeCheck) settings.setValue(QStringLiteral("AIIllustration/goalModeEnabled"), m_goalModeCheck->isChecked());
-    if (m_goalStepsSpin) settings.setValue(QStringLiteral("AIIllustration/goalSteps"), m_goalStepsSpin->value());
-    if (m_artStyleCombo) settings.setValue(QStringLiteral("AIIllustration/artStyle"), m_artStyleCombo->currentData().toInt());
-    if (m_pausePerStepCheck) settings.setValue(QStringLiteral("AIIllustration/pausePerStep"), m_pausePerStepCheck->isChecked());
-    if (m_debugModeCheck) settings.setValue(QStringLiteral("AIIllustration/debugModeEnabled"), m_debugModeCheck->isChecked());
-    if (m_temperatureSpin) settings.setValue(QStringLiteral("AIIllustration/temperature"), m_temperatureSpin->value());
-    if (m_topPSpin) settings.setValue(QStringLiteral("AIIllustration/topP"), m_topPSpin->value());
-    if (m_maxTokensSpin) settings.setValue(QStringLiteral("AIIllustration/maxTokens"), m_maxTokensSpin->value());
-    if (m_maxRetriesSpin) settings.setValue(QStringLiteral("AIIllustration/maxRetries"), m_maxRetriesSpin->value());
-    if (m_timeoutSecSpin) settings.setValue(QStringLiteral("AIIllustration/timeoutSec"), m_timeoutSecSpin->value());
-    if (m_jsonModeCombo) settings.setValue(QStringLiteral("AIIllustration/jsonMode"), m_jsonModeCombo->currentIndex());
-    if (m_trappingPxSpin) settings.setValue(QStringLiteral("AIIllustration/trappingPx"), m_trappingPxSpin->value());
-    if (m_compositionPlanCheck) settings.setValue(QStringLiteral("AIIllustration/compositionPlanEnabled"), m_compositionPlanCheck->isChecked());
+    if (m_goalModeCheck)
+        settings.setValue(QStringLiteral("AIIllustration/goalModeEnabled"), m_goalModeCheck->isChecked());
+    if (m_goalStepsSpin)
+        settings.setValue(QStringLiteral("AIIllustration/goalSteps"), m_goalStepsSpin->value());
+    if (m_artStyleCombo)
+        settings.setValue(QStringLiteral("AIIllustration/artStyle"), m_artStyleCombo->currentData().toInt());
+    if (m_pausePerStepCheck)
+        settings.setValue(QStringLiteral("AIIllustration/pausePerStep"), m_pausePerStepCheck->isChecked());
+    if (m_debugModeCheck)
+        settings.setValue(QStringLiteral("AIIllustration/debugModeEnabled"), m_debugModeCheck->isChecked());
+    if (m_temperatureSpin)
+        settings.setValue(QStringLiteral("AIIllustration/temperature"), m_temperatureSpin->value());
+    if (m_topPSpin)
+        settings.setValue(QStringLiteral("AIIllustration/topP"), m_topPSpin->value());
+    if (m_maxTokensSpin)
+        settings.setValue(QStringLiteral("AIIllustration/maxTokens"), m_maxTokensSpin->value());
+    if (m_maxRetriesSpin)
+        settings.setValue(QStringLiteral("AIIllustration/maxRetries"), m_maxRetriesSpin->value());
+    if (m_timeoutSecSpin)
+        settings.setValue(QStringLiteral("AIIllustration/timeoutSec"), m_timeoutSecSpin->value());
+    if (m_jsonModeCombo)
+        settings.setValue(QStringLiteral("AIIllustration/jsonMode"), m_jsonModeCombo->currentIndex());
+    if (m_trappingPxSpin)
+        settings.setValue(QStringLiteral("AIIllustration/trappingPx"), m_trappingPxSpin->value());
+    if (m_compositionPlanCheck)
+        settings.setValue(QStringLiteral("AIIllustration/compositionPlanEnabled"), m_compositionPlanCheck->isChecked());
     if (m_suppressParticlesCheck) {
         settings.setValue(QStringLiteral("AIIllustration/suppressParticles"), m_suppressParticlesCheck->isChecked());
         KisAiStrokeProgramCodec::setParticleSuppressionEnabled(m_suppressParticlesCheck->isChecked());
     }
-    if (m_visionQualityCombo) settings.setValue(QStringLiteral("AIIllustration/visionQuality"), m_visionQualityCombo->currentData().toString());
-    if (m_strokeProtocolCombo) settings.setValue(QStringLiteral("AIIllustration/strokeProtocol"), m_strokeProtocolCombo->currentData().toInt());
-    if (m_qualityModeCombo) settings.setValue(QStringLiteral("AIIllustration/qualityMode"), m_qualityModeCombo->currentData().toInt());
-    if (m_reasoningEffortCombo) settings.setValue(QStringLiteral("AIIllustration/reasoningEffort"), m_reasoningEffortCombo->currentData().toString());
-    if (m_customInstructionsEdit) settings.setValue(QStringLiteral("AIIllustration/customInstructions"), m_customInstructionsEdit->toPlainText());
+    if (m_visionQualityCombo)
+        settings.setValue(QStringLiteral("AIIllustration/visionQuality"),
+                          m_visionQualityCombo->currentData().toString());
+    if (m_strokeProtocolCombo)
+        settings.setValue(QStringLiteral("AIIllustration/strokeProtocol"),
+                          m_strokeProtocolCombo->currentData().toInt());
+    if (m_qualityModeCombo)
+        settings.setValue(QStringLiteral("AIIllustration/qualityMode"), m_qualityModeCombo->currentData().toInt());
+    if (m_reasoningEffortCombo)
+        settings.setValue(QStringLiteral("AIIllustration/reasoningEffort"),
+                          m_reasoningEffortCombo->currentData().toString());
+    if (m_customInstructionsEdit)
+        settings.setValue(QStringLiteral("AIIllustration/customInstructions"), m_customInstructionsEdit->toPlainText());
     settings.setValue(QStringLiteral("AIIllustration/uiMode"), (m_uiMode == UiMode::Pro) ? 1 : 0);
 }
 
@@ -3908,7 +4326,8 @@ void KisAiIllustrationDocker::testLlmConnection()
     }
     if (m_testConnectionStatusLabel) {
         m_testConnectionStatusLabel->setStyleSheet(QStringLiteral("color: #38bdf8;"));
-        m_testConnectionStatusLabel->setText(i18n("⏳ %1 に接続テスト中…", KisAiIllustrationRenderer::displayEndpoint(endpoint)));
+        m_testConnectionStatusLabel->setText(
+            i18n("⏳ %1 に接続テスト中…", KisAiIllustrationRenderer::displayEndpoint(endpoint)));
         m_testConnectionStatusLabel->setVisible(true);
     }
 
@@ -3935,10 +4354,8 @@ void KisAiIllustrationDocker::testLlmConnection()
     } else {
         payload[QStringLiteral("model")] = model;
         QJsonArray messages;
-        messages.append(QJsonObject{
-            {QStringLiteral("role"), QStringLiteral("user")},
-            {QStringLiteral("content"), QStringLiteral("Hi")}
-        });
+        messages.append(QJsonObject{{QStringLiteral("role"), QStringLiteral("user")},
+                                    {QStringLiteral("content"), QStringLiteral("Hi")}});
         payload[QStringLiteral("messages")] = messages;
         if (KisAiStrokeProgramCodec::isReasoningModel(model)) {
             payload[QStringLiteral("max_completion_tokens")] = 32;
@@ -4026,7 +4443,11 @@ void KisAiIllustrationDocker::finishTestConnectionRequest()
             m_testConnectionStatusLabel->setText(successMsg);
             m_testConnectionStatusLabel->setVisible(true);
         }
-        logDebug(QStringLiteral("TEST_SUCCESS"), QStringLiteral("HTTP %1 (%2ms): %3").arg(httpStatus).arg(elapsedMs).arg(QString::fromUtf8(response.left(500))));
+        logDebug(QStringLiteral("TEST_SUCCESS"),
+                 QStringLiteral("HTTP %1 (%2ms): %3")
+                     .arg(httpStatus)
+                     .arg(elapsedMs)
+                     .arg(QString::fromUtf8(response.left(500))));
     } else {
         QString errorDetail;
         const QJsonDocument doc = QJsonDocument::fromJson(response);
@@ -4044,8 +4465,11 @@ void KisAiIllustrationDocker::finishTestConnectionRequest()
             m_testConnectionStatusLabel->setText(failMsg);
             m_testConnectionStatusLabel->setVisible(true);
         }
-        logDebug(QStringLiteral("TEST_FAILED"), QStringLiteral("HTTP %1 (%2ms): %3\nRaw: %4")
-            .arg(httpStatus).arg(elapsedMs).arg(errorDetail, QString::fromUtf8(response.left(500))));
+        logDebug(QStringLiteral("TEST_FAILED"),
+                 QStringLiteral("HTTP %1 (%2ms): %3\nRaw: %4")
+                     .arg(httpStatus)
+                     .arg(elapsedMs)
+                     .arg(errorDetail, QString::fromUtf8(response.left(500))));
     }
 }
 
@@ -4115,7 +4539,8 @@ void KisAiIllustrationDocker::setUiMode(UiMode mode)
 
 void KisAiIllustrationDocker::onStyleCardClicked(QPushButton *btn, int styleIndex)
 {
-    if (!btn) return;
+    if (!btn)
+        return;
     for (auto *b : m_styleCardButtons) {
         if (b != btn) {
             b->setProperty("active", "false");
@@ -4147,7 +4572,8 @@ void KisAiIllustrationDocker::onStyleCardClicked(QPushButton *btn, int styleInde
 
 void KisAiIllustrationDocker::onCompositionCardClicked(QPushButton *btn, const QString &framing)
 {
-    if (!btn) return;
+    if (!btn)
+        return;
     for (auto *b : m_compositionCardButtons) {
         if (b != btn) {
             b->setProperty("active", "false");
@@ -4172,7 +4598,8 @@ void KisAiIllustrationDocker::onCompositionCardClicked(QPushButton *btn, const Q
 
 void KisAiIllustrationDocker::onLightingCardClicked(QPushButton *btn, const QString &lighting)
 {
-    if (!btn) return;
+    if (!btn)
+        return;
     for (auto *b : m_lightingCardButtons) {
         if (b != btn) {
             b->setProperty("active", "false");
@@ -4197,7 +4624,8 @@ void KisAiIllustrationDocker::onLightingCardClicked(QPushButton *btn, const QStr
 
 void KisAiIllustrationDocker::expandPromptWithAi()
 {
-    if (!m_promptEditor) return;
+    if (!m_promptEditor)
+        return;
     const QString currentPrompt = m_promptEditor->toPlainText().trimmed();
     if (currentPrompt.isEmpty()) {
         setStatus(i18n("推敲するプロンプトを入力してください。"), true);
@@ -4277,7 +4705,10 @@ void KisAiIllustrationDocker::expandPromptWithAi()
             m_expandPromptReply->abort();
         }
     });
-    connect(m_expandPromptReply.data(), &QNetworkReply::finished, this, &KisAiIllustrationDocker::finishExpandPromptRequest);
+    connect(m_expandPromptReply.data(),
+            &QNetworkReply::finished,
+            this,
+            &KisAiIllustrationDocker::finishExpandPromptRequest);
     // Stalled-server guard: the finished handler below re-enables the button,
     // and this timeout guarantees it also happens when no finished signal ever
     // arrives. finishExpandPromptRequest() is a no-op on a null reply.
@@ -4303,7 +4734,8 @@ void KisAiIllustrationDocker::finishExpandPromptRequest()
 
     const auto networkError = m_expandPromptReply->error();
     const int httpStatus = m_expandPromptReply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-    const QByteArray data = m_expandPromptResponseBuffer.isEmpty() ? m_expandPromptReply->readAll() : m_expandPromptResponseBuffer;
+    const QByteArray data =
+        m_expandPromptResponseBuffer.isEmpty() ? m_expandPromptReply->readAll() : m_expandPromptResponseBuffer;
     m_expandPromptResponseBuffer.clear();
     m_expandPromptReply->deleteLater();
     m_expandPromptReply = nullptr;
@@ -4371,10 +4803,9 @@ void KisAiIllustrationDocker::addHistorySnapshot(const KisAiGenerationSnapshot &
     // size. Storing the full-resolution render (up to 1536^2 ARGB each) wasted
     // hundreds of MB, so cap the retained copy at 256px.
     KisAiGenerationSnapshot retained = snapshot;
-    if (!retained.previewImage.isNull() &&
-        (retained.previewImage.width() > 256 || retained.previewImage.height() > 256)) {
-        retained.previewImage = retained.previewImage.scaled(
-            256, 256, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    if (!retained.previewImage.isNull()
+        && (retained.previewImage.width() > 256 || retained.previewImage.height() > 256)) {
+        retained.previewImage = retained.previewImage.scaled(256, 256, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
     m_historySnapshots.prepend(retained);
     while (m_historySnapshots.size() > kMaxHistoryCount) {
@@ -4385,7 +4816,8 @@ void KisAiIllustrationDocker::addHistorySnapshot(const KisAiGenerationSnapshot &
 
 void KisAiIllustrationDocker::updateHistoryUi()
 {
-    if (!m_historyThumbsLayout) return;
+    if (!m_historyThumbsLayout)
+        return;
 
     QLayoutItem *item = nullptr;
     while ((item = m_historyThumbsLayout->takeAt(0)) != nullptr) {
@@ -4418,9 +4850,9 @@ void KisAiIllustrationDocker::updateHistoryUi()
         // an unnamed button, unlike every other control in this docker.
         thumbBtn->setAccessibleName(i18n("履歴 %1: %2", i + 1, snap.prompt));
         thumbBtn->setToolTip(i18n("#%1 (%2)\n%3\nクリックでプロンプト・設定を復元")
-            .arg(i + 1)
-            .arg(snap.timestamp.toString(QStringLiteral("hh:mm:ss")))
-            .arg(snap.prompt));
+                                 .arg(i + 1)
+                                 .arg(snap.timestamp.toString(QStringLiteral("hh:mm:ss")))
+                                 .arg(snap.prompt));
         connect(thumbBtn, &QPushButton::clicked, this, [this, i] {
             restoreHistorySnapshot(i);
         });
@@ -4431,7 +4863,8 @@ void KisAiIllustrationDocker::updateHistoryUi()
 
 void KisAiIllustrationDocker::restoreHistorySnapshot(int index)
 {
-    if (index < 0 || index >= m_historySnapshots.size()) return;
+    if (index < 0 || index >= m_historySnapshots.size())
+        return;
     const auto &snap = m_historySnapshots.at(index);
 
     if (m_promptEditor) {
@@ -4462,10 +4895,10 @@ void KisAiIllustrationDocker::restoreHistorySnapshot(int index)
     }
     if (m_previewLabel && !snap.previewImage.isNull()) {
         const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
-        m_previewLabel->setPixmap(QPixmap::fromImage(snap.previewImage).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+        m_previewLabel->setPixmap(QPixmap::fromImage(snap.previewImage)
+                                      .scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
     }
 
     focusPrompt();
     setStatus(i18n("履歴 #%1 のプロンプトと設定を復元しました。").arg(index + 1));
 }
-

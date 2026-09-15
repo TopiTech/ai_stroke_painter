@@ -103,24 +103,85 @@ struct EyeAnchor {
 
 // Canonical anime eye placement mirrored around the head axis. Keeping this
 // in one function is what guarantees the pair never drifts asymmetrically.
+// V6 W1: facing compensation (front-right/front-left shift, profile narrow)
+// lives here so every Rig consumer shares identical geometry.
 QPair<EyeAnchor, EyeAnchor> eyeAnchors(const KisAiRigParameterSet &params)
 {
-    const qreal spread = params.headWidth * 0.19;
+    qreal spread = params.headWidth * 0.19;
+    qreal shift = 0.0;
+    const QString facing = params.facing.trimmed().toLower();
+    if (facing == QLatin1String("front-right"))
+        shift = params.headWidth * 0.03;
+    else if (facing == QLatin1String("front-left"))
+        shift = -params.headWidth * 0.03;
+    else if (facing == QLatin1String("profile"))
+        spread = params.headWidth * 0.10;
     const qreal eyeY = params.headCenter.y() + params.headHeight * 0.08;
     const qreal baseW = params.headWidth * 0.17;
-    const qreal baseH = params.headWidth * 0.16
-        * (0.30 + 0.70 * clampRange(params.eyeLeft.aperture, 0.0, 1.0));
+    const qreal baseH = params.headWidth * 0.16 * (0.30 + 0.70 * clampRange(params.eyeLeft.aperture, 0.0, 1.0));
 
     EyeAnchor left;
-    left.center = QPointF(params.headCenter.x() - spread, eyeY);
+    left.center = QPointF(params.headCenter.x() - spread + shift, eyeY);
     left.width = baseW;
     left.height = baseH;
 
     EyeAnchor right = left;
-    right.center = QPointF(params.headCenter.x() + spread, eyeY);
+    right.center = QPointF(params.headCenter.x() + spread + shift, eyeY);
     return qMakePair(left, right);
 }
 
+// V6 W1: canonical eye pair placement (center + size) with facing
+// compensation. Must live at global scope: qualified definitions are
+// illegal inside the anonymous namespace above.
+} // namespace
+
+QPair<KisAiEyePlacement, KisAiEyePlacement> KisAiRigLibrary::eyePlacements(const KisAiRigParameterSet &params)
+{
+    KisAiRigParameterSet placed = params;
+    qreal spread = placed.headWidth * 0.19;
+    qreal shift = 0.0;
+    const QString facing = placed.facing.trimmed().toLower();
+    if (facing == QLatin1String("front-right"))
+        shift = placed.headWidth * 0.03;
+    else if (facing == QLatin1String("front-left"))
+        shift = -placed.headWidth * 0.03;
+    else if (facing == QLatin1String("profile"))
+        spread = placed.headWidth * 0.10;
+    const qreal eyeY = placed.headCenter.y() + placed.headHeight * 0.08;
+    const qreal baseW = placed.headWidth * 0.17;
+    const qreal baseH = placed.headWidth * 0.16 * (0.30 + 0.70 * qBound<qreal>(0.0, placed.eyeLeft.aperture, 1.0));
+    KisAiEyePlacement left;
+    left.center = QPointF(placed.headCenter.x() - spread + shift, eyeY);
+    left.size = QSizeF(baseW, baseH);
+    KisAiEyePlacement right;
+    right.center = QPointF(placed.headCenter.x() + spread + shift, eyeY);
+    right.size = QSizeF(baseW, baseH);
+    return qMakePair(left, right);
+}
+
+void KisAiRigLibrary::applyCameraAdjust(KisAiRigParameterSet &params, const KisAiSceneCameraV2 &camera)
+{
+    const QString focal = camera.focal.trimmed().toLower();
+    if (focal == QLatin1String("short"))
+        params.headHeight *= 0.98;
+    else if (focal == QLatin1String("long"))
+        params.headHeight *= 1.02;
+    const QString tilt = camera.tilt.trimmed().toLower();
+    if (tilt == QLatin1String("high_angle"))
+        params.headCenter.setY(params.headCenter.y() - 0.02);
+    else if (tilt == QLatin1String("low_angle"))
+        params.headCenter.setY(params.headCenter.y() + 0.02);
+}
+
+void KisAiRigLibrary::applyDetailBudget(KisAiRigParameterSet &params, qreal detailLevel)
+{
+    const qreal detail = qBound<qreal>(0.0, detailLevel, 1.0);
+    if (detail < 0.35)
+        params.hair.highlightBands = qMin(params.hair.highlightBands, 1);
+}
+
+namespace
+{
 QString eyeExpressionFor(const KisAiRigParameterSet &params)
 {
     const QString &expr = params.eyeLeft.expression;
@@ -156,8 +217,7 @@ QVector<KisAiStrokePoint> lashPath(const EyeAnchor &anchor, bool isRight)
     // Path runs inner corner -> outer corner relative to the face.
     for (int i = 0; i <= steps; ++i) {
         const qreal t = qreal(i) / steps;
-        const qreal x = anchor.center.x() - dir * anchor.width * 0.5
-            + dir * anchor.width * t;
+        const qreal x = anchor.center.x() - dir * anchor.width * 0.5 + dir * anchor.width * t;
         // Gentle upward arch peaking at t = 0.55.
         const qreal arch = std::sin(M_PI * qBound<qreal>(0.0, t * 0.95 + 0.05, 1.0)) * anchor.height * 0.10;
         const qreal y = anchor.center.y() - anchor.height * 0.42 - arch;
@@ -176,6 +236,7 @@ KisAiRigParameterSet KisAiRigLibrary::parametersFromSpec(const KisAiSceneSpec &s
     p.headCenter = spec.composition.headCenter;
     p.headHeight = spec.composition.headHeight;
     p.headWidth = spec.composition.headHeight * 0.78; // canonical anime head ratio
+    p.facing = spec.subject.facing;
 
     p.hairColor = spec.head.hairColor;
     p.eyeColor = spec.head.eyeColor;
@@ -231,9 +292,14 @@ KisAiRigParameterSet KisAiRigLibrary::parametersFromSpec(const KisAiSceneSpec &s
     p.hair.flyaway = spec.rig.hairFlyaway;
     p.hair.highlightBands = spec.rig.hairHighlightBands;
 
-    p.backdrop.timeOfDay = spec.light.timeOfDay;
-    p.backdrop.weather = spec.narrative.weather.isEmpty()
-        ? QStringLiteral("clear") : spec.narrative.weather;
+    // V6 W1: narrative.time resolves the time of day when the light block
+    // is still at its default; an explicit light.time stays authoritative.
+    QString resolvedTime = spec.light.timeOfDay;
+    if ((resolvedTime == QLatin1String("day") || resolvedTime.trimmed().isEmpty())
+        && !spec.narrative.time.trimmed().isEmpty())
+        resolvedTime = narrativeTimeToTimeOfDay(spec.narrative.time, resolvedTime);
+    p.backdrop.timeOfDay = resolvedTime;
+    p.backdrop.weather = spec.narrative.weather.isEmpty() ? QStringLiteral("clear") : spec.narrative.weather;
     p.backdrop.props = spec.narrative.props;
 
     return clamped(p);
@@ -247,7 +313,7 @@ KisAiRigParameterSet KisAiRigLibrary::clamped(const KisAiRigParameterSet &params
     p.headCenter.setX(clampRange(p.headCenter.x(), 0.2, 0.8));
     p.headCenter.setY(clampRange(p.headCenter.y(), 0.15, 0.7));
 
-    for (KisAiEyeRigParams *eye : { &p.eyeLeft, &p.eyeRight }) {
+    for (KisAiEyeRigParams *eye : {&p.eyeLeft, &p.eyeRight}) {
         eye->aperture = clampRange(eye->aperture, 0.0, 1.0);
         eye->irisRatio = clampRange(eye->irisRatio, 0.35, 0.85);
         if (eye->highlightShape.isEmpty())
@@ -263,8 +329,7 @@ KisAiRigParameterSet KisAiRigLibrary::clamped(const KisAiRigParameterSet &params
     return p;
 }
 
-QVector<KisAiStrokeOperation> KisAiRigLibrary::eyePairOps(
-    const KisAiRigParameterSet &params, quint32 seed)
+QVector<KisAiStrokeOperation> KisAiRigLibrary::eyePairOps(const KisAiRigParameterSet &params, quint32 seed)
 {
     Q_UNUSED(seed);
     QVector<KisAiStrokeOperation> ops;
@@ -273,9 +338,13 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::eyePairOps(
     const QColor lashColor = darken(params.hairColor, 0.65);
     const qreal lashSize = lineWeightBase(params.lineWeight) * 1.25;
 
-    const struct { const EyeAnchor &anchor; bool isRight; const char *side; } eyes[2] = {
-        { anchors.first, false, "l" },
-        { anchors.second, true, "r" },
+    const struct {
+        const EyeAnchor &anchor;
+        bool isRight;
+        const char *side;
+    } eyes[2] = {
+        {anchors.first, false, "l"},
+        {anchors.second, true, "r"},
     };
 
     for (const auto &eye : eyes) {
@@ -287,14 +356,11 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::eyePairOps(
             const int steps = 6;
             for (int i = 0; i <= steps; ++i) {
                 const qreal t = qreal(i) / steps;
-                const qreal x = eye.anchor.center.x() - eye.anchor.width * 0.5
-                    + eye.anchor.width * t;
-                const qreal y = eye.anchor.center.y()
-                    + std::sin(M_PI * t) * eye.anchor.height * 0.35;
+                const qreal x = eye.anchor.center.x() - eye.anchor.width * 0.5 + eye.anchor.width * t;
+                const qreal y = eye.anchor.center.y() + std::sin(M_PI * t) * eye.anchor.height * 0.35;
                 pts.append(pt(x, y, 0.4 + 0.5 * std::sin(M_PI * t)));
             }
-            ops.append(makePathOp(QStringLiteral("rig_eye_%1_closed").arg(side),
-                                  pts, lashColor, lashSize, 0.95));
+            ops.append(makePathOp(QStringLiteral("rig_eye_%1_closed").arg(side), pts, lashColor, lashSize, 0.95));
             continue;
         }
 
@@ -316,7 +382,9 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::eyePairOps(
         // Upper lash: the identity line. Painted above the assembly.
         ops.append(makePathOp(QStringLiteral("rig_eye_%1_lash").arg(side),
                               lashPath(eye.anchor, eye.isRight),
-                              lashColor, lashSize, 1.0));
+                              lashColor,
+                              lashSize,
+                              1.0));
     }
 
     return ops;
@@ -332,9 +400,12 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::doubleLidOps(const KisAiRigParame
     const QColor creaseColor = darken(params.hairColor, 0.45);
     const qreal creaseSize = lineWeightBase(params.lineWeight) * 0.7;
 
-    const struct { const EyeAnchor &anchor; const char *side; } eyes[2] = {
-        { anchors.first, "l" },
-        { anchors.second, "r" },
+    const struct {
+        const EyeAnchor &anchor;
+        const char *side;
+    } eyes[2] = {
+        {anchors.first, "l"},
+        {anchors.second, "r"},
     };
 
     for (const auto &eye : eyes) {
@@ -345,14 +416,12 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::doubleLidOps(const KisAiRigParame
         const int steps = 5;
         for (int i = 0; i <= steps; ++i) {
             const qreal t = qreal(i) / steps;
-            const qreal x = eye.anchor.center.x() - eye.anchor.width * 0.42
-                + eye.anchor.width * 0.84 * t;
-            const qreal y = eye.anchor.center.y() - eye.anchor.height * 0.72
-                - std::sin(M_PI * t) * eye.anchor.height * 0.12;
+            const qreal x = eye.anchor.center.x() - eye.anchor.width * 0.42 + eye.anchor.width * 0.84 * t;
+            const qreal y =
+                eye.anchor.center.y() - eye.anchor.height * 0.72 - std::sin(M_PI * t) * eye.anchor.height * 0.12;
             pts.append(pt(x, y, 0.3 + 0.35 * std::sin(M_PI * t)));
         }
-        ops.append(makePathOp(QStringLiteral("rig_eye_%1_lid").arg(eye.side),
-                              pts, creaseColor, creaseSize, 0.55));
+        ops.append(makePathOp(QStringLiteral("rig_eye_%1_lid").arg(eye.side), pts, creaseColor, creaseSize, 0.55));
     }
     return ops;
 }
@@ -368,9 +437,12 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::browOps(const KisAiRigParameterSe
     const qreal browSize = lineWeightBase(params.lineWeight) * 1.1 * params.brow.thicknessScale;
     const qreal lift = 0.30 * params.brow.angleScale; // arch expressiveness
 
-    const struct { const EyeAnchor &anchor; const char *side; } eyes[2] = {
-        { anchors.first, "l" },
-        { anchors.second, "r" },
+    const struct {
+        const EyeAnchor &anchor;
+        const char *side;
+    } eyes[2] = {
+        {anchors.first, "l"},
+        {anchors.second, "r"},
     };
 
     for (const auto &eye : eyes) {
@@ -378,13 +450,11 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::browOps(const KisAiRigParameterSe
         const int steps = 5;
         for (int i = 0; i <= steps; ++i) {
             const qreal t = qreal(i) / steps;
-            const qreal x = eye.anchor.center.x() - eye.anchor.width * 0.55
-                + eye.anchor.width * 1.10 * t;
+            const qreal x = eye.anchor.center.x() - eye.anchor.width * 0.55 + eye.anchor.width * 1.10 * t;
             const qreal y = eye.anchor.center.y() - eye.anchor.height * (1.15 + lift * std::sin(M_PI * t));
             pts.append(pt(x, y, 0.35 + 0.6 * std::sin(M_PI * t)));
         }
-        ops.append(makePathOp(QStringLiteral("rig_brow_%1").arg(eye.side),
-                              pts, browColor, browSize, 0.9));
+        ops.append(makePathOp(QStringLiteral("rig_brow_%1").arg(eye.side), pts, browColor, browSize, 0.9));
     }
     return ops;
 }
@@ -407,15 +477,18 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::noseOps(const KisAiRigParameterSe
         pts.append(pt(noseX, noseY - s, 0.5));
         pts.append(pt(noseX, noseY, 0.9));
         pts.append(pt(noseX, noseY + s, 0.5));
-        ops.append(makePathOp(QStringLiteral("rig_nose_point"), pts,
+        ops.append(makePathOp(QStringLiteral("rig_nose_point"),
+                              pts,
                               mixColor(params.skinTone, QColor(120, 70, 62), 0.45),
-                              lineWeightBase(params.lineWeight) * 0.9, 0.8));
+                              lineWeightBase(params.lineWeight) * 0.9,
+                              0.8));
     }
     {
         QVector<KisAiStrokePoint> pts;
         pts.append(pt(noseX + s * 1.5, noseY + s * 0.4, 0.9));
         pts.append(pt(noseX + s * 3.0, noseY + s * 1.2, 0.25));
-        ops.append(makePathOp(QStringLiteral("rig_nose_shadow"), pts,
+        ops.append(makePathOp(QStringLiteral("rig_nose_shadow"),
+                              pts,
                               shadowColor,
                               lineWeightBase(params.lineWeight) * 1.4,
                               params.nose.shadowStrength));
@@ -431,10 +504,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::mouthOps(const KisAiRigParameterS
     mouth.kind = KisAiStrokeOperation::Kind::AnimeMouth;
     mouth.id = QStringLiteral("rig_mouth");
     mouth.layer = QStringLiteral("Flats");
-    mouth.mouthCenter = QPointF(params.headCenter.x(),
-                                params.headCenter.y() + params.headHeight * 0.30);
-    mouth.mouthSize = QSizeF(params.headWidth * 0.11 * params.mouth.widthScale,
-                             params.headWidth * 0.05);
+    mouth.mouthCenter = QPointF(params.headCenter.x(), params.headCenter.y() + params.headHeight * 0.30);
+    mouth.mouthSize = QSizeF(params.headWidth * 0.11 * params.mouth.widthScale, params.headWidth * 0.05);
     mouth.mouthExpression = params.mouth.expression;
     mouth.mouthLipColor = mixColor(params.skinTone, QColor(224, 117, 125), 0.55);
     mouth.mouthHasHighlight = params.mouth.highlight;
@@ -443,8 +514,7 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::mouthOps(const KisAiRigParameterS
     return ops;
 }
 
-QVector<KisAiStrokeOperation> KisAiRigLibrary::hairHighlightOps(
-    const KisAiRigParameterSet &params, quint32 seed)
+QVector<KisAiStrokeOperation> KisAiRigLibrary::hairHighlightOps(const KisAiRigParameterSet &params, quint32 seed)
 {
     QVector<KisAiStrokeOperation> ops;
     const int bands = qBound(0, params.hair.highlightBands, 3);
@@ -459,18 +529,18 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::hairHighlightOps(
 
     struct BandDef {
         QColor color;
-        qreal yBase;      // relative to topY in headHeight units
-        qreal xShift;     // relative to headWidth
+        qreal yBase; // relative to topY in headHeight units
+        qreal xShift; // relative to headWidth
         qreal widthScale;
         qreal opacity;
     };
 
     QVector<BandDef> defs;
-    defs.append({ mainBand, 0.12, 0.02, 1.0, 0.60 });
+    defs.append({mainBand, 0.12, 0.02, 1.0, 0.60});
     if (bands >= 2)
-        defs.append({ subBand, 0.22, -0.16, 0.6, 0.40 });
+        defs.append({subBand, 0.22, -0.16, 0.6, 0.40});
     if (bands >= 3)
-        defs.append({ counterBand, 0.07, -0.22, 0.45, 0.35 });
+        defs.append({counterBand, 0.07, -0.22, 0.45, 0.35});
 
     int index = 0;
     for (const BandDef &def : defs) {
@@ -479,10 +549,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::hairHighlightOps(
         const int steps = 7;
         for (int i = 0; i <= steps; ++i) {
             const qreal t = qreal(i) / steps;
-            const qreal x = params.headCenter.x() + (t - 0.5) * params.headWidth * 0.72
-                + def.xShift * params.headWidth;
-            const qreal y = topY + params.headHeight * def.yBase
-                + std::sin(M_PI * t) * params.headHeight * 0.045;
+            const qreal x = params.headCenter.x() + (t - 0.5) * params.headWidth * 0.72 + def.xShift * params.headWidth;
+            const qreal y = topY + params.headHeight * def.yBase + std::sin(M_PI * t) * params.headHeight * 0.045;
             spine.append(QPointF(x, y));
         }
 
@@ -510,20 +578,19 @@ QString KisAiRigLibrary::narrativeTimeToTimeOfDay(const QString &narrativeTime, 
     const QString t = narrativeTime.trimmed().toLower();
     if (t.isEmpty())
         return fallback;
-    if (t.contains(QLatin1String("golden")) || t.contains(QLatin1String("sunset"))
-        || t.contains(QLatin1String("dusk")) || t.contains(QLatin1String("evening")))
+    if (t.contains(QLatin1String("golden")) || t.contains(QLatin1String("sunset")) || t.contains(QLatin1String("dusk"))
+        || t.contains(QLatin1String("evening")))
         return QStringLiteral("sunset");
-    if (t.contains(QLatin1String("night")) || t.contains(QLatin1String("midnight"))
-        || t.contains(QLatin1String("moon")) || t.contains(QLatin1String("star")))
+    if (t.contains(QLatin1String("night")) || t.contains(QLatin1String("midnight")) || t.contains(QLatin1String("moon"))
+        || t.contains(QLatin1String("star")))
         return QStringLiteral("night");
-    if (t.contains(QLatin1String("morning")) || t.contains(QLatin1String("noon"))
-        || t.contains(QLatin1String("day")))
+    if (t.contains(QLatin1String("morning")) || t.contains(QLatin1String("noon")) || t.contains(QLatin1String("day")))
         return QStringLiteral("day");
     return fallback;
 }
 
-QVector<KisAiStrokeOperation> KisAiRigLibrary::backdropWeatherOps(
-    const KisAiRigParameterSet &params, const QSize &canvasSize, quint32 seed)
+QVector<KisAiStrokeOperation>
+KisAiRigLibrary::backdropWeatherOps(const KisAiRigParameterSet &params, const QSize &canvasSize, quint32 seed)
 {
     Q_UNUSED(canvasSize);
     QVector<KisAiStrokeOperation> ops;
@@ -575,13 +642,14 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::backdropWeatherOps(
             for (int i = 0; i < 12; ++i) {
                 const qreal t = 2.0 * M_PI * i / 12.0;
                 const qreal wob = 0.75 + 0.25 * std::sin(3.0 * t + side);
-                cloud.append(QPointF(cx + std::cos(t) * r * wob,
-                                     cy + std::sin(t) * r * 0.55 * wob));
+                cloud.append(QPointF(cx + std::cos(t) * r * wob, cy + std::sin(t) * r * 0.55 * wob));
             }
-            const QColor cloudColor = tod == QLatin1String("night")
-                ? QColor(70, 78, 100) : QColor(235, 238, 245);
+            const QColor cloudColor = tod == QLatin1String("night") ? QColor(70, 78, 100) : QColor(235, 238, 245);
             ops.append(makeFillOp(QStringLiteral("rig_cloud_%1").arg(side),
-                                  cloud, cloudColor, 0.7, QStringLiteral("Background")));
+                                  cloud,
+                                  cloudColor,
+                                  0.7,
+                                  QStringLiteral("Background")));
         }
     }
 
@@ -597,7 +665,7 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::backdropWeatherOps(
             const qreal gx = params.headCenter.x() > 0.5 ? 0.14 : 0.86;
             glow.gradientCenter = QPointF(gx, 0.62);
             glow.gradientRadius = 0.10;
-            glow.gradientColors = { QColor(255, 196, 110, 160), QColor(255, 196, 110, 0) };
+            glow.gradientColors = {QColor(255, 196, 110, 160), QColor(255, 196, 110, 0)};
             glow.brush.opacity = 0.8;
             glow.blendMode = QStringLiteral("screen");
             ops.append(glow);
@@ -631,9 +699,7 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::backdropWeatherOps(
     // Guard: particles must not sit on the face (negative.noParticlesOnFace
     // equivalent enforced at rig level, not left to LLM honesty).
     for (KisAiStrokeOperation &op : ops) {
-        if (op.kind == KisAiStrokeOperation::Kind::Particles
-            && op.bounds.isValid()
-            && op.bounds.intersects(faceBox)) {
+        if (op.kind == KisAiStrokeOperation::Kind::Particles && op.bounds.isValid() && op.bounds.intersects(faceBox)) {
             // Shrink to the largest side band outside the face box.
             const qreal leftWidth = faceBox.left();
             const qreal rightWidth = 1.0 - faceBox.right();
@@ -654,8 +720,8 @@ quint32 KisAiRigLibrary::partSeed(const QString &partName, quint32 baseSeed)
     return KisAiStrokeProgramCodec::stableSeed(partName) ^ baseSeed;
 }
 
-QVector<KisAiStrokeOperation> KisAiRigLibrary::mountainOps(
-    const KisAiSceneSpec &spec, const QSize &canvasSize, quint32 seed)
+QVector<KisAiStrokeOperation>
+KisAiRigLibrary::mountainOps(const KisAiSceneSpec &spec, const QSize &canvasSize, quint32 seed)
 {
     Q_UNUSED(canvasSize);
     Q_UNUSED(seed);
@@ -702,9 +768,9 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::mountainOps(
         snowColor = QColor(180, 195, 225);
         shadowColor = QColor(12, 18, 40, 160);
     } else if (tod == QLatin1String("sunset")) {
-        mountainBody = QColor(125, 60, 85);       // Red Fuji / warm evening slope
-        snowColor = QColor(255, 235, 240);        // Alpenglow pink
-        shadowColor = QColor(60, 25, 55, 170);   // Deep violet shadow
+        mountainBody = QColor(125, 60, 85); // Red Fuji / warm evening slope
+        snowColor = QColor(255, 235, 240); // Alpenglow pink
+        shadowColor = QColor(60, 25, 55, 170); // Deep violet shadow
     } else {
         mountainBody = QColor(70, 95, 140);
         snowColor = QColor(250, 252, 255);
@@ -712,8 +778,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::mountainOps(
     }
 
     // 1. Mountain Base Mass (Flats)
-    ops.append(makeFillOp(QStringLiteral("rig_mountain_body"), mountainPoly,
-                          mountainBody, 1.0, QStringLiteral("Flats")));
+    ops.append(
+        makeFillOp(QStringLiteral("rig_mountain_body"), mountainPoly, mountainBody, 1.0, QStringLiteral("Flats")));
 
     // 2. Snow Cap with serrated fractal snowmelt ridges (Snow Crevices)
     const qreal snowDepth = (yBase - yTop) * 0.38;
@@ -746,8 +812,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::mountainOps(
         snowPoly.append(QPointF(x, ridgeY));
     }
 
-    KisAiStrokeOperation snowOp = makeFillOp(QStringLiteral("rig_mountain_snow"), snowPoly,
-                                             snowColor, 0.96, QStringLiteral("Flats"));
+    KisAiStrokeOperation snowOp =
+        makeFillOp(QStringLiteral("rig_mountain_snow"), snowPoly, snowColor, 0.96, QStringLiteral("Flats"));
     snowOp.brush.profile = QStringLiteral("watercolor");
     snowOp.fillStyle = QStringLiteral("wash");
     ops.append(snowOp);
@@ -765,8 +831,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::mountainOps(
     shadeFacet.append(QPointF(xc + 0.05, yBase));
     shadeFacet.append(QPointF(xc, yBase));
 
-    KisAiStrokeOperation shadeOp = makeFillOp(QStringLiteral("rig_mountain_shade"), shadeFacet,
-                                              shadowColor, 0.55, QStringLiteral("Shading"));
+    KisAiStrokeOperation shadeOp =
+        makeFillOp(QStringLiteral("rig_mountain_shade"), shadeFacet, shadowColor, 0.55, QStringLiteral("Shading"));
     shadeOp.blendMode = QStringLiteral("multiply");
     shadeOp.fillStyle = QStringLiteral("wash");
     ops.append(shadeOp);
@@ -778,8 +844,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::mountainOps(
     hazePoly.append(QPointF(xc + halfSpan * 1.1, yBase + 0.04));
     hazePoly.append(QPointF(xc - halfSpan * 1.1, yBase + 0.04));
     QColor hazeCol = tod == QLatin1String("sunset") ? QColor(245, 175, 155, 130) : QColor(210, 225, 245, 130);
-    KisAiStrokeOperation hazeOp = makeFillOp(QStringLiteral("rig_mountain_haze"), hazePoly,
-                                             hazeCol, 0.50, QStringLiteral("Flats"));
+    KisAiStrokeOperation hazeOp =
+        makeFillOp(QStringLiteral("rig_mountain_haze"), hazePoly, hazeCol, 0.50, QStringLiteral("Flats"));
     hazeOp.brush.profile = QStringLiteral("watercolor");
     hazeOp.fillStyle = QStringLiteral("wash");
     ops.append(hazeOp);
@@ -787,8 +853,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::mountainOps(
     return ops;
 }
 
-QVector<KisAiStrokeOperation> KisAiRigLibrary::sakuraTreeOps(
-    const KisAiSceneSpec &spec, const QSize &canvasSize, quint32 seed)
+QVector<KisAiStrokeOperation>
+KisAiRigLibrary::sakuraTreeOps(const KisAiSceneSpec &spec, const QSize &canvasSize, quint32 seed)
 {
     Q_UNUSED(canvasSize);
     Q_UNUSED(seed);
@@ -813,9 +879,7 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::sakuraTreeOps(
     trunk.widthStart = 0.052;
     trunk.widthMid = 0.034;
     trunk.widthEnd = 0.016;
-    trunk.spine << QPointF(rootX, rootY)
-                << QPointF(rootX - 0.06, 0.72)
-                << QPointF(rootX - 0.12, 0.52)
+    trunk.spine << QPointF(rootX, rootY) << QPointF(rootX - 0.06, 0.72) << QPointF(rootX - 0.12, 0.52)
                 << QPointF(rootX - 0.16, 0.38);
     ops.append(trunk);
 
@@ -827,9 +891,7 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::sakuraTreeOps(
     trunkLine.brush.profile = QStringLiteral("gpen");
     trunkLine.brush.color = trunkColor.darker(135);
     trunkLine.brush.size = 0.0035;
-    trunkLine.points << pt(rootX, rootY, 0.9)
-                     << pt(rootX - 0.06, 0.72, 0.8)
-                     << pt(rootX - 0.12, 0.52, 0.7)
+    trunkLine.points << pt(rootX, rootY, 0.9) << pt(rootX - 0.06, 0.72, 0.8) << pt(rootX - 0.12, 0.52, 0.7)
                      << pt(rootX - 0.16, 0.38, 0.5);
     ops.append(trunkLine);
 
@@ -842,12 +904,11 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::sakuraTreeOps(
         qreal widthEnd;
     };
     const QVector<BranchSpec> branches = {
-        { QPointF(rootX - 0.08, 0.64), QPointF(rootX - 0.22, 0.56), QPointF(rootX - 0.38, 0.52), 0.018, 0.007 },
-        { QPointF(rootX - 0.12, 0.52), QPointF(rootX - 0.28, 0.42), QPointF(rootX - 0.46, 0.40), 0.016, 0.006 },
-        { QPointF(rootX - 0.14, 0.44), QPointF(rootX - 0.10, 0.32), QPointF(rootX - 0.06, 0.24), 0.014, 0.005 },
-        { QPointF(rootX - 0.16, 0.38), QPointF(rootX - 0.32, 0.30), QPointF(rootX - 0.52, 0.28), 0.015, 0.005 },
-        { QPointF(rootX - 0.28, 0.42), QPointF(rootX - 0.36, 0.34), QPointF(rootX - 0.44, 0.30), 0.010, 0.004 }
-    };
+        {QPointF(rootX - 0.08, 0.64), QPointF(rootX - 0.22, 0.56), QPointF(rootX - 0.38, 0.52), 0.018, 0.007},
+        {QPointF(rootX - 0.12, 0.52), QPointF(rootX - 0.28, 0.42), QPointF(rootX - 0.46, 0.40), 0.016, 0.006},
+        {QPointF(rootX - 0.14, 0.44), QPointF(rootX - 0.10, 0.32), QPointF(rootX - 0.06, 0.24), 0.014, 0.005},
+        {QPointF(rootX - 0.16, 0.38), QPointF(rootX - 0.32, 0.30), QPointF(rootX - 0.52, 0.28), 0.015, 0.005},
+        {QPointF(rootX - 0.28, 0.42), QPointF(rootX - 0.36, 0.34), QPointF(rootX - 0.44, 0.30), 0.010, 0.004}};
 
     for (int b = 0; b < branches.size(); ++b) {
         const auto &bs = branches.at(b);
@@ -870,20 +931,22 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::sakuraTreeOps(
         brLine.brush.profile = QStringLiteral("gpen");
         brLine.brush.color = trunkColor.darker(130);
         brLine.brush.size = 0.0028;
-        brLine.points << pt(bs.start.x(), bs.start.y(), 0.7)
-                      << pt(bs.mid.x(), bs.mid.y(), 0.6)
+        brLine.points << pt(bs.start.x(), bs.start.y(), 0.7) << pt(bs.mid.x(), bs.mid.y(), 0.6)
                       << pt(bs.end.x(), bs.end.y(), 0.3);
         ops.append(brLine);
     }
 
     // 3. Volumetric Petal Masses along branch nodes
-    const QVector<QPointF> clusterNodes = {
-        QPointF(rootX - 0.38, 0.52), QPointF(rootX - 0.46, 0.40),
-        QPointF(rootX - 0.06, 0.24), QPointF(rootX - 0.52, 0.28),
-        QPointF(rootX - 0.32, 0.32), QPointF(rootX - 0.22, 0.36),
-        QPointF(rootX - 0.18, 0.26), QPointF(rootX - 0.36, 0.22),
-        QPointF(rootX - 0.48, 0.20), QPointF(rootX - 0.12, 0.18)
-    };
+    const QVector<QPointF> clusterNodes = {QPointF(rootX - 0.38, 0.52),
+                                           QPointF(rootX - 0.46, 0.40),
+                                           QPointF(rootX - 0.06, 0.24),
+                                           QPointF(rootX - 0.52, 0.28),
+                                           QPointF(rootX - 0.32, 0.32),
+                                           QPointF(rootX - 0.22, 0.36),
+                                           QPointF(rootX - 0.18, 0.26),
+                                           QPointF(rootX - 0.36, 0.22),
+                                           QPointF(rootX - 0.48, 0.20),
+                                           QPointF(rootX - 0.12, 0.18)};
 
     auto makeCloudPoly = [&](const QPointF &center, qreal rx, qreal ry, int seedShift) {
         QPolygonF poly;
@@ -891,8 +954,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::sakuraTreeOps(
         for (int v = 0; v < verts; ++v) {
             const qreal angle = (2.0 * M_PI * v) / verts;
             const qreal wobble = 0.82 + 0.18 * std::sin(angle * 3.0 + seedShift) + 0.08 * std::cos(angle * 5.0);
-            poly.append(QPointF(center.x() + std::cos(angle) * rx * wobble,
-                                center.y() + std::sin(angle) * ry * wobble));
+            poly.append(
+                QPointF(center.x() + std::cos(angle) * rx * wobble, center.y() + std::sin(angle) * ry * wobble));
         }
         return poly;
     };
@@ -904,7 +967,10 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::sakuraTreeOps(
         // Tier 1: Deep inner shade
         QPolygonF deepPoly = makeCloudPoly(node + QPointF(0.0, 0.015), rScale * 1.1, rScale * 0.85, i * 3);
         KisAiStrokeOperation deepOp = makeFillOp(QStringLiteral("rig_sakura_deep_%1").arg(i),
-                                                 deepPoly, deepPetalColor, 0.75, QStringLiteral("Flats"));
+                                                 deepPoly,
+                                                 deepPetalColor,
+                                                 0.75,
+                                                 QStringLiteral("Flats"));
         deepOp.brush.profile = QStringLiteral("watercolor");
         deepOp.fillStyle = QStringLiteral("wash");
         ops.append(deepOp);
@@ -912,7 +978,10 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::sakuraTreeOps(
         // Tier 2: Mid vibrant bloom
         QPolygonF midPoly = makeCloudPoly(node, rScale, rScale * 0.75, i * 5 + 1);
         KisAiStrokeOperation midOp = makeFillOp(QStringLiteral("rig_sakura_mid_%1").arg(i),
-                                                midPoly, basePetalColor, 0.85, QStringLiteral("Flats"));
+                                                midPoly,
+                                                basePetalColor,
+                                                0.85,
+                                                QStringLiteral("Flats"));
         midOp.brush.profile = QStringLiteral("watercolor");
         midOp.fillStyle = QStringLiteral("wash");
         ops.append(midOp);
@@ -920,7 +989,10 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::sakuraTreeOps(
         // Tier 3: Sunny top rim highlight
         QPolygonF hlPoly = makeCloudPoly(node - QPointF(0.01, 0.015), rScale * 0.72, rScale * 0.55, i * 7 + 2);
         KisAiStrokeOperation hlOp = makeFillOp(QStringLiteral("rig_sakura_hl_%1").arg(i),
-                                               hlPoly, highlightPetalColor, 0.70, QStringLiteral("Highlights"));
+                                               hlPoly,
+                                               highlightPetalColor,
+                                               0.70,
+                                               QStringLiteral("Highlights"));
         hlOp.brush.profile = QStringLiteral("airbrush");
         hlOp.blendMode = QStringLiteral("screen");
         ops.append(hlOp);
@@ -942,8 +1014,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::sakuraTreeOps(
     return ops;
 }
 
-QVector<KisAiStrokeOperation> KisAiRigLibrary::waterSurfaceOps(
-    const KisAiSceneSpec &spec, const QSize &canvasSize, qreal horizonY, quint32 seed)
+QVector<KisAiStrokeOperation>
+KisAiRigLibrary::waterSurfaceOps(const KisAiSceneSpec &spec, const QSize &canvasSize, qreal horizonY, quint32 seed)
 {
     Q_UNUSED(canvasSize);
     Q_UNUSED(seed);
@@ -957,8 +1029,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::waterSurfaceOps(
         waterHorizon = QColor(32, 42, 75);
         waterForeground = QColor(10, 15, 32);
     } else if (tod == QLatin1String("sunset")) {
-        waterHorizon = QColor(220, 130, 110);   // Glowing reflection of sunset
-        waterForeground = QColor(65, 35, 70);     // Deep violet water depth
+        waterHorizon = QColor(220, 130, 110); // Glowing reflection of sunset
+        waterForeground = QColor(65, 35, 70); // Deep violet water depth
     } else {
         waterHorizon = QColor(160, 195, 230);
         waterForeground = QColor(40, 75, 120);
@@ -968,11 +1040,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::waterSurfaceOps(
     waterWash.kind = KisAiStrokeOperation::Kind::GradientFill;
     waterWash.id = QStringLiteral("rig_water_wash");
     waterWash.layer = QStringLiteral("Flats");
-    waterWash.polygon = {
-        QPointF(0.0, horizonY), QPointF(1.0, horizonY),
-        QPointF(1.0, 1.0), QPointF(0.0, 1.0)
-    };
-    waterWash.gradientColors = { waterHorizon, waterForeground };
+    waterWash.polygon = {QPointF(0.0, horizonY), QPointF(1.0, horizonY), QPointF(1.0, 1.0), QPointF(0.0, 1.0)};
+    waterWash.gradientColors = {waterHorizon, waterForeground};
     waterWash.angleDeg = 90.0;
     waterWash.brush.profile = QStringLiteral("watercolor");
     waterWash.brush.color = waterHorizon;
@@ -989,8 +1058,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::waterSurfaceOps(
     reflPoly.append(QPointF(xc, horizonY + reflHeight));
     reflPoly.append(QPointF(xc + reflSpan, horizonY));
     QColor reflColor = tod == QLatin1String("sunset") ? QColor(145, 65, 90, 120) : QColor(45, 65, 105, 110);
-    KisAiStrokeOperation reflOp = makeFillOp(QStringLiteral("rig_water_mountain_refl"), reflPoly,
-                                             reflColor, 0.40, QStringLiteral("Flats"));
+    KisAiStrokeOperation reflOp =
+        makeFillOp(QStringLiteral("rig_water_mountain_refl"), reflPoly, reflColor, 0.40, QStringLiteral("Flats"));
     reflOp.brush.profile = QStringLiteral("watercolor");
     reflOp.fillStyle = QStringLiteral("wash");
     ops.append(reflOp);
@@ -1006,11 +1075,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::waterSurfaceOps(
         const qreal strokeW = 0.0018 + t * 0.0035;
 
         QVector<KisAiStrokePoint> ripplePts;
-        ripplePts << pt(xc - halfW, ry, 0.2)
-                  << pt(xc - halfW * 0.5, ry, 0.8)
-                  << pt(xc, ry, 0.9)
-                  << pt(xc + halfW * 0.5, ry, 0.8)
-                  << pt(xc + halfW, ry, 0.2);
+        ripplePts << pt(xc - halfW, ry, 0.2) << pt(xc - halfW * 0.5, ry, 0.8) << pt(xc, ry, 0.9)
+                  << pt(xc + halfW * 0.5, ry, 0.8) << pt(xc + halfW, ry, 0.2);
 
         KisAiStrokeOperation ripOp;
         ripOp.kind = KisAiStrokeOperation::Kind::Path;

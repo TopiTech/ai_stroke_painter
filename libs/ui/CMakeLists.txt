@@ -452,6 +452,7 @@ set(kritaui_LIB_SRCS
     aiillustration/KisAiRigLibrary.cpp
     aiillustration/KisAiProgramPatch.cpp
     aiillustration/KisAiVisionCritic.cpp
+    aiillustration/KisAiRefinementLoop.cpp
     KisMainWindow.cpp
     KisOpenPane.cpp
     KisPart.cpp
@@ -545,7 +546,7 @@ endif()
         dialogs/KisAsyncAnimationRenderDialogBase.cpp
         dialogs/KisAsyncAnimationCacheRenderDialog.cpp
         dialogs/KisAsyncAnimationFramesSaveDialog.cpp
-        canvas/KisCanvasAnimationState.cpp	
+        canvas/KisCanvasAnimationState.cpp
         kis_animation_importer.cpp
         KisFrameDataSerializer.cpp
         KisFrameCacheStore.cpp

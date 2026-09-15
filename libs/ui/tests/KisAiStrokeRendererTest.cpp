@@ -29,23 +29,19 @@
 #endif
 #endif
 
-#include "aiillustration/KisAiStrokeProgram.h"
-#include "aiillustration/KisAiStrokeRenderer.h"
 #include "aiillustration/KisAiDeliberateStroke.h"
-#include "aiillustration/KisAiLightRig.h"
-#include "aiillustration/KisAiStrokeQualityUtils.h"
-#include "aiillustration/KisAiStrokeTypeChecker.h"
 #include "aiillustration/KisAiLayoutEngine.h"
+#include "aiillustration/KisAiLightRig.h"
 #include "aiillustration/KisAiSceneSpec.h"
+#include "aiillustration/KisAiStrokeProgram.h"
+#include "aiillustration/KisAiStrokeQualityUtils.h"
+#include "aiillustration/KisAiStrokeRenderer.h"
+#include "aiillustration/KisAiStrokeTypeChecker.h"
+
 
 void KisAiStrokeRendererTest::testCatmullRomSpline()
 {
-    const QVector<QPointF> input = {
-        QPointF(0.0, 0.0),
-        QPointF(10.0, 30.0),
-        QPointF(25.0, 15.0),
-        QPointF(40.0, 0.0)
-    };
+    const QVector<QPointF> input = {QPointF(0.0, 0.0), QPointF(10.0, 30.0), QPointF(25.0, 15.0), QPointF(40.0, 0.0)};
 
     const QVector<QPointF> spline = KisAiStrokeRenderer::generateCatmullRomSpline(input, 6, false);
 
@@ -73,10 +69,7 @@ void KisAiStrokeRendererTest::testRenderProgramToImage()
     pathOp.kind = KisAiStrokeOperation::Kind::Path;
     pathOp.id = QStringLiteral("line");
     pathOp.layer = QStringLiteral("Lineart");
-    pathOp.points = QVector<KisAiStrokePoint>{
-        KisAiStrokePoint(0.2, 0.5, 0.8),
-        KisAiStrokePoint(0.8, 0.5, 0.8)
-    };
+    pathOp.points = QVector<KisAiStrokePoint>{KisAiStrokePoint(0.2, 0.5, 0.8), KisAiStrokePoint(0.8, 0.5, 0.8)};
     pathOp.brush.color = QColor(20, 20, 20);
     pathOp.brush.size = 0.02;
     program.operations.append(pathOp);
@@ -169,10 +162,7 @@ void KisAiStrokeRendererTest::testRenderGradientOpacity()
     gradOp.kind = KisAiStrokeOperation::Kind::GradientFill;
     gradOp.id = QStringLiteral("half_alpha_grad");
     gradOp.layer = QStringLiteral("Background");
-    gradOp.points = QVector<KisAiStrokePoint>{
-        KisAiStrokePoint(0.0, 0.0, 1.0),
-        KisAiStrokePoint(1.0, 1.0, 1.0)
-    };
+    gradOp.points = QVector<KisAiStrokePoint>{KisAiStrokePoint(0.0, 0.0, 1.0), KisAiStrokePoint(1.0, 1.0, 1.0)};
     gradOp.gradientColors = {QColor(255, 0, 0), QColor(0, 0, 255)};
     gradOp.brush.opacity = 0.5; // 50% opacity
     program.operations.append(gradOp);
@@ -226,11 +216,9 @@ void KisAiStrokeRendererTest::testRenderAirbrushDynamics()
     airOp.kind = KisAiStrokeOperation::Kind::Path;
     airOp.id = QStringLiteral("soft_airbrush");
     airOp.layer = QStringLiteral("Shading");
-    airOp.points = QVector<KisAiStrokePoint>{
-        KisAiStrokePoint(0.1, 0.5, 0.5),
-        KisAiStrokePoint(0.5, 0.5, 1.0),
-        KisAiStrokePoint(0.9, 0.5, 0.5)
-    };
+    airOp.points = QVector<KisAiStrokePoint>{KisAiStrokePoint(0.1, 0.5, 0.5),
+                                             KisAiStrokePoint(0.5, 0.5, 1.0),
+                                             KisAiStrokePoint(0.9, 0.5, 0.5)};
     airOp.brush.profile = QStringLiteral("airbrush");
     airOp.brush.color = QColor(100, 150, 250);
     airOp.brush.size = 0.1;
@@ -253,12 +241,7 @@ void KisAiStrokeRendererTest::testRenderHatchOperation()
     hatchOp.kind = KisAiStrokeOperation::Kind::Hatch;
     hatchOp.id = QStringLiteral("hatch_test");
     hatchOp.layer = QStringLiteral("Shading");
-    hatchOp.polygon = QPolygonF{
-        QPointF(0.25, 0.25),
-        QPointF(0.75, 0.25),
-        QPointF(0.75, 0.75),
-        QPointF(0.25, 0.75)
-    };
+    hatchOp.polygon = QPolygonF{QPointF(0.25, 0.25), QPointF(0.75, 0.25), QPointF(0.75, 0.75), QPointF(0.25, 0.75)};
     hatchOp.angleDeg = 45.0;
     hatchOp.spacing = 0.05;
     hatchOp.crossHatch = true;
@@ -298,16 +281,8 @@ void KisAiStrokeRendererTest::testRenderRadialGradient()
     radOp.isRadial = true;
     radOp.gradientCenter = QPointF(0.5, 0.5);
     radOp.gradientRadius = 0.4;
-    radOp.gradientColors = QVector<QColor>{
-        QColor(255, 100, 50),
-        QColor(20, 20, 80)
-    };
-    radOp.polygon = QPolygonF{
-        QPointF(0.1, 0.1),
-        QPointF(0.9, 0.1),
-        QPointF(0.9, 0.9),
-        QPointF(0.1, 0.9)
-    };
+    radOp.gradientColors = QVector<QColor>{QColor(255, 100, 50), QColor(20, 20, 80)};
+    radOp.polygon = QPolygonF{QPointF(0.1, 0.1), QPointF(0.9, 0.1), QPointF(0.9, 0.9), QPointF(0.1, 0.9)};
     program.operations.append(radOp);
 
     const QImage img = KisAiStrokeRenderer::renderProgramToImage(program, QSize(200, 200));
@@ -391,12 +366,7 @@ void KisAiStrokeRendererTest::testUnnormalizedLayerRendering()
 
 void KisAiStrokeRendererTest::testCentripetalSplineAvoidsUnevenPointLoop()
 {
-    const QVector<QPointF> input = {
-        QPointF(0.0, 0.0),
-        QPointF(0.95, 0.02),
-        QPointF(1.0, 4.0),
-        QPointF(2.0, 4.1)
-    };
+    const QVector<QPointF> input = {QPointF(0.0, 0.0), QPointF(0.95, 0.02), QPointF(1.0, 4.0), QPointF(2.0, 4.1)};
     const QVector<QPointF> spline = KisAiStrokeRenderer::generateCatmullRomSpline(input, 16, false);
 
     QCOMPARE(spline.first(), input.first());
@@ -421,12 +391,10 @@ void KisAiStrokeRendererTest::testPressureStrokeHasAntialiasedTaper()
     stroke.brush.profile = QStringLiteral("gpen");
     stroke.brush.color = QColor(24, 20, 32);
     stroke.brush.size = 0.04;
-    stroke.points = {
-        KisAiStrokePoint(0.1, 0.5, 1.0),
-        KisAiStrokePoint(0.35, 0.42, 0.9),
-        KisAiStrokePoint(0.65, 0.58, 0.75),
-        KisAiStrokePoint(0.9, 0.5, 0.5)
-    };
+    stroke.points = {KisAiStrokePoint(0.1, 0.5, 1.0),
+                     KisAiStrokePoint(0.35, 0.42, 0.9),
+                     KisAiStrokePoint(0.65, 0.58, 0.75),
+                     KisAiStrokePoint(0.9, 0.5, 0.5)};
     program.operations.append(stroke);
 
     const QImage image = KisAiStrokeRenderer::renderProgramToImage(program, QSize(256, 256));
@@ -437,8 +405,10 @@ void KisAiStrokeRendererTest::testPressureStrokeHasAntialiasedTaper()
     for (int y = 0; y < image.height(); ++y) {
         for (int x = 0; x < image.width(); ++x) {
             const int alpha = qAlpha(image.pixel(x, y));
-            if (alpha > 0) ++paintedPixels;
-            if (alpha > 0 && alpha < 255) ++partialAlphaPixels;
+            if (alpha > 0)
+                ++paintedPixels;
+            if (alpha > 0 && alpha < 255)
+                ++partialAlphaPixels;
         }
     }
     QVERIFY(paintedPixels > 250);
@@ -447,7 +417,8 @@ void KisAiStrokeRendererTest::testPressureStrokeHasAntialiasedTaper()
     auto verticalCoverage = [&image](int x) {
         int count = 0;
         for (int y = 0; y < image.height(); ++y) {
-            if (qAlpha(image.pixel(x, y)) > 16) ++count;
+            if (qAlpha(image.pixel(x, y)) > 16)
+                ++count;
         }
         return count;
     };
@@ -458,13 +429,16 @@ void KisAiStrokeRendererTest::testRepresentativeCompositionQualityMetrics()
 {
     const KisAiStrokeProgram program = KisAiStrokeProgramCodec::createDeterministicProgram(
         QStringLiteral("cinematic sunset mountain landscape with sakura petals"),
-        QSize(1024, 768)
-    );
+        QSize(1024, 768));
     QVERIFY(program.isValid());
     QVERIFY(program.completionScore >= 0.6);
 
     const QMap<QString, int> layers = KisAiStrokeProgramCodec::countLayerOperations(program);
-    for (const QString &layer : {QStringLiteral("Flats"), QStringLiteral("Shading"), QStringLiteral("Lineart"), QStringLiteral("Highlights"), QStringLiteral("FX")}) {
+    for (const QString &layer : {QStringLiteral("Flats"),
+                                 QStringLiteral("Shading"),
+                                 QStringLiteral("Lineart"),
+                                 QStringLiteral("Highlights"),
+                                 QStringLiteral("FX")}) {
         QVERIFY2(layers.value(layer) > 0, qPrintable(layer));
     }
 
@@ -477,12 +451,16 @@ void KisAiStrokeRendererTest::testRepresentativeCompositionQualityMetrics()
     for (int y = 0; y < image.height(); y += 4) {
         for (int x = 0; x < image.width(); x += 4) {
             const QColor color = image.pixelColor(x, y);
-            if (color.alpha() > 220) ++opaqueSamples;
-            if (color.alpha() > 32 && (qMax(color.red(), qMax(color.green(), color.blue()))
-                    - qMin(color.red(), qMin(color.green(), color.blue()))) > 12) {
+            if (color.alpha() > 220)
+                ++opaqueSamples;
+            if (color.alpha() > 32
+                && (qMax(color.red(), qMax(color.green(), color.blue()))
+                    - qMin(color.red(), qMin(color.green(), color.blue())))
+                    > 12) {
                 ++chromaticSamples;
             }
-            if (color.alpha() > 0) sampledColors.insert(image.pixel(x, y));
+            if (color.alpha() > 0)
+                sampledColors.insert(image.pixel(x, y));
         }
     }
     const int sampleCount = (image.width() / 4) * (image.height() / 4);
@@ -610,12 +588,14 @@ void KisAiStrokeRendererTest::testRenderMangaLinesWithOriginCenter()
     int bottomRightCount = 0;
     for (int y = 0; y < 100; ++y) {
         for (int x = 0; x < 100; ++x) {
-            if (rendered.pixelColor(x, y).alpha() > 50) ++topLeftCount;
+            if (rendered.pixelColor(x, y).alpha() > 50)
+                ++topLeftCount;
         }
     }
     for (int y = 100; y < 200; ++y) {
         for (int x = 100; x < 200; ++x) {
-            if (rendered.pixelColor(x, y).alpha() > 50) ++bottomRightCount;
+            if (rendered.pixelColor(x, y).alpha() > 50)
+                ++bottomRightCount;
         }
     }
     QVERIFY(topLeftCount > bottomRightCount);
@@ -623,7 +603,8 @@ void KisAiStrokeRendererTest::testRenderMangaLinesWithOriginCenter()
 
 void KisAiStrokeRendererTest::testNewBrushProfilesRendering()
 {
-    for (const QString &profile : {QStringLiteral("marker"), QStringLiteral("crayon"), QStringLiteral("neon"), QStringLiteral("splatter")}) {
+    for (const QString &profile :
+         {QStringLiteral("marker"), QStringLiteral("crayon"), QStringLiteral("neon"), QStringLiteral("splatter")}) {
         KisAiStrokeProgram program;
         program.canvasSize = QSize(100, 100);
 
@@ -642,7 +623,8 @@ void KisAiStrokeRendererTest::testNewBrushProfilesRendering()
         int coloredCount = 0;
         for (int y = 0; y < 100; ++y) {
             for (int x = 0; x < 100; ++x) {
-                if (img.pixelColor(x, y).alpha() > 10) ++coloredCount;
+                if (img.pixelColor(x, y).alpha() > 10)
+                    ++coloredCount;
             }
         }
         QVERIFY2(coloredCount > 20, qPrintable(profile));
@@ -690,8 +672,10 @@ void KisAiStrokeRendererTest::testRenderGoalModeProgression()
     int finalPainted = 0;
     for (int y = 0; y < canvasSize.height(); y += 4) {
         for (int x = 0; x < canvasSize.width(); x += 4) {
-            if (imgStep1.pixelColor(x, y).alpha() > 16) ++step1Painted;
-            if (imgFinal.pixelColor(x, y).alpha() > 16) ++finalPainted;
+            if (imgStep1.pixelColor(x, y).alpha() > 16)
+                ++step1Painted;
+            if (imgFinal.pixelColor(x, y).alpha() > 16)
+                ++finalPainted;
         }
     }
     QVERIFY(step1Painted > 100);
@@ -706,7 +690,10 @@ void KisAiStrokeRendererTest::testGoalModeCumulativeProgressionAndRibbon()
     // Simulate Goal Mode accumulating across 4 steps
     for (int step = 1; step <= 4; ++step) {
         const KisAiStrokeProgram stepProg = KisAiStrokeProgramCodec::createDeterministicProgramStep(
-            QStringLiteral("anime girl portrait with vibrant eyes"), canvasSize, step, 4);
+            QStringLiteral("anime girl portrait with vibrant eyes"),
+            canvasSize,
+            step,
+            4);
         QVERIFY(!stepProg.operations.isEmpty());
         accumulated = KisAiStrokeProgramCodec::mergePrograms(accumulated, stepProg);
     }
@@ -862,7 +849,8 @@ void KisAiStrokeRendererTest::testQualityUtilsHalftonePattern()
                 break;
             }
         }
-        if (hasDrawnPixel) break;
+        if (hasDrawnPixel)
+            break;
     }
     QVERIFY(hasDrawnPixel);
 }
@@ -988,8 +976,8 @@ void KisAiStrokeRendererTest::testRenderCalligraphyAndCharcoalBrush()
     QVERIFY(!img.isNull());
 
     // Check that each stroke line rendered
-    QVERIFY(img.pixelColor(100, 40).alpha() > 100);  // Calligraphy line
-    QVERIFY(img.pixelColor(100, 100).alpha() > 50);  // Charcoal line
+    QVERIFY(img.pixelColor(100, 40).alpha() > 100); // Calligraphy line
+    QVERIFY(img.pixelColor(100, 100).alpha() > 50); // Charcoal line
     QVERIFY(img.pixelColor(100, 160).alpha() > 100); // Bristle brush line
 }
 
@@ -1013,7 +1001,8 @@ void KisAiStrokeRendererTest::testSynthesizeHairClump()
     // Check procedural expansion in renderer
     QVector<KisAiStrokeOperation> ops = {ribbonOp};
     ops.first().brush.profile = QStringLiteral("hair");
-    const QVector<KisAiStrokeOperation> expanded = KisAiStrokeRenderer::expandProceduralOperations(ops, QSize(400, 400));
+    const QVector<KisAiStrokeOperation> expanded =
+        KisAiStrokeRenderer::expandProceduralOperations(ops, QSize(400, 400));
     QVERIFY(expanded.size() > 1);
 }
 
@@ -1027,7 +1016,8 @@ void KisAiStrokeRendererTest::testSynthesizeFoliageClusters()
     fillOp.brush.color = QColor(255, 180, 200); // Sakura pink
     fillOp.brush.profile = QStringLiteral("watercolor");
 
-    const QVector<KisAiStrokeOperation> clusters = KisAiStrokeQualityUtils::synthesizeFoliageClusters(fillOp, QSize(400, 400), 54321);
+    const QVector<KisAiStrokeOperation> clusters =
+        KisAiStrokeQualityUtils::synthesizeFoliageClusters(fillOp, QSize(400, 400), 54321);
     QVERIFY(clusters.size() >= 4); // base wash + multiple clusters + petals
 
     bool hasDriftingPetals = false;
@@ -1197,7 +1187,8 @@ void KisAiStrokeRendererTest::testCaptureImageBase64RejectsInvalidArguments()
     // Valid input still round-trips as a JPEG data URL.
     const QString dataUrl = KisAiStrokeRenderer::captureImageBase64(image, 768, 80);
     QVERIFY(dataUrl.startsWith(QStringLiteral("data:image/jpeg;base64,")));
-    const QByteArray payload = QByteArray::fromBase64(dataUrl.mid(QStringLiteral("data:image/jpeg;base64,").size()).toLatin1());
+    const QByteArray payload =
+        QByteArray::fromBase64(dataUrl.mid(QStringLiteral("data:image/jpeg;base64,").size()).toLatin1());
     QVERIFY(!payload.isEmpty());
     QVERIFY(payload.startsWith("\xFF\xD8")); // JPEG SOI marker
 
@@ -1234,7 +1225,8 @@ void KisAiStrokeRendererTest::testPxBrushSizeSurvivesSupersampling()
         int maxY = -1;
         for (int y = 0; y < image.height(); ++y) {
             if (qAlpha(image.pixel(x, y)) > 100) {
-                if (minY < 0) minY = y;
+                if (minY < 0)
+                    minY = y;
                 maxY = y;
             }
         }
@@ -1352,8 +1344,10 @@ void KisAiStrokeRendererTest::testTrappingWidthAndScreenBlending()
     int nonZeroTrap = 0;
     for (int y = 0; y < 100; ++y) {
         for (int x = 0; x < 100; ++x) {
-            if (qAlpha(imgNoTrap.pixel(x, y)) > 0) ++nonZeroNoTrap;
-            if (qAlpha(imgTrap.pixel(x, y)) > 0) ++nonZeroTrap;
+            if (qAlpha(imgNoTrap.pixel(x, y)) > 0)
+                ++nonZeroNoTrap;
+            if (qAlpha(imgTrap.pixel(x, y)) > 0)
+                ++nonZeroTrap;
         }
     }
     // Trapping must dilate Flats slightly to prevent white gaps
@@ -1437,12 +1431,7 @@ void KisAiStrokeRendererTest::testFaceExclusionMaskSuppressesParticles()
     faceOp.layer = QStringLiteral("Flats");
     faceOp.brush.color = QColor(255, 224, 200);
     faceOp.brush.opacity = 1.0;
-    faceOp.polygon = {
-        QPointF(0.3, 0.3),
-        QPointF(0.7, 0.3),
-        QPointF(0.7, 0.7),
-        QPointF(0.3, 0.7)
-    };
+    faceOp.polygon = {QPointF(0.3, 0.3), QPointF(0.7, 0.3), QPointF(0.7, 0.7), QPointF(0.3, 0.7)};
     prog.operations.append(faceOp);
 
     KisAiStrokeOperation particlesOp;
@@ -1490,8 +1479,7 @@ void KisAiStrokeRendererTest::testUniteOverlappingHairFlats()
     ops.append(makeHairPatch(QStringLiteral("hair_patch_b"), patchB));
     ops.append(makeHairPatch(QStringLiteral("hair_tail_far"), farTail));
 
-    const QVector<KisAiStrokeOperation> united =
-        KisAiStrokeQualityUtils::uniteOverlappingHairFlats(ops);
+    const QVector<KisAiStrokeOperation> united = KisAiStrokeQualityUtils::uniteOverlappingHairFlats(ops);
     // A+B fused, far tail untouched.
     QCOMPARE(united.size(), 2);
     int hairOps = 0;
@@ -1572,14 +1560,12 @@ void KisAiStrokeRendererTest::testGoalModeSingleArtboard()
     QCOMPARE(rendered.size(), QSize(512, 512));
 
     // Verify all merged operations strictly conform to standard layer names
-    const QStringList allowedLayers = {
-        QStringLiteral("Background"),
-        QStringLiteral("Flats"),
-        QStringLiteral("Shading"),
-        QStringLiteral("Lineart"),
-        QStringLiteral("Highlights"),
-        QStringLiteral("FX")
-    };
+    const QStringList allowedLayers = {QStringLiteral("Background"),
+                                       QStringLiteral("Flats"),
+                                       QStringLiteral("Shading"),
+                                       QStringLiteral("Lineart"),
+                                       QStringLiteral("Highlights"),
+                                       QStringLiteral("FX")};
     for (const auto &op : merged.operations) {
         const QString norm = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
         QVERIFY2(allowedLayers.contains(norm), qPrintable(QStringLiteral("Invalid layer: %1").arg(norm)));
@@ -1679,26 +1665,24 @@ void KisAiStrokeRendererTest::testSceneSpecHyperQualityRendering()
     // Test 1: Sailor school uniform, silver hair, blue eyes, M-fringe
     KisAiSceneSpec spec1 = KisAiSceneSpecCodec::defaultSpecForPrompt(
         QStringLiteral("anime girl portrait with silver hair and blue eyes, sailor uniform"),
-        QSize(1024, 1024)
-    );
+        QSize(1024, 1024));
     const KisAiStrokeProgram prog1 = KisAiLayoutEngine::generateProgram(spec1, QSize(1024, 1024));
     QVERIFY(prog1.isValid());
     QVERIFY(prog1.operations.size() >= 20);
 
-    const QString artifactDir = qEnvironmentVariable("AI_STROKE_TEST_ARTIFACT_DIR", QStringLiteral("build-test/artifacts"));
+    const QString artifactDir =
+        qEnvironmentVariable("AI_STROKE_TEST_ARTIFACT_DIR", QStringLiteral("build-test/artifacts"));
     QDir().mkpath(artifactDir);
     {
         QFile dumpFile(QDir(artifactDir).filePath(QStringLiteral("ops_dump.txt")));
         if (dumpFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream ts(&dumpFile);
             for (const auto &op : prog1.operations) {
-                ts << "OP: " << op.id << " | Layer: " << op.layer << " | Kind: " << (int)op.kind 
-                   << " | Color: " << op.brush.color.name(QColor::HexArgb) 
-                   << " | Opacity: " << op.brush.opacity 
-                   << " | Profile: " << op.brush.profile 
-                   << " | PolyPts: " << op.polygon.size()
-                   << " | BBox: " << op.polygon.boundingRect().x() << "," << op.polygon.boundingRect().y() << " " << op.polygon.boundingRect().width() << "x" << op.polygon.boundingRect().height()
-                   << "\n";
+                ts << "OP: " << op.id << " | Layer: " << op.layer << " | Kind: " << (int)op.kind
+                   << " | Color: " << op.brush.color.name(QColor::HexArgb) << " | Opacity: " << op.brush.opacity
+                   << " | Profile: " << op.brush.profile << " | PolyPts: " << op.polygon.size()
+                   << " | BBox: " << op.polygon.boundingRect().x() << "," << op.polygon.boundingRect().y() << " "
+                   << op.polygon.boundingRect().width() << "x" << op.polygon.boundingRect().height() << "\n";
             }
         }
     }
@@ -1708,8 +1692,7 @@ void KisAiStrokeRendererTest::testSceneSpecHyperQualityRendering()
     // Test 2: Hoodie, twin tails, blonde hair, green eyes
     KisAiSceneSpec spec2 = KisAiSceneSpecCodec::defaultSpecForPrompt(
         QStringLiteral("anime girl with blonde twin tails and green eyes, oversized hoodie"),
-        QSize(1024, 1024)
-    );
+        QSize(1024, 1024));
     const KisAiStrokeProgram prog2 = KisAiLayoutEngine::generateProgram(spec2, QSize(1024, 1024));
     QVERIFY(prog2.isValid());
     QVERIFY(prog2.operations.size() >= 20);
@@ -1747,8 +1730,7 @@ void KisAiStrokeRendererTest::testDeliberateLintDropsMicroAndOffCanvas()
     micro.kind = KisAiStrokeOperation::Kind::Path;
     micro.id = QStringLiteral("micro");
     micro.layer = QStringLiteral("Lineart");
-    micro.points = QVector<KisAiStrokePoint>{
-        KisAiStrokePoint(0.5, 0.5, 0.8), KisAiStrokePoint(0.5005, 0.5, 0.8)};
+    micro.points = QVector<KisAiStrokePoint>{KisAiStrokePoint(0.5, 0.5, 0.8), KisAiStrokePoint(0.5005, 0.5, 0.8)};
     micro.brush.color = QColor(20, 20, 20);
     micro.brush.size = 0.004;
     QVERIFY(KisAiDeliberateStroke::lintStroke(micro, canvas).drop);
@@ -1757,8 +1739,7 @@ void KisAiStrokeRendererTest::testDeliberateLintDropsMicroAndOffCanvas()
     off.kind = KisAiStrokeOperation::Kind::Path;
     off.id = QStringLiteral("off");
     off.layer = QStringLiteral("Lineart");
-    off.points = QVector<KisAiStrokePoint>{
-        KisAiStrokePoint(2.0, 2.0, 0.8), KisAiStrokePoint(2.5, 2.5, 0.8)};
+    off.points = QVector<KisAiStrokePoint>{KisAiStrokePoint(2.0, 2.0, 0.8), KisAiStrokePoint(2.5, 2.5, 0.8)};
     off.brush.color = QColor(20, 20, 20);
     off.brush.size = 0.004;
     QVERIFY(KisAiDeliberateStroke::lintStroke(off, canvas).drop);
@@ -1767,8 +1748,7 @@ void KisAiStrokeRendererTest::testDeliberateLintDropsMicroAndOffCanvas()
     good.kind = KisAiStrokeOperation::Kind::Path;
     good.id = QStringLiteral("good");
     good.layer = QStringLiteral("Lineart");
-    good.points = QVector<KisAiStrokePoint>{
-        KisAiStrokePoint(0.2, 0.5, 0.8), KisAiStrokePoint(0.8, 0.5, 0.8)};
+    good.points = QVector<KisAiStrokePoint>{KisAiStrokePoint(0.2, 0.5, 0.8), KisAiStrokePoint(0.8, 0.5, 0.8)};
     good.brush.color = QColor(20, 20, 20);
     good.brush.size = 0.004;
     QVERIFY(!KisAiDeliberateStroke::lintStroke(good, canvas).drop);
@@ -1782,8 +1762,7 @@ void KisAiStrokeRendererTest::testDeliberateStrokeOrderBigToSmallFaceLast()
         op.kind = KisAiStrokeOperation::Kind::Path;
         op.id = id;
         op.layer = layer;
-        op.points = QVector<KisAiStrokePoint>{
-            KisAiStrokePoint(x0, 0.5, 0.8), KisAiStrokePoint(x1, 0.5, 0.8)};
+        op.points = QVector<KisAiStrokePoint>{KisAiStrokePoint(x0, 0.5, 0.8), KisAiStrokePoint(x1, 0.5, 0.8)};
         op.brush.color = QColor(20, 20, 20);
         op.brush.size = 0.004;
         return op;
@@ -1792,8 +1771,7 @@ void KisAiStrokeRendererTest::testDeliberateStrokeOrderBigToSmallFaceLast()
     ops.append(path(QStringLiteral("left_eye"), QStringLiteral("Lineart"), 0.3, 0.4));
     ops.append(path(QStringLiteral("bg_line"), QStringLiteral("Background"), 0.0, 1.0));
     ops.append(path(QStringLiteral("hair_long"), QStringLiteral("Flats"), 0.1, 0.9));
-    const QVector<KisAiStrokeOperation> ordered =
-        KisAiDeliberateStroke::orderOperationsForRendering(ops, canvas);
+    const QVector<KisAiStrokeOperation> ordered = KisAiDeliberateStroke::orderOperationsForRendering(ops, canvas);
     QCOMPARE(ordered.size(), 3);
     QCOMPARE(ordered.at(0).id, QStringLiteral("bg_line"));
     QCOMPARE(ordered.at(1).id, QStringLiteral("hair_long"));
@@ -1850,12 +1828,10 @@ void KisAiStrokeRendererTest::testFineLineRenderingSubpixel()
 {
     // Test that delicate fineliner, maru_pen, feathering, and stipple profiles
     // render correctly with subpixel paths without crashing or degenerating.
-    const QStringList profiles = {
-        QStringLiteral("fineliner"),
-        QStringLiteral("maru_pen"),
-        QStringLiteral("feathering"),
-        QStringLiteral("stipple")
-    };
+    const QStringList profiles = {QStringLiteral("fineliner"),
+                                  QStringLiteral("maru_pen"),
+                                  QStringLiteral("feathering"),
+                                  QStringLiteral("stipple")};
 
     const QSize canvasSize(512, 512);
     for (const QString &prof : profiles) {
@@ -1868,12 +1844,10 @@ void KisAiStrokeRendererTest::testFineLineRenderingSubpixel()
         op.brush.size = 0.002;
         op.brush.opacity = 1.0;
         op.smooth = true;
-        op.points = {
-            KisAiStrokePoint(0.2, 0.3, 0.8),
-            KisAiStrokePoint(0.4, 0.32, 0.9),
-            KisAiStrokePoint(0.6, 0.28, 0.7),
-            KisAiStrokePoint(0.8, 0.35, 0.4)
-        };
+        op.points = {KisAiStrokePoint(0.2, 0.3, 0.8),
+                     KisAiStrokePoint(0.4, 0.32, 0.9),
+                     KisAiStrokePoint(0.6, 0.28, 0.7),
+                     KisAiStrokePoint(0.8, 0.35, 0.4)};
 
         KisAiStrokeProgram prog;
         prog.operations = {op};
@@ -1888,7 +1862,8 @@ void KisAiStrokeRendererTest::testFineLineRenderingSubpixel()
                     ++drawn;
             }
         }
-        QVERIFY2(drawn > 10, qPrintable(QStringLiteral("Profile %1 produced too few pixels (%2)").arg(prof).arg(drawn)));
+        QVERIFY2(drawn > 10,
+                 qPrintable(QStringLiteral("Profile %1 produced too few pixels (%2)").arg(prof).arg(drawn)));
     }
 }
 
@@ -1904,12 +1879,12 @@ void KisAiStrokeRendererTest::testAdaptiveResamplingPreservesNuance()
         KisAiStrokePoint(0.508, 0.511, 0.4),
     };
 
-    QVector<KisAiStrokePoint> resampled =
-        KisAiDeliberateStroke::stabilizeStroke(shortCurve, canvasSize, false, 42);
+    QVector<KisAiStrokePoint> resampled = KisAiDeliberateStroke::stabilizeStroke(shortCurve, canvasSize, false, 42);
 
     // Adaptive step should maintain at least 4 points to keep curvature
-    QVERIFY2(resampled.size() >= 4,
-             qPrintable(QStringLiteral("Adaptive resampling decimated short stroke to %1 points").arg(resampled.size())));
+    QVERIFY2(
+        resampled.size() >= 4,
+        qPrintable(QStringLiteral("Adaptive resampling decimated short stroke to %1 points").arg(resampled.size())));
 }
 
 void KisAiStrokeRendererTest::testLineartHierarchyDynamicTiers()
@@ -1922,11 +1897,7 @@ void KisAiStrokeRendererTest::testLineartHierarchyDynamicTiers()
     fineOp.layer = QStringLiteral("Lineart");
     fineOp.brush.profile = QStringLiteral("fineliner");
     fineOp.brush.size = 0.0016;
-    fineOp.points = {
-        KisAiStrokePoint(0.1, 0.1, 0.8),
-        KisAiStrokePoint(0.2, 0.3, 0.8),
-        KisAiStrokePoint(0.3, 0.5, 0.8)
-    };
+    fineOp.points = {KisAiStrokePoint(0.1, 0.1, 0.8), KisAiStrokePoint(0.2, 0.3, 0.8), KisAiStrokePoint(0.3, 0.5, 0.8)};
 
     QVector<KisAiStrokeOperation> ops = {fineOp};
     KisAiStrokeQualityUtils::applyLineartHierarchy(ops);
@@ -1953,19 +1924,25 @@ void KisAiStrokeRendererTest::testHairStrandsAndBangsBleedGeneration()
     bool hasHairStrand = false;
     bool hasBangsBleed = false;
     bool hasClavicle = false;
-    bool hasNoseBridge = false;
+    // V6 W1: nose_bridge_hl retired in favor of the Rig nose
+    // (rig_nose_point/rig_nose_shadow); assert the Rig replacement instead.
+    bool hasRigNose = false;
 
     for (const KisAiStrokeOperation &op : prog.operations) {
-        if (op.id.contains(QLatin1String("hair_strand"))) hasHairStrand = true;
-        if (op.id.contains(QLatin1String("hair_bangs_bleed"))) hasBangsBleed = true;
-        if (op.id.contains(QLatin1String("clavicle"))) hasClavicle = true;
-        if (op.id.contains(QLatin1String("nose_bridge"))) hasNoseBridge = true;
+        if (op.id.contains(QLatin1String("hair_strand")))
+            hasHairStrand = true;
+        if (op.id.contains(QLatin1String("hair_bangs_bleed")))
+            hasBangsBleed = true;
+        if (op.id.contains(QLatin1String("clavicle")))
+            hasClavicle = true;
+        if (op.id.contains(QLatin1String("rig_nose")))
+            hasRigNose = true;
     }
 
     QVERIFY(hasHairStrand);
     QVERIFY(hasBangsBleed);
     QVERIFY(hasClavicle);
-    QVERIFY(hasNoseBridge);
+    QVERIFY(hasRigNose);
 }
 
 void KisAiStrokeRendererTest::testShortStrokeTaperingEndpoints()
@@ -2107,7 +2084,8 @@ void KisAiStrokeRendererTest::testGoalModeLayersPreservationOnFinalStep()
     QVERIFY(!finalImage.isNull());
 
     // Verify Flats skin region is not clear/blank (preserved from Step 1)
-    const QColor skinPixel = finalImage.pixelColor(qRound(0.35 * canvasSize.width()), qRound(0.5 * canvasSize.height()));
+    const QColor skinPixel =
+        finalImage.pixelColor(qRound(0.35 * canvasSize.width()), qRound(0.5 * canvasSize.height()));
     QVERIFY(skinPixel.alpha() > 200);
     QVERIFY(skinPixel.red() > 180);
 
@@ -2121,7 +2099,8 @@ void KisAiStrokeRendererTest::testGoalModeLayersPreservationOnFinalStep()
     QVERIFY(jawPixel.alpha() > 100);
 
     // Verify Highlights from Step 4 is present
-    const QColor glintPixel = finalImage.pixelColor(qRound(0.46 * canvasSize.width()), qRound(0.46 * canvasSize.height()));
+    const QColor glintPixel =
+        finalImage.pixelColor(qRound(0.46 * canvasSize.width()), qRound(0.46 * canvasSize.height()));
     QVERIFY(glintPixel.red() > 200 && glintPixel.green() > 200 && glintPixel.blue() > 200);
 }
 
@@ -2137,8 +2116,7 @@ void KisAiStrokeRendererTest::testVolumetricShadingAndMasterInking()
     skinBase.id = QStringLiteral("skin_face_base");
     skinBase.layer = QStringLiteral("Flats");
     skinBase.brush.color = QColor(255, 224, 200);
-    skinBase.polygon << QPointF(0.25, 0.25) << QPointF(0.75, 0.25)
-                     << QPointF(0.75, 0.75) << QPointF(0.25, 0.75);
+    skinBase.polygon << QPointF(0.25, 0.25) << QPointF(0.75, 0.25) << QPointF(0.75, 0.75) << QPointF(0.25, 0.75);
     prog.operations.append(skinBase);
 
     // 2. Shading: Volumetric Form Shadow with SSS Warmth
@@ -2151,8 +2129,7 @@ void KisAiStrokeRendererTest::testVolumetricShadingAndMasterInking()
     formShadow.brush.opacity = 0.50;
     formShadow.fillStyle = QStringLiteral("directional");
     formShadow.angleDeg = 45.0;
-    formShadow.polygon << QPointF(0.45, 0.25) << QPointF(0.75, 0.25)
-                       << QPointF(0.75, 0.75) << QPointF(0.45, 0.75);
+    formShadow.polygon << QPointF(0.45, 0.25) << QPointF(0.75, 0.25) << QPointF(0.75, 0.75) << QPointF(0.45, 0.75);
     prog.operations.append(formShadow);
 
     // 3. Lineart: Master Inking G-Pen Main Contour & Delicate Eyelash
@@ -2163,10 +2140,8 @@ void KisAiStrokeRendererTest::testVolumetricShadingAndMasterInking()
     gpenContour.brush.profile = QStringLiteral("gpen");
     gpenContour.brush.color = QColor(25, 20, 32);
     gpenContour.brush.size = 0.0035; // ~3.58px: previously fell back to ribbon, now fine-inked
-    gpenContour.points << KisAiStrokePoint(0.25, 0.40, 0.3)
-                       << KisAiStrokePoint(0.30, 0.60, 0.9)
-                       << KisAiStrokePoint(0.50, 0.75, 0.8)
-                       << KisAiStrokePoint(0.70, 0.60, 0.9)
+    gpenContour.points << KisAiStrokePoint(0.25, 0.40, 0.3) << KisAiStrokePoint(0.30, 0.60, 0.9)
+                       << KisAiStrokePoint(0.50, 0.75, 0.8) << KisAiStrokePoint(0.70, 0.60, 0.9)
                        << KisAiStrokePoint(0.75, 0.40, 0.3);
     prog.operations.append(gpenContour);
 
@@ -2177,8 +2152,7 @@ void KisAiStrokeRendererTest::testVolumetricShadingAndMasterInking()
     delicateLash.brush.profile = QStringLiteral("maru_pen");
     delicateLash.brush.color = QColor(25, 20, 32);
     delicateLash.brush.size = 0.0018; // ~1.8px
-    delicateLash.points << KisAiStrokePoint(0.40, 0.45, 0.3)
-                        << KisAiStrokePoint(0.45, 0.43, 0.9)
+    delicateLash.points << KisAiStrokePoint(0.40, 0.45, 0.3) << KisAiStrokePoint(0.45, 0.43, 0.9)
                         << KisAiStrokePoint(0.48, 0.44, 0.2);
     prog.operations.append(delicateLash);
 
@@ -2201,17 +2175,16 @@ void KisAiStrokeRendererTest::testVolumetricShadingAndMasterInking()
     QVERIFY(pLine.red() < 100); // Dark ink
 
     // 4. Verify Expanded Operation Target Scaling in Payload
-    const QJsonObject payload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
-        QStringLiteral("gpt-4o"),
-        QStringLiteral("exquisite master anime illustration"),
-        canvasSize,
-        1500 // Expanded budget
-    );
+    const QJsonObject payload =
+        KisAiStrokeProgramCodec::buildChatCompletionsPayload(QStringLiteral("gpt-4o"),
+                                                             QStringLiteral("exquisite master anime illustration"),
+                                                             canvasSize,
+                                                             1500 // Expanded budget
+        );
     const QJsonArray msgs = payload.value(QStringLiteral("messages")).toArray();
     QCOMPARE(msgs.size(), 2);
-    const QJsonObject userReq = QJsonDocument::fromJson(
-        msgs.at(1).toObject().value(QStringLiteral("content")).toString().toUtf8()
-    ).object();
+    const QJsonObject userReq =
+        QJsonDocument::fromJson(msgs.at(1).toObject().value(QStringLiteral("content")).toString().toUtf8()).object();
 
     const int opTarget = userReq.value(QStringLiteral("operation_target")).toInt();
     // Must be scaled well beyond previous hard 60 cap to permit fine inking and multi-tier shading!
@@ -2231,17 +2204,15 @@ void KisAiStrokeRendererTest::testPhase2MultiTierCurvatureShading()
     body.id = QStringLiteral("body_torso");
     body.layer = QStringLiteral("Flats");
     body.brush.color = QColor(220, 180, 160);
-    body.polygon = {
-        QPointF(0.30, 0.40), QPointF(0.70, 0.40),
-        QPointF(0.75, 0.85), QPointF(0.25, 0.85)
-    };
+    body.polygon = {QPointF(0.30, 0.40), QPointF(0.70, 0.40), QPointF(0.75, 0.85), QPointF(0.25, 0.85)};
 
     KisAiLightRig::HeadAnchor anchor;
     anchor.headCenter = QPointF(0.50, 0.35);
     anchor.headWidth = 0.30;
     anchor.headHeight = 0.38;
 
-    const QVector<KisAiStrokeOperation> shading = KisAiLightRig::synthesizeShading({body}, rig, QSize(512, 512), &anchor);
+    const QVector<KisAiStrokeOperation> shading =
+        KisAiLightRig::synthesizeShading({body}, rig, QSize(512, 512), &anchor);
     QVERIFY(!shading.isEmpty());
 
     bool foundCoreShadow = false;
@@ -2284,10 +2255,7 @@ void KisAiStrokeRendererTest::testPhase2ColorDodgeAndTargetedClipping()
     baseMass.id = QStringLiteral("base_plate");
     baseMass.layer = QStringLiteral("Flats");
     baseMass.brush.color = QColor(60, 80, 140);
-    baseMass.polygon = {
-        QPointF(0.25, 0.25), QPointF(0.75, 0.25),
-        QPointF(0.75, 0.75), QPointF(0.25, 0.75)
-    };
+    baseMass.polygon = {QPointF(0.25, 0.25), QPointF(0.75, 0.25), QPointF(0.75, 0.75), QPointF(0.25, 0.75)};
     prog.operations.append(baseMass);
 
     // Targeted clipped shadow (covers outside, but must be clipped to base_plate)
@@ -2298,10 +2266,7 @@ void KisAiStrokeRendererTest::testPhase2ColorDodgeAndTargetedClipping()
     clippedShade.brush.color = QColor(20, 20, 50);
     clippedShade.blendMode = QStringLiteral("multiply");
     clippedShade.clipToId = QStringLiteral("base_plate");
-    clippedShade.polygon = {
-        QPointF(0.0, 0.0), QPointF(1.0, 0.0),
-        QPointF(1.0, 1.0), QPointF(0.0, 1.0)
-    };
+    clippedShade.polygon = {QPointF(0.0, 0.0), QPointF(1.0, 0.0), QPointF(1.0, 1.0), QPointF(0.0, 1.0)};
     prog.operations.append(clippedShade);
 
     // Color Dodge Highlight stroke across the center
@@ -2313,10 +2278,7 @@ void KisAiStrokeRendererTest::testPhase2ColorDodgeAndTargetedClipping()
     dodgeGlint.brush.color = QColor(255, 220, 180);
     dodgeGlint.brush.size = 0.03;
     dodgeGlint.blendMode = QStringLiteral("color_dodge");
-    dodgeGlint.points = {
-        KisAiStrokePoint(0.35, 0.50, 1.0),
-        KisAiStrokePoint(0.65, 0.50, 1.0)
-    };
+    dodgeGlint.points = {KisAiStrokePoint(0.35, 0.50, 1.0), KisAiStrokePoint(0.65, 0.50, 1.0)};
     prog.operations.append(dodgeGlint);
 
     const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvasSize);
@@ -2376,10 +2338,7 @@ void KisAiStrokeRendererTest::testPhase2ArtisticPaperGrainAndWetEdge()
     wcFill.brush.profile = QStringLiteral("watercolor");
     wcFill.brush.color = QColor(80, 150, 200, 180);
     wcFill.fillStyle = QStringLiteral("wash");
-    wcFill.polygon = {
-        QPointF(0.2, 0.2), QPointF(0.8, 0.2),
-        QPointF(0.8, 0.8), QPointF(0.2, 0.8)
-    };
+    wcFill.polygon = {QPointF(0.2, 0.2), QPointF(0.8, 0.2), QPointF(0.8, 0.8), QPointF(0.2, 0.8)};
     prog.operations.append(wcFill);
 
     const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvasSize);
@@ -2399,13 +2358,12 @@ void KisAiStrokeRendererTest::testPhase2DynamicPerspectiveAndAngles()
     const QSize canvasSize(512, 512);
 
     // Generate with profile prompt
-    const KisAiStrokeProgram progProfile = KisAiStrokeProgramCodec::createDeterministicProgram(
-        QStringLiteral("side view profile anime girl"), canvasSize
-    );
+    const KisAiStrokeProgram progProfile =
+        KisAiStrokeProgramCodec::createDeterministicProgram(QStringLiteral("side view profile anime girl"), canvasSize);
     // Generate with frontal prompt
-    const KisAiStrokeProgram progFrontal = KisAiStrokeProgramCodec::createDeterministicProgram(
-        QStringLiteral("frontal close up portrait girl"), canvasSize
-    );
+    const KisAiStrokeProgram progFrontal =
+        KisAiStrokeProgramCodec::createDeterministicProgram(QStringLiteral("frontal close up portrait girl"),
+                                                            canvasSize);
 
     QVERIFY(!progProfile.operations.isEmpty());
     QVERIFY(!progFrontal.operations.isEmpty());
@@ -2414,10 +2372,12 @@ void KisAiStrokeRendererTest::testPhase2DynamicPerspectiveAndAngles()
     QVector<KisAiStrokePoint> jawProfile;
     QVector<KisAiStrokePoint> jawFrontal;
     for (const auto &op : progProfile.operations) {
-        if (op.id == QStringLiteral("jawline")) jawProfile = op.points;
+        if (op.id == QStringLiteral("jawline"))
+            jawProfile = op.points;
     }
     for (const auto &op : progFrontal.operations) {
-        if (op.id == QStringLiteral("jawline")) jawFrontal = op.points;
+        if (op.id == QStringLiteral("jawline"))
+            jawFrontal = op.points;
     }
 
     QVERIFY(!jawProfile.isEmpty());
@@ -2439,12 +2399,7 @@ void KisAiStrokeRendererTest::testCrossLayerClipToId()
     baseFace.id = QStringLiteral("base_face");
     baseFace.layer = QStringLiteral("Flats");
     baseFace.brush.color = QColor(255, 220, 200);
-    baseFace.polygon = {
-        QPointF(0.3, 0.3),
-        QPointF(0.7, 0.3),
-        QPointF(0.7, 0.7),
-        QPointF(0.3, 0.7)
-    };
+    baseFace.polygon = {QPointF(0.3, 0.3), QPointF(0.7, 0.3), QPointF(0.7, 0.7), QPointF(0.3, 0.7)};
     prog.operations.append(baseFace);
 
     // Shading layer: huge full-canvas polygon, but strictly clip_to_id: "base_face"
@@ -2455,12 +2410,7 @@ void KisAiStrokeRendererTest::testCrossLayerClipToId()
     shadowOp.clipToId = QStringLiteral("base_face");
     shadowOp.blendMode = QStringLiteral("multiply");
     shadowOp.brush.color = QColor(60, 20, 40, 200);
-    shadowOp.polygon = {
-        QPointF(0.0, 0.0),
-        QPointF(1.0, 0.0),
-        QPointF(1.0, 1.0),
-        QPointF(0.0, 1.0)
-    };
+    shadowOp.polygon = {QPointF(0.0, 0.0), QPointF(1.0, 0.0), QPointF(1.0, 1.0), QPointF(0.0, 1.0)};
     prog.operations.append(shadowOp);
 
     const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, canvasSize);
@@ -2487,11 +2437,7 @@ void KisAiStrokeRendererTest::testProceduralMacroExpansionGuidance()
     hairOp.layer = QStringLiteral("Flats");
     hairOp.brush.profile = QStringLiteral("hair");
     hairOp.brush.color = QColor(45, 30, 60);
-    hairOp.spine = {
-        QPointF(0.3, 0.2),
-        QPointF(0.5, 0.5),
-        QPointF(0.6, 0.8)
-    };
+    hairOp.spine = {QPointF(0.3, 0.2), QPointF(0.5, 0.5), QPointF(0.6, 0.8)};
     hairOp.widthStart = 0.03;
     hairOp.widthMid = 0.05;
     hairOp.widthEnd = 0.01;
@@ -2519,10 +2465,9 @@ void KisAiStrokeRendererTest::testLintDropsNonFiniteGeometry()
     nanPath.layer = QStringLiteral("Lineart");
     nanPath.brush.color = QColor(20, 20, 20);
     nanPath.brush.size = 0.004;
-    nanPath.points = QVector<KisAiStrokePoint>{
-        KisAiStrokePoint(0.1, 0.1, 0.8),
-        KisAiStrokePoint(std::numeric_limits<qreal>::quiet_NaN(), 0.5, 0.8),
-        KisAiStrokePoint(0.9, 0.9, 0.8)};
+    nanPath.points = QVector<KisAiStrokePoint>{KisAiStrokePoint(0.1, 0.1, 0.8),
+                                               KisAiStrokePoint(std::numeric_limits<qreal>::quiet_NaN(), 0.5, 0.8),
+                                               KisAiStrokePoint(0.9, 0.9, 0.8)};
     QVERIFY(KisAiDeliberateStroke::lintStroke(nanPath, canvas).drop);
 
     KisAiStrokeOperation nanSpine;
@@ -2533,10 +2478,8 @@ void KisAiStrokeRendererTest::testLintDropsNonFiniteGeometry()
     nanSpine.widthStart = 0.01;
     nanSpine.widthMid = 0.01;
     nanSpine.widthEnd = 0.01;
-    nanSpine.spine = QVector<QPointF>{
-        QPointF(0.2, 0.2),
-        QPointF(0.5, std::numeric_limits<qreal>::infinity()),
-        QPointF(0.8, 0.6)};
+    nanSpine.spine =
+        QVector<QPointF>{QPointF(0.2, 0.2), QPointF(0.5, std::numeric_limits<qreal>::infinity()), QPointF(0.8, 0.6)};
     QVERIFY(KisAiDeliberateStroke::lintStroke(nanSpine, canvas).drop);
 
     KisAiStrokeOperation nanPoly;
@@ -2544,10 +2487,8 @@ void KisAiStrokeRendererTest::testLintDropsNonFiniteGeometry()
     nanPoly.id = QStringLiteral("nan-poly");
     nanPoly.layer = QStringLiteral("Flats");
     nanPoly.brush.color = QColor(20, 20, 20);
-    nanPoly.polygon = QVector<QPointF>{
-        QPointF(0.2, 0.2),
-        QPointF(std::numeric_limits<qreal>::quiet_NaN(), 0.6),
-        QPointF(0.8, 0.8)};
+    nanPoly.polygon =
+        QVector<QPointF>{QPointF(0.2, 0.2), QPointF(std::numeric_limits<qreal>::quiet_NaN(), 0.6), QPointF(0.8, 0.8)};
     QVERIFY(KisAiDeliberateStroke::lintStroke(nanPoly, canvas).drop);
 
     // A program carrying NaN geometry must never paint ink for that operation.
@@ -2573,9 +2514,7 @@ void KisAiStrokeRendererTest::testLintKeepsCanvasCrossingStrokesAndFullBleedFill
     crossingPath.layer = QStringLiteral("Lineart");
     crossingPath.brush.color = QColor(20, 20, 20);
     crossingPath.brush.size = 0.004;
-    crossingPath.points = QVector<KisAiStrokePoint>{
-        KisAiStrokePoint(-0.1, 0.5, 0.8),
-        KisAiStrokePoint(1.1, 0.5, 0.8)};
+    crossingPath.points = QVector<KisAiStrokePoint>{KisAiStrokePoint(-0.1, 0.5, 0.8), KisAiStrokePoint(1.1, 0.5, 0.8)};
     const auto repCrossing = KisAiDeliberateStroke::lintStroke(crossingPath, canvas);
     QVERIFY2(!repCrossing.drop, qPrintable(repCrossing.reasons.join(QLatin1Char(';'))));
 
@@ -2585,9 +2524,8 @@ void KisAiStrokeRendererTest::testLintKeepsCanvasCrossingStrokesAndFullBleedFill
     fullBleedFill.id = QStringLiteral("full-bleed-fill");
     fullBleedFill.layer = QStringLiteral("Flats");
     fullBleedFill.brush.color = QColor(200, 220, 240);
-    fullBleedFill.polygon = QVector<QPointF>{
-        QPointF(-0.1, -0.1), QPointF(1.1, -0.1),
-        QPointF(1.1, 1.1), QPointF(-0.1, 1.1)};
+    fullBleedFill.polygon =
+        QVector<QPointF>{QPointF(-0.1, -0.1), QPointF(1.1, -0.1), QPointF(1.1, 1.1), QPointF(-0.1, 1.1)};
     QVERIFY(!KisAiDeliberateStroke::lintStroke(fullBleedFill, canvas).drop);
 
     // 3. Crossing polygon
@@ -2596,8 +2534,7 @@ void KisAiStrokeRendererTest::testLintKeepsCanvasCrossingStrokesAndFullBleedFill
     crossingPoly.id = QStringLiteral("crossing-poly");
     crossingPoly.layer = QStringLiteral("Flats");
     crossingPoly.brush.color = QColor(200, 200, 200);
-    crossingPoly.polygon = QVector<QPointF>{
-        QPointF(-0.1, 0.5), QPointF(1.1, 0.2), QPointF(1.1, 0.8)};
+    crossingPoly.polygon = QVector<QPointF>{QPointF(-0.1, 0.5), QPointF(1.1, 0.2), QPointF(1.1, 0.8)};
     QVERIFY(!KisAiDeliberateStroke::lintStroke(crossingPoly, canvas).drop);
 
     // 4. Ribbon spine crossing canvas
@@ -2609,8 +2546,7 @@ void KisAiStrokeRendererTest::testLintKeepsCanvasCrossingStrokesAndFullBleedFill
     crossingRibbon.widthStart = 0.01;
     crossingRibbon.widthMid = 0.01;
     crossingRibbon.widthEnd = 0.01;
-    crossingRibbon.spine = QVector<QPointF>{
-        QPointF(-0.1, 0.5), QPointF(1.1, 0.5)};
+    crossingRibbon.spine = QVector<QPointF>{QPointF(-0.1, 0.5), QPointF(1.1, 0.5)};
     QVERIFY(!KisAiDeliberateStroke::lintStroke(crossingRibbon, canvas).drop);
 
     // 5. Truly off-canvas path must be dropped
@@ -2620,8 +2556,7 @@ void KisAiStrokeRendererTest::testLintKeepsCanvasCrossingStrokesAndFullBleedFill
     offPath.layer = QStringLiteral("Lineart");
     offPath.brush.color = QColor(20, 20, 20);
     offPath.brush.size = 0.004;
-    offPath.points = QVector<KisAiStrokePoint>{
-        KisAiStrokePoint(2.0, 2.0, 0.8), KisAiStrokePoint(2.5, 2.5, 0.8)};
+    offPath.points = QVector<KisAiStrokePoint>{KisAiStrokePoint(2.0, 2.0, 0.8), KisAiStrokePoint(2.5, 2.5, 0.8)};
     QVERIFY(KisAiDeliberateStroke::lintStroke(offPath, canvas).drop);
 
     // 6. Truly off-canvas polygon must be dropped
@@ -2630,8 +2565,7 @@ void KisAiStrokeRendererTest::testLintKeepsCanvasCrossingStrokesAndFullBleedFill
     offPoly.id = QStringLiteral("off-poly");
     offPoly.layer = QStringLiteral("Flats");
     offPoly.brush.color = QColor(20, 20, 20);
-    offPoly.polygon = QVector<QPointF>{
-        QPointF(2.0, 2.0), QPointF(3.0, 2.0), QPointF(2.5, 3.0)};
+    offPoly.polygon = QVector<QPointF>{QPointF(2.0, 2.0), QPointF(3.0, 2.0), QPointF(2.5, 3.0)};
     QVERIFY(KisAiDeliberateStroke::lintStroke(offPoly, canvas).drop);
 
     // 7. Truly off-canvas ribbon spine must be dropped
@@ -2643,8 +2577,7 @@ void KisAiStrokeRendererTest::testLintKeepsCanvasCrossingStrokesAndFullBleedFill
     offRibbon.widthStart = 0.01;
     offRibbon.widthMid = 0.01;
     offRibbon.widthEnd = 0.01;
-    offRibbon.spine = QVector<QPointF>{
-        QPointF(2.0, 2.0), QPointF(2.5, 2.5)};
+    offRibbon.spine = QVector<QPointF>{QPointF(2.0, 2.0), QPointF(2.5, 2.5)};
     QVERIFY(KisAiDeliberateStroke::lintStroke(offRibbon, canvas).drop);
 
     // Verify rendering of crossing path paints actual ink in canvas center
@@ -2777,7 +2710,7 @@ void KisAiStrokeRendererTest::testAnimeMouthRenderingAndFinishingSuite()
     QVERIFY(grain.pixelColor(50, 50).alpha() > 0);
     // Verify premultiplied alpha invariant across scanlines
     for (int y = 0; y < grain.height(); ++y) {
-        const auto *scanLine = reinterpret_cast<const QRgb*>(grain.constScanLine(y));
+        const auto *scanLine = reinterpret_cast<const QRgb *>(grain.constScanLine(y));
         for (int x = 0; x < grain.width(); ++x) {
             const QRgb px = scanLine[x];
             const int a = qAlpha(px);

@@ -21,6 +21,11 @@ if (AI_STROKE_STANDALONE_TESTS)
         libs/ui/aiillustration/KisAiLayoutEngine.cpp
         libs/ui/aiillustration/KisAiLightRig.cpp
         libs/ui/aiillustration/KisAiDeliberateStroke.cpp
+        libs/ui/aiillustration/KisAiRigLibrary.cpp
+        libs/ui/aiillustration/KisAiProgramPatch.cpp
+        libs/ui/aiillustration/KisAiVisionCritic.cpp
+        libs/ui/aiillustration/KisAiModelRouter.cpp
+        libs/ui/aiillustration/KisAiRefinementLoop.cpp
     )
     target_include_directories(ai_stroke_core PUBLIC
         libs/ui
@@ -58,10 +63,32 @@ if (AI_STROKE_STANDALONE_TESTS)
     )
     target_link_libraries(KisAiIllustrationRendererTest PRIVATE ai_stroke_core Qt6::Test)
     add_test(NAME KisAiIllustrationRendererTest COMMAND KisAiIllustrationRendererTest)
+
+    add_executable(KisAiV5EngineTest
+        libs/ui/tests/KisAiV5EngineTest.cpp
+    )
+    target_include_directories(KisAiV5EngineTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiV5EngineTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiV5EngineTest COMMAND KisAiV5EngineTest)
+
+    add_executable(KisAiV6WiringTest
+        libs/ui/tests/KisAiV6WiringTest.cpp
+    )
+    target_include_directories(KisAiV6WiringTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiV6WiringTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiV6WiringTest COMMAND KisAiV6WiringTest)
     set_tests_properties(
         KisAiStrokeProgramTest
         KisAiStrokeRendererTest
         KisAiIllustrationRendererTest
+        KisAiV5EngineTest
+        KisAiV6WiringTest
         PROPERTIES
             LABELS "AIStroke"
             TIMEOUT 60
@@ -78,6 +105,8 @@ if (AI_STROKE_STANDALONE_TESTS)
             KisAiStrokeProgramTest
             KisAiStrokeRendererTest
             KisAiIllustrationRendererTest
+            KisAiV5EngineTest
+            KisAiV6WiringTest
             PROPERTIES ENVIRONMENT "PATH=${ai_stroke_test_runtime_path}")
     endif()
 
@@ -300,9 +329,9 @@ message(STATUS "Krita version: ${KRITA_VERSION_STRING}")
 # (one should use AppImage for things like that)
 #
 # Historical note:
-# 
+#
 # We had a mess with versions previously, we used to increase the versions with
-# every minor release only. It caused multiple problems: 1) the soversions of 
+# every minor release only. It caused multiple problems: 1) the soversions of
 # different major releases did overlap; 2) the soversions of different bugfix
 # releases were the same, even tough they were not binary compatible.
 #
@@ -317,7 +346,7 @@ message(STATUS "Krita version: ${KRITA_VERSION_STRING}")
 # Krita 6.x: SOVERSION -> 21
 # Krita 7.x: SOVERSION -> 22
 #
-if(KRITA_STABLE_VERSION_MAJOR EQUAL 5) 
+if(KRITA_STABLE_VERSION_MAJOR EQUAL 5)
     # In Krita 5 days we increased the SOVERSION with every minor release
     if(KRITA_STABLE_VERSION_MINOR LESS_EQUAL 3)
         math(EXPR GENERIC_KRITA_LIB_VERSION_MAJOR "${KRITA_STABLE_VERSION_MINOR} + 17")
@@ -1007,11 +1036,11 @@ add_definitions(
   -DQT_USE_QSTRINGBUILDER
   -DQT_NO_SIGNALS_SLOTS_KEYWORDS
   -DQT_NO_URL_CAST_FROM_STRING
-  -DQT_USE_FAST_CONCATENATION 
+  -DQT_USE_FAST_CONCATENATION
   -DQT_USE_FAST_OPERATOR_PLUS
 )
 
-# MSVC is unable to disambiguate between definitions of QVector<QPointF> 
+# MSVC is unable to disambiguate between definitions of QVector<QPointF>
 # and QPolygonF. This is a known upstream bug e.g.:
 # - https://phabricator.kde.org/D21314
 # - https://codereview.qt-project.org/c/qt/qtbase/+/180229
@@ -1115,7 +1144,7 @@ endif(MINGW)
 
 # enable exceptions globally
 # WARNING: in MSVC this will NOT catch exceptions thrown through C code
-# see: 
+# see:
 # - https://learn.microsoft.com/en-us/cpp/build/reference/eh-exception-handling-model?view=msvc-170#arguments
 # - https://invent.kde.org/frameworks/extra-cmake-modules/-/blob/v5.101.0/kde-modules/KDECompilerSettings.cmake#L502-526
 kde_enable_exceptions()
@@ -1243,7 +1272,7 @@ target_link_libraries(Boost::boost
         Boost::disable_autolinking
 )
 
-# Disallow usage of std::unary_function. 
+# Disallow usage of std::unary_function.
 # See https://github.com/boostorg/container_hash/issues/22
 # and https://releases.llvm.org/15.0.0/projects/libcxx/docs/ReleaseNotes.html#deprecations-and-removals
 if(Boost_VERSION VERSION_LESS "1.81.0")

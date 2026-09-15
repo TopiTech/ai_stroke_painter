@@ -5,6 +5,7 @@
 
 #include "KisAiLightRig.h"
 #include "KisAiLayoutEngine.h"
+#include "KisAiRigLibrary.h"
 #include "KisAiStrokeQualityUtils.h"
 
 #include <QPainterPath>
@@ -46,7 +47,13 @@ KisAiLightSettings KisAiLightRig::fromSpec(const KisAiSceneSpec &spec)
     KisAiLightSettings rig;
     rig.direction = normalizedDirection(spec.light.direction);
     rig.warmth = spec.light.warmth;
-    rig.timeOfDay = spec.light.timeOfDay;
+    // V6 W2: narrative.time resolves the time of day when the light block
+    // is still at its default; an explicit light.time stays authoritative.
+    QString resolvedTime = spec.light.timeOfDay;
+    if ((resolvedTime == QLatin1String("day") || resolvedTime.trimmed().isEmpty())
+        && !spec.narrative.time.trimmed().isEmpty())
+        resolvedTime = KisAiRigLibrary::narrativeTimeToTimeOfDay(spec.narrative.time, resolvedTime);
+    rig.timeOfDay = resolvedTime;
     rig.keyTint = keyTintFor(rig);
     rig.fillTint = fillTintFor(rig);
     return rig;
@@ -89,11 +96,10 @@ QColor KisAiLightRig::highlightColor(const QColor &base, const KisAiLightSetting
     return KisAiStrokeQualityUtils::calculateHueShiftedHighlight(base, rig.keyTint, 0.5);
 }
 
-QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
-    const QVector<KisAiStrokeOperation> &flatsOps,
-    const KisAiLightSettings &rig,
-    const QSize &canvasSize,
-    const HeadAnchor *headAnchor)
+QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(const QVector<KisAiStrokeOperation> &flatsOps,
+                                                               const KisAiLightSettings &rig,
+                                                               const QSize &canvasSize,
+                                                               const HeadAnchor *headAnchor)
 {
     Q_UNUSED(canvasSize);
     QVector<KisAiStrokeOperation> shading;
@@ -142,8 +148,8 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
             continue;
         }
 
-        const bool isFaceSkin = lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face")) ||
-                                lowerId.contains(QLatin1String("ear"));
+        const bool isFaceSkin = lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face"))
+            || lowerId.contains(QLatin1String("ear"));
 
         const QRectF b = op.polygon.boundingRect();
         const QPointF center = b.center();
@@ -156,8 +162,7 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         const QPointF cTerm = center + (lightDir * termOffset);
 
         QPolygonF shadowHalfPlane;
-        shadowHalfPlane << (cTerm - perpT * r * 2.0)
-                        << (cTerm + perpT * r * 2.0)
+        shadowHalfPlane << (cTerm - perpT * r * 2.0) << (cTerm + perpT * r * 2.0)
                         << (cTerm + perpT * r * 2.0 - lightDir * r * 3.0)
                         << (cTerm - perpT * r * 2.0 - lightDir * r * 3.0);
 
@@ -170,7 +175,9 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         // Subtract head/face anchor so back hair shadows never cast over the front of the face!
         if (headAnchor && (lowerId.contains(QLatin1String("hair")) || lowerId.contains(QLatin1String("back")))) {
             QPainterPath facePath;
-            facePath.addPolygon(KisAiLayoutEngine::headOutlinePolygon(headAnchor->headCenter, headAnchor->headWidth, headAnchor->headHeight));
+            facePath.addPolygon(KisAiLayoutEngine::headOutlinePolygon(headAnchor->headCenter,
+                                                                      headAnchor->headWidth,
+                                                                      headAnchor->headHeight));
             shadowPath = shadowPath.subtracted(facePath);
         }
 
@@ -213,7 +220,8 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
         for (int i = 0; i < n; ++i) {
             const int next = (i + 1) % n;
             const qreal dist = QLineF(poly[i], poly[next]).length();
-            if (dist > 0.35) continue;
+            if (dist > 0.35)
+                continue;
             const qreal edgeScore = (scores[i] + scores[next]) * 0.5;
             if (edgeScore > bestEdgeScore) {
                 bestEdgeScore = edgeScore;
@@ -335,17 +343,19 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeShading(
                 const qreal bandW = hw * 0.38;
                 const qreal bandTop = hc.y() + (hh * 0.02);
                 const qreal bandBottom = hc.y() + (hh * 0.05);
-                hairCast.polygon = QPolygonF{
-                    QPointF(hc.x() - bandW, bandTop), QPointF(hc.x() + bandW, bandTop),
-                    QPointF(hc.x() + (bandW * 0.90), bandBottom), QPointF(hc.x() - (bandW * 0.90), bandBottom)};
+                hairCast.polygon = QPolygonF{QPointF(hc.x() - bandW, bandTop),
+                                             QPointF(hc.x() + bandW, bandTop),
+                                             QPointF(hc.x() + (bandW * 0.90), bandBottom),
+                                             QPointF(hc.x() - (bandW * 0.90), bandBottom)};
             }
         } else {
             const qreal bandW = hw * 0.38;
             const qreal bandTop = hc.y() + (hh * 0.02);
             const qreal bandBottom = hc.y() + (hh * 0.05);
-            hairCast.polygon = QPolygonF{
-                QPointF(hc.x() - bandW, bandTop), QPointF(hc.x() + bandW, bandTop),
-                QPointF(hc.x() + (bandW * 0.90), bandBottom), QPointF(hc.x() - (bandW * 0.90), bandBottom)};
+            hairCast.polygon = QPolygonF{QPointF(hc.x() - bandW, bandTop),
+                                         QPointF(hc.x() + bandW, bandTop),
+                                         QPointF(hc.x() + (bandW * 0.90), bandBottom),
+                                         QPointF(hc.x() - (bandW * 0.90), bandBottom)};
         }
         shading.append(hairCast);
     }
@@ -360,20 +370,20 @@ KisAiLightRig::TimeOfDayLut KisAiLightRig::timeOfDayLut(const QString &timeOfDay
 {
     TimeOfDayLut lut;
     if (timeOfDay == QLatin1String("night")) {
-        lut.keyTint = QColor(214, 226, 255);      // cool moon key
-        lut.fillTint = QColor(30, 42, 88);        // deep blue fill
-        lut.ambientTint = QColor(24, 34, 76);     // night atmosphere
-        lut.sssTint = QColor(150, 160, 220);      // cool SSS, subdued
-        lut.bounceTint = QColor(70, 90, 150);     // moon bounce off ground
+        lut.keyTint = QColor(214, 226, 255); // cool moon key
+        lut.fillTint = QColor(30, 42, 88); // deep blue fill
+        lut.ambientTint = QColor(24, 34, 76); // night atmosphere
+        lut.sssTint = QColor(150, 160, 220); // cool SSS, subdued
+        lut.bounceTint = QColor(70, 90, 150); // moon bounce off ground
         lut.skyTop = QColor(8, 12, 34);
         lut.skyMid = QColor(22, 32, 72);
         lut.skyBottom = QColor(48, 58, 104);
     } else if (timeOfDay == QLatin1String("sunset")) {
-        lut.keyTint = QColor(255, 176, 108);      // orange key
-        lut.fillTint = QColor(88, 62, 118);       // violet fill
-        lut.ambientTint = QColor(180, 110, 90);   // warm dusk atmosphere
-        lut.sssTint = QColor(255, 138, 118);      // amplified warm SSS
-        lut.bounceTint = QColor(230, 150, 100);   // warm ground bounce
+        lut.keyTint = QColor(255, 176, 108); // orange key
+        lut.fillTint = QColor(88, 62, 118); // violet fill
+        lut.ambientTint = QColor(180, 110, 90); // warm dusk atmosphere
+        lut.sssTint = QColor(255, 138, 118); // amplified warm SSS
+        lut.bounceTint = QColor(230, 150, 100); // warm ground bounce
         lut.skyTop = QColor(64, 52, 120);
         lut.skyMid = QColor(214, 118, 96);
         lut.skyBottom = QColor(252, 206, 150);
@@ -381,8 +391,8 @@ KisAiLightRig::TimeOfDayLut KisAiLightRig::timeOfDayLut(const QString &timeOfDay
         lut.keyTint = QColor(255, 252, 240);
         lut.fillTint = QColor(52, 64, 104);
         lut.ambientTint = QColor(190, 208, 235);
-        lut.sssTint = QColor(255, 154, 138);      // classic skin SSS coral
-        lut.bounceTint = QColor(226, 214, 196);   // neutral warm bounce
+        lut.sssTint = QColor(255, 154, 138); // classic skin SSS coral
+        lut.bounceTint = QColor(226, 214, 196); // neutral warm bounce
         lut.skyTop = QColor(96, 156, 232);
         lut.skyMid = QColor(164, 208, 244);
         lut.skyBottom = QColor(226, 240, 252);
@@ -390,10 +400,9 @@ KisAiLightRig::TimeOfDayLut KisAiLightRig::timeOfDayLut(const QString &timeOfDay
     return lut;
 }
 
-QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeFormShading(
-    const QVector<KisAiStrokeOperation> &flatsOps,
-    const KisAiLightSettings &rig,
-    const QSize &canvasSize)
+QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeFormShading(const QVector<KisAiStrokeOperation> &flatsOps,
+                                                                   const KisAiLightSettings &rig,
+                                                                   const QSize &canvasSize)
 {
     Q_UNUSED(canvasSize);
     QVector<KisAiStrokeOperation> form;
@@ -416,8 +425,7 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeFormShading(
         // Softer, wider terminator than the core pass (2x offset).
         const QPointF cTerm = center + (lightDir * r * 0.16);
         QPolygonF shadowHalfPlane;
-        shadowHalfPlane << (cTerm - perpT * r * 2.0)
-                        << (cTerm + perpT * r * 2.0)
+        shadowHalfPlane << (cTerm - perpT * r * 2.0) << (cTerm + perpT * r * 2.0)
                         << (cTerm + perpT * r * 2.0 - lightDir * r * 3.0)
                         << (cTerm - perpT * r * 2.0 - lightDir * r * 3.0);
 
@@ -452,10 +460,9 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeFormShading(
     return form;
 }
 
-QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeBounceLight(
-    const QVector<KisAiStrokeOperation> &flatsOps,
-    const KisAiLightSettings &rig,
-    const QSize &canvasSize)
+QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeBounceLight(const QVector<KisAiStrokeOperation> &flatsOps,
+                                                                   const KisAiLightSettings &rig,
+                                                                   const QSize &canvasSize)
 {
     Q_UNUSED(canvasSize);
     QVector<KisAiStrokeOperation> bounce;
@@ -473,8 +480,7 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeBounceLight(
 
         // Lower-third intersection of the mass (light bounces up from below).
         const QRectF b = op.polygon.boundingRect();
-        const QRectF lowerThird(b.left(), b.top() + b.height() * 2.0 / 3.0,
-                                b.width(), b.height() / 3.0);
+        const QRectF lowerThird(b.left(), b.top() + b.height() * 2.0 / 3.0, b.width(), b.height() / 3.0);
         QPainterPath original;
         original.addPolygon(op.polygon);
         QPainterPath bandPath;
@@ -490,11 +496,10 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeBounceLight(
         wash.brush.profile = QStringLiteral("airbrush");
         // Bounce color derives from the LUT, brightened toward the base color.
         const QColor base = op.brush.color;
-        wash.brush.color = QColor(
-            qBound(0, (base.red() + lut.bounceTint.red()) / 2 + 22, 255),
-            qBound(0, (base.green() + lut.bounceTint.green()) / 2 + 22, 255),
-            qBound(0, (base.blue() + lut.bounceTint.blue()) / 2 + 22, 255),
-            255);
+        wash.brush.color = QColor(qBound(0, (base.red() + lut.bounceTint.red()) / 2 + 22, 255),
+                                  qBound(0, (base.green() + lut.bounceTint.green()) / 2 + 22, 255),
+                                  qBound(0, (base.blue() + lut.bounceTint.blue()) / 2 + 22, 255),
+                                  255);
         wash.brush.opacity = 0.16;
         wash.brush.size = 0.03;
         wash.polygon = bandPoly;
