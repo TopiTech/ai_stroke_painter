@@ -2763,9 +2763,40 @@ void KisAiStrokeRenderer::applyVignette(QImage &image, qreal strength)
 
 void KisAiStrokeRenderer::applyFinishingPostProcess(QImage &image)
 {
-    applyBloomEffect(image, 0.40, 6);
-    applyChromaticAberration(image, 1);
-    applyVignette(image, 0.12);
+    if (image.isNull()) {
+        return;
+    }
+
+    if (image.format() != QImage::Format_ARGB32_Premultiplied) {
+        image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    }
+
+    // 1. Bloom glow matching layers (Screen 40%, radius 8)
+    applyBloomEffect(image, 0.40, 8);
+
+    // 2. Color grading gradient overlay (50% opacity, cool overhead / warm bounce)
+    // Use SourceAtop to preserve transparency of unpainted canvas regions
+    {
+        QPainter pGrade(&image);
+        pGrade.setCompositionMode(QPainter::CompositionMode_SourceAtop);
+        QLinearGradient grad(0, 0, 0, image.height());
+        grad.setColorAt(0.0, QColor(30, 45, 80, 14)); // 28 * 0.50
+        grad.setColorAt(1.0, QColor(255, 210, 160, 11)); // 22 * 0.50
+        pGrade.fillRect(image.rect(), grad);
+    }
+
+    // 3. Cinematic vignette (0.14 strength at 70% opacity)
+    applyVignette(image, 0.14 * 0.70);
+
+    // 4. Micro film grain texture overlay (25% opacity, seed 42)
+    // Use SourceAtop to preserve transparency of unpainted canvas regions
+    const QImage grainImg = KisAiStrokeQualityUtils::generateFilmGrain(image.size(), 0.07, 42);
+    if (!grainImg.isNull()) {
+        QPainter pGrain(&image);
+        pGrain.setCompositionMode(QPainter::CompositionMode_SourceAtop);
+        pGrain.setOpacity(0.25);
+        pGrain.drawImage(0, 0, grainImg);
+    }
 }
 
 void KisAiStrokeRenderer::drawAnimeEyeOperation(QPainter &painter,

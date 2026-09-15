@@ -713,4 +713,3 @@ void KisAiV5EngineTest::testInkDynamicsPoolingAndFade()
 }
 
 QTEST_MAIN(KisAiV5EngineTest)
-#include "KisAiV5EngineTest.moc"

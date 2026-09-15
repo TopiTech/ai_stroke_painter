@@ -50,6 +50,12 @@ private Q_SLOTS:
     // W5: spec finishing
     void testCanonicalExampleMentionsV2();
     void testArtStyleReachesSpec();
+
+    // Regression tests for code review fixes
+    void testGoalStepPatchDoesNotDoubleOperations();
+    void testSceneSpecParseRespectsInitialCanvasSize();
+    void testFinishingPostProcessParity();
+    void testEnvelopeClampedVertexPreserved();
 };
 
 #endif // KIS_AI_V6_WIRING_TEST_H

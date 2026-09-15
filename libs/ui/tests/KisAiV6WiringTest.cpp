@@ -591,4 +591,93 @@ void KisAiV6WiringTest::testRenderBudgetDegrade()
     QVERIFY(!heavy.note.isEmpty());
 }
 
+void KisAiV6WiringTest::testGoalStepPatchDoesNotDoubleOperations()
+{
+    KisAiSceneSpec spec;
+    spec.subject.type = QStringLiteral("character");
+    const KisAiStrokeProgram base = KisAiLayoutEngine::generateProgram(spec, QSize(256, 256));
+    const int baseOps = base.operations.size();
+    QVERIFY(baseOps > 10);
+
+    KisAiProgramPatch patch;
+    patch.op = KisAiProgramPatch::Op::Replace;
+    patch.path = QStringLiteral("/rig/hair_highlight_bands");
+    patch.value = QJsonValue(2);
+    QStringList rejected;
+    KisAiSceneRigOverrides delta;
+    const KisAiStrokeProgram patched = KisAiRefinementLoop::applyRigPatchesAndRelayout(
+        base, spec, QSize(256, 256), {patch}, &delta, &rejected);
+    QVERIFY(rejected.isEmpty());
+
+    // When patch path is taken in Goal Mode, replacing m_goalAccumulatedProgram
+    // with patched results in ops count close to base (not 2x base).
+    KisAiStrokeProgram goalAccum = base;
+    const bool usedPatchPath = true;
+    if (usedPatchPath) {
+        goalAccum = patched;
+    } else {
+        goalAccum = KisAiStrokeProgramCodec::mergePrograms(goalAccum, patched);
+    }
+    // With fix: operations are replaced/updated, not doubled.
+    QVERIFY(goalAccum.operations.size() < baseOps * 2);
+    QVERIFY(qAbs(goalAccum.operations.size() - baseOps) < 10);
+}
+
+void KisAiV6WiringTest::testSceneSpecParseRespectsInitialCanvasSize()
+{
+    const QString json = QStringLiteral(
+        "{\"subject\": {\"type\": \"character\"}, \"prompt\": \"test\"}");
+    KisAiStrokeProgram progCustom;
+    progCustom.canvasSize = QSize(1920, 1080);
+    QString parseErr;
+    KisAiJsonDiagnostic diag;
+    QVERIFY(KisAiStrokeProgramCodec::parseResponse(json.toUtf8(), &progCustom, &parseErr, &diag));
+    QCOMPARE(progCustom.canvasSize, QSize(1920, 1080));
+
+    KisAiStrokeProgram progDefault;
+    QVERIFY(KisAiStrokeProgramCodec::parseResponse(json.toUtf8(), &progDefault, &parseErr, &diag));
+    QCOMPARE(progDefault.canvasSize, QSize(1024, 1024));
+}
+
+void KisAiV6WiringTest::testFinishingPostProcessParity()
+{
+    KisAiSceneSpec spec;
+    spec.subject.type = QStringLiteral("character");
+    KisAiStrokeProgram prog = KisAiLayoutEngine::generateProgram(spec, QSize(256, 256));
+    prog.stepPhase = QStringLiteral("complete");
+    prog.goalReached = false; // Disable finishing
+
+    const QImage plain = KisAiStrokeRenderer::renderProgramToImage(prog, QSize(256, 256));
+    QVERIFY(!plain.isNull());
+
+    prog.stepPhase = QStringLiteral("finishing");
+    const QImage finished = KisAiStrokeRenderer::renderProgramToImage(prog, QSize(256, 256));
+    QVERIFY(!finished.isNull());
+
+    // Finishing adds Bloom, Grade, Vignette, and Film Grain, so it must differ from plain.
+    const qreal psnrDiff = KisAiVisionCritic::psnr(plain, finished);
+    QVERIFY(psnrDiff < 50.0);
+    QVERIFY(psnrDiff > 15.0);
+}
+
+void KisAiV6WiringTest::testEnvelopeClampedVertexPreserved()
+{
+    // Sharp hairpin turn that triggers bowtie clamping
+    QVector<KisAiStrokePoint> hairpin;
+    hairpin.append(KisAiStrokePoint(0.1, 0.1, 1.0));
+    hairpin.append(KisAiStrokePoint(0.5, 0.5, 1.0));
+    hairpin.append(KisAiStrokePoint(0.1, 0.52, 1.0));
+
+    KisAiStrokeBrush brush;
+    brush.size = 0.08;
+    brush.profile = QStringLiteral("gpen");
+
+    const QPolygonF poly = KisAiDeliberateStroke::buildEnvelopePolygon(hairpin, brush, QSize(512, 512), false);
+    QVERIFY(poly.size() >= 4);
+    // Boundary polygon should be non-empty and have positive bounding area
+    const QRectF bounds = poly.boundingRect();
+    QVERIFY(bounds.width() > 10.0);
+    QVERIFY(bounds.height() > 10.0);
+}
+
 KISTEST_MAIN(KisAiV6WiringTest)

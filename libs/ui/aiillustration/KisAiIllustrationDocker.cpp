@@ -2059,6 +2059,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
                  .arg(QString::fromUtf8(response.left(1000))));
 
     KisAiStrokeProgram program;
+    program.canvasSize = effectiveCanvasSize();
     QString parseError;
     KisAiJsonDiagnostic diagnostic;
     KisAiStrokeQualityReport qualityReport;
@@ -3448,6 +3449,7 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
                  .arg(QString::fromUtf8(response.left(1000))));
 
     KisAiStrokeProgram program;
+    program.canvasSize = effectiveCanvasSize();
     QString parseError;
     KisAiJsonDiagnostic diagnostic;
     // V6 W3: patch-first for step>=2. A patch response refines the
@@ -3504,7 +3506,11 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     program.goalReached = m_goalCurrentStep >= m_goalTotalSteps;
 
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
-    m_goalAccumulatedProgram = KisAiStrokeProgramCodec::mergePrograms(m_goalAccumulatedProgram, program);
+    if (usedPatchPath) {
+        m_goalAccumulatedProgram = program;
+    } else {
+        m_goalAccumulatedProgram = KisAiStrokeProgramCodec::mergePrograms(m_goalAccumulatedProgram, program);
+    }
     const QImage preview = KisAiStrokeRenderer::renderProgramToImage(m_goalAccumulatedProgram, previewTargetSize);
     if (!preview.isNull()) {
         m_previewLabel->setPixmap(

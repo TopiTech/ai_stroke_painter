@@ -648,13 +648,21 @@ QPolygonF KisAiDeliberateStroke::buildEnvelopePolygon(
         KisAiStrokeQualityUtils::generateStrokeEnvelope(normalizedPoints, brush, canvasSizePx, closed);
     if (segs.isEmpty())
         return poly;
-    poly.reserve(segs.size() * 2 + 2);
-    for (const auto &s : segs)
-        poly.append(s.leftStart);
+    poly.reserve(segs.size() * 3 + 2);
+    for (int i = 0; i < segs.size(); ++i) {
+        poly.append(segs.at(i).leftStart);
+        if (i < segs.size() - 1 && segs.at(i).leftEnd != segs.at(i + 1).leftStart) {
+            poly.append(segs.at(i).leftEnd);
+        }
+    }
     poly.append(segs.last().leftEnd);
     poly.append(segs.last().rightEnd);
-    for (int i = segs.size() - 1; i >= 0; --i)
+    for (int i = segs.size() - 1; i >= 0; --i) {
+        if (i < segs.size() - 1 && segs.at(i).rightEnd != segs.at(i + 1).rightStart) {
+            poly.append(segs.at(i).rightEnd);
+        }
         poly.append(segs.at(i).rightStart);
+    }
     return poly;
 }
 
