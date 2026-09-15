@@ -71,6 +71,11 @@ void KisAiV5EngineTest::testModelRouterStagePlans()
                                                  QString());
     QVERIFY(patch.useStructuredOutput);
     QVERIFY(patch.temperature <= 0.5);
+
+    const auto expansion = KisAiModelRouter::planFor(KisAiModelRouter::Stage::PromptExpansion,
+                                                     QStringLiteral("gpt-5"));
+    QVERIFY(!expansion.useStructuredOutput);
+    QVERIFY(!expansion.useJsonFormat);
 }
 
 void KisAiV5EngineTest::testModelRouterQualityModes()
@@ -379,6 +384,17 @@ void KisAiV5EngineTest::testPatchParseAndApplyRig()
     QCOMPARE(patches.size(), 2);     // unknown path + structural path rejected
     QCOMPARE(rejected.size(), 2);
 
+    // Bare array format tolerated
+    const QByteArray bareArrayBody = QByteArrayLiteral(
+        "["
+        " {\"op\": \"replace\", \"path\": \"/rig/eye_aperture\", \"value\": 0.5}"
+        "]");
+    QVector<KisAiProgramPatch> barePatches;
+    QString bareErr;
+    QVERIFY(KisAiProgramPatchCodec::parsePatches(bareArrayBody, &barePatches, nullptr, &bareErr));
+    QCOMPARE(barePatches.size(), 1);
+    QCOMPARE(barePatches.first().path, QStringLiteral("/rig/eye_aperture"));
+
     KisAiStrokeProgram program;
     KisAiStrokeOperation base;
     base.kind = KisAiStrokeOperation::Kind::Path;
@@ -518,6 +534,10 @@ void KisAiV5EngineTest::testCriticCropSelectionDeterministic()
     const QImage rgb888Canvas = canvas.convertToFormat(QImage::Format_RGB888);
     const QVector<KisAiCriticCrop> rgb888Crops = KisAiVisionCritic::selectCrops(rgb888Canvas, faceBox, prior, 4);
     QCOMPARE(rgb888Crops.size(), crops1.size());
+
+    const QImage monoCanvas = canvas.convertToFormat(QImage::Format_Mono);
+    const QVector<KisAiCriticCrop> monoCrops = KisAiVisionCritic::selectCrops(monoCanvas, faceBox, prior, 4);
+    QCOMPARE(monoCrops.size(), crops1.size());
 }
 
 void KisAiV5EngineTest::testCritiqueParseAndMerge()

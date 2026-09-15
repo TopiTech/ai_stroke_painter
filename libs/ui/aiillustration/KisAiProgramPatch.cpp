@@ -256,15 +256,16 @@ bool KisAiProgramPatchCodec::parsePatches(
         QString::fromUtf8(responseBytes));
     QJsonParseError parseError;
     const QJsonDocument doc = QJsonDocument::fromJson(jsonText.toUtf8(), &parseError);
-    if (parseError.error != QJsonParseError::NoError || !doc.isObject()) {
+    if (parseError.error != QJsonParseError::NoError || (!doc.isObject() && !doc.isArray())) {
         if (errorMessage)
             *errorMessage = QStringLiteral("Patch response is not valid JSON: %1").arg(parseError.errorString());
         return false;
     }
 
-    QJsonArray patchArray = doc.object().value(QStringLiteral("patches")).toArray();
-    if (patchArray.isEmpty()) {
-        // Tolerate a bare array response.
+    QJsonArray patchArray;
+    if (doc.isObject()) {
+        patchArray = doc.object().value(QStringLiteral("patches")).toArray();
+    } else if (doc.isArray()) {
         patchArray = doc.array();
     }
 

@@ -1630,7 +1630,8 @@ QImage KisAiStrokeQualityUtils::generateFilmGrain(
         auto *scanLine = reinterpret_cast<QRgb*>(grain.scanLine(y));
         for (int x = 0; x < size.width(); ++x) {
             const int noise = rng.bounded(256);
-            scanLine[x] = qRgba(noise, noise, noise, alpha);
+            const int premul = (noise * alpha + 127) / 255;
+            scanLine[x] = qRgba(premul, premul, premul, alpha);
         }
     }
 

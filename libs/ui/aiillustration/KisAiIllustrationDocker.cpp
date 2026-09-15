@@ -1222,6 +1222,22 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         setUiMode(idx == 0 ? UiMode::Simple : UiMode::Pro);
     });
 
+    // Configure accessible keyboard navigation (Tab order) across primary controls.
+    if (m_uiModeTabs && m_promptEditor) {
+        QWidget::setTabOrder(m_uiModeTabs, m_promptEditor);
+        if (m_expandPromptButton) QWidget::setTabOrder(m_promptEditor, m_expandPromptButton);
+        if (m_expandPromptButton && m_syncColorButton) QWidget::setTabOrder(m_expandPromptButton, m_syncColorButton);
+        if (m_syncColorButton && m_widthSpin) QWidget::setTabOrder(m_syncColorButton, m_widthSpin);
+        if (m_widthSpin && m_heightSpin) QWidget::setTabOrder(m_widthSpin, m_heightSpin);
+        if (m_heightSpin && m_newCanvasButton) QWidget::setTabOrder(m_heightSpin, m_newCanvasButton);
+        if (m_newCanvasButton && m_modeCombo) QWidget::setTabOrder(m_newCanvasButton, m_modeCombo);
+        if (m_modeCombo && m_artStyleCombo) QWidget::setTabOrder(m_modeCombo, m_artStyleCombo);
+        if (m_artStyleCombo && m_strokeBudgetSpin) QWidget::setTabOrder(m_artStyleCombo, m_strokeBudgetSpin);
+        if (m_strokeBudgetSpin && m_goalModeCheck) QWidget::setTabOrder(m_strokeBudgetSpin, m_goalModeCheck);
+        if (m_goalModeCheck && m_generateButton) QWidget::setTabOrder(m_goalModeCheck, m_generateButton);
+        if (m_generateButton && m_cancelButton) QWidget::setTabOrder(m_generateButton, m_cancelButton);
+    }
+
     updateModeUi();
     setUiMode(m_uiMode);
     updateHistoryUi();

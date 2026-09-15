@@ -115,34 +115,36 @@ KisAiModelRouter::StagePlan KisAiModelRouter::planFor(Stage stage, const QString
     }
 
     plan.model = model;
-    plan.useJsonFormat = !plan.useStructuredOutput;
+    plan.useJsonFormat = (stage != Stage::PromptExpansion) && !plan.useStructuredOutput;
     return plan;
 }
 
 int KisAiModelRouter::specCandidateCount()
 {
-    switch (s_qualityMode) {
+    switch (s_qualityMode.load(std::memory_order_relaxed)) {
     case QualityMode::Fast:
         return 1;
     case QualityMode::Quality:
         return 3;
     case QualityMode::Max:
         return 5;
+    default:
+        return 3;
     }
-    return 3;
 }
 
 int KisAiModelRouter::critiqueRoundBudget()
 {
-    switch (s_qualityMode) {
+    switch (s_qualityMode.load(std::memory_order_relaxed)) {
     case QualityMode::Fast:
         return 1;
     case QualityMode::Quality:
         return 2;
     case QualityMode::Max:
         return 3;
+    default:
+        return 2;
     }
-    return 2;
 }
 
 QString KisAiModelRouter::structuredStrategy(const QString &model, const QString &endpoint)

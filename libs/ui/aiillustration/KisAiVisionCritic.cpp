@@ -199,7 +199,7 @@ QVector<KisAiCriticCrop> KisAiVisionCritic::selectCrops(
         KisAiCriticCrop crop;
         crop.region = region;
         crop.reason = QStringLiteral("prior_critique:%1").arg(r.area);
-        crop.image = cropAndUpscale(canvas, region);
+        crop.image = cropAndUpscale(safeCanvas, region);
         crops.append(crop);
     }
 

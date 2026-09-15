@@ -1346,12 +1346,40 @@ QString KisAiStrokeProgramCodec::sanitizeAndExtractJson(const QString &rawText, 
         if (diagnostic) diagnostic->appliedRepairs.append(QStringLiteral("BestCodeBlockExtracted"));
     }
 
-    // 3. Find outermost { ... }
+    // 3. Find outermost { ... } or [ ... ]
+    int startPos = -1;
+    QChar closeChar;
+
     const int firstBrace = text.indexOf(QLatin1Char('{'));
-    if (firstBrace >= 0) {
-        const int lastBrace = text.lastIndexOf(QLatin1Char('}'));
-        if (lastBrace > firstBrace) {
-            const QString candidate = text.mid(firstBrace, lastBrace - firstBrace + 1).trimmed();
+    const int firstFullBrace = text.indexOf(QChar(0xFF5B)); // 全角 ｛
+    const int effectiveFirstBrace = (firstBrace >= 0 && firstFullBrace >= 0)
+        ? std::min(firstBrace, firstFullBrace)
+        : (firstBrace >= 0 ? firstBrace : firstFullBrace);
+
+    const int firstBracket = text.indexOf(QLatin1Char('['));
+
+    if (effectiveFirstBrace >= 0 && firstBracket >= 0) {
+        if (effectiveFirstBrace <= firstBracket) {
+            startPos = firstBrace; // If firstBrace < 0, let repairJsonSyntax normalize full-width brace
+            closeChar = QLatin1Char('}');
+        } else if (text.left(firstBracket).trimmed().isEmpty()) {
+            startPos = firstBracket;
+            closeChar = QLatin1Char(']');
+        }
+    } else if (firstBrace >= 0) {
+        startPos = firstBrace;
+        closeChar = QLatin1Char('}');
+    } else if (firstBracket >= 0 && effectiveFirstBrace < 0) {
+        if (text.left(firstBracket).trimmed().isEmpty()) {
+            startPos = firstBracket;
+            closeChar = QLatin1Char(']');
+        }
+    }
+
+    if (startPos >= 0) {
+        const int lastPos = text.lastIndexOf(closeChar);
+        if (lastPos > startPos) {
+            const QString candidate = text.mid(startPos, lastPos - startPos + 1).trimmed();
             QJsonParseError cErr;
             QJsonDocument::fromJson(candidate.toUtf8(), &cErr);
             if (cErr.error == QJsonParseError::NoError) {
@@ -1363,11 +1391,11 @@ QString KisAiStrokeProgramCodec::sanitizeAndExtractJson(const QString &rawText, 
                 if (rErr.error == QJsonParseError::NoError && !rDoc.isNull()) {
                     text = candidate;
                 } else {
-                    text = text.mid(firstBrace).trimmed();
+                    text = text.mid(startPos).trimmed();
                 }
             }
         } else {
-            text = text.mid(firstBrace).trimmed();
+            text = text.mid(startPos).trimmed();
         }
     }
 

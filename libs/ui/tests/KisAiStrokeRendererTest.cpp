@@ -2773,7 +2773,19 @@ void KisAiStrokeRendererTest::testAnimeMouthRenderingAndFinishingSuite()
     const QImage grain = KisAiStrokeQualityUtils::generateFilmGrain(canvasSize, 0.08, 42);
     QVERIFY(!grain.isNull());
     QCOMPARE(grain.size(), canvasSize);
+    QCOMPARE(grain.format(), QImage::Format_ARGB32_Premultiplied);
     QVERIFY(grain.pixelColor(50, 50).alpha() > 0);
+    // Verify premultiplied alpha invariant across scanlines
+    for (int y = 0; y < grain.height(); ++y) {
+        const auto *scanLine = reinterpret_cast<const QRgb*>(grain.constScanLine(y));
+        for (int x = 0; x < grain.width(); ++x) {
+            const QRgb px = scanLine[x];
+            const int a = qAlpha(px);
+            QVERIFY(qRed(px) <= a);
+            QVERIFY(qGreen(px) <= a);
+            QVERIFY(qBlue(px) <= a);
+        }
+    }
 }
 
 KISTEST_MAIN(KisAiStrokeRendererTest)
