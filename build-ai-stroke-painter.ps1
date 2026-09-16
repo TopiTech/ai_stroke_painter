@@ -3,7 +3,7 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$craftRoot = 'C:\CraftRoot'
+$craftRoot = if ([string]::IsNullOrWhiteSpace($env:CRAFT_ROOT)) { 'C:\CraftRoot' } else { $env:CRAFT_ROOT }
 $buildDir = 'build-ai'
 $installPrefix = Join-Path $craftRoot 'ai-stroke-painter'
 

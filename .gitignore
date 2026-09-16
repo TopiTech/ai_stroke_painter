@@ -60,6 +60,24 @@ dist/
 .mypy_cache/
 .pytest_cache/
 .commandcode/
+.mimocode/
+.agent/
+.gemini/
+
+# Test output and log files
+test_*.txt
+*output.txt
+*.log
+
+# Environment and secrets
+.env
+.env.*
+*.env
 
 # Gradle caches and generated build state
 .gradle/
+
+# OS and shortcut files
+Thumbs.db
+desktop.ini
+*.lnk
