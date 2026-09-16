@@ -447,7 +447,7 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
     rootProps[QStringLiteral("operations")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("array")},
                                                           {QStringLiteral("items"), opItem},
                                                           {QStringLiteral("minItems"), 1},
-                                                          {QStringLiteral("maxItems"), 160}};
+                                                          {QStringLiteral("maxItems"), 500}};
 
     QJsonObject schema;
     schema[QStringLiteral("type")] = QStringLiteral("object");
@@ -1564,7 +1564,7 @@ bool KisAiStrokeProgramCodec::extractOperationsFromRawText(const QString &rawTex
     // Collect completed objects in a single pass.  A truncated outer response
     // must not prevent us from reaching complete operation objects nested in it.
     // The caps keep this last-resort recovery path bounded for a hostile response.
-    constexpr int MAX_RECOVERED_OPERATIONS = 160;
+    constexpr int MAX_RECOVERED_OPERATIONS = 500;
     constexpr int MAX_OBJECT_RANGES = 512;
     constexpr int MAX_OPERATION_OBJECT_LENGTH = 64 * 1024;
     QVector<int> openBraces;
@@ -2688,9 +2688,9 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
         return {QPointF(), -1.0};
     };
 
-    constexpr int MAX_OPERATIONS = 160;
+    constexpr int MAX_OPERATIONS = 500;
     constexpr int MAX_POINTS_PER_OPERATION = 256;
-    constexpr int MAX_TOTAL_CONTROL_POINTS = 8192;
+    constexpr int MAX_TOTAL_CONTROL_POINTS = 16384;
     constexpr int MAX_PARTICLES_PER_OPERATION = 200;
     constexpr int MAX_TOTAL_PARTICLES = 4096;
 

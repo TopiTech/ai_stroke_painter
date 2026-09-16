@@ -45,10 +45,26 @@ void KisAiStrokeRendererTest::testCatmullRomSpline()
 
     const QVector<QPointF> spline = KisAiStrokeRenderer::generateCatmullRomSpline(input, 6, false);
 
-    // Subdividing 3 segments with 6 steps = 18 + 1 = 19 points
-    QVERIFY(spline.size() > input.size());
+    // Subdividing 3 segments with 6 steps = 18 intervals + 1 endpoint = exactly 19 points
+    QCOMPARE(spline.size(), 19);
     QCOMPARE(spline.first(), input.first());
     QCOMPARE(spline.last(), input.last());
+
+    // Verify no consecutive points are duplicate/degenerate knots
+    for (int i = 0; i < spline.size() - 1; ++i) {
+        const QPointF diff = spline.at(i + 1) - spline.at(i);
+        const qreal dist = std::hypot(diff.x(), diff.y());
+        QVERIFY2(dist > 1e-4, "Open Catmull-Rom spline generated duplicate consecutive knots");
+    }
+
+    // Closed spline test: 4 segments * 6 = 24 points
+    const QVector<QPointF> closedSpline = KisAiStrokeRenderer::generateCatmullRomSpline(input, 6, true);
+    QCOMPARE(closedSpline.size(), 24);
+    for (int i = 0; i < closedSpline.size(); ++i) {
+        const QPointF diff = closedSpline.at((i + 1) % closedSpline.size()) - closedSpline.at(i);
+        const qreal dist = std::hypot(diff.x(), diff.y());
+        QVERIFY2(dist > 1e-4, "Closed Catmull-Rom spline generated duplicate consecutive knots");
+    }
 }
 
 void KisAiStrokeRendererTest::testRenderProgramToImage()

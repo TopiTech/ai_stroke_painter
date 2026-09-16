@@ -4302,6 +4302,49 @@ void KisAiStrokeProgramTest::testLandscapeRigsAndMultiTierComposition()
     }
 }
 
+void KisAiStrokeProgramTest::testRichOperationsLimitExpanded()
+{
+    // A program with 300 operations used to fail under the old 160-operation limit.
+    // It should now parse cleanly and accept up to 500 operations.
+    QJsonArray ops;
+    for (int i = 0; i < 300; ++i) {
+        QJsonObject op;
+        op[QStringLiteral("kind")] = QStringLiteral("path");
+        op[QStringLiteral("id")] = QStringLiteral("stroke_%1").arg(i);
+        op[QStringLiteral("layer")] = QStringLiteral("Lineart");
+        QJsonArray pts;
+        pts.append(QJsonArray{0.1, 0.1});
+        pts.append(QJsonArray{0.2, 0.2});
+        op[QStringLiteral("points")] = pts;
+        ops.append(op);
+    }
+
+    QJsonObject root;
+    root[QStringLiteral("schema_version")] = 2;
+    root[QStringLiteral("operations")] = ops;
+
+    KisAiStrokeProgram prog;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseProgramJson(root, &prog, &error), qPrintable(error));
+    QCOMPARE(prog.operations.size(), 300);
+
+    // Over 500 operations must still be safely rejected
+    for (int i = 300; i < 501; ++i) {
+        QJsonObject op;
+        op[QStringLiteral("kind")] = QStringLiteral("path");
+        op[QStringLiteral("id")] = QStringLiteral("stroke_%1").arg(i);
+        op[QStringLiteral("layer")] = QStringLiteral("Lineart");
+        QJsonArray pts;
+        pts.append(QJsonArray{0.1, 0.1});
+        pts.append(QJsonArray{0.2, 0.2});
+        op[QStringLiteral("points")] = pts;
+        ops.append(op);
+    }
+    root[QStringLiteral("operations")] = ops;
+    QVERIFY(!KisAiStrokeProgramCodec::parseProgramJson(root, &prog, &error));
+    QVERIFY(error.contains(QStringLiteral("上限")));
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

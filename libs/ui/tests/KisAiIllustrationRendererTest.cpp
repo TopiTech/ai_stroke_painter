@@ -38,6 +38,18 @@ void KisAiIllustrationRendererTest::testValidateImageEndpoint()
     // Valid loopback IPv6 HTTP endpoint
     QVERIFY(KisAiIllustrationRenderer::validateImageEndpoint(QStringLiteral("http://[::1]:8080/v1/images/generations"), &errorMsg));
 
+    // Valid loopback with trailing dot (FQDN)
+    QVERIFY(KisAiIllustrationRenderer::validateImageEndpoint(QStringLiteral("http://localhost.:11434/v1/chat/completions"), &errorMsg));
+
+    // Valid IPv4-mapped IPv6 loopback
+    QVERIFY(KisAiIllustrationRenderer::validateImageEndpoint(QStringLiteral("http://[::ffff:127.0.0.1]:8080/v1/images/generations"), &errorMsg));
+
+    // Valid IPv6 loopback with Zone ID / Scope ID
+    QVERIFY(KisAiIllustrationRenderer::validateImageEndpoint(QStringLiteral("http://[::1%1]:8080/v1/images/generations"), &errorMsg));
+
+    // Valid percent-encoded loopback hostname
+    QVERIFY(KisAiIllustrationRenderer::validateImageEndpoint(QStringLiteral("http://%6c%6f%63%61%6c%68%6f%73%74:11434/v1"), &errorMsg));
+
     // Provider-specific, non-secret query parameters remain supported.
     QVERIFY(KisAiIllustrationRenderer::validateImageEndpoint(
         QStringLiteral("https://example.invalid/v1/chat?api-version=2026-01-01"),
@@ -64,10 +76,18 @@ void KisAiIllustrationRendererTest::testValidateImageEndpoint()
         QStringLiteral("https://example.invalid/v1/chat#token=secret"),
         &errorMsg));
     QVERIFY(!errorMsg.isEmpty());
+    errorMsg.clear();
+    QVERIFY(!KisAiIllustrationRenderer::validateImageEndpoint(
+        QStringLiteral("https://example.invalid/v1/chat?param=sk-proj-secretKey123"),
+        &errorMsg));
+    QVERIFY(!errorMsg.isEmpty());
 
     // Insecure non-loopback HTTP endpoint must fail
     errorMsg.clear();
     QVERIFY(!KisAiIllustrationRenderer::validateImageEndpoint(QStringLiteral("http://api.openai.com/v1/images/generations"), &errorMsg));
+    QVERIFY(!errorMsg.isEmpty());
+    errorMsg.clear();
+    QVERIFY(!KisAiIllustrationRenderer::validateImageEndpoint(QStringLiteral("http://192.168.1.100:8000/v1"), &errorMsg));
     QVERIFY(!errorMsg.isEmpty());
 
     // Empty endpoint

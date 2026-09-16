@@ -36,15 +36,36 @@ QSize boundedSize(const QSize &requestedSize)
 bool isLoopbackHost(const QString &host)
 {
     QString normalized = host.trimmed().toLower();
+    normalized = QUrl::fromPercentEncoding(normalized.toUtf8());
     if (normalized.startsWith(QLatin1Char('[')) && normalized.endsWith(QLatin1Char(']'))) {
         normalized = normalized.mid(1, normalized.length() - 2);
+    }
+    const int percentIndex = normalized.indexOf(QLatin1Char('%'));
+    if (percentIndex >= 0) {
+        normalized = normalized.left(percentIndex);
+    }
+    while (normalized.endsWith(QLatin1Char('.'))) {
+        normalized.chop(1);
     }
     if (normalized == QLatin1String("localhost") || normalized.endsWith(QLatin1String(".localhost"))) {
         return true;
     }
 
     QHostAddress address;
-    return address.setAddress(normalized) && address.isLoopback();
+    if (!address.setAddress(normalized)) {
+        return false;
+    }
+    if (address.isLoopback()) {
+        return true;
+    }
+
+    bool ok = false;
+    const quint32 ipv4 = address.toIPv4Address(&ok);
+    if (ok) {
+        return QHostAddress(ipv4).isLoopback();
+    }
+
+    return false;
 }
 
 bool hasSensitiveUrlComponent(const QUrl &url)
@@ -80,6 +101,12 @@ bool hasSensitiveUrlComponent(const QUrl &url)
             }
         }
         if (sensitiveKeys.contains(normalizedKey)) {
+            return true;
+        }
+
+        const QString value = item.second.trimmed();
+        if (value.startsWith(QLatin1String("sk-"), Qt::CaseInsensitive) ||
+            value.startsWith(QLatin1String("Bearer "), Qt::CaseInsensitive)) {
             return true;
         }
     }

@@ -147,14 +147,10 @@ KisAiStrokeRenderer::generateCatmullRomSpline(const QVector<QPointF> &points, in
             const qreal t = qreal(step) / steps;
             result.append(centripetalPoint(p0, p1, p2, p3, t));
         }
-        // Include t = 1 (== p2, the next knot) so each span reaches its end;
-        // sampling only [0, 1) left every segment ~1/subdivisions short and
-        // produced visible polygonal faceting between spans.
-        result.append(p2);
     }
 
     if (!closed) {
-        // The final segment already ended at points.last(); avoid a duplicate.
+        // The last segment sampled [0, 1); append points.last() (t == 1) to close the open curve cleanly without duplicate knots.
         if (result.isEmpty() || result.last() != points.last()) {
             result.append(points.last());
         }
@@ -2594,7 +2590,7 @@ QImage KisAiStrokeRenderer::generateBloomMap(const QImage &image, qreal intensit
             if (lum > 170) {
                 const qreal factor = qreal(lum - 170) / (255.0 - 170.0);
                 const int outA = qRound(a * factor);
-                dstRow[x] = qPremultiply(qRgba(qRound(r * factor), qRound(g * factor), qRound(b * factor), outA));
+                dstRow[x] = qPremultiply(qRgba(r, g, b, outA));
             } else {
                 dstRow[x] = 0;
             }

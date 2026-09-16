@@ -1399,6 +1399,14 @@ KisAiIllustrationDocker::~KisAiIllustrationDocker()
     }
     m_testResponseBuffer.clear();
     m_testResponseTooLarge = false;
+    if (m_expandPromptReply) {
+        m_expandPromptReply->disconnect(this);
+        m_expandPromptReply->abort();
+        m_expandPromptReply->deleteLater();
+        m_expandPromptReply = nullptr;
+    }
+    m_expandPromptResponseBuffer.clear();
+    m_expandPromptResponseTooLarge = false;
     if (m_reply) {
         m_reply->disconnect(this);
         m_reply->abort();
@@ -2436,10 +2444,20 @@ void KisAiIllustrationDocker::cancelRemoteRequest()
     m_sseBuffer.clear();
 
     if (m_testReply) {
+        m_testReply->disconnect(this);
         m_testReply->abort();
     }
     if (m_expandPromptReply) {
+        m_expandPromptReply->disconnect(this);
         m_expandPromptReply->abort();
+        m_expandPromptReply->deleteLater();
+        m_expandPromptReply = nullptr;
+    }
+    m_expandPromptResponseBuffer.clear();
+    m_expandPromptResponseTooLarge = false;
+    if (m_expandPromptButton && !m_expandPromptButton->isEnabled()) {
+        m_expandPromptButton->setEnabled(true);
+        m_expandPromptButton->setText(i18n("✨ AI推敲"));
     }
     if (!m_reply) {
         if (m_goalModeActive) {
@@ -4755,7 +4773,7 @@ void KisAiIllustrationDocker::finishExpandPromptRequest()
         setStatus(i18n("プロンプト推敲を中止しました。"));
         return;
     }
-    if (networkError != QNetworkReply::NoError && httpStatus != 200) {
+    if (networkError != QNetworkReply::NoError || httpStatus < 200 || httpStatus >= 300) {
         setStatus(i18n("プロンプト推敲に失敗しました (HTTP %1)").arg(httpStatus), true);
         return;
     }
