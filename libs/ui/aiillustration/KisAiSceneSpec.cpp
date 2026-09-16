@@ -6,6 +6,8 @@
 #include "KisAiSceneSpec.h"
 #include "KisAiStrokeProgram.h"
 
+#include <cmath>
+
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -31,7 +33,7 @@ QPointF parsePoint(const QJsonValue &v, const QPointF &fallback)
     bool okX = false, okY = false;
     const qreal x = a.at(0).toVariant().toDouble(&okX);
     const qreal y = a.at(1).toVariant().toDouble(&okY);
-    if (!okX || !okY)
+    if (!okX || !okY || !std::isfinite(x) || !std::isfinite(y))
         return fallback;
     return QPointF(qBound<qreal>(-1.0, x, 1.0), qBound<qreal>(-1.0, y, 1.0));
 }
@@ -540,7 +542,9 @@ bool KisAiSceneSpecCodec::parseSceneSpecObject(const QJsonObject &rootObj,
                           QStringLiteral("standard"));
         if (styleObj.contains(QStringLiteral("detail_level"))) {
             const double dl = styleObj.value(QStringLiteral("detail_level")).toDouble(spec.style.detailLevel);
-            spec.style.detailLevel = qBound<qreal>(0.0, dl, 1.0);
+            if (std::isfinite(dl)) {
+                spec.style.detailLevel = qBound<qreal>(0.0, dl, 1.0);
+            }
         }
     }
 
@@ -562,7 +566,9 @@ bool KisAiSceneSpecCodec::parseSceneSpecObject(const QJsonObject &rootObj,
         spec.colorScript.highlight = parseColorField(csObj, QStringLiteral("highlight"), spec.colorScript.highlight);
         if (csObj.contains(QStringLiteral("accent_weight"))) {
             const double aw = csObj.value(QStringLiteral("accent_weight")).toDouble(spec.colorScript.accentWeight);
-            spec.colorScript.accentWeight = qBound<qreal>(0.0, aw, 1.0);
+            if (std::isfinite(aw)) {
+                spec.colorScript.accentWeight = qBound<qreal>(0.0, aw, 1.0);
+            }
         }
     }
 
@@ -586,36 +592,51 @@ bool KisAiSceneSpecCodec::parseSceneSpecObject(const QJsonObject &rootObj,
 
     const QJsonObject rigObj = rootObj.value(QStringLiteral("rig")).toObject();
     if (!rigObj.isEmpty()) {
-        if (rigObj.contains(QStringLiteral("eye_aperture")))
-            spec.rig.eyeAperture =
-                qBound<qreal>(0.0, rigObj.value(QStringLiteral("eye_aperture")).toDouble(spec.rig.eyeAperture), 1.0);
-        if (rigObj.contains(QStringLiteral("iris_ratio")))
-            spec.rig.irisRatio =
-                qBound<qreal>(0.35, rigObj.value(QStringLiteral("iris_ratio")).toDouble(spec.rig.irisRatio), 0.85);
+        if (rigObj.contains(QStringLiteral("eye_aperture"))) {
+            const double ea = rigObj.value(QStringLiteral("eye_aperture")).toDouble(spec.rig.eyeAperture);
+            if (std::isfinite(ea)) {
+                spec.rig.eyeAperture = qBound<qreal>(0.0, ea, 1.0);
+            }
+        }
+        if (rigObj.contains(QStringLiteral("iris_ratio"))) {
+            const double ir = rigObj.value(QStringLiteral("iris_ratio")).toDouble(spec.rig.irisRatio);
+            if (std::isfinite(ir)) {
+                spec.rig.irisRatio = qBound<qreal>(0.35, ir, 0.85);
+            }
+        }
         spec.rig.eyeHighlight =
             normalizeEnum(rigObj.value(QStringLiteral("eye_highlight")).toString(spec.rig.eyeHighlight),
                           {QStringLiteral("twin_dot"), QStringLiteral("streak"), QStringLiteral("soft")},
                           spec.rig.eyeHighlight);
         if (rigObj.contains(QStringLiteral("double_lid")))
             spec.rig.doubleLid = rigObj.value(QStringLiteral("double_lid")).toBool(spec.rig.doubleLid);
-        if (rigObj.contains(QStringLiteral("hair_strand_density")))
-            spec.rig.hairStrandDensity =
-                qBound<qreal>(0.0,
-                              rigObj.value(QStringLiteral("hair_strand_density")).toDouble(spec.rig.hairStrandDensity),
-                              1.0);
-        if (rigObj.contains(QStringLiteral("hair_flyaway")))
-            spec.rig.hairFlyaway =
-                qBound<qreal>(0.0, rigObj.value(QStringLiteral("hair_flyaway")).toDouble(spec.rig.hairFlyaway), 1.0);
-        if (rigObj.contains(QStringLiteral("hair_highlight_bands")))
-            spec.rig.hairHighlightBands =
-                qBound(0,
-                       int(rigObj.value(QStringLiteral("hair_highlight_bands")).toDouble(spec.rig.hairHighlightBands)),
-                       3);
-        if (rigObj.contains(QStringLiteral("mouth_width_scale")))
-            spec.rig.mouthWidthScale =
-                qBound<qreal>(0.6,
-                              rigObj.value(QStringLiteral("mouth_width_scale")).toDouble(spec.rig.mouthWidthScale),
-                              1.4);
+        if (rigObj.contains(QStringLiteral("hair_strand_density"))) {
+            const double hsd =
+                rigObj.value(QStringLiteral("hair_strand_density")).toDouble(spec.rig.hairStrandDensity);
+            if (std::isfinite(hsd)) {
+                spec.rig.hairStrandDensity = qBound<qreal>(0.0, hsd, 1.0);
+            }
+        }
+        if (rigObj.contains(QStringLiteral("hair_flyaway"))) {
+            const double hf = rigObj.value(QStringLiteral("hair_flyaway")).toDouble(spec.rig.hairFlyaway);
+            if (std::isfinite(hf)) {
+                spec.rig.hairFlyaway = qBound<qreal>(0.0, hf, 1.0);
+            }
+        }
+        if (rigObj.contains(QStringLiteral("hair_highlight_bands"))) {
+            const double hhb =
+                rigObj.value(QStringLiteral("hair_highlight_bands")).toDouble(spec.rig.hairHighlightBands);
+            if (std::isfinite(hhb)) {
+                spec.rig.hairHighlightBands = qBound(0, static_cast<int>(std::round(hhb)), 3);
+            }
+        }
+        if (rigObj.contains(QStringLiteral("mouth_width_scale"))) {
+            const double mws =
+                rigObj.value(QStringLiteral("mouth_width_scale")).toDouble(spec.rig.mouthWidthScale);
+            if (std::isfinite(mws)) {
+                spec.rig.mouthWidthScale = qBound<qreal>(0.6, mws, 1.4);
+            }
+        }
         if (rigObj.contains(QStringLiteral("has_brows")))
             spec.rig.hasBrows = rigObj.value(QStringLiteral("has_brows")).toBool(spec.rig.hasBrows);
     }

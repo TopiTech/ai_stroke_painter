@@ -116,7 +116,8 @@ public:
         const QVector<KisAiStrokePoint> &normalizedPoints,
         const KisAiStrokeBrush &brush,
         const QSize &canvasSizePx,
-        bool closed);
+        bool closed,
+        int supersampleScale = 1);
 
     /**
      * Meaning-group critique for an eye pair. Returns warnings;

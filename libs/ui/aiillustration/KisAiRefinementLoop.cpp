@@ -75,31 +75,54 @@ KisAiStrokeProgram KisAiRefinementLoop::applyRigPatchesAndRelayout(const KisAiSt
 {
     KisAiSceneRigOverrides delta;
     KisAiStrokeProgram patched = KisAiProgramPatchCodec::applyPatches(base, patches, &delta, rejected);
-    if (rigDelta)
-        *rigDelta = delta;
 
     // Re-layout only when a rig key actually moved: structural ops stay
     // frozen so good regions survive (patch-only Goal steps).
-    const bool rigMoved = (delta.eyeAperture != KisAiSceneRigOverrides().eyeAperture)
-        || (delta.irisRatio != KisAiSceneRigOverrides().irisRatio) || (!delta.eyeHighlight.isEmpty())
-        || (delta.hairHighlightBands != KisAiSceneRigOverrides().hairHighlightBands)
-        || (delta.mouthWidthScale != KisAiSceneRigOverrides().mouthWidthScale)
-        || (delta.hairStrandDensity != KisAiSceneRigOverrides().hairStrandDensity)
-        || (delta.hairFlyaway != KisAiSceneRigOverrides().hairFlyaway);
+    bool rigMoved = false;
+    KisAiSceneSpec relaid = baseSpec;
+
+    for (const KisAiProgramPatch &patch : patches) {
+        if (!patch.path.startsWith(QLatin1String("/rig/"))) {
+            continue;
+        }
+        const QString key = patch.path.mid(5);
+        if (key == QLatin1String("eye_aperture")) {
+            relaid.rig.eyeAperture = delta.eyeAperture;
+            rigMoved = true;
+        } else if (key == QLatin1String("iris_ratio")) {
+            relaid.rig.irisRatio = delta.irisRatio;
+            rigMoved = true;
+        } else if (key == QLatin1String("eye_highlight")) {
+            if (!delta.eyeHighlight.isEmpty()) {
+                relaid.rig.eyeHighlight = delta.eyeHighlight;
+                rigMoved = true;
+            }
+        } else if (key == QLatin1String("double_lid")) {
+            relaid.rig.doubleLid = delta.doubleLid;
+            rigMoved = true;
+        } else if (key == QLatin1String("hair_strand_density")) {
+            relaid.rig.hairStrandDensity = delta.hairStrandDensity;
+            rigMoved = true;
+        } else if (key == QLatin1String("hair_flyaway")) {
+            relaid.rig.hairFlyaway = delta.hairFlyaway;
+            rigMoved = true;
+        } else if (key == QLatin1String("hair_highlight_bands")) {
+            relaid.rig.hairHighlightBands = delta.hairHighlightBands;
+            rigMoved = true;
+        } else if (key == QLatin1String("mouth_width_scale")) {
+            relaid.rig.mouthWidthScale = delta.mouthWidthScale;
+            rigMoved = true;
+        } else if (key == QLatin1String("has_brows")) {
+            relaid.rig.hasBrows = delta.hasBrows;
+            rigMoved = true;
+        }
+    }
+
+    if (rigDelta)
+        *rigDelta = relaid.rig;
+
     if (!rigMoved)
         return patched;
-
-    KisAiSceneSpec relaid = baseSpec;
-    relaid.rig.eyeAperture = delta.eyeAperture;
-    relaid.rig.irisRatio = delta.irisRatio;
-    if (!delta.eyeHighlight.isEmpty())
-        relaid.rig.eyeHighlight = delta.eyeHighlight;
-    relaid.rig.doubleLid = delta.doubleLid;
-    relaid.rig.hairStrandDensity = delta.hairStrandDensity;
-    relaid.rig.hairFlyaway = delta.hairFlyaway;
-    relaid.rig.hairHighlightBands = delta.hairHighlightBands;
-    relaid.rig.mouthWidthScale = delta.mouthWidthScale;
-    relaid.rig.hasBrows = delta.hasBrows;
 
     const KisAiStrokeProgram fresh =
         KisAiLayoutEngine::generateProgram(relaid, canvasSize.isValid() ? canvasSize : base.canvasSize);

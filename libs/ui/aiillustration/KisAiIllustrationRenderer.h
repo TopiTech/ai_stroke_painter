@@ -38,6 +38,9 @@ public:
 
     /** Normalize a prompt before it is sent to a model or used in a layer name. */
     static QString normalizedPrompt(const QString &prompt);
+
+    /** Check whether an endpoint URL points to a loopback/local development address. */
+    static bool isLoopbackEndpoint(const QString &endpoint);
 };
 
 #endif // KIS_AI_ILLUSTRATION_RENDERER_H

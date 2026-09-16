@@ -680,4 +680,175 @@ void KisAiV6WiringTest::testEnvelopeClampedVertexPreserved()
     QVERIFY(bounds.height() > 10.0);
 }
 
+void KisAiV6WiringTest::testApplyRigPatchesPreservesUnpatchedRigFields()
+{
+    KisAiSceneSpec spec;
+    spec.style.artStyleId = QStringLiteral("anime_cel");
+    spec.rig.hairStrandDensity = 0.85;
+    spec.rig.mouthWidthScale = 1.30;
+    spec.rig.eyeAperture = 0.70;
+
+    const KisAiStrokeProgram base = KisAiLayoutEngine::generateProgram(spec, QSize(256, 256));
+
+    KisAiProgramPatch patch;
+    patch.op = KisAiProgramPatch::Op::Replace;
+    patch.path = QStringLiteral("/rig/eye_aperture");
+    patch.value = QJsonValue(0.35);
+
+    QStringList rejected;
+    KisAiSceneRigOverrides delta;
+    const KisAiStrokeProgram patched = KisAiRefinementLoop::applyRigPatchesAndRelayout(
+        base, spec, QSize(256, 256), {patch}, &delta, &rejected);
+
+    QVERIFY(rejected.isEmpty());
+    // eye_aperture was patched:
+    QCOMPARE(delta.eyeAperture, 0.35);
+    // unpatched fields must be preserved and NOT clobbered back to default:
+    QCOMPARE(delta.hairStrandDensity, 0.85);
+    QCOMPARE(delta.mouthWidthScale, 1.30);
+}
+
+void KisAiV6WiringTest::testApplyRigPatchesDoubleLidAndBrows()
+{
+    KisAiSceneSpec spec;
+    spec.style.artStyleId = QStringLiteral("anime_cel");
+    spec.rig.doubleLid = false;
+    spec.rig.hasBrows = true;
+
+    const KisAiStrokeProgram base = KisAiLayoutEngine::generateProgram(spec, QSize(256, 256));
+
+    KisAiProgramPatch patch1;
+    patch1.op = KisAiProgramPatch::Op::Replace;
+    patch1.path = QStringLiteral("/rig/double_lid");
+    patch1.value = QJsonValue(true);
+
+    KisAiProgramPatch patch2;
+    patch2.op = KisAiProgramPatch::Op::Replace;
+    patch2.path = QStringLiteral("/rig/has_brows");
+    patch2.value = QJsonValue(false);
+
+    QStringList rejected;
+    KisAiSceneRigOverrides delta;
+    const KisAiStrokeProgram patched = KisAiRefinementLoop::applyRigPatchesAndRelayout(
+        base, spec, QSize(256, 256), {patch1, patch2}, &delta, &rejected);
+
+    QVERIFY(rejected.isEmpty());
+    QCOMPARE(delta.doubleLid, true);
+    QCOMPARE(delta.hasBrows, false);
+}
+
+void KisAiV6WiringTest::testEnvelopeSupersampleScaleInPxMode()
+{
+    QVector<KisAiStrokePoint> pts;
+    pts.append(KisAiStrokePoint(0.2, 0.5, 1.0));
+    pts.append(KisAiStrokePoint(0.8, 0.5, 1.0));
+
+    KisAiStrokeBrush brush;
+    brush.sizeMode = QStringLiteral("px");
+    brush.size = 10.0;
+    brush.profile = QStringLiteral("round");
+
+    const QSize canvasSize(500, 500);
+
+    // At scale 1, effective width is 10px
+    const QPolygonF poly1 = KisAiDeliberateStroke::buildEnvelopePolygon(pts, brush, canvasSize, false, 1);
+    QVERIFY(!poly1.isEmpty());
+    const qreal height1 = poly1.boundingRect().height();
+
+    // At scale 2, effective width is 20px
+    const QPolygonF poly2 = KisAiDeliberateStroke::buildEnvelopePolygon(pts, brush, canvasSize, false, 2);
+    QVERIFY(!poly2.isEmpty());
+    const qreal height2 = poly2.boundingRect().height();
+
+    // At scale 3, effective width is 30px
+    const QPolygonF poly3 = KisAiDeliberateStroke::buildEnvelopePolygon(pts, brush, canvasSize, false, 3);
+    QVERIFY(!poly3.isEmpty());
+    const qreal height3 = poly3.boundingRect().height();
+
+    // Heights should scale proportionally with supersampleScale
+    QVERIFY(height2 > height1 * 1.8);
+    QVERIFY(height3 > height2 * 1.3);
+}
+
+void KisAiV6WiringTest::testSceneSpecParseNaNFloatSafety()
+{
+    // Malformed JSON with out-of-range, NaN-like, and overflow float values
+    const QString json = QStringLiteral(R"({
+        "style": {
+            "art_style": "anime_cel",
+            "detail_level": 999999.0
+        },
+        "color_script": {
+            "accent_weight": -10.0
+        },
+        "rig": {
+            "eye_aperture": 100.0,
+            "iris_ratio": -5.0,
+            "hair_strand_density": 99.0,
+            "hair_flyaway": -99.0,
+            "hair_highlight_bands": 999999.0,
+            "mouth_width_scale": 100.0
+        }
+    })");
+
+    KisAiSceneSpec spec;
+    QString error;
+    const bool ok = KisAiSceneSpecCodec::parseSceneSpec(json.toUtf8(), &spec, &error);
+    QVERIFY(ok);
+    QVERIFY(error.isEmpty());
+
+    // Verify all fields are bounded safely without NaN or UB
+    QVERIFY(spec.style.detailLevel >= 0.0 && spec.style.detailLevel <= 1.0);
+    QVERIFY(spec.colorScript.accentWeight >= 0.0 && spec.colorScript.accentWeight <= 1.0);
+    QVERIFY(spec.rig.eyeAperture >= 0.0 && spec.rig.eyeAperture <= 1.0);
+    QVERIFY(spec.rig.irisRatio >= 0.35 && spec.rig.irisRatio <= 0.85);
+    QVERIFY(spec.rig.hairStrandDensity >= 0.0 && spec.rig.hairStrandDensity <= 1.0);
+    QVERIFY(spec.rig.hairFlyaway >= 0.0 && spec.rig.hairFlyaway <= 1.0);
+    QVERIFY(spec.rig.hairHighlightBands >= 0 && spec.rig.hairHighlightBands <= 3);
+    QVERIFY(spec.rig.mouthWidthScale >= 0.6 && spec.rig.mouthWidthScale <= 1.4);
+}
+
+void KisAiV6WiringTest::testVisionCriticImageToDataUrlTransparency()
+{
+    // Create a 64x64 transparent image
+    QImage transparentImg(64, 64, QImage::Format_ARGB32);
+    transparentImg.fill(Qt::transparent);
+
+    KisAiLightSettings rig;
+    const QJsonObject payload = KisAiVisionCritic::buildCritiquePayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("critique prompt"),
+        transparentImg,
+        {},
+        rig);
+
+    const QJsonArray messages = payload.value(QStringLiteral("messages")).toArray();
+    QVERIFY(!messages.isEmpty());
+    const QJsonObject userMsg = messages.last().toObject();
+    const QJsonArray content = userMsg.value(QStringLiteral("content")).toArray();
+    QVERIFY(!content.isEmpty());
+
+    QString dataUrl;
+    for (const QJsonValue &part : content) {
+        const QJsonObject pObj = part.toObject();
+        if (pObj.value(QStringLiteral("type")).toString() == QLatin1String("image_url")) {
+            dataUrl = pObj.value(QStringLiteral("image_url")).toObject().value(QStringLiteral("url")).toString();
+            break;
+        }
+    }
+    QVERIFY(!dataUrl.isEmpty());
+    QVERIFY(dataUrl.startsWith(QStringLiteral("data:image/jpeg;base64,")));
+
+    const QString b64 = dataUrl.mid(QStringLiteral("data:image/jpeg;base64,").length());
+    const QByteArray imgData = QByteArray::fromBase64(b64.toLatin1());
+    QImage decoded;
+    QVERIFY(decoded.loadFromData(imgData, "JPEG"));
+    QCOMPARE(decoded.size(), QSize(64, 64));
+
+    // The transparent image must have been composited onto white, NOT black!
+    const QColor centerColor = decoded.pixelColor(32, 32);
+    QVERIFY2(centerColor.red() > 240 && centerColor.green() > 240 && centerColor.blue() > 240,
+             "Transparent image was rendered with dark/black artifacts instead of white background");
+}
+
 KISTEST_MAIN(KisAiV6WiringTest)

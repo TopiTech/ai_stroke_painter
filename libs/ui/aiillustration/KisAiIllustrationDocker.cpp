@@ -433,6 +433,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_expandPromptButton->setCursor(Qt::PointingHandCursor);
     m_expandPromptButton->setFocusPolicy(Qt::StrongFocus);
     m_expandPromptButton->setAccessibleName(i18n("Expand prompt with AI"));
+    m_expandPromptButton->setAccessibleDescription(i18n("現在のプロンプトをAIで自動推敲・補強します。"));
     connect(m_expandPromptButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::expandPromptWithAi);
     promptHeaderRow->addWidget(m_expandPromptButton);
 
@@ -443,6 +444,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_syncColorButton->setCursor(Qt::PointingHandCursor);
     m_syncColorButton->setFocusPolicy(Qt::StrongFocus);
     m_syncColorButton->setAccessibleName(i18n("Sync foreground color to prompt"));
+    m_syncColorButton->setAccessibleDescription(i18n("Kritaの現在のアクティブ前景色をプロンプトに取り込みます。"));
     connect(m_syncColorButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::syncForegroundPalette);
     promptHeaderRow->addWidget(m_syncColorButton);
 
@@ -531,6 +533,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_promptEditor->setMinimumHeight(75);
     m_promptEditor->setMaximumHeight(130);
     m_promptEditor->setAccessibleName(i18n("Illustration prompt"));
+    m_promptEditor->setAccessibleDescription(
+        i18n("生成するイラストのプロンプトを入力します。Ctrl+Enter で生成を開始します。"));
     m_promptEditor->installEventFilter(this);
     promptCard.layout->addWidget(m_promptEditor);
 
@@ -736,13 +740,18 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_endpointEditor = new QLineEdit(m_detailsContainer);
     m_endpointEditor->setPlaceholderText(QStringLiteral("https://api.openai.com/v1/chat/completions"));
     m_endpointEditor->setAccessibleName(i18n("LLM endpoint"));
+    m_endpointEditor->setAccessibleDescription(
+        i18n("接続先LLMのエンドポイントURL。ローカル接続 (localhost/127.0.0.1) の場合はAPIキーを省略できます。"));
     m_modelEditor = new QLineEdit(m_detailsContainer);
     m_modelEditor->setPlaceholderText(i18n("モデル名 (例: gpt-4o, o3-mini, deepseek-chat)"));
     m_modelEditor->setAccessibleName(i18n("LLM model name"));
+    m_modelEditor->setAccessibleDescription(i18n("使用するLLMまたは画像生成モデルの名前。"));
     m_apiKeyEditor = new QLineEdit(m_detailsContainer);
     m_apiKeyEditor->setEchoMode(QLineEdit::Password);
     m_apiKeyEditor->setPlaceholderText(i18n("API キー (sk-...)"));
     m_apiKeyEditor->setAccessibleName(i18n("API key"));
+    m_apiKeyEditor->setAccessibleDescription(
+        i18n("API認証用の秘密鍵。ローカルエンドポイントでは未入力でも利用可能です。"));
     connect(m_endpointEditor, &QLineEdit::returnPressed, this, &KisAiIllustrationDocker::generateIllustration);
     connect(m_modelEditor, &QLineEdit::returnPressed, this, &KisAiIllustrationDocker::generateIllustration);
     connect(m_apiKeyEditor, &QLineEdit::returnPressed, this, &KisAiIllustrationDocker::generateIllustration);
@@ -926,6 +935,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_testConnectionButton->setObjectName(QStringLiteral("aiSecondaryButton"));
     m_testConnectionButton->setFocusPolicy(Qt::StrongFocus);
     m_testConnectionButton->setAccessibleName(i18n("Test connection"));
+    m_testConnectionButton->setAccessibleDescription(
+        i18n("入力されたエンドポイントとAPIキーで通信テストを実行します。"));
     m_testConnectionButton->setCursor(Qt::PointingHandCursor);
     m_testConnectionButton->setToolTip(i18n("入力されたエンドポイント・モデル・APIキーで導通テストを行います。"));
 
@@ -933,6 +944,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_saveSettingsButton->setObjectName(QStringLiteral("aiSecondaryButton"));
     m_saveSettingsButton->setFocusPolicy(Qt::StrongFocus);
     m_saveSettingsButton->setAccessibleName(i18n("Save settings"));
+    m_saveSettingsButton->setAccessibleDescription(
+        i18n("現在のエンドポイント、モデル名、APIキー、各生成設定を保存します。"));
     m_saveSettingsButton->setCursor(Qt::PointingHandCursor);
     m_saveSettingsButton->setToolTip(i18n("現在のエンドポイント、モデル名、APIキー、各生成設定を保存します。"));
 
@@ -976,6 +989,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_goalModeCheck = new QCheckBox(i18n("Goalモード（自律多段階作画）を有効にする"), goalCard.frame);
     m_goalModeCheck->setFocusPolicy(Qt::StrongFocus);
     m_goalModeCheck->setAccessibleName(i18n("Autonomous goal mode"));
+    m_goalModeCheck->setAccessibleDescription(
+        i18n("完成までAIが自律的に多段階で描画と批評を繰り返すゴールモードを有効にします。"));
     m_goalModeCheck->setToolTip(i18n("下地・陰影・線画・ハイライト等を段階的に自律作画し、完成度を高めます。"));
     m_goalModeCheck->setCursor(Qt::PointingHandCursor);
     goalCard.layout->addWidget(m_goalModeCheck);
@@ -1634,7 +1649,8 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
         setStatus(i18n("LLM モデル名を入力してください。"), true);
         return;
     }
-    if (apiKey.isEmpty()) {
+    const bool isLoopback = KisAiIllustrationRenderer::isLoopbackEndpoint(endpoint);
+    if (apiKey.isEmpty() && !isLoopback) {
         m_retryInFlight = false;
         if (m_uiMode != UiMode::Pro) {
             setUiMode(UiMode::Pro);
@@ -1665,7 +1681,9 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
 
     QNetworkRequest request{QUrl(endpoint)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-    request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+    if (!apiKey.isEmpty()) {
+        request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+    }
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
     if (endpoint.contains(QLatin1String("openrouter.ai"), Qt::CaseInsensitive)) {
@@ -2234,7 +2252,8 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
         setStatus(i18n("画像モデル名を入力してください。"), true);
         return;
     }
-    if (apiKey.isEmpty()) {
+    const bool isLoopback = KisAiIllustrationRenderer::isLoopbackEndpoint(endpoint);
+    if (apiKey.isEmpty() && !isLoopback) {
         if (m_uiMode != UiMode::Pro) {
             setUiMode(UiMode::Pro);
         }
@@ -2252,7 +2271,9 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
 
     QNetworkRequest request{QUrl(endpoint)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-    request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+    if (!apiKey.isEmpty()) {
+        request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+    }
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
     if (endpoint.contains(QLatin1String("openrouter.ai"), Qt::CaseInsensitive)) {
@@ -2953,7 +2974,8 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
             m_goalModeActive = false;
             return;
         }
-        if (apiKey.isEmpty()) {
+        const bool isLoopback = KisAiIllustrationRenderer::isLoopbackEndpoint(endpoint);
+        if (apiKey.isEmpty() && !isLoopback) {
             if (m_uiMode != UiMode::Pro) {
                 setUiMode(UiMode::Pro);
             }
@@ -3124,7 +3146,8 @@ void KisAiIllustrationDocker::executeGoalStep()
             return;
         }
 
-        if (apiKey.isEmpty()) {
+        const bool isLoopback = KisAiIllustrationRenderer::isLoopbackEndpoint(endpoint);
+        if (apiKey.isEmpty() && !isLoopback) {
             setStatus(i18n("API キーが見つかりません。Goalモードを終了します。"), true);
             finishGoalMode(false);
             return;
@@ -3224,7 +3247,9 @@ void KisAiIllustrationDocker::executeGoalStep()
 
         QNetworkRequest request{QUrl(endpoint)};
         request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-        request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+        if (!apiKey.isEmpty()) {
+            request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+        }
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
         if (endpoint.contains(QLatin1String("openrouter.ai"), Qt::CaseInsensitive)) {
@@ -4333,7 +4358,8 @@ void KisAiIllustrationDocker::testLlmConnection()
         }
         return;
     }
-    if (apiKey.isEmpty()) {
+    const bool isLoopback = KisAiIllustrationRenderer::isLoopbackEndpoint(endpoint);
+    if (apiKey.isEmpty() && !isLoopback) {
         if (m_testConnectionStatusLabel) {
             m_testConnectionStatusLabel->setStyleSheet(QStringLiteral("color: #f87171;"));
             m_testConnectionStatusLabel->setText(i18n("❌ API キーが入力されていません。"));
@@ -4361,7 +4387,9 @@ void KisAiIllustrationDocker::testLlmConnection()
 
     QNetworkRequest request{QUrl(endpoint)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
-    request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+    if (!apiKey.isEmpty()) {
+        request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+    }
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
     if (endpoint.contains(QLatin1String("openrouter.ai"), Qt::CaseInsensitive)) {

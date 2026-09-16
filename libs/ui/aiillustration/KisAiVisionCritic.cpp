@@ -13,6 +13,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonParseError>
+#include <QPainter>
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
@@ -94,9 +95,17 @@ QImage cropAndUpscale(const QImage &canvas, const QRectF &region)
 
 QString imageToDataUrl(const QImage &image)
 {
+    QImage toSave = image;
+    if (image.hasAlphaChannel()) {
+        toSave = QImage(image.size(), QImage::Format_RGB32);
+        toSave.fill(Qt::white);
+        QPainter p(&toSave);
+        p.drawImage(0, 0, image);
+        p.end();
+    }
     QBuffer buffer;
     buffer.open(QIODevice::WriteOnly);
-    image.save(&buffer, "JPEG", 82);
+    toSave.save(&buffer, "JPEG", 82);
     return QStringLiteral("data:image/jpeg;base64,%1")
         .arg(QString::fromLatin1(buffer.data().toBase64()));
 }

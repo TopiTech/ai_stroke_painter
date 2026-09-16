@@ -20,6 +20,7 @@ private Q_SLOTS:
     void testCreateConceptImageDeterministicWithLowHuePrompts();
     void testPromptExpansionPayloadAndParsing();
     void testCityConceptImagePrecedence();
+    void testIsLoopbackEndpoint();
 };
 
 #endif // KIS_AI_ILLUSTRATION_RENDERER_TEST_H

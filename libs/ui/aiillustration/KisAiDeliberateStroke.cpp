@@ -639,13 +639,14 @@ QPolygonF KisAiDeliberateStroke::buildEnvelopePolygon(
     const QVector<KisAiStrokePoint> &normalizedPoints,
     const KisAiStrokeBrush &brush,
     const QSize &canvasSizePx,
-    bool closed)
+    bool closed,
+    int supersampleScale)
 {
     QPolygonF poly;
     if (normalizedPoints.size() < 2)
         return poly;
     const QVector<KisAiStrokeQualityUtils::StrokeEnvelopeSegment> segs =
-        KisAiStrokeQualityUtils::generateStrokeEnvelope(normalizedPoints, brush, canvasSizePx, closed);
+        KisAiStrokeQualityUtils::generateStrokeEnvelope(normalizedPoints, brush, canvasSizePx, closed, supersampleScale);
     if (segs.isEmpty())
         return poly;
     poly.reserve(segs.size() * 3 + 2);

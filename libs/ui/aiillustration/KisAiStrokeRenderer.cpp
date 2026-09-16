@@ -1449,7 +1449,8 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter,
         rightEdge.append(curr - normal * halfW);
     }
 
-    QPolygonF ribbonPoly = KisAiDeliberateStroke::buildEnvelopePolygon(stablePoints, op.brush, canvasSize, op.closed);
+    QPolygonF ribbonPoly =
+        KisAiDeliberateStroke::buildEnvelopePolygon(stablePoints, op.brush, canvasSize, op.closed, supersampleScale);
     if (ribbonPoly.size() < 3) {
         // Fall back to the legacy ribbon only when the shared builder declines.
         ribbonPoly.clear();

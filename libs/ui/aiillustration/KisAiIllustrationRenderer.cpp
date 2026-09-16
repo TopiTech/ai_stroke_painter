@@ -267,6 +267,15 @@ QString KisAiIllustrationRenderer::displayEndpoint(const QString &endpoint)
     return url.scheme().toLower() + QStringLiteral("://") + url.host();
 }
 
+bool KisAiIllustrationRenderer::isLoopbackEndpoint(const QString &endpoint)
+{
+    const QUrl url = QUrl::fromUserInput(endpoint.trimmed());
+    if (!url.isValid() || url.host().isEmpty()) {
+        return false;
+    }
+    return isLoopbackHost(url.host());
+}
+
 QImage KisAiIllustrationRenderer::createConceptImage(const QString &prompt, const QSize &requestedSize)
 {
     const QSize size = boundedSize(requestedSize);

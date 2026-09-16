@@ -63,12 +63,13 @@ QPolygonF scalePolygon(const QPolygonF &normPoly, const QSize &canvasSize)
     return res;
 }
 
-qreal effectiveWidthPx(const KisAiStrokeBrush &brush, qreal pressure, const QSize &canvasSize)
+qreal effectiveWidthPx(const KisAiStrokeBrush &brush, qreal pressure, const QSize &canvasSize, int supersampleScale = 1)
 {
     const qreal baseDim = qMin(canvasSize.width(), canvasSize.height());
+    const qreal scale = qMax(1, supersampleScale);
     qreal sz = 8.0;
     if (brush.sizeMode == QLatin1String("px")) {
-        sz = brush.size;
+        sz = brush.size * scale;
     } else {
         sz = brush.size * baseDim;
     }
@@ -489,7 +490,8 @@ QVector<KisAiStrokeQualityUtils::StrokeEnvelopeSegment> KisAiStrokeQualityUtils:
     const QVector<KisAiStrokePoint> &points,
     const KisAiStrokeBrush &brush,
     const QSize &canvasSize,
-    bool closed)
+    bool closed,
+    int supersampleScale)
 {
     QVector<StrokeEnvelopeSegment> segments;
     if (points.size() < 2) {
@@ -517,7 +519,7 @@ QVector<KisAiStrokeQualityUtils::StrokeEnvelopeSegment> KisAiStrokeQualityUtils:
     for (int i = 0; i < n; ++i) {
         const qreal globalT = qreal(i) / qMax(1, segCount);
         const qreal taper = calculateTaper(globalT, brush.profile, closed);
-        const qreal w = effectiveWidthPx(brush, pressures.at(i) * taper, canvasSize);
+        const qreal w = effectiveWidthPx(brush, pressures.at(i) * taper, canvasSize, supersampleScale);
         widths.append(w);
     }
 

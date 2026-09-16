@@ -219,4 +219,27 @@ void KisAiIllustrationRendererTest::testCityConceptImagePrecedence()
     QCOMPARE(cityImg.size(), targetSize);
 }
 
+void KisAiIllustrationRendererTest::testIsLoopbackEndpoint()
+{
+    // Localhost hostnames
+    QVERIFY(KisAiIllustrationRenderer::isLoopbackEndpoint(QStringLiteral("http://localhost:11434/v1/chat/completions")));
+    QVERIFY(KisAiIllustrationRenderer::isLoopbackEndpoint(QStringLiteral("http://localhost.:11434/v1")));
+    QVERIFY(KisAiIllustrationRenderer::isLoopbackEndpoint(QStringLiteral("http://%6c%6f%63%61%6c%68%6f%73%74:11434/v1")));
+
+    // IPv4 loopback addresses
+    QVERIFY(KisAiIllustrationRenderer::isLoopbackEndpoint(QStringLiteral("http://127.0.0.1:8000/v1")));
+    QVERIFY(KisAiIllustrationRenderer::isLoopbackEndpoint(QStringLiteral("http://127.0.0.2:8000/v1")));
+
+    // IPv6 loopback addresses
+    QVERIFY(KisAiIllustrationRenderer::isLoopbackEndpoint(QStringLiteral("http://[::1]:8080/v1")));
+    QVERIFY(KisAiIllustrationRenderer::isLoopbackEndpoint(QStringLiteral("http://[::ffff:127.0.0.1]:8080/v1")));
+
+    // Remote endpoints must NOT be loopback
+    QVERIFY(!KisAiIllustrationRenderer::isLoopbackEndpoint(QStringLiteral("https://api.openai.com/v1/chat/completions")));
+    QVERIFY(!KisAiIllustrationRenderer::isLoopbackEndpoint(QStringLiteral("https://openrouter.ai/api/v1/chat/completions")));
+    QVERIFY(!KisAiIllustrationRenderer::isLoopbackEndpoint(QStringLiteral("http://192.168.1.100:11434/v1")));
+    QVERIFY(!KisAiIllustrationRenderer::isLoopbackEndpoint(QStringLiteral("http://example.com")));
+    QVERIFY(!KisAiIllustrationRenderer::isLoopbackEndpoint(QStringLiteral("")));
+}
+
 KISTEST_MAIN(KisAiIllustrationRendererTest)

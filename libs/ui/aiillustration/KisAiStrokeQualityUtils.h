@@ -110,7 +110,8 @@ public:
         const QVector<KisAiStrokePoint> &points,
         const KisAiStrokeBrush &brush,
         const QSize &canvasSize,
-        bool closed = false
+        bool closed = false,
+        int supersampleScale = 1
     );
 
     /**
