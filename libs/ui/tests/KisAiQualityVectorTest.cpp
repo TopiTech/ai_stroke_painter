@@ -430,4 +430,33 @@ void KisAiQualityVectorTest::testEvaluatePerceptualFormatSafety()
     QVERIFY(m.ssimAgainstReference >= 0.0 && m.ssimAgainstReference <= 1.0);
 }
 
+void KisAiQualityVectorTest::testEdgeDensityBalanceBoundarySafety()
+{
+    // Regression: edgeDensityBalance computed 2D grid index as ty * cols + tx
+    // and checked idx >= 0 && idx < edges.size(), but lacked tx >= 0 && tx < cols.
+    // Near margins (e.g. x=0.02 or x=0.98), negative or overflowing tx wrapped across rows.
+    // Also tests that Format_ARGB32_Premultiplied images are safely evaluated.
+    QImage premulImg(128, 128, QImage::Format_ARGB32_Premultiplied);
+    premulImg.fill(qRgba(240, 220, 200, 200));
+
+    // Draw some edges so globalMean > 0.001
+    for (int y = 20; y < 100; ++y) {
+        QRgb *row = reinterpret_cast<QRgb *>(premulImg.scanLine(y));
+        row[30] = qRgba(10, 10, 10, 255);
+        row[60] = qRgba(10, 10, 10, 255);
+    }
+
+    // 1. Extreme top-left boundary
+    KisAiSceneSpec specLeft;
+    specLeft.composition.headCenter = QPointF(0.01, 0.01);
+    const PerceptualMetrics mLeft = QualityVectorEvaluator::evaluatePerceptual(premulImg, &specLeft, nullptr);
+    QVERIFY(mLeft.edgeDensityBalance >= 0.0 && mLeft.edgeDensityBalance <= 1.0);
+
+    // 2. Extreme bottom-right boundary
+    KisAiSceneSpec specRight;
+    specRight.composition.headCenter = QPointF(0.99, 0.99);
+    const PerceptualMetrics mRight = QualityVectorEvaluator::evaluatePerceptual(premulImg, &specRight, nullptr);
+    QVERIFY(mRight.edgeDensityBalance >= 0.0 && mRight.edgeDensityBalance <= 1.0);
+}
+
 KISTEST_MAIN(KisAiQualityVectorTest)

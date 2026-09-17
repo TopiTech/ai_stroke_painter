@@ -492,4 +492,43 @@ void KisAiPerceptualRepairerTest::testJitterFixTargetsOnlyJitteryOps()
     QCOMPARE(fixCount, 1);
 }
 
+void KisAiPerceptualRepairerTest::testAutoRepairHatchOnFaceSynthesizesPolygon()
+{
+    // Regression: When Hatch on face was demoted to Fill, if the original op had only points
+    // (no polygon), fix.newPolygon was empty and apply() did not generate one.
+    // drawFillOperation/lintStroke dropped empty polygons (< 3 vertices), causing the demoted
+    // hatch to completely vanish instead of rendering as a soft wash.
+    KisAiStrokeProgram prog;
+    prog.canvasSize = QSize(100, 100);
+
+    KisAiStrokeOperation opHatch;
+    opHatch.id = QStringLiteral("points_face_hatch");
+    opHatch.layer = QStringLiteral("Shading");
+    opHatch.kind = KisAiStrokeOperation::Kind::Hatch;
+    opHatch.brush.color = QColor(255, 180, 180);
+    opHatch.brush.opacity = 0.6;
+    for (int i = 0; i < 4; ++i) {
+        KisAiStrokePoint pt;
+        pt.pos = QPointF(0.40 + 0.05 * i, 0.40 + 0.05 * i);
+        pt.pressure = 0.8;
+        opHatch.points.append(pt);
+    }
+    prog.operations.append(opHatch);
+
+    QImage rendered(100, 100, QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(Qt::transparent);
+
+    KisAiSceneSpec spec;
+    PerceptualRepairPlan plan;
+    const KisAiStrokeProgram repaired = KisAiPerceptualRepairer::autoRepair(prog, rendered, &spec, &plan);
+
+    QCOMPARE(repaired.operations.size(), 1);
+    const KisAiStrokeOperation &repairedOp = repaired.operations.first();
+    QCOMPARE(repairedOp.kind, KisAiStrokeOperation::Kind::Fill);
+    QVERIFY(repairedOp.polygon.size() >= 3);
+    const QRectF b = repairedOp.polygon.boundingRect();
+    QVERIFY(b.width() > 0.0);
+    QVERIFY(b.height() > 0.0);
+}
+
 KISTEST_MAIN(KisAiPerceptualRepairerTest)

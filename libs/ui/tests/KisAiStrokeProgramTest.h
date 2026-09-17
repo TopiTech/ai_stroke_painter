@@ -126,6 +126,7 @@ private Q_SLOTS:
     void testAnimeMouthParsingAndValidation();
     void testLandscapeRigsAndMultiTierComposition();
     void testRichOperationsLimitExpanded();
+    void testTypeCheckerBleedAndCrossingCoordinatesPreserved();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

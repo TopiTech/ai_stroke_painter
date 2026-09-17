@@ -669,7 +669,6 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeMaterialOptics(
 
         // 1. Skin Subsurface Scattering (SSS) Terminator Warm Fringe
         if (isSkin && op.polygon.size() >= 3) {
-            const QRectF b = op.polygon.boundingRect();
             // Narrow band along the shadow edge
             const QPointF fringeShift(-lightDir.x() * 0.020, -lightDir.y() * 0.020);
             QPainterPath origPath;

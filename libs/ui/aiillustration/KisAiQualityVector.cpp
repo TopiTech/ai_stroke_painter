@@ -177,15 +177,6 @@ qreal polygonAreaSigned(const QPolygonF &poly)
     return qAbs(area) * 0.5;
 }
 
-/// 色相距離 (0.0-1.0)。
-qreal hueDistance(qreal h1, qreal h2)
-{
-    qreal d = qAbs(h1 - h2);
-    if (d > 0.5)
-        d = 1.0 - d;
-    return d;
-}
-
 /// 16x16 タイルごとの平均輝度を返す。
 QVector<qreal> tilewiseLuminance(const QImage &image, int tileSize = 16)
 {
@@ -217,44 +208,6 @@ QVector<qreal> tilewiseLuminance(const QImage &image, int tileSize = 16)
                 }
             }
             tiles.append(count > 0 ? sum / count : 0.0);
-        }
-    }
-    return tiles;
-}
-
-/// ラプラシアン分散 (8 近接チャネル輝度差分の二乗平均) を 16x16 タイルごとに計算。
-QVector<qreal> tilewiseLaplacianVariance(const QImage &image, int tileSize = 16)
-{
-    QVector<qreal> tiles;
-    if (image.isNull() || image.width() < 3 || image.height() < 3)
-        return tiles;
-    const int W = image.width();
-    const int H = image.height();
-    const int cols = (W / tileSize) + 1;
-    const int rows = (H / tileSize) + 1;
-    tiles.reserve(cols * rows);
-    for (int ty = 0; ty < H; ty += tileSize) {
-        for (int tx = 0; tx < W; tx += tileSize) {
-            const int xmax = qMin(tx + tileSize, W);
-            const int ymax = qMin(ty + tileSize, H);
-            qreal sumSq = 0.0;
-            int count = 0;
-            for (int y = ty + 1; y < ymax - 1; ++y) {
-                const QRgb *prev = reinterpret_cast<const QRgb *>(image.constScanLine(y - 1));
-                const QRgb *curr = reinterpret_cast<const QRgb *>(image.constScanLine(y));
-                const QRgb *next = reinterpret_cast<const QRgb *>(image.constScanLine(y + 1));
-                for (int x = tx + 1; x < xmax - 1; ++x) {
-                    const qreal c = qRed(curr[x]) / 255.0;
-                    const qreal l = qRed(prev[x]) / 255.0;
-                    const qreal r = qRed(next[x]) / 255.0;
-                    const qreal u = qRed(curr[x - 1]) / 255.0;
-                    const qreal d = qRed(curr[x + 1]) / 255.0;
-                    const qreal lap = 4.0 * c - l - r - u - d;
-                    sumSq += lap * lap;
-                    ++count;
-                }
-            }
-            tiles.append(count > 0 ? sumSq / count : 0.0);
         }
     }
     return tiles;
@@ -324,15 +277,6 @@ qreal tileStddev(const QVector<qreal> &tiles, qreal mean = -1.0)
         acc += d * d;
     }
     return std::sqrt(acc / (tiles.size() - 1));
-}
-
-qreal tileP95(QVector<qreal> tiles)
-{
-    if (tiles.isEmpty())
-        return 0.0;
-    std::sort(tiles.begin(), tiles.end());
-    const int idx = qMin<int>(tiles.size() - 1, int(tiles.size() * 0.95));
-    return tiles.at(idx);
 }
 
 QString normalizeLayerLocal(const QString &name)
@@ -859,7 +803,6 @@ PerceptualMetrics QualityVectorEvaluator::evaluatePerceptual(const QImage &rende
 
     QImage safeImg = renderedImage;
     if (safeImg.format() != QImage::Format_ARGB32 &&
-        safeImg.format() != QImage::Format_ARGB32_Premultiplied &&
         safeImg.format() != QImage::Format_RGB32) {
         safeImg = safeImg.convertToFormat(QImage::Format_ARGB32);
     }
@@ -912,7 +855,11 @@ PerceptualMetrics QualityVectorEvaluator::evaluatePerceptual(const QImage &rende
             qreal faceSum = 0.0;
             int faceCount = 0;
             for (int ty = faceY0; ty <= faceY1; ++ty) {
+                if (ty < 0 || ty >= rows)
+                    continue;
                 for (int tx = faceX0; tx <= faceX1; ++tx) {
+                    if (tx < 0 || tx >= cols)
+                        continue;
                     const int idx = ty * cols + tx;
                     if (idx >= 0 && idx < edges.size()) {
                         faceSum += edges.at(idx);

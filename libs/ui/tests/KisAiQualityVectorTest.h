@@ -39,6 +39,7 @@ private Q_SLOTS:
     void testIntentMatchCoversSunsetAndDawn();
     void testLineartJitterIgnoresEmptyTiles();
     void testEvaluatePerceptualFormatSafety();
+    void testEdgeDensityBalanceBoundarySafety();
 };
 
 #endif // KIS_AI_QUALITY_VECTOR_TEST_H

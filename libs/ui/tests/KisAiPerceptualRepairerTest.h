@@ -33,6 +33,7 @@ private Q_SLOTS:
     void testHatchOnFaceDetectsPointsOnlyHatch();
     void testColorBandingSkipsSharpLineart();
     void testJitterFixTargetsOnlyJitteryOps();
+    void testAutoRepairHatchOnFaceSynthesizesPolygon();
 };
 
 #endif // KIS_AI_PERCEPTUAL_REPAIRER_TEST_H

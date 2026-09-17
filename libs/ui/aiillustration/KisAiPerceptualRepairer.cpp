@@ -73,20 +73,6 @@ QString normalizeLayerLocal(const QString &name)
     return name.trimmed().isEmpty() ? QStringLiteral("Lineart") : name.trimmed();
 }
 
-qreal polygonAreaSigned(const QPolygonF &poly)
-{
-    const int n = poly.size();
-    if (n < 3)
-        return 0.0;
-    qreal area = 0.0;
-    for (int i = 0; i < n; ++i) {
-        const QPointF a = poly.at(i);
-        const QPointF b = poly.at((i + 1) % n);
-        area += a.x() * b.y() - b.x() * a.y();
-    }
-    return qAbs(area) * 0.5;
-}
-
 QRectF normalizedBounds(const QRectF &r, qreal imageW, qreal imageH)
 {
     if (imageW <= 0.0 || imageH <= 0.0)
@@ -532,6 +518,17 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
                     fix.replaceKindName = QStringLiteral("Fill");
                     fix.newColor = op.brush.color;
                     fix.newOpacity = qBound<qreal>(0.05, op.brush.opacity * 0.75, 0.40);
+                    if (op.polygon.size() >= 3) {
+                        fix.newPolygon = op.polygon;
+                    } else if (!hatchBounds.isEmpty()) {
+                        const QRectF nb = normalizedBounds(hatchBounds, flatsMask.width(), flatsMask.height());
+                        fix.newPolygon = QPolygonF(QVector<QPointF>{
+                            nb.topLeft(),
+                            nb.topRight(),
+                            nb.bottomRight(),
+                            nb.bottomLeft()
+                        });
+                    }
                     fix.description = QStringLiteral("Demote face hatch to soft Fill (watercolor 0.30)");
                     plan.fixes.append(fix);
                     plan.autoFixSummaries.append(fix.description);
@@ -590,7 +587,6 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
                 sample = sample.scaled(512, 512, Qt::KeepAspectRatio, Qt::FastTransformation);
             }
             if (sample.format() != QImage::Format_ARGB32 &&
-                sample.format() != QImage::Format_ARGB32_Premultiplied &&
                 sample.format() != QImage::Format_RGB32) {
                 sample = sample.convertToFormat(QImage::Format_ARGB32);
             }
@@ -750,6 +746,8 @@ KisAiStrokeProgram KisAiPerceptualRepairer::apply(const KisAiStrokeProgram &prog
             if (fix.newColor.isValid())
                 op.brush.color = fix.newColor;
             op.brush.opacity = fix.newOpacity;
+            if (!fix.newPolygon.isEmpty() && op.polygon.size() < 3)
+                op.polygon = fix.newPolygon;
             result.operations[targetIdx] = op;
             break;
         }

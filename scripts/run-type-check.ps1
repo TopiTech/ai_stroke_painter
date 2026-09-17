@@ -135,6 +135,12 @@ if ($SyntaxOnly) {
         $targets += "KisAiIllustrationRendererTest"
         $targets += "KisAiV5EngineTest"
         $targets += "KisAiV6WiringTest"
+        $targets += "KisAiV7QualityTest"
+        $targets += "KisAiQualityVectorTest"
+        $targets += "KisAiPerceptualRepairerTest"
+        $targets += "KisAiPhysicalRendererTest"
+        $targets += "KisAiAbstractOntologyTest"
+        $targets += "KisAiQualityBenchGateTest"
     }
 
     $ninjaArgs = @("-C", $buildDir) + $targets

@@ -1441,58 +1441,76 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     // Configure accessible keyboard navigation (Tab order) across primary controls.
     // 詳細設定・Goal・デバッグ等の追加コントロールも辿れるよう、主要な操作系を
-    // 一本の順序に繋ぐ。カードボタン群 (chip/style/composition/lighting) は
-    // 生成直後に setTabOrder できないため、Qt 既定の生成順フォーカスに任せる。
-    if (m_uiModeTabs && m_promptEditor) {
-        QWidget::setTabOrder(m_uiModeTabs, m_promptEditor);
-        if (m_expandPromptButton)
-            QWidget::setTabOrder(m_promptEditor, m_expandPromptButton);
-        if (m_expandPromptButton && m_syncColorButton)
-            QWidget::setTabOrder(m_expandPromptButton, m_syncColorButton);
-        if (m_syncColorButton && m_widthSpin)
-            QWidget::setTabOrder(m_syncColorButton, m_widthSpin);
-        if (m_widthSpin && m_heightSpin)
-            QWidget::setTabOrder(m_widthSpin, m_heightSpin);
-        if (m_heightSpin && m_newCanvasButton)
-            QWidget::setTabOrder(m_heightSpin, m_newCanvasButton);
-        if (m_newCanvasButton && m_modeCombo)
-            QWidget::setTabOrder(m_newCanvasButton, m_modeCombo);
-        if (m_modeCombo && m_detailsToggleBtn)
-            QWidget::setTabOrder(m_modeCombo, m_detailsToggleBtn);
-        if (m_detailsToggleBtn && m_endpointEditor)
-            QWidget::setTabOrder(m_detailsToggleBtn, m_endpointEditor);
-        if (m_endpointEditor && m_modelEditor)
-            QWidget::setTabOrder(m_endpointEditor, m_modelEditor);
-        if (m_modelEditor && m_apiKeyEditor)
-            QWidget::setTabOrder(m_modelEditor, m_apiKeyEditor);
-        if (m_apiKeyEditor && m_strokeBudgetSpin)
-            QWidget::setTabOrder(m_apiKeyEditor, m_strokeBudgetSpin);
-        if (m_strokeBudgetSpin && m_artStyleCombo)
-            QWidget::setTabOrder(m_strokeBudgetSpin, m_artStyleCombo);
-        if (m_artStyleCombo && m_customInstructionsEdit)
-            QWidget::setTabOrder(m_artStyleCombo, m_customInstructionsEdit);
-        if (m_customInstructionsEdit && m_testConnectionButton)
-            QWidget::setTabOrder(m_customInstructionsEdit, m_testConnectionButton);
-        if (m_testConnectionButton && m_saveSettingsButton)
-            QWidget::setTabOrder(m_testConnectionButton, m_saveSettingsButton);
-        if (m_saveSettingsButton && m_goalModeCheck)
-            QWidget::setTabOrder(m_saveSettingsButton, m_goalModeCheck);
-        if (m_goalModeCheck && m_goalStepsSpin)
-            QWidget::setTabOrder(m_goalModeCheck, m_goalStepsSpin);
-        if (m_goalStepsSpin && m_debugModeCheck)
-            QWidget::setTabOrder(m_goalStepsSpin, m_debugModeCheck);
-        if (m_debugModeCheck && m_generateButton)
-            QWidget::setTabOrder(m_debugModeCheck, m_generateButton);
-        if (m_generateButton && m_cancelButton)
-            QWidget::setTabOrder(m_generateButton, m_cancelButton);
-        if (m_cancelButton && m_nextStepButton)
-            QWidget::setTabOrder(m_cancelButton, m_nextStepButton);
-        if (m_nextStepButton && m_finishGoalButton)
-            QWidget::setTabOrder(m_nextStepButton, m_finishGoalButton);
-        if (m_finishGoalButton && m_copyLogButton)
-            QWidget::setTabOrder(m_finishGoalButton, m_copyLogButton);
-        if (m_copyLogButton && m_clearLogButton)
-            QWidget::setTabOrder(m_copyLogButton, m_clearLogButton);
+    // 自然な視覚的読書順序（上部タブ・プロンプト・キャンバス・モード・接続・生成設定・Goal・Debug・アクション）で
+    // 一本の順序に繋ぐ。
+    {
+        QWidget *prev = nullptr;
+        auto chainTab = [&prev](QWidget *w) {
+            if (!w) return;
+            if (prev) {
+                QWidget::setTabOrder(prev, w);
+            }
+            prev = w;
+        };
+
+        // Header & prompt card
+        chainTab(m_uiModeTabs);
+        chainTab(m_presetCombo);
+        chainTab(m_promptEditor);
+        chainTab(m_expandPromptButton);
+        chainTab(m_syncColorButton);
+
+        // Canvas setup & generation mode
+        chainTab(m_widthSpin);
+        chainTab(m_heightSpin);
+        chainTab(m_newCanvasButton);
+        chainTab(m_modeCombo);
+        chainTab(m_detailsToggleBtn);
+
+        // Connection & model settings
+        chainTab(m_endpointEditor);
+        chainTab(m_modelEditor);
+        chainTab(m_apiKeyEditor);
+        chainTab(m_saveApiKeyCheck);
+
+        // Generation parameters & advanced details
+        chainTab(m_strokeBudgetSpin);
+        chainTab(m_temperatureSpin);
+        chainTab(m_topPSpin);
+        chainTab(m_trappingPxSpin);
+        chainTab(m_maxTokensSpin);
+        chainTab(m_timeoutSecSpin);
+        chainTab(m_maxRetriesSpin);
+        chainTab(m_jsonModeCombo);
+        chainTab(m_visionQualityCombo);
+        chainTab(m_strokeProtocolCombo);
+        chainTab(m_reasoningEffortCombo);
+        chainTab(m_qualityProfileCombo);
+        chainTab(m_physicalRenderCheck);
+        chainTab(m_perceptualRepairCheck);
+        chainTab(m_compositionPlanCheck);
+        chainTab(m_suppressParticlesCheck);
+        chainTab(m_customInstructionsEdit);
+        chainTab(m_submitFeedbackButton);
+        chainTab(m_testConnectionButton);
+        chainTab(m_saveSettingsButton);
+
+        // Goal Mode controls
+        chainTab(m_goalModeCheck);
+        chainTab(m_goalStepsSpin);
+        chainTab(m_artStyleCombo);
+        chainTab(m_pausePerStepCheck);
+
+        // Debug Mode controls
+        chainTab(m_debugModeCheck);
+        chainTab(m_copyLogButton);
+        chainTab(m_clearLogButton);
+
+        // Primary action buttons
+        chainTab(m_generateButton);
+        chainTab(m_cancelButton);
+        chainTab(m_nextStepButton);
+        chainTab(m_finishGoalButton);
     }
 
     updateModeUi();

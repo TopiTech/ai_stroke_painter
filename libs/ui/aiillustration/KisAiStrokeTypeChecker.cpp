@@ -299,11 +299,10 @@ bool KisAiStrokeTypeChecker::checkPointsArray(QJsonArray *pointsArray, QString *
                 bool okP = (arr.size() >= 3) ? coerceToNumber(arr.at(2), &p) : true;
 
                 if (okX && okY) {
-                    // bounds/center と同様に正規化ドメインへ clamp。
-                    // 旧実装は 1e300 のような巨大値をそのまま通していた。
+                    // 正規化ドメイン [-0.5, 1.5] へ clamp (オフスクリーンブリード余白・キャンバス横断ストロークを許容しつつ 1e300 等の巨大値を防ぐ)。
                     QJsonArray normPt;
-                    normPt.append(qBound(0.0, x, 1.0));
-                    normPt.append(qBound(0.0, y, 1.0));
+                    normPt.append(qBound(-0.5, x, 1.5));
+                    normPt.append(qBound(-0.5, y, 1.5));
                     normPt.append(qBound(0.0, okP ? p : 0.8, 1.0));
                     normalized.append(normPt);
 
@@ -333,8 +332,8 @@ bool KisAiStrokeTypeChecker::checkPointsArray(QJsonArray *pointsArray, QString *
                     p = 0.8;
                 }
                 QJsonArray normPt;
-                normPt.append(qBound(0.0, x, 1.0));
-                normPt.append(qBound(0.0, y, 1.0));
+                normPt.append(qBound(-0.5, x, 1.5));
+                normPt.append(qBound(-0.5, y, 1.5));
                 normPt.append(qBound(0.0, p, 1.0));
                 normalized.append(normPt);
                 if (coercedCount) ++(*coercedCount);
@@ -366,8 +365,8 @@ bool KisAiStrokeTypeChecker::checkPolygonArray(QJsonArray *polygonArray, QString
                 qreal x = 0.0, y = 0.0;
                 if (coerceToNumber(arr.at(0), &x) && coerceToNumber(arr.at(1), &y)) {
                     QJsonArray normPt;
-                    normPt.append(qBound(0.0, x, 1.0));
-                    normPt.append(qBound(0.0, y, 1.0));
+                    normPt.append(qBound(-0.5, x, 1.5));
+                    normPt.append(qBound(-0.5, y, 1.5));
                     normalized.append(normPt);
 
                     if (!arr.at(0).isDouble() || !arr.at(1).isDouble()) {
@@ -385,8 +384,8 @@ bool KisAiStrokeTypeChecker::checkPolygonArray(QJsonArray *polygonArray, QString
             qreal x = 0.0, y = 0.0;
             if (coerceToNumber(vx, &x) && coerceToNumber(vy, &y)) {
                 QJsonArray normPt;
-                normPt.append(qBound(0.0, x, 1.0));
-                normPt.append(qBound(0.0, y, 1.0));
+                normPt.append(qBound(-0.5, x, 1.5));
+                normPt.append(qBound(-0.5, y, 1.5));
                 normalized.append(normPt);
                 if (coercedCount) ++(*coercedCount);
             }

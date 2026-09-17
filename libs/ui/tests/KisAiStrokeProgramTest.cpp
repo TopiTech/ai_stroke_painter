@@ -4401,6 +4401,61 @@ void KisAiStrokeProgramTest::testRichOperationsLimitExpanded()
     QVERIFY(error.contains(QStringLiteral("上限")));
 }
 
+void KisAiStrokeProgramTest::testTypeCheckerBleedAndCrossingCoordinatesPreserved()
+{
+    // Regression: checkPointsArray and checkPolygonArray previously clamped strictly to [0.0, 1.0],
+    // destroying valid bleed fills (e.g. [-0.1, 1.1]) and canvas-crossing paths (e.g. [-0.1, 0.5] -> [1.1, 0.5]).
+    // They must preserve coordinates in [-0.5, 1.5] while clamping wild 1e300 / NaN inputs.
+
+    // 1. Points array format 1 (array of arrays)
+    QJsonArray ptsArr;
+    ptsArr.append(QJsonArray{-0.1, 0.5, 0.8});
+    ptsArr.append(QJsonArray{1.2, 0.5, 0.8});
+    ptsArr.append(QJsonArray{100.0, -50.0, 0.8}); // extreme coords clamped to [-0.5, 1.5]
+
+    QString error;
+    int coerced = 0;
+    QVERIFY(KisAiStrokeTypeChecker::checkPointsArray(&ptsArr, &error, &coerced));
+    QCOMPARE(ptsArr.size(), 3);
+    const QJsonArray p0 = ptsArr.at(0).toArray();
+    QCOMPARE(p0.at(0).toDouble(), -0.1);
+    QCOMPARE(p0.at(1).toDouble(), 0.5);
+    const QJsonArray p1 = ptsArr.at(1).toArray();
+    QCOMPARE(p1.at(0).toDouble(), 1.2);
+    QCOMPARE(p1.at(1).toDouble(), 0.5);
+    const QJsonArray p2 = ptsArr.at(2).toArray();
+    QCOMPARE(p2.at(0).toDouble(), 1.5);
+    QCOMPARE(p2.at(1).toDouble(), -0.5);
+
+    // 2. Points array format 2 (array of objects)
+    QJsonArray ptsObjArr;
+    QJsonObject ptObj1;
+    ptObj1[QStringLiteral("x")] = -0.2;
+    ptObj1[QStringLiteral("y")] = 1.3;
+    ptObj1[QStringLiteral("pressure")] = 0.7;
+    ptsObjArr.append(ptObj1);
+    QVERIFY(KisAiStrokeTypeChecker::checkPointsArray(&ptsObjArr, &error, &coerced));
+    const QJsonArray pObj0 = ptsObjArr.at(0).toArray();
+    QCOMPARE(pObj0.at(0).toDouble(), -0.2);
+    QCOMPARE(pObj0.at(1).toDouble(), 1.3);
+
+    // 3. Polygon array
+    QJsonArray polyArr;
+    polyArr.append(QJsonArray{-0.1, -0.1});
+    polyArr.append(QJsonArray{1.1, -0.1});
+    polyArr.append(QJsonArray{1.1, 1.1});
+    polyArr.append(QJsonArray{-0.1, 1.1});
+    polyArr.append(QJsonArray{-10.0, 10.0}); // extreme clamped
+    QVERIFY(KisAiStrokeTypeChecker::checkPolygonArray(&polyArr, &error, &coerced));
+    QCOMPARE(polyArr.size(), 5);
+    QCOMPARE(polyArr.at(0).toArray().at(0).toDouble(), -0.1);
+    QCOMPARE(polyArr.at(0).toArray().at(1).toDouble(), -0.1);
+    QCOMPARE(polyArr.at(1).toArray().at(0).toDouble(), 1.1);
+    QCOMPARE(polyArr.at(2).toArray().at(1).toDouble(), 1.1);
+    QCOMPARE(polyArr.at(4).toArray().at(0).toDouble(), -0.5);
+    QCOMPARE(polyArr.at(4).toArray().at(1).toDouble(), 1.5);
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 
