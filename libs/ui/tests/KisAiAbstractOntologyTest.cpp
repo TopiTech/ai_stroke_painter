@@ -186,4 +186,12 @@ void KisAiAbstractOntologyTest::testWeightScaling()
     QVERIFY(spec.colorScript.accentWeight > 0.0);
 }
 
+void KisAiAbstractOntologyTest::testDefaultSpecForPromptAppliesOntology()
+{
+    // "jazzy" triggers artStyleId = "fine_line" or colorScript / palette changes
+    const KisAiSceneSpec spec = KisAiSceneSpecCodec::defaultSpecForPrompt(QStringLiteral("jazzy girl"), QSize(512, 512));
+    // Ontology rule for "jazzy" sets style.artStyleId = "fine_line" or colorScript properties
+    QVERIFY(spec.style.artStyleId == QStringLiteral("fine_line") || spec.colorScript.accentWeight > 0.0);
+}
+
 KISTEST_MAIN(KisAiAbstractOntologyTest)

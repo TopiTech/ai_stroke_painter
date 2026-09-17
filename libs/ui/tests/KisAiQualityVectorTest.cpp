@@ -234,4 +234,52 @@ void KisAiQualityVectorTest::testForNameUnknownReturnsDefault()
     }
 }
 
+void KisAiQualityVectorTest::testEvaluateStructuralSymmetryAxisDeviation()
+{
+    KisAiSceneSpec spec;
+    spec.composition.headCenter = QPointF(0.5, 0.5);
+
+    // Symmetric drawing around axis x = 0.5 (left eye at 0.4, right eye at 0.6)
+    KisAiStrokeProgram symProg;
+    KisAiStrokeOperation opSym;
+    opSym.layer = QStringLiteral("Lineart");
+    opSym.kind = KisAiStrokeOperation::Kind::Path;
+    KisAiStrokePoint ptL, ptR;
+    ptL.pos = QPointF(0.4, 0.5);
+    ptR.pos = QPointF(0.6, 0.5);
+    opSym.points << ptL << ptR;
+    symProg.operations << opSym;
+
+    const StructuralMetrics symM = QualityVectorEvaluator::evaluateStructural(symProg, &spec);
+    // Left and right perfectly balance: score should be 1.0
+    QCOMPARE(symM.symmetryAxisDeviation, 1.0);
+
+    // Asymmetric drawing biased to one side (points at 0.7, 0.7)
+    KisAiStrokeProgram asymProg;
+    KisAiStrokeOperation opAsym;
+    opAsym.layer = QStringLiteral("Lineart");
+    opAsym.kind = KisAiStrokeOperation::Kind::Path;
+    KisAiStrokePoint ptA1, ptA2;
+    ptA1.pos = QPointF(0.7, 0.5);
+    ptA2.pos = QPointF(0.7, 0.5);
+    opAsym.points << ptA1 << ptA2;
+    asymProg.operations << opAsym;
+
+    const StructuralMetrics asymM = QualityVectorEvaluator::evaluateStructural(asymProg, &spec);
+    // Skewed by 0.2 from 0.5, exceeds 0.10 threshold: score should be 0.0
+    QCOMPARE(asymM.symmetryAxisDeviation, 0.0);
+}
+
+void KisAiQualityVectorTest::testEvaluatePerceptualFormatSafety()
+{
+    // Grayscale image should not cause memory misalignment or crash
+    QImage grayImg(32, 32, QImage::Format_Grayscale8);
+    grayImg.fill(128);
+
+    KisAiSceneSpec spec;
+    const PerceptualMetrics m = QualityVectorEvaluator::evaluatePerceptual(grayImg, &spec, nullptr);
+    QVERIFY(m.colorEntropy >= 0.0 && m.colorEntropy <= 1.0);
+    QVERIFY(m.ssimAgainstReference >= 0.0 && m.ssimAgainstReference <= 1.0);
+}
+
 KISTEST_MAIN(KisAiQualityVectorTest)

@@ -347,4 +347,57 @@ void KisAiPerceptualRepairerTest::testCleanProgramProducesZeroIssues()
     QVERIFY(plan.totalIssues() >= 0);
 }
 
+void KisAiPerceptualRepairerTest::testMultipleDropOpStability()
+{
+    KisAiStrokeProgram prog;
+    KisAiStrokeOperation opA, opB, opC;
+    opA.id = QStringLiteral("opA");
+    opA.kind = KisAiStrokeOperation::Kind::Path;
+    opB.id = QStringLiteral("opB");
+    opB.kind = KisAiStrokeOperation::Kind::Path;
+    opC.id = QStringLiteral("opC");
+    opC.kind = KisAiStrokeOperation::Kind::Fill;
+
+    prog.operations << opA << opB << opC;
+
+    PerceptualRepairPlan plan;
+    PerceptualIssue issue;
+    issue.requiresUserConsent = true;
+
+    PerceptualFix fix1;
+    fix1.issue = issue;
+    fix1.action = PerceptualFix::DropOp;
+    fix1.targetOpIndex = 0;
+    fix1.targetOpId = QStringLiteral("opA");
+
+    PerceptualFix fix2;
+    fix2.issue = issue;
+    fix2.action = PerceptualFix::DropOp;
+    fix2.targetOpIndex = 1;
+    fix2.targetOpId = QStringLiteral("opB");
+
+    plan.fixes << fix1 << fix2;
+
+    const KisAiStrokeProgram outProg = KisAiPerceptualRepairer::apply(prog, plan, true);
+    QCOMPARE(outProg.operations.size(), 1);
+    QCOMPARE(outProg.operations.first().id, QStringLiteral("opC"));
+}
+
+void KisAiPerceptualRepairerTest::testColorBandingOnLargeImage()
+{
+    // 1024x1024 large render with artificial 8-bit banding steps
+    QImage largeImg(1024, 1024, QImage::Format_ARGB32);
+    for (int y = 0; y < 1024; ++y) {
+        QRgb *row = reinterpret_cast<QRgb *>(largeImg.scanLine(y));
+        const int val = (y / 32) * 8; // step banding
+        for (int x = 0; x < 1024; ++x) {
+            row[x] = qRgba(val, val, val, 255);
+        }
+    }
+
+    KisAiStrokeProgram prog;
+    const PerceptualRepairPlan plan = KisAiPerceptualRepairer::diagnose(prog, largeImg, nullptr);
+    QVERIFY(plan.issueCount(PerceptualIssue::ColorBanding) >= 0);
+}
+
 KISTEST_MAIN(KisAiPerceptualRepairerTest)

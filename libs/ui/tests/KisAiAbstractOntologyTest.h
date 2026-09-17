@@ -25,6 +25,7 @@ private Q_SLOTS:
     void testLoadCustomFromJsonArray();
     void testAppliedDescriptionsOutParam();
     void testWeightScaling();
+    void testDefaultSpecForPromptAppliesOntology();
 };
 
 #endif // KIS_AI_ABSTRACT_ONTOLOGY_TEST_H

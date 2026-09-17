@@ -28,6 +28,8 @@ private Q_SLOTS:
     void testApplyWithConsent();
     void testAutoRepairConvenience();
     void testCleanProgramProducesZeroIssues();
+    void testMultipleDropOpStability();
+    void testColorBandingOnLargeImage();
 };
 
 #endif // KIS_AI_PERCEPTUAL_REPAIRER_TEST_H

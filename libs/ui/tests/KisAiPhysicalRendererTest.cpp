@@ -335,4 +335,40 @@ void KisAiPhysicalRendererTest::testRenderProgramToPhysicalImage()
     QVERIFY(cornerCol.alpha() < 10);
 }
 
+void KisAiPhysicalRendererTest::testCompositeLayerMismatchedSize()
+{
+    QImage dst(64, 64, QImage::Format_ARGB32_Premultiplied);
+    dst.fill(QColor(100, 100, 100, 255));
+
+    KisAiLayerImage srcLayer;
+    srcLayer.name = QStringLiteral("Shading");
+    srcLayer.blendMode = QStringLiteral("multiply");
+    srcLayer.opacityFactor = 0.8;
+    srcLayer.image = QImage(128, 128, QImage::Format_ARGB32_Premultiplied);
+    srcLayer.image.fill(QColor(50, 50, 50, 200));
+
+    QImage clipMask(32, 32, QImage::Format_ARGB32_Premultiplied);
+    clipMask.fill(QColor(255, 255, 255, 255));
+
+    // Must not crash or read out-of-bounds even with mismatched sizes
+    KisAiPhysicalRenderer::compositeLayer(dst, srcLayer, &clipMask);
+    QCOMPARE(dst.size(), QSize(64, 64));
+    QVERIFY(dst.pixelColor(32, 32).alpha() > 200);
+}
+
+void KisAiPhysicalRendererTest::testBlendPixelNanAndInfProtection()
+{
+    const float nanVal = std::numeric_limits<float>::quiet_NaN();
+    const float infVal = std::numeric_limits<float>::infinity();
+
+    float dstR = 0.5f, dstG = 0.5f, dstB = 0.5f, dstA = 1.0f;
+    // NaN src
+    KisAiPhysicalRenderer::blendPixel(QStringLiteral("normal"), nanVal, 0.5f, 0.5f, 1.0f, dstR, dstG, dstB, dstA, 1.0f);
+    QVERIFY(std::isfinite(dstR) && std::isfinite(dstG) && std::isfinite(dstB) && std::isfinite(dstA));
+
+    // Inf opacity
+    KisAiPhysicalRenderer::blendPixel(QStringLiteral("multiply"), 0.5f, 0.5f, 0.5f, 1.0f, dstR, dstG, dstB, dstA, infVal);
+    QVERIFY(std::isfinite(dstR) && std::isfinite(dstG) && std::isfinite(dstB) && std::isfinite(dstA));
+}
+
 KISTEST_MAIN(KisAiPhysicalRendererTest)

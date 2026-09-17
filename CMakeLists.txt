@@ -89,6 +89,16 @@ if (AI_STROKE_STANDALONE_TESTS)
     target_link_libraries(KisAiV6WiringTest PRIVATE ai_stroke_core Qt6::Test)
     add_test(NAME KisAiV6WiringTest COMMAND KisAiV6WiringTest)
 
+    add_executable(KisAiV7QualityTest
+        libs/ui/tests/KisAiV7QualityTest.cpp
+    )
+    target_include_directories(KisAiV7QualityTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiV7QualityTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiV7QualityTest COMMAND KisAiV7QualityTest)
+
     add_executable(KisAiQualityVectorTest
         libs/ui/tests/KisAiQualityVectorTest.cpp
     )
@@ -145,6 +155,7 @@ if (AI_STROKE_STANDALONE_TESTS)
         KisAiIllustrationRendererTest
         KisAiV5EngineTest
         KisAiV6WiringTest
+        KisAiV7QualityTest
         KisAiQualityVectorTest
         KisAiPerceptualRepairerTest
         KisAiPhysicalRendererTest

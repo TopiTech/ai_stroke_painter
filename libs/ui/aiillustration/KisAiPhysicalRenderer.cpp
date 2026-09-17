@@ -129,6 +129,12 @@ void KisAiPhysicalRenderer::blendPixel(const QString &blendMode,
                                        float &dstR, float &dstG, float &dstB, float &dstA,
                                        float opacity)
 {
+    if (!std::isfinite(srcA) || !std::isfinite(dstA) || !std::isfinite(opacity) ||
+        !std::isfinite(srcR) || !std::isfinite(srcG) || !std::isfinite(srcB) ||
+        !std::isfinite(dstR) || !std::isfinite(dstG) || !std::isfinite(dstB)) {
+        return;
+    }
+
     srcA = qBound(0.0f, srcA * opacity, 1.0f);
     if (srcA <= 1e-6f) {
         return; // ソースが完全に透明
@@ -198,10 +204,10 @@ void KisAiPhysicalRenderer::blendPixel(const QString &blendMode,
     const float term2 = (1.0f - srcA) * dstA;
     const float term3 = srcA * dstA;
 
-    dstR = term1 * csR + term2 * cbR + term3 * bR;
-    dstG = term1 * csG + term2 * cbG + term3 * bG;
-    dstB = term1 * csB + term2 * cbB + term3 * bB;
     dstA = qBound(0.0f, outA, 1.0f);
+    dstR = qBound(0.0f, term1 * csR + term2 * cbR + term3 * bR, dstA);
+    dstG = qBound(0.0f, term1 * csG + term2 * cbG + term3 * bG, dstA);
+    dstB = qBound(0.0f, term1 * csB + term2 * cbB + term3 * bB, dstA);
 }
 
 // ===========================================================================
@@ -339,6 +345,13 @@ void KisAiPhysicalRenderer::compositeLayer(QImage &dstImage,
         } else {
             maskFp = *clipMask;
         }
+    }
+
+    if (srcFp.size() != dstImage.size()) {
+        srcFp = srcFp.scaled(dstImage.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    }
+    if (!maskFp.isNull() && maskFp.size() != dstImage.size()) {
+        maskFp = maskFp.scaled(dstImage.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
     }
 
     const float opacity = qBound(0.0f, static_cast<float>(srcLayer.opacityFactor), 1.0f);

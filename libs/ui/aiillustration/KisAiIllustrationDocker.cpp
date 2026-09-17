@@ -129,6 +129,28 @@ void setFormRowVisible(QFormLayout *form, int row, bool visible)
 #endif
 }
 
+void setFormRowVisible(QFormLayout *form, QWidget *fieldWidget, bool visible)
+{
+    if (!form || !fieldWidget) {
+        return;
+    }
+    int row = -1;
+    QFormLayout::ItemRole role;
+    form->getWidgetPosition(fieldWidget, &row, &role);
+    if (row >= 0) {
+        setFormRowVisible(form, row, visible);
+    }
+}
+
+static QByteArray formatBearerAuthHeader(const QString &apiKey)
+{
+    QString trimmed = apiKey.trimmed();
+    if (trimmed.startsWith(QLatin1String("Bearer "), Qt::CaseInsensitive)) {
+        trimmed = trimmed.mid(7).trimmed();
+    }
+    return QByteArrayLiteral("Bearer ") + trimmed.toUtf8();
+}
+
 bool protectApiKeyForCurrentUser(const QString &apiKey, QString *protectedValue)
 {
 #if defined(Q_OS_WIN)
@@ -1441,7 +1463,6 @@ KisAiIllustrationDocker::~KisAiIllustrationDocker()
     clearInFlightApiKey();
     if (m_settingsSaveDebounceTimer && m_settingsSaveDebounceTimer->isActive()) {
         m_settingsSaveDebounceTimer->stop();
-        saveSettings(); // flush the debounced free-text edit
     }
     saveSettings();
     if (!m_goalApiKey.isEmpty()) {
@@ -1726,7 +1747,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     QNetworkRequest request{QUrl(endpoint)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     if (!apiKey.isEmpty()) {
-        request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+        request.setRawHeader("Authorization", formatBearerAuthHeader(apiKey));
     }
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
@@ -2324,7 +2345,7 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
     QNetworkRequest request{QUrl(endpoint)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     if (!apiKey.isEmpty()) {
-        request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+        request.setRawHeader("Authorization", formatBearerAuthHeader(apiKey));
     }
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
@@ -2519,6 +2540,14 @@ void KisAiIllustrationDocker::cancelRemoteRequest()
     if (m_testReply) {
         m_testReply->disconnect(this);
         m_testReply->abort();
+        m_testReply->deleteLater();
+        m_testReply = nullptr;
+    }
+    m_testResponseBuffer.clear();
+    m_testResponseTooLarge = false;
+    if (m_testConnectionButton) {
+        m_testConnectionButton->setEnabled(true);
+        m_testConnectionButton->setText(i18n("接続テスト"));
     }
     if (m_expandPromptReply) {
         m_expandPromptReply->disconnect(this);
@@ -2681,25 +2710,28 @@ void KisAiIllustrationDocker::updateModeUi()
 
     const bool isStrokeMode = (isLlm || newMode == GenerationMode::LocalStrokes);
     if (m_remoteForm) {
-        // Row indices must match the addRow() order in the constructor.
-        setFormRowVisible(m_remoteForm, 0, needsRemote); // Endpoint
-        setFormRowVisible(m_remoteForm, 1, needsRemote); // Model
-        setFormRowVisible(m_remoteForm, 2, needsRemote); // API Key
-        setFormRowVisible(m_remoteForm, 3, needsRemote); // Save API Key checkbox
-        setFormRowVisible(m_remoteForm, 4, isLlm); // Stroke Budget
-        setFormRowVisible(m_remoteForm, 5, isLlm); // Temperature
-        setFormRowVisible(m_remoteForm, 6, isLlm); // Top-P
-        setFormRowVisible(m_remoteForm, 7, isStrokeMode); // Trapping px
-        setFormRowVisible(m_remoteForm, 8, isLlm); // Max Tokens
-        setFormRowVisible(m_remoteForm, 9, needsRemote); // Timeout
-        setFormRowVisible(m_remoteForm, 10, isLlm); // Auto-retries
-        setFormRowVisible(m_remoteForm, 11, isLlm); // JSON Mode
-        setFormRowVisible(m_remoteForm, 12, isLlm); // Vision Quality
-        setFormRowVisible(m_remoteForm, 13, isLlm); // Stroke Protocol
-        setFormRowVisible(m_remoteForm, 14, isLlm); // Composition Plan
-        setFormRowVisible(m_remoteForm, 15, isStrokeMode); // Suppress Particles
-        setFormRowVisible(m_remoteForm, 16, isLlm); // Reasoning Effort
-        setFormRowVisible(m_remoteForm, 17, isLlm); // Custom Instructions
+        setFormRowVisible(m_remoteForm, m_endpointEditor, needsRemote);
+        setFormRowVisible(m_remoteForm, m_modelEditor, needsRemote);
+        setFormRowVisible(m_remoteForm, m_apiKeyEditor, needsRemote);
+        setFormRowVisible(m_remoteForm, m_saveApiKeyCheck, needsRemote);
+        setFormRowVisible(m_remoteForm, m_strokeBudgetSpin, isLlm);
+        setFormRowVisible(m_remoteForm, m_qualityModeCombo, isStrokeMode);
+        setFormRowVisible(m_remoteForm, m_qualityProfileCombo, isStrokeMode);
+        setFormRowVisible(m_remoteForm, m_physicalRenderCheck, isStrokeMode);
+        setFormRowVisible(m_remoteForm, m_perceptualRepairCheck, isStrokeMode);
+        setFormRowVisible(m_remoteForm, m_temperatureSpin, isLlm);
+        setFormRowVisible(m_remoteForm, m_topPSpin, isLlm);
+        setFormRowVisible(m_remoteForm, m_trappingPxSpin, isStrokeMode);
+        setFormRowVisible(m_remoteForm, m_maxTokensSpin, isLlm);
+        setFormRowVisible(m_remoteForm, m_timeoutSecSpin, needsRemote);
+        setFormRowVisible(m_remoteForm, m_maxRetriesSpin, isLlm);
+        setFormRowVisible(m_remoteForm, m_jsonModeCombo, isLlm);
+        setFormRowVisible(m_remoteForm, m_visionQualityCombo, isLlm);
+        setFormRowVisible(m_remoteForm, m_strokeProtocolCombo, isLlm);
+        setFormRowVisible(m_remoteForm, m_compositionPlanCheck, isLlm);
+        setFormRowVisible(m_remoteForm, m_suppressParticlesCheck, isStrokeMode);
+        setFormRowVisible(m_remoteForm, m_reasoningEffortCombo, isLlm);
+        setFormRowVisible(m_remoteForm, m_customInstructionsEdit, isLlm);
     }
 
     if (m_testConnectionButton) {
@@ -3300,7 +3332,7 @@ void KisAiIllustrationDocker::executeGoalStep()
         QNetworkRequest request{QUrl(endpoint)};
         request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
         if (!apiKey.isEmpty()) {
-            request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+            request.setRawHeader("Authorization", formatBearerAuthHeader(apiKey));
         }
         request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
@@ -4260,10 +4292,12 @@ void KisAiIllustrationDocker::loadSettings()
         }
     }
     if (m_physicalRenderCheck) {
+        const QSignalBlocker blocker(m_physicalRenderCheck);
         m_physicalRenderCheck->setChecked(
             settings.value(QStringLiteral("AIIllustration/physicalRender"), false).toBool());
     }
     if (m_perceptualRepairCheck) {
+        const QSignalBlocker blocker(m_perceptualRepairCheck);
         m_perceptualRepairCheck->setChecked(
             settings.value(QStringLiteral("AIIllustration/perceptualRepair"), true).toBool());
     }
@@ -4464,7 +4498,7 @@ void KisAiIllustrationDocker::testLlmConnection()
     QNetworkRequest request{QUrl(endpoint)};
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     if (!apiKey.isEmpty()) {
-        request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+        request.setRawHeader("Authorization", formatBearerAuthHeader(apiKey));
     }
     request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::ManualRedirectPolicy);
 
@@ -4760,15 +4794,32 @@ void KisAiIllustrationDocker::expandPromptWithAi()
         return;
     }
 
-    const QString endpoint = m_endpointEditor ? m_endpointEditor->text().trimmed() : QString();
-    const QString model = m_modelEditor ? m_modelEditor->text().trimmed() : QStringLiteral("gpt-4o");
+    QString endpoint = m_endpointEditor ? m_endpointEditor->text().trimmed() : QString();
+    QString model = m_modelEditor ? m_modelEditor->text().trimmed() : QStringLiteral("gpt-4o");
     QString apiKey = m_apiKeyEditor ? m_apiKeyEditor->text().trimmed() : QString();
     if (apiKey.isEmpty()) {
         apiKey = m_inFlightApiKey;
     }
+    QSettings s;
     if (apiKey.isEmpty() && m_saveApiKeyCheck && m_saveApiKeyCheck->isChecked()) {
-        QSettings s;
         unprotectApiKeyForCurrentUser(s.value(QStringLiteral("AIIllustration/apiKey")).toString(), &apiKey);
+    }
+
+    if (endpoint.contains(QLatin1String("/images/generations"), Qt::CaseInsensitive)) {
+        const QString savedLlmEp = readSafeStoredEndpoint(s,
+                                                          QStringLiteral("AIIllustration/llmEndpoint"),
+                                                          QStringLiteral("AIIllustration/endpoint"));
+        if (!savedLlmEp.isEmpty()) {
+            endpoint = savedLlmEp;
+        } else {
+            endpoint.replace(QStringLiteral("/images/generations"), QStringLiteral("/chat/completions"), Qt::CaseInsensitive);
+        }
+    }
+    if (model.contains(QLatin1String("dall-e"), Qt::CaseInsensitive) ||
+        model.contains(QLatin1String("image"), Qt::CaseInsensitive)) {
+        const QString savedLlmModel = s.value(QStringLiteral("AIIllustration/llmModel"),
+                                             s.value(QStringLiteral("AIIllustration/model"))).toString();
+        model = savedLlmModel.isEmpty() ? QStringLiteral("gpt-4o") : savedLlmModel;
     }
 
     // The prompt expander POSTs the user's API key to the endpoint, so it must
@@ -4797,7 +4848,7 @@ void KisAiIllustrationDocker::expandPromptWithAi()
     QNetworkRequest request(endpointUrl);
     request.setHeader(QNetworkRequest::ContentTypeHeader, QStringLiteral("application/json"));
     if (!apiKey.isEmpty()) {
-        request.setRawHeader("Authorization", QByteArrayLiteral("Bearer ") + apiKey.toUtf8());
+        request.setRawHeader("Authorization", formatBearerAuthHeader(apiKey));
     }
     // Never follow redirects silently: an HTTPS endpoint could bounce the
     // Authorization header to an attacker-controlled host (same policy as the
@@ -4807,8 +4858,10 @@ void KisAiIllustrationDocker::expandPromptWithAi()
     m_expandPromptResponseBuffer.clear();
     m_expandPromptResponseTooLarge = false;
     if (m_expandPromptReply) {
+        m_expandPromptReply->disconnect(this);
         m_expandPromptReply->abort();
         m_expandPromptReply->deleteLater();
+        m_expandPromptReply = nullptr;
     }
 
     m_expandPromptReply = m_networkManager->post(request, payload);

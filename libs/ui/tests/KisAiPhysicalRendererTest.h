@@ -33,6 +33,8 @@ private Q_SLOTS:
     void testCompositeGraphFindLayer();
     void testDownsampleBox();
     void testRenderProgramToPhysicalImage();
+    void testCompositeLayerMismatchedSize();
+    void testBlendPixelNanAndInfProtection();
 };
 
 #endif // KIS_AI_PHYSICAL_RENDERER_TEST_H

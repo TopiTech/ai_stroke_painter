@@ -33,6 +33,8 @@ private Q_SLOTS:
     void testEvaluateStructuralRecognizesLayers();
     void testEvaluateStructuralOnSmallProgram();
     void testForNameUnknownReturnsDefault();
+    void testEvaluateStructuralSymmetryAxisDeviation();
+    void testEvaluatePerceptualFormatSafety();
 };
 
 #endif // KIS_AI_QUALITY_VECTOR_TEST_H

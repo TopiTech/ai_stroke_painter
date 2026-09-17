@@ -22,6 +22,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <vector>
 
 #include "KisAiSceneSpec.h"
 #include "KisAiStrokeProgram.h"
@@ -206,46 +208,58 @@ struct ComponentInfo {
 QVector<ComponentInfo> connectedComponents(const QImage &mask, uchar alphaThreshold = 64)
 {
     QVector<ComponentInfo> components;
-    if (mask.isNull())
+    if (mask.isNull() || mask.width() <= 0 || mask.height() <= 0)
         return components;
-    const int W = mask.width();
-    const int H = mask.height();
-    QImage visited(W, H, QImage::Format_ARGB32);
-    visited.fill(0);
+
+    QImage m = mask;
+    if (m.format() != QImage::Format_ARGB32 &&
+        m.format() != QImage::Format_ARGB32_Premultiplied &&
+        m.format() != QImage::Format_RGB32) {
+        m = m.convertToFormat(QImage::Format_ARGB32);
+    }
+
+    const int W = m.width();
+    const int H = m.height();
+    std::vector<uint8_t> visited(static_cast<size_t>(W) * H, 0);
+
+    const int dx[4] = {1, -1, 0, 0};
+    const int dy[4] = {0, 0, 1, -1};
 
     for (int y = 0; y < H; ++y) {
-        const QRgb *mRow = reinterpret_cast<const QRgb *>(mask.constScanLine(y));
-        const QRgb *vRow = reinterpret_cast<const QRgb *>(visited.constScanLine(y));
+        const QRgb *mRow = reinterpret_cast<const QRgb *>(m.constScanLine(y));
         for (int x = 0; x < W; ++x) {
-            if (qAlpha(mRow[x]) < alphaThreshold)
-                continue;
-            if (qAlpha(vRow[x]) != 0)
+            const int idx = y * W + x;
+            if (visited[idx] != 0 || qAlpha(mRow[x]) < alphaThreshold)
                 continue;
 
             // BFS
             ComponentInfo comp;
             comp.bounds = QRect(x, y, 1, 1);
             comp.area = 0;
+
+            visited[idx] = 1;
             QStack<QPoint> stack;
             stack.push(QPoint(x, y));
+
             while (!stack.isEmpty()) {
-                QPoint pt = stack.pop();
-                if (pt.x() < 0 || pt.x() >= W || pt.y() < 0 || pt.y() >= H)
-                    continue;
-                const QRgb *vv = reinterpret_cast<const QRgb *>(visited.constScanLine(pt.y()));
-                if (qAlpha(vv[pt.x()]) != 0)
-                    continue;
-                const QRgb *mm = reinterpret_cast<const QRgb *>(mask.constScanLine(pt.y()));
-                if (qAlpha(mm[pt.x()]) < alphaThreshold)
-                    continue;
-                QRgb *vw = reinterpret_cast<QRgb *>(visited.scanLine(pt.y()));
-                vw[pt.x()] = qRgba(255, 255, 255, 255);
+                const QPoint pt = stack.pop();
                 comp.bounds = comp.bounds.united(QRect(pt, QSize(1, 1)));
                 ++comp.area;
-                stack.push(QPoint(pt.x() + 1, pt.y()));
-                stack.push(QPoint(pt.x() - 1, pt.y()));
-                stack.push(QPoint(pt.x(), pt.y() + 1));
-                stack.push(QPoint(pt.x(), pt.y() - 1));
+
+                for (int i = 0; i < 4; ++i) {
+                    const int nx = pt.x() + dx[i];
+                    const int ny = pt.y() + dy[i];
+                    if (nx >= 0 && nx < W && ny >= 0 && ny < H) {
+                        const int nidx = ny * W + nx;
+                        if (visited[nidx] == 0) {
+                            const QRgb *nRow = reinterpret_cast<const QRgb *>(m.constScanLine(ny));
+                            if (qAlpha(nRow[nx]) >= alphaThreshold) {
+                                visited[nidx] = 1;
+                                stack.push(QPoint(nx, ny));
+                            }
+                        }
+                    }
+                }
             }
             if (comp.area > 0)
                 components.append(comp);
@@ -361,14 +375,15 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
         QRectF seamBounds;
         for (int y = 1; y < lh - 1; ++y) {
             const QRgb *lr = reinterpret_cast<const QRgb *>(lineartMask.constScanLine(y));
+            const QRgb *frPrev = reinterpret_cast<const QRgb *>(flatsMask.constScanLine(y - 1));
             const QRgb *fr = reinterpret_cast<const QRgb *>(flatsMask.constScanLine(y));
+            const QRgb *frNext = reinterpret_cast<const QRgb *>(flatsMask.constScanLine(y + 1));
             for (int x = 1; x < lw - 1; ++x) {
                 const bool isLineart = qAlpha(lr[x]) >= 64;
-                const bool isFlats = qAlpha(fr[x]) >= 64;
                 // Lineart が Flats のすぐ外にある = シーム候補
                 if (isLineart) {
                     const bool neighborFlats = (qAlpha(fr[x - 1]) >= 64 || qAlpha(fr[x + 1]) >= 64
-                                                || qAlpha(fr[x - lw]) >= 64 || qAlpha(fr[x + lw]) >= 64);
+                                                || qAlpha(frPrev[x]) >= 64 || qAlpha(frNext[x]) >= 64);
                     if (!neighborFlats) {
                         ++seamCount;
                         const QPointF pt(qreal(x) / lw, qreal(y) / lh);
@@ -427,6 +442,7 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
                 fix.issue = issue;
                 fix.action = PerceptualFix::ClipPolygon;
                 fix.targetOpIndex = i;
+                fix.targetOpId = op.id;
                 // クリップ後のポリゴンは元の 0.95 倍に縮小 (近似)。厳密には Sutherland-Hodgman だが、
                 // コスト的に代表点縮小で代用。
                 QPolygonF shrunk;
@@ -487,6 +503,7 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
                     fix.issue = issue;
                     fix.action = PerceptualFix::ReplaceOpKind;
                     fix.targetOpIndex = i;
+                    fix.targetOpId = op.id;
                     fix.replaceKindName = QStringLiteral("Fill");
                     fix.newColor = op.brush.color;
                     fix.newOpacity = qBound<qreal>(0.05, op.brush.opacity * 0.75, 0.40);
@@ -541,14 +558,23 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
     // ---- 6. カラーバンディング検出 (renderedImage ラプラシアン) ----
     {
         if (!renderedImage.isNull() && renderedImage.width() >= 16 && renderedImage.height() >= 16) {
-            const int W2 = renderedImage.width();
-            const int H2 = renderedImage.height();
+            QImage sample = renderedImage;
+            if (sample.width() > 512 || sample.height() > 512) {
+                sample = sample.scaled(512, 512, Qt::KeepAspectRatio, Qt::FastTransformation);
+            }
+            if (sample.format() != QImage::Format_ARGB32 &&
+                sample.format() != QImage::Format_ARGB32_Premultiplied &&
+                sample.format() != QImage::Format_RGB32) {
+                sample = sample.convertToFormat(QImage::Format_ARGB32);
+            }
+            const int W2 = sample.width();
+            const int H2 = sample.height();
             QVector<qreal> lap;
             lap.reserve((W2 - 2) * (H2 - 2));
             for (int y = 1; y < H2 - 1; ++y) {
-                const QRgb *prev = reinterpret_cast<const QRgb *>(renderedImage.constScanLine(y - 1));
-                const QRgb *curr = reinterpret_cast<const QRgb *>(renderedImage.constScanLine(y));
-                const QRgb *next = reinterpret_cast<const QRgb *>(renderedImage.constScanLine(y + 1));
+                const QRgb *prev = reinterpret_cast<const QRgb *>(sample.constScanLine(y - 1));
+                const QRgb *curr = reinterpret_cast<const QRgb *>(sample.constScanLine(y));
+                const QRgb *next = reinterpret_cast<const QRgb *>(sample.constScanLine(y + 1));
                 for (int x = 1; x < W2 - 1; ++x) {
                     const qreal c = qRed(curr[x]) / 255.0;
                     const qreal l = qRed(prev[x]) / 255.0;
@@ -620,6 +646,7 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
                 fix.issue = issue;
                 fix.action = PerceptualFix::SmoothControlPoints;
                 fix.targetOpIndex = i;
+                fix.targetOpId = op.id;
                 fix.description = QStringLiteral("Smooth pressure sequence for path '%1'").arg(op.id);
                 plan.fixes.append(fix);
                 plan.autoFixSummaries.append(fix.description);
@@ -648,6 +675,20 @@ KisAiStrokeProgram KisAiPerceptualRepairer::apply(const KisAiStrokeProgram &prog
 {
     KisAiStrokeProgram result = program;
 
+    auto findTargetIndex = [&](const PerceptualFix &fix) -> int {
+        if (!fix.targetOpId.isEmpty()) {
+            for (int i = 0; i < result.operations.size(); ++i) {
+                if (result.operations.at(i).id == fix.targetOpId) {
+                    return i;
+                }
+            }
+        }
+        if (fix.targetOpIndex >= 0 && fix.targetOpIndex < result.operations.size()) {
+            return fix.targetOpIndex;
+        }
+        return -1;
+    };
+
     for (int f = 0; f < plan.fixes.size(); ++f) {
         const PerceptualFix &fix = plan.fixes.at(f);
         if (fix.issue.requiresUserConsent && !includeConsentFixes)
@@ -657,15 +698,17 @@ KisAiStrokeProgram KisAiPerceptualRepairer::apply(const KisAiStrokeProgram &prog
         case PerceptualFix::NoOp:
             break;
         case PerceptualFix::DropOp: {
-            if (fix.targetOpIndex < 0 || fix.targetOpIndex >= result.operations.size())
-                break;
-            result.operations.remove(fix.targetOpIndex);
+            const int targetIdx = findTargetIndex(fix);
+            if (targetIdx >= 0 && targetIdx < result.operations.size()) {
+                result.operations.remove(targetIdx);
+            }
             break;
         }
         case PerceptualFix::ReplaceOpKind: {
-            if (fix.targetOpIndex < 0 || fix.targetOpIndex >= result.operations.size())
+            const int targetIdx = findTargetIndex(fix);
+            if (targetIdx < 0 || targetIdx >= result.operations.size())
                 break;
-            KisAiStrokeOperation op = result.operations.at(fix.targetOpIndex);
+            KisAiStrokeOperation op = result.operations.at(targetIdx);
             if (fix.replaceKindName == QLatin1String("Fill"))
                 op.kind = KisAiStrokeOperation::Kind::Fill;
             else if (fix.replaceKindName == QLatin1String("GradientFill"))
@@ -676,7 +719,7 @@ KisAiStrokeProgram KisAiPerceptualRepairer::apply(const KisAiStrokeProgram &prog
             if (fix.newColor.isValid())
                 op.brush.color = fix.newColor;
             op.brush.opacity = fix.newOpacity;
-            result.operations[fix.targetOpIndex] = op;
+            result.operations[targetIdx] = op;
             break;
         }
         case PerceptualFix::InsertPolygonFill: {
@@ -695,18 +738,20 @@ KisAiStrokeProgram KisAiPerceptualRepairer::apply(const KisAiStrokeProgram &prog
             break;
         }
         case PerceptualFix::ClipPolygon: {
-            if (fix.targetOpIndex < 0 || fix.targetOpIndex >= result.operations.size())
+            const int targetIdx = findTargetIndex(fix);
+            if (targetIdx < 0 || targetIdx >= result.operations.size())
                 break;
-            KisAiStrokeOperation op = result.operations.at(fix.targetOpIndex);
+            KisAiStrokeOperation op = result.operations.at(targetIdx);
             if (!fix.newPolygon.isEmpty())
                 op.polygon = fix.newPolygon;
-            result.operations[fix.targetOpIndex] = op;
+            result.operations[targetIdx] = op;
             break;
         }
         case PerceptualFix::SmoothControlPoints: {
-            if (fix.targetOpIndex < 0 || fix.targetOpIndex >= result.operations.size())
+            const int targetIdx = findTargetIndex(fix);
+            if (targetIdx < 0 || targetIdx >= result.operations.size())
                 break;
-            KisAiStrokeOperation op = result.operations.at(fix.targetOpIndex);
+            KisAiStrokeOperation op = result.operations.at(targetIdx);
             if (op.points.size() < 3)
                 break;
             // 3 点移動平均で圧力を平滑化
@@ -722,7 +767,7 @@ KisAiStrokeProgram KisAiPerceptualRepairer::apply(const KisAiStrokeProgram &prog
             for (int i = 0; i < op.points.size(); ++i) {
                 op.points[i].pressure = smoothed.at(i);
             }
-            result.operations[fix.targetOpIndex] = op;
+            result.operations[targetIdx] = op;
             break;
         }
         case PerceptualFix::AddDither: {

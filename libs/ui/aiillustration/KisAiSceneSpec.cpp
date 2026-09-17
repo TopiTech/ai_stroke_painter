@@ -5,6 +5,7 @@
 
 #include "KisAiSceneSpec.h"
 #include "KisAiStrokeProgram.h"
+#include "KisAiAbstractOntology.h"
 
 #include <cmath>
 
@@ -877,6 +878,7 @@ KisAiSceneSpec KisAiSceneSpecCodec::defaultSpecForPrompt(const QString &prompt, 
         spec.clothing.style = QStringLiteral("kimono");
         spec.clothing.color = QColor(160, 48, 64);
     }
+    KisAi::OntologyApplier::apply(prompt, &spec);
     return spec;
 }
 

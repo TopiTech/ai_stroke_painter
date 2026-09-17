@@ -775,18 +775,18 @@ StructuralMetrics QualityVectorEvaluator::evaluateStructural(const KisAiStrokePr
     {
         if (spec && !pathOps.isEmpty()) {
             const qreal axis = spec->composition.headCenter.x();
-            qreal sumAbsDev = 0.0;
+            qreal sumSignedDev = 0.0;
             int count = 0;
             for (int i = 0; i < pathOps.size(); ++i) {
                 const KisAiStrokeOperation &op = pathOps.at(i);
                 for (int p = 0; p < op.points.size(); ++p) {
-                    sumAbsDev += qAbs(op.points.at(p).pos.x() - axis);
+                    sumSignedDev += (op.points.at(p).pos.x() - axis);
                     ++count;
                 }
             }
             if (count > 0) {
-                const qreal meanAbsDev = sumAbsDev / count;
-                m.symmetryAxisDeviation = qBound<qreal>(0.0, 1.0 - qMin<qreal>(1.0, meanAbsDev / 0.10), 1.0);
+                const qreal meanSignedDev = qAbs(sumSignedDev / count);
+                m.symmetryAxisDeviation = qBound<qreal>(0.0, 1.0 - qMin<qreal>(1.0, meanSignedDev / 0.10), 1.0);
             } else {
                 m.symmetryAxisDeviation = 1.0;
             }
@@ -817,6 +817,13 @@ PerceptualMetrics QualityVectorEvaluator::evaluatePerceptual(const QImage &rende
         return m;
     }
 
+    QImage safeImg = renderedImage;
+    if (safeImg.format() != QImage::Format_ARGB32 &&
+        safeImg.format() != QImage::Format_ARGB32_Premultiplied &&
+        safeImg.format() != QImage::Format_RGB32) {
+        safeImg = safeImg.convertToFormat(QImage::Format_ARGB32);
+    }
+
     // 1. ssimAgainstReference proxy
     if (spec) {
         qreal refLuma = 0.5;
@@ -824,7 +831,7 @@ PerceptualMetrics QualityVectorEvaluator::evaluatePerceptual(const QImage &rende
         if (key.isValid()) {
             refLuma = 0.2126 * key.redF() + 0.7152 * key.greenF() + 0.0722 * key.blueF();
         }
-        const QVector<qreal> tiles = tilewiseLuminance(renderedImage, 32);
+        const QVector<qreal> tiles = tilewiseLuminance(safeImg, 32);
         const qreal actualLuma = tileMean(tiles);
         const qreal diff = qAbs(refLuma - actualLuma);
         m.ssimAgainstReference = qBound<qreal>(0.0, 1.0 - diff, 1.0);
@@ -836,11 +843,11 @@ PerceptualMetrics QualityVectorEvaluator::evaluatePerceptual(const QImage &rende
     {
         QVector<QColor> colors;
         const int step = 32;
-        const int W = renderedImage.width();
-        const int H = renderedImage.height();
+        const int W = safeImg.width();
+        const int H = safeImg.height();
         colors.reserve((W / step + 1) * (H / step + 1));
         for (int y = 0; y < H; y += step) {
-            const QRgb *row = reinterpret_cast<const QRgb *>(renderedImage.constScanLine(y));
+            const QRgb *row = reinterpret_cast<const QRgb *>(safeImg.constScanLine(y));
             for (int x = 0; x < W; x += step) {
                 colors.append(QColor(row[x]));
             }
@@ -850,14 +857,14 @@ PerceptualMetrics QualityVectorEvaluator::evaluatePerceptual(const QImage &rende
 
     // 3. edgeDensityBalance
     {
-        const QVector<qreal> edges = tilewiseEdgeDensity(renderedImage);
+        const QVector<qreal> edges = tilewiseEdgeDensity(safeImg);
         const qreal globalMean = tileMean(edges);
         if (spec && globalMean > 0.001) {
             const int tileSize = 16;
-            const int cols = (renderedImage.width() / tileSize) + 1;
+            const int cols = (safeImg.width() / tileSize) + 1;
             const int faceX0 = int(spec->composition.headCenter.x() * cols) - 3;
             const int faceX1 = faceX0 + 6;
-            const int faceY0 = int(spec->composition.headCenter.y() * (renderedImage.height() / tileSize)) - 3;
+            const int faceY0 = int(spec->composition.headCenter.y() * (safeImg.height() / tileSize)) - 3;
             const int faceY1 = faceY0 + 6;
             qreal faceSum = 0.0;
             int faceCount = 0;
@@ -880,7 +887,7 @@ PerceptualMetrics QualityVectorEvaluator::evaluatePerceptual(const QImage &rende
 
     // 4. lineartThicknessStddev
     if (program) {
-        QImage lineartLayer(renderedImage.size(), QImage::Format_ARGB32);
+        QImage lineartLayer(safeImg.size(), QImage::Format_ARGB32);
         lineartLayer.fill(0);
         QPainter painter(&lineartLayer);
         painter.setRenderHint(QPainter::Antialiasing, true);
@@ -894,14 +901,14 @@ PerceptualMetrics QualityVectorEvaluator::evaluatePerceptual(const QImage &rende
             QPen pen(c);
             const qreal sizePx = (op.brush.sizeMode == QStringLiteral("px"))
                 ? op.brush.size
-                : op.brush.size * qMin(renderedImage.width(), renderedImage.height());
+                : op.brush.size * qMin(safeImg.width(), safeImg.height());
             pen.setWidthF(qMax<qreal>(1.0, sizePx));
             painter.setPen(pen);
             if (op.points.size() >= 2) {
                 QVector<QPointF> pts;
                 for (int p = 0; p < op.points.size(); ++p) {
-                    pts.append(QPointF(op.points.at(p).pos.x() * renderedImage.width(),
-                                       op.points.at(p).pos.y() * renderedImage.height()));
+                    pts.append(QPointF(op.points.at(p).pos.x() * safeImg.width(),
+                                       op.points.at(p).pos.y() * safeImg.height()));
                 }
                 painter.drawPolyline(pts);
             }
@@ -916,7 +923,7 @@ PerceptualMetrics QualityVectorEvaluator::evaluatePerceptual(const QImage &rende
     // 5. skinBandSmoothness
     if (spec) {
         m.skinBandSmoothness =
-            skinBandSmoothnessMetric(renderedImage, spec->composition.headCenter, spec->composition.headHeight);
+            skinBandSmoothnessMetric(safeImg, spec->composition.headCenter, spec->composition.headHeight);
     } else {
         m.skinBandSmoothness = 0.5;
     }
