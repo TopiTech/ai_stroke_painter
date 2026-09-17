@@ -13,6 +13,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <QStringList>
 #include <QUrl>
 #include <QUrlQuery>
@@ -71,6 +72,21 @@ bool isLoopbackHost(const QString &host)
 bool hasSensitiveUrlComponent(const QUrl &url)
 {
     if (!url.fragment(QUrl::FullyDecoded).trimmed().isEmpty()) {
+        return true;
+    }
+
+    // パス中に埋め込まれた秘密鍵も拒否する (query/fragment/userinfo と同等に
+    // QSettings へ平文保存・リクエストライン送信される漏洩経路のため)。
+    // 例: https://host/sk-live-XXXX/chat... / https://host/api/key/SECRET/...
+    const QString decodedPath = url.path(QUrl::FullyDecoded);
+    if (decodedPath.contains(QLatin1String("sk-"), Qt::CaseInsensitive)
+        || decodedPath.contains(QLatin1String("sk_proj_"), Qt::CaseInsensitive)
+        || decodedPath.contains(QLatin1String("bearer"), Qt::CaseInsensitive)) {
+        return true;
+    }
+    QRegularExpression pathSecret(QStringLiteral("/(key|token|secret|password|api[_-]?key)/[^/\\s]+"),
+                                  QRegularExpression::CaseInsensitiveOption);
+    if (decodedPath.contains(pathSecret)) {
         return true;
     }
 

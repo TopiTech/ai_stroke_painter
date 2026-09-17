@@ -61,6 +61,9 @@ private Q_SLOTS:
     void testEnvelopeSupersampleScaleInPxMode();
     void testSceneSpecParseNaNFloatSafety();
     void testVisionCriticImageToDataUrlTransparency();
+    void testDraperyFoldIdsAreUnique();
+    void testSamplingForClampsTopPAndMaxTokens();
+    void testRigClampedCoversPoseFields();
 };
 
 #endif // KIS_AI_V6_WIRING_TEST_H

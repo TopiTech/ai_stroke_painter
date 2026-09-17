@@ -82,6 +82,25 @@ void KisAiIllustrationRendererTest::testValidateImageEndpoint()
         &errorMsg));
     QVERIFY(!errorMsg.isEmpty());
 
+    // Secrets embedded in the URL path must also be rejected: the endpoint is
+    // persisted to QSettings in plaintext and sent in the request line.
+    errorMsg.clear();
+    QVERIFY(!KisAiIllustrationRenderer::validateImageEndpoint(
+        QStringLiteral("https://example.invalid/sk-live-XXXX123/v1/chat/completions"),
+        &errorMsg));
+    QVERIFY(!errorMsg.isEmpty());
+    errorMsg.clear();
+    QVERIFY(!KisAiIllustrationRenderer::validateImageEndpoint(
+        QStringLiteral("https://example.invalid/api/key/SECRET123/v1/chat"),
+        &errorMsg));
+    QVERIFY(!errorMsg.isEmpty());
+
+    // Normal versioned API paths without secrets stay valid.
+    errorMsg.clear();
+    QVERIFY(KisAiIllustrationRenderer::validateImageEndpoint(
+        QStringLiteral("https://example.invalid/v1/chat/completions"), &errorMsg));
+    QVERIFY(errorMsg.isEmpty());
+
     // Insecure non-loopback HTTP endpoint must fail
     errorMsg.clear();
     QVERIFY(!KisAiIllustrationRenderer::validateImageEndpoint(QStringLiteral("http://api.openai.com/v1/images/generations"), &errorMsg));

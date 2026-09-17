@@ -25,6 +25,8 @@ private Q_SLOTS:
     void testBezierHeadCurvature();
     void testHierarchicalHairClumpStructure();
     void testVolumetricShadingConsistency();
+    void testVolumetricShadingEmitCap();
+    void testCornerInkingDotsSegmentCap();
     void testMaterialOpticsSssAndSheen();
     void testArtStylePipelineSwitching();
     void testStrokeBeautifierTaperAndSmoothing();

@@ -34,6 +34,10 @@ private Q_SLOTS:
     void testEvaluateStructuralOnSmallProgram();
     void testForNameUnknownReturnsDefault();
     void testEvaluateStructuralSymmetryAxisDeviation();
+    void testColorEntropyUsesSampleDistribution();
+    void testSilhouetteContinuityDetectsFragmentation();
+    void testIntentMatchCoversSunsetAndDawn();
+    void testLineartJitterIgnoresEmptyTiles();
     void testEvaluatePerceptualFormatSafety();
 };
 

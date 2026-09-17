@@ -5,6 +5,7 @@
 
 #include "KisAiV7QualityTest.h"
 
+#include <QElapsedTimer>
 #include <QImage>
 #include <QPainter>
 #ifndef AI_STROKE_STANDALONE
@@ -127,6 +128,58 @@ void KisAiV7QualityTest::testVolumetricShadingConsistency()
     }
     QVERIFY(hasFormShading);
     QVERIFY(hasCastDeep);
+}
+
+void KisAiV7QualityTest::testVolumetricShadingEmitCap()
+{
+    // 敵対的に大量の Flats を渡しても emit が上限内に収まること。
+    KisAiLightSettings rig;
+    rig.direction = QPointF(-0.5, -0.7);
+    rig.timeOfDay = QStringLiteral("day");
+
+    QVector<KisAiStrokeOperation> flatsOps;
+    for (int i = 0; i < 200; ++i) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Fill;
+        op.id = QStringLiteral("mass_%1").arg(i);
+        op.layer = QStringLiteral("Flats");
+        op.brush.color = QColor(200, 180, 160);
+        const qreal ox = 0.02 * (i % 10);
+        const qreal oy = 0.02 * (i / 10);
+        op.polygon << QPointF(0.10 + ox, 0.10 + oy) << QPointF(0.20 + ox, 0.10 + oy)
+                   << QPointF(0.20 + ox, 0.20 + oy) << QPointF(0.10 + ox, 0.20 + oy);
+        flatsOps.append(op);
+    }
+    const auto vOps = KisAiLightRig::synthesizeVolumetricShading(flatsOps, rig, QSize(512, 512));
+    QVERIFY(vOps.size() <= 48);
+    const auto optics = KisAiLightRig::synthesizeMaterialOptics(flatsOps, rig, QSize(512, 512));
+    QVERIFY(optics.size() <= 48);
+}
+
+void KisAiV7QualityTest::testCornerInkingDotsSegmentCap()
+{
+    // 大量 Lineart でも generateCornerInkingDots が現実時間で終わること。
+    QVector<KisAiStrokeOperation> ops;
+    for (int i = 0; i < 200; ++i) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Path;
+        op.id = QStringLiteral("line_%1").arg(i);
+        op.layer = QStringLiteral("Lineart");
+        op.brush.color = QColor(20, 20, 30);
+        op.brush.size = 0.004;
+        for (int p = 0; p < 20; ++p) {
+            KisAiStrokePoint pt;
+            pt.pos = QPointF(0.05 + 0.004 * p + 0.001 * i, 0.10 + 0.003 * i);
+            pt.pressure = 0.8;
+            op.points.append(pt);
+        }
+        ops.append(op);
+    }
+    QElapsedTimer timer;
+    timer.start();
+    const auto dots = KisAiStrokeQualityUtils::generateCornerInkingDots(ops, QSize(512, 512));
+    QVERIFY(timer.elapsed() < 5000);
+    QVERIFY(dots.size() <= 32);
 }
 
 void KisAiV7QualityTest::testMaterialOpticsSssAndSheen()

@@ -400,4 +400,96 @@ void KisAiPerceptualRepairerTest::testColorBandingOnLargeImage()
     QVERIFY(plan.issueCount(PerceptualIssue::ColorBanding) >= 0);
 }
 
+void KisAiPerceptualRepairerTest::testHatchOnFaceDetectsPointsOnlyHatch()
+{
+    // polygon を持たず points のみで顔領域に重なる Hatch も検出すること。
+    // (旧実装は polygon のみを見て検出漏れしていた)
+    KisAiStrokeProgram prog;
+    prog.canvasSize = QSize(100, 100);
+
+    KisAiStrokeOperation opHatch;
+    opHatch.id = QStringLiteral("points_hatch");
+    opHatch.layer = QStringLiteral("Shading");
+    opHatch.kind = KisAiStrokeOperation::Kind::Hatch;
+    for (int i = 0; i < 4; ++i) {
+        KisAiStrokePoint pt;
+        pt.pos = QPointF(0.40 + 0.05 * i, 0.40 + 0.05 * i);
+        pt.pressure = 0.8;
+        opHatch.points.append(pt);
+    }
+    prog.operations.append(opHatch);
+
+    QImage rendered(100, 100, QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(Qt::transparent);
+
+    KisAiSceneSpec spec; // headCenter (0.5, 0.38), headHeight 0.42
+    const PerceptualRepairPlan plan = KisAiPerceptualRepairer::diagnose(prog, rendered, &spec);
+    QVERIFY(plan.issueCount(PerceptualIssue::HatchOnFace) >= 1);
+}
+
+void KisAiPerceptualRepairerTest::testColorBandingSkipsSharpLineart()
+{
+    // 平坦グレー + 黒い線画 1 本: wash に段差はなく、線画エッジのみ。
+    // 旧実装は線画エッジの lap で常に ColorBanding を誤検出していた。
+    QImage img(128, 128, QImage::Format_ARGB32);
+    img.fill(QColor(128, 128, 128, 255));
+    for (int y = 8; y < 120; ++y) {
+        QRgb *row = reinterpret_cast<QRgb *>(img.scanLine(y));
+        row[64] = qRgba(0, 0, 0, 255);
+        row[65] = qRgba(0, 0, 0, 255);
+    }
+
+    KisAiStrokeProgram prog;
+    const PerceptualRepairPlan plan = KisAiPerceptualRepairer::diagnose(prog, img, nullptr);
+    QCOMPARE(plan.issueCount(PerceptualIssue::ColorBanding), 0);
+}
+
+void KisAiPerceptualRepairerTest::testJitterFixTargetsOnlyJitteryOps()
+{
+    KisAiStrokeProgram prog;
+    prog.canvasSize = QSize(100, 100);
+
+    KisAiStrokeOperation jittery;
+    jittery.id = QStringLiteral("jittery_path");
+    jittery.layer = QStringLiteral("Lineart");
+    jittery.kind = KisAiStrokeOperation::Kind::Path;
+    {
+        KisAiStrokePoint p1, p2, p3, p4;
+        p1.pos = QPointF(0.1, 0.1); p1.pressure = 0.1;
+        p2.pos = QPointF(0.2, 0.2); p2.pressure = 0.9;
+        p3.pos = QPointF(0.3, 0.3); p3.pressure = 0.1;
+        p4.pos = QPointF(0.4, 0.4); p4.pressure = 0.9;
+        jittery.points << p1 << p2 << p3 << p4;
+    }
+    prog.operations.append(jittery);
+
+    KisAiStrokeOperation smooth;
+    smooth.id = QStringLiteral("smooth_path");
+    smooth.layer = QStringLiteral("Lineart");
+    smooth.kind = KisAiStrokeOperation::Kind::Path;
+    for (int i = 0; i < 4; ++i) {
+        KisAiStrokePoint pt;
+        pt.pos = QPointF(0.5 + 0.05 * i, 0.5);
+        pt.pressure = 0.8;
+        smooth.points.append(pt);
+    }
+    prog.operations.append(smooth);
+
+    QImage rendered(100, 100, QImage::Format_ARGB32_Premultiplied);
+    rendered.fill(Qt::transparent);
+
+    const PerceptualRepairPlan plan = KisAiPerceptualRepairer::diagnose(prog, rendered, nullptr);
+    QCOMPARE(plan.issueCount(PerceptualIssue::LineartThicknessJitter), 1);
+    // ジッタのある op のみに fix が付く (旧実装は全 Path に付与していた)
+    int fixCount = 0;
+    for (int i = 0; i < plan.fixes.size(); ++i) {
+        const PerceptualFix &fix = plan.fixes.at(i);
+        if (fix.action == PerceptualFix::SmoothControlPoints) {
+            ++fixCount;
+            QCOMPARE(fix.targetOpId, QStringLiteral("jittery_path"));
+        }
+    }
+    QCOMPARE(fixCount, 1);
+}
+
 KISTEST_MAIN(KisAiPerceptualRepairerTest)

@@ -111,7 +111,7 @@ def main():
 
     print(f"\nExecution finished in {elapsed:.2f}s (Exit code: {code})")
     if code == 0:
-        print(f"{GREEN}{BOLD}[PASS] GATE PASSED: All 32 golden prompts satisfied quality requirements.{RESET}")
+        print(f"{GREEN}{BOLD}[PASS] GATE PASSED: quality gate binary exited 0 (see C++ test log for per-prompt detail).{RESET}")
     else:
         print(f"{RED}{BOLD}[FAIL] GATE FAILED: Output details:{RESET}")
         print(output)

@@ -1378,6 +1378,10 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateCornerInkingDots(
         qreal width;
     };
     QVector<LineSegment> segments;
+    // セグメント総数を上限内に収める: 下流のペア走査は O(S^2) のため、
+    // 500op x 256pt のような敵対的入力で UI が固まる。長い入力は先頭から
+    // 切り詰め (決定論的) し、残りは無視する。
+    constexpr int MAX_CORNER_SEGMENTS = 4000;
 
     for (const auto &op : operations) {
         if (op.kind != KisAiStrokeOperation::Kind::Path || op.points.size() < 2) continue;
@@ -1385,8 +1389,12 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateCornerInkingDots(
 
         const qreal baseW = op.brush.size > 0.0 ? op.brush.size : 0.004;
         for (int i = 0; i < op.points.size() - 1; ++i) {
+            if (segments.size() >= MAX_CORNER_SEGMENTS)
+                break;
             segments.append({op.points.at(i).pos, op.points.at(i + 1).pos, op.brush.color, baseW});
         }
+        if (segments.size() >= MAX_CORNER_SEGMENTS)
+            break;
     }
 
     const qreal minDistSq = 0.015 * 0.015;

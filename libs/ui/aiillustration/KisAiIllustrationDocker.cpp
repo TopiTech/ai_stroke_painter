@@ -414,6 +414,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_uiModeTabs->setShape(QTabBar::RoundedNorth);
     m_uiModeTabs->setFocusPolicy(Qt::StrongFocus);
     m_uiModeTabs->setCursor(Qt::PointingHandCursor);
+    m_uiModeTabs->setAccessibleName(i18n("UI mode tabs"));
+    m_uiModeTabs->setAccessibleDescription(i18n("かんたん表示と詳細設定表示を切り替えます。"));
     layout->addWidget(m_uiModeTabs);
 
     auto *subtitle =
@@ -783,6 +785,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     m_saveApiKeyCheck = new QCheckBox(i18n("🔑 API キーをこの端末に保存する"), m_detailsContainer);
     m_saveApiKeyCheck->setChecked(false);
+    m_saveApiKeyCheck->setAccessibleName(i18n("Save API key on this device"));
 #if defined(Q_OS_WIN)
     m_saveApiKeyCheck->setToolTip(
         i18n("チェックを入れると、API キーを Windows の現在のユーザー向け保護で保存し、次回起動時に自動入力します。"));
@@ -886,12 +889,14 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     m_compositionPlanCheck = new QCheckBox(i18n("2段階構図生成 (Composition Plan)"), m_detailsContainer);
     m_compositionPlanCheck->setChecked(false);
+    m_compositionPlanCheck->setAccessibleName(i18n("Two-stage composition plan"));
     m_compositionPlanCheck->setToolTip(
         i18n("複雑な構図向けに、事前に構図計画を策定してから実ストロークを生成します。"));
 
     // V3 Phase 0.1: FX particle suppression toggle (default ON).
     m_suppressParticlesCheck = new QCheckBox(i18n("点々・パーティクルを抑制 (推奨)"), m_detailsContainer);
     m_suppressParticlesCheck->setChecked(true);
+    m_suppressParticlesCheck->setAccessibleName(i18n("Suppress dots and particles"));
     m_suppressParticlesCheck->setToolTip(
         i18n("顔や画面全体を覆う点描ノイズ・吹雪状パーティクルの生成と多重蓄積を抑止します。星空・雪・花びら等が必要な"
              "場合のみOFFにしてください。"));
@@ -944,10 +949,12 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     m_physicalRenderCheck = new QCheckBox(i18n("物理レンダリング (RGBA16F + 物理ブレンド)"), m_detailsContainer);
     m_physicalRenderCheck->setChecked(false);
+    m_physicalRenderCheck->setAccessibleName(i18n("Physical rendering"));
     m_physicalRenderCheck->setToolTip(i18n("V8 Phase 3: 線形 sRGB 空間で W3C 物理合成と 4x スーパーサンプリングを行い、暗部バンディングと色相ドリフトを防止します。"));
 
     m_perceptualRepairCheck = new QCheckBox(i18n("知覚自動補正 (Perceptual Repair)"), m_detailsContainer);
     m_perceptualRepairCheck->setChecked(true);
+    m_perceptualRepairCheck->setAccessibleName(i18n("Perceptual auto repair"));
     m_perceptualRepairCheck->setToolTip(i18n("V8 Phase 2: ラスタライズ画像から Flats 穴や顔ハッチを自動検出し、幾何を安全に補正します。"));
 
     remoteForm->addRow(i18n("エンドポイント"), m_endpointEditor);
@@ -978,6 +985,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     settingsBtnRow->setSpacing(6);
     m_submitFeedbackButton = new QPushButton(i18n("⭐ 評価フィードバック"), m_detailsContainer);
     m_submitFeedbackButton->setObjectName(QStringLiteral("aiSecondaryButton"));
+    m_submitFeedbackButton->setAccessibleName(i18n("Submit quality feedback"));
     m_submitFeedbackButton->setToolTip(i18n("現在の生成結果と品質ベクトルをベンチ履歴に記録します。"));
     settingsBtnRow->addWidget(m_submitFeedbackButton);
     m_testConnectionButton = new QPushButton(i18n("🔌 接続テスト"), m_detailsContainer);
@@ -1104,12 +1112,14 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     // stepPhase / targetFocusArea come straight from the model response, so they
     // must never be parsed as rich text. Keep parity with the other labels here.
     m_goalPhaseLabel->setTextFormat(Qt::PlainText);
+    m_goalPhaseLabel->setAccessibleName(i18n("Goal phase"));
     m_goalPhaseLabel->setStyleSheet(QStringLiteral("font-weight: 700; color: #38bdf8; font-size: 13px;"));
     m_goalPhaseLabel->setWordWrap(true);
     inspectorLayout->addWidget(m_goalPhaseLabel);
 
     m_agentFocusLabel = new QLabel(i18n("🎯 着目領域: 待機中"), m_goalInspectorCard);
     m_agentFocusLabel->setTextFormat(Qt::PlainText);
+    m_agentFocusLabel->setAccessibleName(i18n("Agent focus area"));
     m_agentFocusLabel->setStyleSheet(QStringLiteral("font-weight: 600; color: #a5b4fc; font-size: 11px;"));
     m_agentFocusLabel->setWordWrap(true);
     inspectorLayout->addWidget(m_agentFocusLabel);
@@ -1119,6 +1129,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_readinessBar->setValue(0);
     m_readinessBar->setFormat(i18n("自律完成度: %p%"));
     m_readinessBar->setAlignment(Qt::AlignCenter);
+    m_readinessBar->setAccessibleName(i18n("Autonomous completion"));
+    m_readinessBar->setAccessibleDescription(i18n("Goal作画の自律完成度を百分率で示します。"));
     m_readinessBar->setStyleSheet(
         QStringLiteral("QProgressBar { background: #0d1117; border: 1px solid #273142; border-radius: 4px; height: "
                        "16px; text-align: center; color: #f8fafc; font-size: 10px; font-weight: 600; }"
@@ -1131,6 +1143,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     // Critique text comes from the model; render it as plain text so HTML in
     // an untrusted response is never interpreted.
     m_critiqueLabel->setTextFormat(Qt::PlainText);
+    m_critiqueLabel->setAccessibleName(i18n("AI visual critique"));
     m_critiqueLabel->setStyleSheet(
         QStringLiteral("background: #0d1117; color: #94a3b8; border: 1px solid #273142; border-left: 3px solid "
                        "#38bdf8; border-radius: 4px; padding: 6px 8px; font-size: 11px;"));
@@ -1278,6 +1291,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_debugLogText->setMinimumHeight(140);
     m_debugLogText->setMaximumHeight(260);
     m_debugLogText->setLineWrapMode(QPlainTextEdit::NoWrap);
+    m_debugLogText->setAccessibleName(i18n("Debug log"));
+    m_debugLogText->setAccessibleDescription(i18n("LLM送受信の詳細ログ。読み取り専用です。"));
     debugCardWidget.layout->addWidget(m_debugLogText);
 
     m_debugCard->setVisible(false);
@@ -1425,6 +1440,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     });
 
     // Configure accessible keyboard navigation (Tab order) across primary controls.
+    // 詳細設定・Goal・デバッグ等の追加コントロールも辿れるよう、主要な操作系を
+    // 一本の順序に繋ぐ。カードボタン群 (chip/style/composition/lighting) は
+    // 生成直後に setTabOrder できないため、Qt 既定の生成順フォーカスに任せる。
     if (m_uiModeTabs && m_promptEditor) {
         QWidget::setTabOrder(m_uiModeTabs, m_promptEditor);
         if (m_expandPromptButton)
@@ -1439,16 +1457,42 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
             QWidget::setTabOrder(m_heightSpin, m_newCanvasButton);
         if (m_newCanvasButton && m_modeCombo)
             QWidget::setTabOrder(m_newCanvasButton, m_modeCombo);
-        if (m_modeCombo && m_artStyleCombo)
-            QWidget::setTabOrder(m_modeCombo, m_artStyleCombo);
-        if (m_artStyleCombo && m_strokeBudgetSpin)
-            QWidget::setTabOrder(m_artStyleCombo, m_strokeBudgetSpin);
-        if (m_strokeBudgetSpin && m_goalModeCheck)
-            QWidget::setTabOrder(m_strokeBudgetSpin, m_goalModeCheck);
-        if (m_goalModeCheck && m_generateButton)
-            QWidget::setTabOrder(m_goalModeCheck, m_generateButton);
+        if (m_modeCombo && m_detailsToggleBtn)
+            QWidget::setTabOrder(m_modeCombo, m_detailsToggleBtn);
+        if (m_detailsToggleBtn && m_endpointEditor)
+            QWidget::setTabOrder(m_detailsToggleBtn, m_endpointEditor);
+        if (m_endpointEditor && m_modelEditor)
+            QWidget::setTabOrder(m_endpointEditor, m_modelEditor);
+        if (m_modelEditor && m_apiKeyEditor)
+            QWidget::setTabOrder(m_modelEditor, m_apiKeyEditor);
+        if (m_apiKeyEditor && m_strokeBudgetSpin)
+            QWidget::setTabOrder(m_apiKeyEditor, m_strokeBudgetSpin);
+        if (m_strokeBudgetSpin && m_artStyleCombo)
+            QWidget::setTabOrder(m_strokeBudgetSpin, m_artStyleCombo);
+        if (m_artStyleCombo && m_customInstructionsEdit)
+            QWidget::setTabOrder(m_artStyleCombo, m_customInstructionsEdit);
+        if (m_customInstructionsEdit && m_testConnectionButton)
+            QWidget::setTabOrder(m_customInstructionsEdit, m_testConnectionButton);
+        if (m_testConnectionButton && m_saveSettingsButton)
+            QWidget::setTabOrder(m_testConnectionButton, m_saveSettingsButton);
+        if (m_saveSettingsButton && m_goalModeCheck)
+            QWidget::setTabOrder(m_saveSettingsButton, m_goalModeCheck);
+        if (m_goalModeCheck && m_goalStepsSpin)
+            QWidget::setTabOrder(m_goalModeCheck, m_goalStepsSpin);
+        if (m_goalStepsSpin && m_debugModeCheck)
+            QWidget::setTabOrder(m_goalStepsSpin, m_debugModeCheck);
+        if (m_debugModeCheck && m_generateButton)
+            QWidget::setTabOrder(m_debugModeCheck, m_generateButton);
         if (m_generateButton && m_cancelButton)
             QWidget::setTabOrder(m_generateButton, m_cancelButton);
+        if (m_cancelButton && m_nextStepButton)
+            QWidget::setTabOrder(m_cancelButton, m_nextStepButton);
+        if (m_nextStepButton && m_finishGoalButton)
+            QWidget::setTabOrder(m_nextStepButton, m_finishGoalButton);
+        if (m_finishGoalButton && m_copyLogButton)
+            QWidget::setTabOrder(m_finishGoalButton, m_copyLogButton);
+        if (m_copyLogButton && m_clearLogButton)
+            QWidget::setTabOrder(m_copyLogButton, m_clearLogButton);
     }
 
     updateModeUi();
@@ -4227,7 +4271,7 @@ void KisAiIllustrationDocker::loadSettings()
     if (m_temperatureSpin)
         m_temperatureSpin->setValue(
             qBound(m_temperatureSpin->minimum(),
-                   settings.value(QStringLiteral("AIIllustration/temperature"), 0.70).toDouble(),
+                   settings.value(QStringLiteral("AIIllustration/temperature"), 0.35).toDouble(),
                    m_temperatureSpin->maximum()));
     if (m_topPSpin)
         m_topPSpin->setValue(qBound(m_topPSpin->minimum(),
@@ -4305,7 +4349,7 @@ void KisAiIllustrationDocker::loadSettings()
     const int savedUiMode = settings.value(QStringLiteral("AIIllustration/uiMode"), 0).toInt();
     m_uiMode = (savedUiMode == 1) ? UiMode::Pro : UiMode::Simple;
     if (m_uiModeTabs) {
-        m_uiModeTabs->setCurrentIndex(savedUiMode);
+        m_uiModeTabs->setCurrentIndex(m_uiMode == UiMode::Pro ? 1 : 0);
     }
     setUiMode(m_uiMode);
 }

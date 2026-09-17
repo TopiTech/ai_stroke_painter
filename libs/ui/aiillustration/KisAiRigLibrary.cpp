@@ -313,6 +313,12 @@ KisAiRigParameterSet KisAiRigLibrary::clamped(const KisAiRigParameterSet &params
     p.headWidth = clampRange(p.headWidth, p.headHeight * 0.5, p.headHeight * 1.2);
     p.headCenter.setX(clampRange(p.headCenter.x(), 0.2, 0.8));
     p.headCenter.setY(clampRange(p.headCenter.y(), 0.15, 0.7));
+    // ポーズ量も不変条件内に収める (ヘッダの [-15,15] / [-0.08,0.08] / [-0.10,0.10])。
+    // 現在の parametersFromSpec は 0 を入れるが、将来の patch 経路が値を
+    // 設定しても不変条件を破らないようここで clamp する。
+    p.headTiltDeg = clampRange(p.headTiltDeg, -15.0, 15.0);
+    p.shoulderSlope = clampRange(p.shoulderSlope, -0.08, 0.08);
+    p.torsoTurn = clampRange(p.torsoTurn, -0.10, 0.10);
 
     for (KisAiEyeRigParams *eye : {&p.eyeLeft, &p.eyeRight}) {
         eye->aperture = clampRange(eye->aperture, 0.0, 1.0);
@@ -1284,7 +1290,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::draperyFoldOps(
     const QPointF &target,
     qreal widthPx,
     const QColor &clothColor,
-    const QColor &shadowColor)
+    const QColor &shadowColor,
+    const QString &idSuffix)
 {
     Q_UNUSED(clothColor);
     Q_UNUSED(widthPx);
@@ -1308,7 +1315,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::draperyFoldOps(
 
     KisAiStrokeOperation lineOp;
     lineOp.kind = KisAiStrokeOperation::Kind::Path;
-    lineOp.id = QStringLiteral("drapery_tension_line");
+    lineOp.id = idSuffix.isEmpty() ? QStringLiteral("drapery_tension_line")
+                                   : QStringLiteral("drapery_tension_line_%1").arg(idSuffix);
     lineOp.layer = QStringLiteral("Lineart");
     lineOp.points = foldLine;
     lineOp.smooth = true;
@@ -1327,7 +1335,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::draperyFoldOps(
 
     KisAiStrokeOperation shOp;
     shOp.kind = KisAiStrokeOperation::Kind::Fill;
-    shOp.id = QStringLiteral("drapery_fold_shade");
+    shOp.id = idSuffix.isEmpty() ? QStringLiteral("drapery_fold_shade")
+                                 : QStringLiteral("drapery_fold_shade_%1").arg(idSuffix);
     shOp.layer = QStringLiteral("Shading");
     shOp.polygon = foldShade;
     shOp.brush.color = shadowColor;

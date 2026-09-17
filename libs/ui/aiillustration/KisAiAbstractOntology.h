@@ -68,8 +68,8 @@ struct KRITAUI_EXPORT OntologyRuleset {
 class KRITAUI_EXPORT OntologyApplier
 {
 public:
-    /// プロンプト文字列をトークン化して、ルールを SceneSpec に適用する。
-    /// 同じ specPath への複数ヒットは加重平均 (重み = OntologyRule::weight) で集約。
+    /// プロンプト文字列を照合して、ヒットしたルールをリスト順に SceneSpec へ適用する。
+    /// 同一種別の Set* は後勝ち、AddNumber は重み (weight) 倍して順次加算する。
     /// 戻り値: 適用されたルール数と、新 SceneSpec。
     static int apply(const QString &prompt,
                      KisAiSceneSpec *spec,

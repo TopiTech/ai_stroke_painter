@@ -19,6 +19,7 @@
 #endif
 
 #include "aiillustration/KisAiStrokeProgram.h"
+#include "aiillustration/KisAiDeliberateStroke.h"
 #include "aiillustration/KisAiPromptAnalyzer.h"
 #include "aiillustration/KisAiStrokeTypeChecker.h"
 #include "aiillustration/KisAiSceneSpec.h"
@@ -416,6 +417,15 @@ void KisAiStrokeProgramTest::testPromptAnalyzerDomainClassification()
     // 5. Botanical
     const auto specRose = KisAiPromptAnalyzer::analyze(QStringLiteral("delicate rose bouquet with green leaves"), size);
     QCOMPARE(static_cast<int>(specRose.domain), static_cast<int>(KisAiPromptAnalyzer::DomainType::Botanical));
+
+    // 6. Word-boundary style guard: "pink"/"link" must not trigger InkSketch,
+    // "cancel" must not trigger AnimeCel via "cel".
+    const auto specPink = KisAiPromptAnalyzer::analyze(QStringLiteral("pink hair girl portrait"), size);
+    QVERIFY(static_cast<int>(specPink.style) != static_cast<int>(KisAiPromptAnalyzer::ArtStyle::InkSketch));
+    const auto specCancel = KisAiPromptAnalyzer::analyze(QStringLiteral("cancel the order"), size);
+    QVERIFY(static_cast<int>(specCancel.style) != static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel));
+    const auto specInk = KisAiPromptAnalyzer::analyze(QStringLiteral("dramatic ink sketch portrait"), size);
+    QCOMPARE(static_cast<int>(specInk.style), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::InkSketch));
 }
 
 void KisAiStrokeProgramTest::testHatchOperationParsing()
@@ -1667,6 +1677,52 @@ void KisAiStrokeProgramTest::testTypeCheckerValidationAndCoercion()
     QCOMPARE(opFill.polygon.at(0), QPointF(0.1, 0.2));
     QCOMPARE(opFill.brush.color, QColor(0xff, 0x55, 0x00));
     QCOMPARE(opFill.brush.size, 0.03);
+
+    // String booleans reach the eye/mouth flags: QJsonValue::toBool() alone
+    // would map "true" to false.
+    {
+        const QString boolJson = QStringLiteral(
+            "{\"schema_version\": 2, \"operations\": ["
+            "{\"kind\": \"anime_eye\", \"id\": \"eye_str_bool\", \"layer\": \"Flats\","
+            " \"center\": [0.4, 0.4], \"size\": [0.08, 0.10], \"is_right\": \"true\","
+            " \"brush\": {\"profile\": \"gpen\", \"color\": \"#000000\", \"size\": 0.004, \"is_eraser\": false}}"
+            "]}");
+        KisAiStrokeProgram boolProg;
+        QString boolError;
+        QVERIFY2(KisAiStrokeProgramCodec::parseResponse(boolJson.toUtf8(), &boolProg, &boolError),
+                 qPrintable(boolError));
+        QCOMPARE(boolProg.operations.size(), 1);
+        QVERIFY(boolProg.operations.at(0).eyeIsRight);
+    }
+
+    // 3+ AnimeEye ops warn instead of passing silently.
+    {
+        const QString eyesJson = QStringLiteral(
+            "{\"schema_version\": 2, \"operations\": ["
+            "{\"kind\": \"anime_eye\", \"id\": \"e1\", \"layer\": \"Flats\", \"center\": [0.3, 0.4],"
+            " \"size\": [0.08, 0.10], \"brush\": {\"profile\": \"gpen\", \"color\": \"#000\", \"size\": 0.004, \"is_eraser\": false}},"
+            "{\"kind\": \"anime_eye\", \"id\": \"e2\", \"layer\": \"Flats\", \"center\": [0.5, 0.4],"
+            " \"size\": [0.08, 0.10], \"brush\": {\"profile\": \"gpen\", \"color\": \"#000\", \"size\": 0.004, \"is_eraser\": false}},"
+            "{\"kind\": \"anime_eye\", \"id\": \"e3\", \"layer\": \"Flats\", \"center\": [0.7, 0.4],"
+            " \"size\": [0.08, 0.10], \"brush\": {\"profile\": \"gpen\", \"color\": \"#000\", \"size\": 0.004, \"is_eraser\": false}}"
+            "]}");
+        KisAiStrokeProgram eyesParsed;
+        QString eyesError;
+        QVERIFY2(KisAiStrokeProgramCodec::parseResponse(eyesJson.toUtf8(), &eyesParsed, &eyesError),
+                 qPrintable(eyesError));
+        QCOMPARE(eyesParsed.operations.size(), 3);
+        KisAiStrokeQualityReport eyesReport;
+        KisAiStrokeProgramCodec::refineForRendering(eyesParsed, &eyesReport);
+        bool hasEyeCountWarning = false;
+        for (const QString &w : eyesReport.warnings) {
+            if (w.contains(QStringLiteral("eye count"), Qt::CaseInsensitive)
+                || w.contains(QStringLiteral("Unexpected eye"), Qt::CaseInsensitive)) {
+                hasEyeCountWarning = true;
+            }
+        }
+        QVERIFY(hasEyeCountWarning);
+        QVERIFY(!KisAiDeliberateStroke::eyePairSymmetryWarnings(eyesParsed.operations).isEmpty());
+    }
 
     // Verify coerced path points
     const auto &opPath = prog.operations.at(1);

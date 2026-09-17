@@ -183,7 +183,24 @@ void KisAiAbstractOntologyTest::testWeightScaling()
     KisAiSceneSpec spec;
     spec.colorScript.accentWeight = 0.0;
     OntologyApplier::apply(QStringLiteral("boost colors"), &spec, rSet);
-    QVERIFY(spec.colorScript.accentWeight > 0.0);
+    // weight 2.0 が numberValue に乗算される: 0.0 + 0.50*2.0 = 1.0 (clamp 上限)。
+    // 旧実装は weight を無視し 0.50 になっていた。
+    QCOMPARE(spec.colorScript.accentWeight, 1.0);
+}
+
+void KisAiAbstractOntologyTest::testWordBoundaryMatching()
+{
+    // "ink" は単語としてのみ一致する。"pink"/"link"/"think" に誤爆しない。
+    KisAiSceneSpec pinkSpec;
+    const int pinkCount =
+        OntologyApplier::apply(QStringLiteral("pink hair girl"), &pinkSpec, OntologyRuleset::defaultRules());
+    QCOMPARE(pinkSpec.style.artStyleId, QStringLiteral("anime_cel"));
+    QVERIFY(pinkCount >= 0);
+
+    // 明示的な "ink sketch" は ink_sketch になる。
+    KisAiSceneSpec inkSpec;
+    OntologyApplier::apply(QStringLiteral("dramatic ink sketch portrait"), &inkSpec);
+    QCOMPARE(inkSpec.style.artStyleId, QStringLiteral("ink_sketch"));
 }
 
 void KisAiAbstractOntologyTest::testDefaultSpecForPromptAppliesOntology()

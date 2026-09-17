@@ -226,7 +226,9 @@ bool KisAiStrokeTypeChecker::checkBrushObject(QJsonObject *brushObj, QString *ou
         qreal sz = 0.008;
         if (!sVal.isDouble() || sVal.toDouble() <= 0.0 || sVal.toDouble() > 1.0) {
             if (coerceToNumber(sVal, &sz) && sz > 0.0) {
-                (*brushObj)[QStringLiteral("size")] = sz;
+                // opacity と同様に上限を clamp: 5.0 のような巨大値が残ると
+                // レンダラーが画面全体を覆うストロークを描く。
+                (*brushObj)[QStringLiteral("size")] = qBound(0.0005, sz, 1.0);
                 if (coercedCount) ++(*coercedCount);
             } else {
                 (*brushObj)[QStringLiteral("size")] = 0.008;
@@ -297,10 +299,12 @@ bool KisAiStrokeTypeChecker::checkPointsArray(QJsonArray *pointsArray, QString *
                 bool okP = (arr.size() >= 3) ? coerceToNumber(arr.at(2), &p) : true;
 
                 if (okX && okY) {
+                    // bounds/center と同様に正規化ドメインへ clamp。
+                    // 旧実装は 1e300 のような巨大値をそのまま通していた。
                     QJsonArray normPt;
-                    normPt.append(x);
-                    normPt.append(y);
-                    normPt.append(okP ? p : 0.8);
+                    normPt.append(qBound(0.0, x, 1.0));
+                    normPt.append(qBound(0.0, y, 1.0));
+                    normPt.append(qBound(0.0, okP ? p : 0.8, 1.0));
                     normalized.append(normPt);
 
                     if (!arr.at(0).isDouble() || !arr.at(1).isDouble() || (arr.size() >= 3 && !arr.at(2).isDouble())) {
@@ -329,9 +333,9 @@ bool KisAiStrokeTypeChecker::checkPointsArray(QJsonArray *pointsArray, QString *
                     p = 0.8;
                 }
                 QJsonArray normPt;
-                normPt.append(x);
-                normPt.append(y);
-                normPt.append(p);
+                normPt.append(qBound(0.0, x, 1.0));
+                normPt.append(qBound(0.0, y, 1.0));
+                normPt.append(qBound(0.0, p, 1.0));
                 normalized.append(normPt);
                 if (coercedCount) ++(*coercedCount);
             }
@@ -362,8 +366,8 @@ bool KisAiStrokeTypeChecker::checkPolygonArray(QJsonArray *polygonArray, QString
                 qreal x = 0.0, y = 0.0;
                 if (coerceToNumber(arr.at(0), &x) && coerceToNumber(arr.at(1), &y)) {
                     QJsonArray normPt;
-                    normPt.append(x);
-                    normPt.append(y);
+                    normPt.append(qBound(0.0, x, 1.0));
+                    normPt.append(qBound(0.0, y, 1.0));
                     normalized.append(normPt);
 
                     if (!arr.at(0).isDouble() || !arr.at(1).isDouble()) {
@@ -381,8 +385,8 @@ bool KisAiStrokeTypeChecker::checkPolygonArray(QJsonArray *polygonArray, QString
             qreal x = 0.0, y = 0.0;
             if (coerceToNumber(vx, &x) && coerceToNumber(vy, &y)) {
                 QJsonArray normPt;
-                normPt.append(x);
-                normPt.append(y);
+                normPt.append(qBound(0.0, x, 1.0));
+                normPt.append(qBound(0.0, y, 1.0));
                 normalized.append(normPt);
                 if (coercedCount) ++(*coercedCount);
             }

@@ -680,6 +680,12 @@ QStringList KisAiDeliberateStroke::eyePairSymmetryWarnings(
         warnings << QStringLiteral("single-eye-only");
         return warnings;
     }
+    // 3 個以上の AnimeEye (敵対的 LLM 出力など) も欠陥として警告する。
+    // 旧実装は 2 個の場合のみ検査し、3 個以上を無警告で通していた。
+    if (eyes.size() > 2) {
+        warnings << QStringLiteral("eye-count-mismatch");
+        return warnings;
+    }
     if (eyes.size() != 2)
         return warnings;
     const KisAiStrokeOperation *a = eyes.at(0);

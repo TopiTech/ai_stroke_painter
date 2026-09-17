@@ -2130,7 +2130,12 @@ void KisAiStrokeRenderer::drawGradientFillOperation(QPainter &painter,
     // D2-5: 1.5% deterministic dither kills 8-bit Mach banding on smooth skies.
     {
         const QRect bounds = poly.boundingRect().toAlignedRect().intersected(QRect(QPoint(0, 0), canvasSize));
-        if (!bounds.isEmpty() && bounds.width() * bounds.height() < 4096 * 4096) {
+        // width()/height() は int のため巨大キャンバスで積が int オーバーフローし、
+        // 負値になってゲートをすり抜ける。qint64 で面積判定する。
+        const qint64 boundsArea = bounds.isEmpty()
+            ? 0
+            : static_cast<qint64>(bounds.width()) * static_cast<qint64>(bounds.height());
+        if (!bounds.isEmpty() && boundsArea < static_cast<qint64>(4096) * 4096) {
             QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/dither")));
             painter.setPen(Qt::NoPen);
             const int dabStep = 3;

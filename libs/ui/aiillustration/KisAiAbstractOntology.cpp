@@ -11,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QRegularExpression>
 #include <QString>
 #include <QStringList>
 
@@ -611,8 +612,17 @@ namespace
 
 bool promptMatchesRule(const QString &prompt, const OntologyRule &rule)
 {
+    // 英語トリガーは単語境界で照合する ("ink" が "pink"/"link" に誤爆しないよう)。
+    // 日本語は分かち書きしないため従来どおり部分一致とする。
+    static auto containsWordEn = [](const QString &text, const QString &word) {
+        if (word.isEmpty())
+            return false;
+        QRegularExpression re(QStringLiteral("\\b") + QRegularExpression::escape(word) + QStringLiteral("\\b"),
+                              QRegularExpression::CaseInsensitiveOption);
+        return text.contains(re);
+    };
     for (int i = 0; i < rule.triggerWords.size(); ++i) {
-        if (prompt.contains(rule.triggerWords.at(i), Qt::CaseInsensitive))
+        if (containsWordEn(prompt, rule.triggerWords.at(i)))
             return true;
     }
     for (int i = 0; i < rule.triggerWordsJa.size(); ++i) {
@@ -629,7 +639,9 @@ void applyRuleToSpec(const OntologyRule &rule, KisAiSceneSpec *spec)
     const QString path = rule.specPath;
     if (path == QStringLiteral("colorScript.accentWeight")) {
         if (rule.kind == OntologyRule::AddNumber) {
-            spec->colorScript.accentWeight = qBound<qreal>(0.0, spec->colorScript.accentWeight + rule.numberValue, 1.0);
+            const qreal weight = (rule.weight > 0.0 && std::isfinite(rule.weight)) ? rule.weight : 1.0;
+            spec->colorScript.accentWeight =
+                qBound<qreal>(0.0, spec->colorScript.accentWeight + rule.numberValue * weight, 1.0);
         } else if (rule.kind == OntologyRule::SetNumber) {
             spec->colorScript.accentWeight = qBound<qreal>(0.0, rule.numberValue, 1.0);
         }

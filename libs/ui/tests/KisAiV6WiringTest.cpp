@@ -7,6 +7,8 @@
 
 #include <QImage>
 #include <QPainter>
+#include <QPointF>
+#include <QSet>
 #ifndef AI_STROKE_STANDALONE
 #include <testui.h>
 #else
@@ -849,6 +851,75 @@ void KisAiV6WiringTest::testVisionCriticImageToDataUrlTransparency()
     const QColor centerColor = decoded.pixelColor(32, 32);
     QVERIFY2(centerColor.red() > 240 && centerColor.green() > 240 && centerColor.blue() > 240,
              "Transparent image was rendered with dark/black artifacts instead of white background");
+}
+
+void KisAiV6WiringTest::testDraperyFoldIdsAreUnique()
+{
+    // 左右 2 回呼び出す Layout パスで op id が衝突しないこと。
+    // (旧実装は固定 id のため globalSilhouettes / clip_to_id が曖昧だった)
+    const QPointF left(0.3, 0.4);
+    const QPointF right(0.7, 0.4);
+    const QPointF center(0.5, 0.6);
+    const QColor cloth(50, 60, 90);
+    const QColor shadow(30, 35, 55);
+
+    const auto foldsL = KisAiRigLibrary::draperyFoldOps(left, center, 2.0, cloth, shadow, QStringLiteral("l"));
+    const auto foldsR = KisAiRigLibrary::draperyFoldOps(right, center, 2.0, cloth, shadow, QStringLiteral("r"));
+    QCOMPARE(foldsL.size(), 2);
+    QCOMPARE(foldsR.size(), 2);
+
+    QSet<QString> ids;
+    for (const auto &op : foldsL)
+        ids.insert(op.id);
+    for (const auto &op : foldsR) {
+        QVERIFY(!ids.contains(op.id));
+        ids.insert(op.id);
+    }
+    QCOMPARE(ids.size(), 4);
+
+    // デフォルト呼び出し (suffix なし) は従来 id を維持し互換性を保つ。
+    const auto legacy = KisAiRigLibrary::draperyFoldOps(left, center, 2.0, cloth, shadow);
+    QVERIFY(hasId(legacy, QStringLiteral("drapery_tension_line")));
+    QVERIFY(hasId(legacy, QStringLiteral("drapery_fold_shade")));
+}
+
+void KisAiV6WiringTest::testSamplingForClampsTopPAndMaxTokens()
+{
+    // 範囲外 topP / maxTokens が API エラーにならず clamp されること。
+    const auto low = KisAiRefinementLoop::samplingFor(KisAiModelRouter::Stage::SceneSpec,
+                                                      QStringLiteral("gpt-4o"),
+                                                      QStringLiteral("https://api.openai.com/v1/chat/completions"),
+                                                      0.7, -0.5, -100, QString(), false);
+    QCOMPARE(low.topP, 0.01);
+    QCOMPARE(low.maxTokens, 0);
+
+    const auto high = KisAiRefinementLoop::samplingFor(KisAiModelRouter::Stage::SceneSpec,
+                                                       QStringLiteral("gpt-4o"),
+                                                       QStringLiteral("https://api.openai.com/v1/chat/completions"),
+                                                       0.7, 5.0, 1000000, QString(), false);
+    QCOMPARE(high.topP, 1.0);
+    QVERIFY(high.maxTokens <= 131072);
+
+    // 正常値は素通し。
+    const auto normal = KisAiRefinementLoop::samplingFor(KisAiModelRouter::Stage::SceneSpec,
+                                                         QStringLiteral("gpt-4o"),
+                                                         QStringLiteral("https://api.openai.com/v1/chat/completions"),
+                                                         0.7, 0.9, 4096, QString(), false);
+    QCOMPARE(normal.topP, 0.9);
+    QCOMPARE(normal.maxTokens, 4096);
+}
+
+void KisAiV6WiringTest::testRigClampedCoversPoseFields()
+{
+    KisAiRigParameterSet params;
+    params.headTiltDeg = 45.0;
+    params.shoulderSlope = 1.0;
+    params.torsoTurn = -1.0;
+
+    const KisAiRigParameterSet clamped = KisAiRigLibrary::clamped(params);
+    QCOMPARE(clamped.headTiltDeg, 15.0);
+    QCOMPARE(clamped.shoulderSlope, 0.08);
+    QCOMPARE(clamped.torsoTurn, -0.10);
 }
 
 KISTEST_MAIN(KisAiV6WiringTest)

@@ -25,6 +25,7 @@ private Q_SLOTS:
     void testLoadCustomFromJsonArray();
     void testAppliedDescriptionsOutParam();
     void testWeightScaling();
+    void testWordBoundaryMatching();
     void testDefaultSpecForPromptAppliesOntology();
 };
 

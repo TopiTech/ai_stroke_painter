@@ -2599,9 +2599,11 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
             return val.toBool(defaultVal);
         if (val.isString()) {
             const QString s = val.toString().trimmed().toLower();
-            if (s.startsWith(QLatin1String("t")) || s == QLatin1String("1") || s == QLatin1String("yes"))
+            if (s.startsWith(QLatin1String("t")) || s == QLatin1String("1") || s == QLatin1String("yes")
+                || s == QLatin1String("on"))
                 return true;
-            if (s.startsWith(QLatin1String("f")) || s == QLatin1String("0") || s == QLatin1String("no"))
+            if (s.startsWith(QLatin1String("f")) || s == QLatin1String("0") || s == QLatin1String("no")
+                || s == QLatin1String("off"))
                 return false;
         }
         if (val.isDouble()) {
@@ -3216,7 +3218,7 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                                              QStringLiteral("open"))
                                        .toString(QStringLiteral("open"));
                 op.eyeIsRight =
-                    findField(o, {QStringLiteral("is_right"), QStringLiteral("right")}, false).toBool(false);
+                    toBoolField(findField(o, {QStringLiteral("is_right"), QStringLiteral("right")}, false), false);
             } else if (op.kind == KisAiStrokeOperation::Kind::AnimeMouth) {
                 const QJsonValue centerVal = findField(o, {QStringLiteral("center"), QStringLiteral("mouth_center")});
                 if (!centerVal.isUndefined() && !centerVal.isNull()) {
@@ -3248,7 +3250,8 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                                                QStringLiteral("smile"))
                                          .toString(QStringLiteral("smile"));
                 op.mouthHasHighlight =
-                    findField(o, {QStringLiteral("has_highlight"), QStringLiteral("highlight")}, true).toBool(true);
+                    toBoolField(findField(o, {QStringLiteral("has_highlight"), QStringLiteral("highlight")}, true),
+                                true);
             }
 
             if (op.kind != KisAiStrokeOperation::Kind::Unknown) {
@@ -3739,6 +3742,10 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
                 localReport.warnings.append(
                     QStringLiteral("Eye pair is asymmetric; check gaze alignment and matching eye sizes."));
             }
+        } else if (eyes.size() > 2) {
+            localReport.warnings.append(
+                QStringLiteral("Unexpected eye count (%1); expected exactly 2 AnimeEye operations.")
+                    .arg(eyes.size()));
         }
     }
 

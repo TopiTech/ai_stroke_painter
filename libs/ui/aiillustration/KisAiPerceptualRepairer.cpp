@@ -480,16 +480,41 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
                 const QString layer = normalizeLayerLocal(op.layer);
                 if (op.kind != KisAiStrokeOperation::Kind::Hatch)
                     continue;
-                // バウンスまたは polygon が顔 BBox と重なる
-                QRectF polyBounds;
+                // polygon / points / spine いずれかで顔 BBox との重なりを判定する。
+                // 旧実装は polygon のみで、points/spine だけの Hatch は検出漏れしていた。
+                QRectF hatchBounds;
                 if (!op.polygon.isEmpty()) {
-                    polyBounds = op.polygon.boundingRect();
-                    polyBounds = QRectF(polyBounds.x() * flatsMask.width(),
-                                        polyBounds.y() * flatsMask.height(),
-                                        polyBounds.width() * flatsMask.width(),
-                                        polyBounds.height() * flatsMask.height());
+                    hatchBounds = op.polygon.boundingRect();
+                    hatchBounds = QRectF(hatchBounds.x() * flatsMask.width(),
+                                        hatchBounds.y() * flatsMask.height(),
+                                        hatchBounds.width() * flatsMask.width(),
+                                        hatchBounds.height() * flatsMask.height());
+                } else if (!op.points.isEmpty()) {
+                    qreal minX = 1.0, minY = 1.0, maxX = 0.0, maxY = 0.0;
+                    for (int p = 0; p < op.points.size(); ++p) {
+                        const QPointF pt = op.points.at(p).pos;
+                        minX = qMin(minX, pt.x());
+                        minY = qMin(minY, pt.y());
+                        maxX = qMax(maxX, pt.x());
+                        maxY = qMax(maxY, pt.y());
+                    }
+                    hatchBounds = QRectF(minX * flatsMask.width(),
+                                        minY * flatsMask.height(),
+                                        (maxX - minX) * flatsMask.width(),
+                                        (maxY - minY) * flatsMask.height());
+                } else if (!op.spine.isEmpty()) {
+                    QPolygonF spinePoly;
+                    spinePoly.reserve(op.spine.size());
+                    for (int p = 0; p < op.spine.size(); ++p)
+                        spinePoly.append(op.spine.at(p));
+                    hatchBounds = QRectF(spinePoly.boundingRect().x() * flatsMask.width(),
+                                        spinePoly.boundingRect().y() * flatsMask.height(),
+                                        spinePoly.boundingRect().width() * flatsMask.width(),
+                                        spinePoly.boundingRect().height() * flatsMask.height());
                 }
-                if (face.intersects(polyBounds.toRect())) {
+                if (hatchBounds.isEmpty())
+                    continue;
+                if (face.intersects(hatchBounds.toAlignedRect())) {
                     ++hatchOnFaceCount;
                     PerceptualIssue issue;
                     issue.type = PerceptualIssue::HatchOnFace;
@@ -556,6 +581,8 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
     }
 
     // ---- 6. カラーバンディング検出 (renderedImage ラプラシアン) ----
+    // 平坦な wash 領域のみを対象にし、線画エッジ (lap が大きい) を除外する。
+    // 旧実装は全画素の p95 を見ていたため、線画のある画像では常に誤検出していた。
     {
         if (!renderedImage.isNull() && renderedImage.width() >= 16 && renderedImage.height() >= 16) {
             QImage sample = renderedImage;
@@ -582,7 +609,9 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
                     const qreal u = qRed(curr[x - 1]) / 255.0;
                     const qreal d = qRed(curr[x + 1]) / 255.0;
                     const qreal v = qAbs(4.0 * c - l - r - u - d);
-                    lap.append(v);
+                    // 線画エッジ (lap >= 0.5) は除外し、wash の微細段差のみ集計する。
+                    if (v < 0.5)
+                        lap.append(v);
                 }
             }
             if (lap.size() > 100) {
@@ -610,8 +639,11 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
     }
 
     // ---- 7. 線画太さジッタ (Path op 内の隣接圧力差) ----
+    // ジッタのある op のみに SmoothControlPoints を適用する。
+    // 旧実装は 1 op でもジッタがあれば全 Path を平滑化し、
+    // 意図的な筆圧変化まで破壊していた。
     {
-        int jitterOps = 0;
+        QVector<int> jitterOpIndices;
         for (int i = 0; i < program.operations.size(); ++i) {
             const KisAiStrokeOperation &op = program.operations.at(i);
             if (op.kind != KisAiStrokeOperation::Kind::Path)
@@ -625,27 +657,26 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
             }
             const qreal avgJitter = sumJitter / (op.points.size() - 1);
             if (avgJitter > 0.25)
-                ++jitterOps;
+                jitterOpIndices.append(i);
         }
-        if (jitterOps >= 1) {
+        if (!jitterOpIndices.isEmpty()) {
             PerceptualIssue issue;
             issue.type = PerceptualIssue::LineartThicknessJitter;
             issue.region = QRectF(0, 0, 1, 1);
-            issue.severity = qBound<qreal>(0.0, qMin<qreal>(1.0, qreal(jitterOps) / 5.0), 1.0);
-            issue.description = QStringLiteral("Lineart pressure jitter detected in %1 path(s)").arg(jitterOps);
+            issue.severity =
+                qBound<qreal>(0.0, qMin<qreal>(1.0, qreal(jitterOpIndices.size()) / 5.0), 1.0);
+            issue.description =
+                QStringLiteral("Lineart pressure jitter detected in %1 path(s)").arg(jitterOpIndices.size());
             issue.requiresUserConsent = false;
             plan.issues.append(issue);
 
-            for (int i = 0; i < program.operations.size(); ++i) {
-                KisAiStrokeOperation op = program.operations.at(i);
-                if (op.kind != KisAiStrokeOperation::Kind::Path)
-                    continue;
-                if (op.points.size() < 4)
-                    continue;
+            for (int i = 0; i < jitterOpIndices.size(); ++i) {
+                const int opIdx = jitterOpIndices.at(i);
+                const KisAiStrokeOperation &op = program.operations.at(opIdx);
                 PerceptualFix fix;
                 fix.issue = issue;
                 fix.action = PerceptualFix::SmoothControlPoints;
-                fix.targetOpIndex = i;
+                fix.targetOpIndex = opIdx;
                 fix.targetOpId = op.id;
                 fix.description = QStringLiteral("Smooth pressure sequence for path '%1'").arg(op.id);
                 plan.fixes.append(fix);

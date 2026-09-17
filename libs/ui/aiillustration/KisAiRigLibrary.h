@@ -227,14 +227,15 @@ public:
      * V7 Procedural Drapery & Tension Folds:
      * Synthesizes clothing tension folds between anchor points (e.g. shoulders, neck, waist)
      * with delicate lineart and soft fold shading.
+     * idSuffix が空でない場合は op id に付与し、同一プログラム内の重複を避ける。
      */
     static QVector<KisAiStrokeOperation> draperyFoldOps(
         const QPointF &origin,
         const QPointF &target,
         qreal widthPx,
         const QColor &clothColor,
-        const QColor &shadowColor
-    );
+        const QColor &shadowColor,
+        const QString &idSuffix = QString());
 
     /** Stable sub-seed for a named rig part (deterministic across sessions). */
     static quint32 partSeed(const QString &partName, quint32 baseSeed);

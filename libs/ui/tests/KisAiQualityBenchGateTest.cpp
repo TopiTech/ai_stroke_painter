@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QTextStream>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -174,6 +175,13 @@ void KisAiQualityBenchGateTest::testBenchmarkFullGatePass()
     }
 
     int passedCount = 0;
+    QString failures;
+    const QString diagPath = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("bench_gate_debug.txt"));
+    QFile diagOut(diagPath);
+    if (!diagOut.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        QFAIL(qPrintable(QStringLiteral("cannot open diag output: %1").arg(diagPath)));
+    }
+    QTextStream diag(&diagOut);
     // 32 本すべてをベンチマーク実行
     for (int i = 0; i < arr.size(); ++i) {
         const QJsonObject p = arr.at(i).toObject();
@@ -182,18 +190,32 @@ void KisAiQualityBenchGateTest::testBenchmarkFullGatePass()
         const qreal minScore = p.value(QStringLiteral("min_aggregate_score")).toDouble(0.40);
 
         qreal score = 0.0;
-        if (evaluatePromptQuality(prompt, profile, minScore * 0.85, &score)) {
+        if (evaluatePromptQuality(prompt, profile, minScore, &score)) {
             ++passedCount;
+        } else {
+            failures += QStringLiteral("#%1 %2: score=%3 < min=%4\n")
+                            .arg(p.value(QStringLiteral("id")).toInt())
+                            .arg(profile)
+                            .arg(score, 0, 'f', 3)
+                            .arg(minScore, 0, 'f', 3);
         }
+        diag << "bench " << p.value(QStringLiteral("id")).toInt() << " score=" << score
+             << " min=" << minScore << (score >= minScore ? " PASS" : " FAIL") << "\n";
+        diag.flush();
     }
+    diag << "bench failures:\n" << failures << "\n";
+    diagOut.close();
 
-    // 計画書要件: 95% 以上のプロンプトで合格 (32 本中 30 本以上)
+    // 計画書要件: 95% 以上のプロンプトで合格 (32 本中 30 本以上)。
+    // golden_set.json の min_aggregate_score をそのまま適用する
+    // (旧実装は *0.85 の割引と 90% 判定でゲートを緩めていた)。
     const qreal passRate = static_cast<qreal>(passedCount) / arr.size();
-    QVERIFY2(passRate >= 0.90,
-             qPrintable(QString("Pass rate %1 (%2/%3) is below 90% target")
+    QVERIFY2(passRate >= 0.95,
+             qPrintable(QString("Pass rate %1 (%2/%3) is below 95% target\n%4")
                             .arg(passRate)
                             .arg(passedCount)
-                            .arg(arr.size())));
+                            .arg(arr.size())
+                            .arg(failures)));
 }
 
 KISTEST_MAIN(KisAiQualityBenchGateTest)

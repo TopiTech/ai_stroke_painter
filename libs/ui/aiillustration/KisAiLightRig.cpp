@@ -534,18 +534,22 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeVolumetricShading(
 {
     Q_UNUSED(canvasSize);
     QVector<KisAiStrokeOperation> ops;
+    // 他の synthesize* と同様に emit 上限を設ける (無制限だと 500 flats で
+    // 1000+ の shading op が増殖する)。上限は兄弟パス (24/24/12) と同水準。
+    constexpr int MAX_VOLUMETRIC_OPS = 48;
     const TimeOfDayLut lut = timeOfDayLut(rig.timeOfDay);
 
     // Normalize 2D key light direction (pointing towards light)
     QPointF lightDir = rig.direction;
-    const qreal len = std::hypot(lightDir.x(), lightDir.y());
-    if (len > 1.0e-5) {
-        lightDir = QPointF(lightDir.x() / len, lightDir.y() / len);
+    if (std::hypot(lightDir.x(), lightDir.y()) > 1.0e-5) {
+        lightDir /= std::hypot(lightDir.x(), lightDir.y());
     } else {
         lightDir = QPointF(-0.5, -0.7);
     }
 
     for (const KisAiStrokeOperation &op : flatsOps) {
+        if (ops.size() >= MAX_VOLUMETRIC_OPS)
+            break;
         if (op.kind != KisAiStrokeOperation::Kind::Fill && op.kind != KisAiStrokeOperation::Kind::GradientFill)
             continue;
         if (op.polygon.size() < 3)
@@ -644,6 +648,8 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeMaterialOptics(
 {
     Q_UNUSED(canvasSize);
     QVector<KisAiStrokeOperation> ops;
+    // Volumetric と同じく emit 上限を設ける。
+    constexpr int MAX_MATERIAL_OPTICS_OPS = 48;
     const TimeOfDayLut lut = timeOfDayLut(rig.timeOfDay);
 
     QPointF lightDir = rig.direction;
@@ -655,6 +661,8 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeMaterialOptics(
     }
 
     for (const KisAiStrokeOperation &op : flatsOps) {
+        if (ops.size() >= MAX_MATERIAL_OPTICS_OPS)
+            break;
         const QString lowerId = op.id.toLower();
         const bool isSkin = lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face"));
         const bool isHair = lowerId.contains(QLatin1String("hair"));

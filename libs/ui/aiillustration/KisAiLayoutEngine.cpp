@@ -735,8 +735,8 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::clothingForSpec(const KisAiScen
     const QPointF leftShoulder(hc.x() - shoulderW * 0.40, shoulderY + hh * 0.15);
     const QPointF rightShoulder(hc.x() + shoulderW * 0.40, shoulderY + hh * 0.15);
     const QPointF chestCenter(hc.x(), shoulderY + hh * 0.35);
-    ops.append(KisAiRigLibrary::draperyFoldOps(leftShoulder, chestCenter, 2.0, mainCloth, clothShadow));
-    ops.append(KisAiRigLibrary::draperyFoldOps(rightShoulder, chestCenter, 2.0, mainCloth, clothShadow));
+    ops.append(KisAiRigLibrary::draperyFoldOps(leftShoulder, chestCenter, 2.0, mainCloth, clothShadow, QStringLiteral("l")));
+    ops.append(KisAiRigLibrary::draperyFoldOps(rightShoulder, chestCenter, 2.0, mainCloth, clothShadow, QStringLiteral("r")));
 
     // 4. Style-Specific Costume Details
     if (style == QLatin1String("school_uniform") || style == QLatin1String("sailor")) {

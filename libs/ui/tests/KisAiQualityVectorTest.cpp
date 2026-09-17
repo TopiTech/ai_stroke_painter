@@ -270,6 +270,154 @@ void KisAiQualityVectorTest::testEvaluateStructuralSymmetryAxisDeviation()
     QCOMPARE(asymM.symmetryAxisDeviation, 0.0);
 }
 
+void KisAiQualityVectorTest::testColorEntropyUsesSampleDistribution()
+{
+    // 単色 (全て同じ赤) -> エントロピー 0。旧実装は分母 24 固定で
+    // p = count/24 となり正規分布にならず過大評価されていた。
+    KisAiStrokeProgram prog;
+    for (int i = 0; i < 4; ++i) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Fill;
+        op.layer = QStringLiteral("Flats");
+        op.brush.color = QColor(220, 40, 40);
+        op.polygon = QPolygonF() << QPointF(0.1, 0.1) << QPointF(0.9, 0.1)
+                                 << QPointF(0.9, 0.9) << QPointF(0.1, 0.9);
+        prog.operations.append(op);
+    }
+    const StructuralMetrics m = QualityVectorEvaluator::evaluateStructural(prog, nullptr);
+    QCOMPARE(m.colorHarmony, 0.0);
+
+    // 無彩色のみ (白黒) -> ヒストグラム対象外 -> 0。旧実装は赤ビンに集計していた。
+    KisAiStrokeProgram grayProg;
+    for (int i = 0; i < 2; ++i) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Fill;
+        op.layer = QStringLiteral("Flats");
+        op.brush.color = (i == 0) ? QColor(255, 255, 255) : QColor(0, 0, 0);
+        op.polygon = QPolygonF() << QPointF(0.1, 0.1) << QPointF(0.9, 0.1)
+                                 << QPointF(0.9, 0.9) << QPointF(0.1, 0.9);
+        grayProg.operations.append(op);
+    }
+    const StructuralMetrics gm = QualityVectorEvaluator::evaluateStructural(grayProg, nullptr);
+    QCOMPARE(gm.colorHarmony, 0.0);
+}
+
+void KisAiQualityVectorTest::testSilhouetteContinuityDetectsFragmentation()
+{
+    // 退化した Flats (面積 0) が混ざると 0.0。正常な 2 枚は 1.0。
+    // 旧実装はどちらも恒等的に 1.0 だった。
+    KisAiStrokeProgram okProg;
+    for (int i = 0; i < 2; ++i) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Fill;
+        op.layer = QStringLiteral("Flats");
+        op.brush.color = QColor(200, 150, 100);
+        op.polygon = QPolygonF() << QPointF(0.2, 0.2) << QPointF(0.8, 0.2)
+                                 << QPointF(0.8, 0.8) << QPointF(0.2, 0.8);
+        okProg.operations.append(op);
+    }
+    const StructuralMetrics okM = QualityVectorEvaluator::evaluateStructural(okProg, nullptr);
+    QCOMPARE(okM.silhouetteContinuity, 1.0);
+
+    // 退化した Flats (面積 0 の線分ポリゴン) が混ざると 0.0。
+    KisAiStrokeProgram fragProg;
+    {
+        KisAiStrokeOperation a;
+        a.kind = KisAiStrokeOperation::Kind::Fill;
+        a.layer = QStringLiteral("Flats");
+        a.brush.color = QColor(200, 150, 100);
+        a.polygon = QPolygonF() << QPointF(0.2, 0.2) << QPointF(0.8, 0.2)
+                                << QPointF(0.8, 0.8) << QPointF(0.2, 0.8);
+        fragProg.operations.append(a);
+        KisAiStrokeOperation b = a;
+        b.polygon = QPolygonF() << QPointF(0.1, 0.1) << QPointF(0.2, 0.2) << QPointF(0.1, 0.1);
+        fragProg.operations.append(b);
+    }
+    const StructuralMetrics fragM = QualityVectorEvaluator::evaluateStructural(fragProg, nullptr);
+    QCOMPARE(fragM.silhouetteContinuity, 0.0);
+
+    // 一体のシルエット (大きな Flats + 内部に重なる 2 枚) -> 高スコア。
+    // 各 bbox の最大重なり率の平均で測るため、包含関係では 1.0 に近い。
+    KisAiStrokeProgram coherentProg;
+    {
+        KisAiStrokeOperation base;
+        base.kind = KisAiStrokeOperation::Kind::Fill;
+        base.layer = QStringLiteral("Flats");
+        base.brush.color = QColor(200, 150, 100);
+        base.polygon = QPolygonF() << QPointF(0.2, 0.2) << QPointF(0.8, 0.2)
+                                   << QPointF(0.8, 0.8) << QPointF(0.2, 0.8);
+        coherentProg.operations.append(base);
+        KisAiStrokeOperation inner = base;
+        inner.polygon = QPolygonF() << QPointF(0.3, 0.3) << QPointF(0.5, 0.3)
+                                    << QPointF(0.5, 0.5) << QPointF(0.3, 0.5);
+        coherentProg.operations.append(inner);
+        KisAiStrokeOperation inner2 = base;
+        inner2.polygon = QPolygonF() << QPointF(0.55, 0.55) << QPointF(0.7, 0.55)
+                                     << QPointF(0.7, 0.7) << QPointF(0.55, 0.7);
+        coherentProg.operations.append(inner2);
+    }
+    const StructuralMetrics coherentM = QualityVectorEvaluator::evaluateStructural(coherentProg, nullptr);
+    QVERIFY(coherentM.silhouetteContinuity > 0.5);
+}
+
+void KisAiQualityVectorTest::testIntentMatchCoversSunsetAndDawn()
+{
+    const auto progWithWarmRed = [] {
+        KisAiStrokeProgram p;
+        p.prompt = QStringLiteral("sunset");
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Fill;
+        op.layer = QStringLiteral("Flats");
+        op.brush.color = QColor(230, 90, 40); // 暖色 (sunset 判定に必要)
+        op.polygon = QPolygonF() << QPointF(0.1, 0.1) << QPointF(0.9, 0.1)
+                                 << QPointF(0.9, 0.9) << QPointF(0.1, 0.9);
+        p.operations.append(op);
+        return p;
+    }();
+    const StructuralMetrics sm = QualityVectorEvaluator::evaluateStructural(progWithWarmRed, nullptr);
+    // 旧実装は sunset を常に不一致とし 0.0 を返していた。
+    QCOMPARE(sm.intentMatch, 1.0);
+
+    const auto progWithBright = [] {
+        KisAiStrokeProgram p;
+        p.prompt = QStringLiteral("dawn");
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Fill;
+        op.layer = QStringLiteral("Flats");
+        op.brush.color = QColor(240, 235, 220);
+        op.polygon = QPolygonF() << QPointF(0.1, 0.1) << QPointF(0.9, 0.1)
+                                 << QPointF(0.9, 0.9) << QPointF(0.1, 0.9);
+        p.operations.append(op);
+        return p;
+    }();
+    const StructuralMetrics dm = QualityVectorEvaluator::evaluateStructural(progWithBright, nullptr);
+    QCOMPARE(dm.intentMatch, 1.0);
+}
+
+void KisAiQualityVectorTest::testLineartJitterIgnoresEmptyTiles()
+{
+    // 疎だが均一な線画 (対角線 1 本)。旧実装は空タイルを CV に含めて
+    // 常に 0.0 を返していた。修正後はインクタイルのみで評価し高スコアになる。
+    KisAiStrokeProgram prog;
+    KisAiStrokeOperation op;
+    op.kind = KisAiStrokeOperation::Kind::Path;
+    op.layer = QStringLiteral("Lineart");
+    op.brush.color = QColor(20, 20, 30);
+    op.brush.size = 0.004;
+    for (int i = 0; i <= 10; ++i) {
+        KisAiStrokePoint pt;
+        pt.pos = QPointF(0.1 + 0.08 * i, 0.1 + 0.08 * i);
+        pt.pressure = 0.8;
+        op.points.append(pt);
+    }
+    prog.operations.append(op);
+
+    QImage img(64, 64, QImage::Format_ARGB32);
+    img.fill(0);
+    const PerceptualMetrics m = QualityVectorEvaluator::evaluatePerceptual(img, nullptr, &prog);
+    QVERIFY(m.lineartThicknessStddev > 0.5);
+}
+
 void KisAiQualityVectorTest::testEvaluatePerceptualFormatSafety()
 {
     // Grayscale image should not cause memory misalignment or crash

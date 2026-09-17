@@ -30,6 +30,9 @@ private Q_SLOTS:
     void testCleanProgramProducesZeroIssues();
     void testMultipleDropOpStability();
     void testColorBandingOnLargeImage();
+    void testHatchOnFaceDetectsPointsOnlyHatch();
+    void testColorBandingSkipsSharpLineart();
+    void testJitterFixTargetsOnlyJitteryOps();
 };
 
 #endif // KIS_AI_PERCEPTUAL_REPAIRER_TEST_H
