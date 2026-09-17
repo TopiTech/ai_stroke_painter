@@ -219,6 +219,10 @@ private:
     QComboBox *m_visionQualityCombo {nullptr};
     QComboBox *m_strokeProtocolCombo {nullptr};
     QComboBox *m_qualityModeCombo {nullptr};
+    QComboBox *m_qualityProfileCombo {nullptr};
+    QCheckBox *m_physicalRenderCheck {nullptr};
+    QCheckBox *m_perceptualRepairCheck {nullptr};
+    QPushButton *m_submitFeedbackButton {nullptr};
     QCheckBox *m_compositionPlanCheck {nullptr};
     QCheckBox *m_suppressParticlesCheck {nullptr};
     QComboBox *m_reasoningEffortCombo {nullptr};

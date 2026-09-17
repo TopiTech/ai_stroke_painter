@@ -5,6 +5,7 @@
 
 #include "KisAiStrokeRenderer.h"
 #include "KisAiDeliberateStroke.h"
+#include "KisAiPhysicalRenderer.h"
 #include "KisAiStrokeQualityUtils.h"
 
 #ifndef AI_STROKE_STANDALONE
@@ -290,6 +291,24 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
                                                  bool clipShadingToFlats,
                                                  qreal trappingPx)
 {
+    return renderProgramToImage(program, targetSize, clipShadingToFlats, nullptr, trappingPx);
+}
+
+QImage KisAiStrokeRenderer::renderProgramToImagePhysical(const KisAiStrokeProgram &program,
+                                                         const QSize &targetSize,
+                                                         bool clipShadingToFlats,
+                                                         qreal trappingPx,
+                                                         int superSampleFactor)
+{
+    try {
+        const QImage physicalImg = KisAi::KisAiPhysicalRenderer::renderProgramToPhysicalImage(
+            program, targetSize, clipShadingToFlats, trappingPx, superSampleFactor);
+        if (!physicalImg.isNull() && physicalImg.width() > 0 && physicalImg.height() > 0) {
+            return physicalImg;
+        }
+    } catch (...) {
+        // Fall back to standard renderer on any error
+    }
     return renderProgramToImage(program, targetSize, clipShadingToFlats, nullptr, trappingPx);
 }
 

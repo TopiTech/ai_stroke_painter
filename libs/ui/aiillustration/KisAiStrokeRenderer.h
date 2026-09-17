@@ -84,6 +84,19 @@ public:
                                        qreal trappingPx = -1.0);
 
     /**
+     * V8 Phase 3: Render the program using the physical rendering pipeline (sRGB Linear,
+     * RGBA16F, W3C CSS Compositing Level 1 blend modes, 4x supersampling).
+     * Falls back to renderProgramToImage() if physical rendering fails.
+     */
+    static QImage renderProgramToImagePhysical(const KisAiStrokeProgram &program,
+                                               const QSize &targetSize = QSize(),
+                                               bool clipShadingToFlats = true,
+                                               qreal trappingPx = -1.0,
+                                               int superSampleFactor = 2);
+
+    friend class KisAiPhysicalRenderer;
+
+    /**
      * Encode a QImage into a JPEG Base64 Data URL (scaled down if exceeding maxDimension).
      */
     static QString captureImageBase64(const QImage &image, int maxDimension = 768, int quality = 80);
@@ -145,13 +158,16 @@ public:
     };
     static RenderBudget renderBudgetFor(const QSize &size, int opCount);
 
-private:
+    /**
+     * Render a subset of operations directly to an image (public for KisAiPhysicalRenderer).
+     */
     static QImage
     renderOperationsToImage(const QVector<KisAiStrokeOperation> &operations,
                             const QSize &canvasSize,
                             const QPainterPath &faceExclusionPath = QPainterPath(),
                             const QMap<QString, QPolygonF> &globalSilhouettes = QMap<QString, QPolygonF>());
 
+private:
     static void rasterizeOperation(QPainter &painter,
                                    const KisAiStrokeOperation &op,
                                    const QSize &canvasSize,

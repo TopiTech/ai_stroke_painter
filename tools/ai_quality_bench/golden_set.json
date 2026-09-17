@@ -1,0 +1,262 @@
+{
+  "version": "V8",
+  "name": "AI Stroke Painter Golden Bench 32",
+  "prompts": [
+    {
+      "id": 1,
+      "category": "existing",
+      "prompt": "黒髪ショートボブの少女、窓辺で微笑む",
+      "expected_profile": "anime_lineart_heavy",
+      "min_aggregate_score": 0.55,
+      "description": "Standard anime portrait with clear head/face"
+    },
+    {
+      "id": 2,
+      "category": "existing",
+      "prompt": "金髪ツインテールの魔法少女、ステッキを構える",
+      "expected_profile": "anime_lineart_heavy",
+      "min_aggregate_score": 0.55,
+      "description": "Dynamic silhouette with prop"
+    },
+    {
+      "id": 3,
+      "category": "existing",
+      "prompt": "夕暮れの桜並木と石畳の坂道",
+      "expected_profile": "watercolor_soft",
+      "min_aggregate_score": 0.50,
+      "description": "Atmospheric landscape with warm lighting"
+    },
+    {
+      "id": 4,
+      "category": "existing",
+      "prompt": "サイバーパンク風の高層ビル群とネオン街",
+      "expected_profile": "ink_sketch_bold",
+      "min_aggregate_score": 0.50,
+      "description": "Dense urban environment with high contrast"
+    },
+    {
+      "id": 5,
+      "category": "existing",
+      "prompt": "森の中の静かな湖、小舟が一隻浮かぶ",
+      "expected_profile": "watercolor_soft",
+      "min_aggregate_score": 0.50,
+      "description": "Calm reflection and natural greens"
+    },
+    {
+      "id": 6,
+      "category": "existing",
+      "prompt": "甲冑を纏った騎士、剣を地に突き刺して佇む",
+      "expected_profile": "ink_sketch_bold",
+      "min_aggregate_score": 0.55,
+      "description": "Metallic reflections and structured armor"
+    },
+    {
+      "id": 7,
+      "category": "existing",
+      "prompt": "白いペルシャ猫、赤いベルベットクッションの上で丸くなる",
+      "expected_profile": "photorealistic",
+      "min_aggregate_score": 0.50,
+      "description": "Soft animal fur texture and rich background"
+    },
+    {
+      "id": 8,
+      "category": "existing",
+      "prompt": "古びた図書館の読書室、ステンドグラスから差し込む光",
+      "expected_profile": "watercolor_soft",
+      "min_aggregate_score": 0.50,
+      "description": "Volumetric godrays and rich architectural detail"
+    },
+    {
+      "id": 9,
+      "category": "existing",
+      "prompt": "深海を泳ぐ巨大なクジラとクラゲの群れ",
+      "expected_profile": "watercolor_soft",
+      "min_aggregate_score": 0.50,
+      "description": "Bioluminescence and underwater depth gradients"
+    },
+    {
+      "id": 10,
+      "category": "existing",
+      "prompt": "アンティークな懐中時計と開いた古文書",
+      "expected_profile": "ink_sketch_bold",
+      "min_aggregate_score": 0.55,
+      "description": "Precise mechanical lineart and parchment tone"
+    },
+    {
+      "id": 11,
+      "category": "existing",
+      "prompt": "雨の日のバス停、透明な傘をさす少年",
+      "expected_profile": "anime_lineart_heavy",
+      "min_aggregate_score": 0.50,
+      "description": "Rain drops, reflections, and umbrella transparency"
+    },
+    {
+      "id": 12,
+      "category": "existing",
+      "prompt": "星空を駆ける蒸気機関車の幻想風景",
+      "expected_profile": "watercolor_soft",
+      "min_aggregate_score": 0.50,
+      "description": "Cosmic sky and smoke trail"
+    },
+    {
+      "id": 13,
+      "category": "existing",
+      "prompt": "レトロ喫茶店のカウンター、湯気の立つ珈琲とパンケーキ",
+      "expected_profile": "watercolor_soft",
+      "min_aggregate_score": 0.50,
+      "description": "Warm interior atmosphere and appetizing food"
+    },
+    {
+      "id": 14,
+      "category": "existing",
+      "prompt": "雪に覆われた山小屋、煙突から昇る暖かな煙",
+      "expected_profile": "watercolor_soft",
+      "min_aggregate_score": 0.50,
+      "description": "Snow volume and warm contrast window"
+    },
+    {
+      "id": 15,
+      "category": "existing",
+      "prompt": "秋の神社境内、朱色の鳥居と舞い散る紅葉",
+      "expected_profile": "anime_lineart_heavy",
+      "min_aggregate_score": 0.55,
+      "description": "Vermilion gate and falling leaf particles"
+    },
+    {
+      "id": 16,
+      "category": "existing",
+      "prompt": "未来都市を飛翔するドローンとエアタクシー",
+      "expected_profile": "ink_sketch_bold",
+      "min_aggregate_score": 0.50,
+      "description": "Hard-surface mechanical forms"
+    },
+    {
+      "id": 17,
+      "category": "existing",
+      "prompt": "ひまわり畑の中央で麦わら帽子を押さえる少女",
+      "expected_profile": "anime_lineart_heavy",
+      "min_aggregate_score": 0.55,
+      "description": "Bright summer sunlight and yellow palette"
+    },
+    {
+      "id": 18,
+      "category": "existing",
+      "prompt": "ステンドグラスが輝く大聖堂の回廊",
+      "expected_profile": "photorealistic",
+      "min_aggregate_score": 0.50,
+      "description": "Perspective lines and colored light projection"
+    },
+    {
+      "id": 19,
+      "category": "abstract",
+      "prompt": "jazzy な街角、雨上がりのネオンが水たまりに踊る",
+      "expected_profile": "ink_sketch_bold",
+      "min_aggregate_score": 0.50,
+      "description": "Abstract mood: jazzy accent saturation"
+    },
+    {
+      "id": 20,
+      "category": "abstract",
+      "prompt": "melancholy な少女、曇り空の埠頭で佇む",
+      "expected_profile": "watercolor_soft",
+      "min_aggregate_score": 0.50,
+      "description": "Abstract mood: melancholy cool shadows"
+    },
+    {
+      "id": 21,
+      "category": "abstract",
+      "prompt": "ethereal な森、光の粒子が浮遊する神秘の泉",
+      "expected_profile": "watercolor_soft",
+      "min_aggregate_score": 0.50,
+      "description": "Abstract mood: ethereal bloom and particles"
+    },
+    {
+      "id": 22,
+      "category": "abstract",
+      "prompt": "painterly な秋の山肌、重厚な筆致の油彩風景",
+      "expected_profile": "photorealistic",
+      "min_aggregate_score": 0.50,
+      "description": "Abstract texture: impasto painterly strokes"
+    },
+    {
+      "id": 23,
+      "category": "abstract",
+      "prompt": "noir な探偵、ブラインド越しの光と煙草の煙",
+      "expected_profile": "ink_sketch_bold",
+      "min_aggregate_score": 0.50,
+      "description": "Abstract palette: noir high contrast"
+    },
+    {
+      "id": 24,
+      "category": "abstract",
+      "prompt": "dreamy な夜の水族館、青い幻想の空間",
+      "expected_profile": "watercolor_soft",
+      "min_aggregate_score": 0.50,
+      "description": "Abstract mood: dreamy soft palette"
+    },
+    {
+      "id": 25,
+      "category": "asymmetry",
+      "prompt": "右側だけに強いサイド光が当たる劇的な陰影の肖像画",
+      "expected_profile": "photorealistic",
+      "min_aggregate_score": 0.50,
+      "description": "Intentional lighting asymmetry without error"
+    },
+    {
+      "id": 26,
+      "category": "asymmetry",
+      "prompt": "風に吹かれて左を向いた横顔のスケッチ",
+      "expected_profile": "ink_sketch_bold",
+      "min_aggregate_score": 0.50,
+      "description": "Intentional profile pose asymmetry"
+    },
+    {
+      "id": 27,
+      "category": "complex",
+      "prompt": "水彩風の抽象的な夕焼け空とシルエットの電柱",
+      "expected_profile": "watercolor_soft",
+      "min_aggregate_score": 0.50,
+      "description": "Compound prompt: watercolor bleed + sharp lineart"
+    },
+    {
+      "id": 28,
+      "category": "complex",
+      "prompt": "サイバーパンク雨夜、透明フードを被ったサイボーグ少女",
+      "expected_profile": "anime_lineart_heavy",
+      "min_aggregate_score": 0.55,
+      "description": "Compound prompt: cyber + rain + anime character"
+    },
+    {
+      "id": 29,
+      "category": "complex",
+      "prompt": "アニメ風銀髪赤眼のエルフ騎士、月光に照らされる",
+      "expected_profile": "anime_lineart_heavy",
+      "min_aggregate_score": 0.55,
+      "description": "Compound prompt: anime color scheme + moonlight"
+    },
+    {
+      "id": 30,
+      "category": "boundary",
+      "prompt": "漆黒の背景に舞う一匹の白い蝶",
+      "expected_profile": "ink_sketch_bold",
+      "min_aggregate_score": 0.45,
+      "description": "Boundary case: pure black background, pure white subject"
+    },
+    {
+      "id": 31,
+      "category": "boundary",
+      "prompt": "真っ白な雪原に佇む一匹の黒猫",
+      "expected_profile": "ink_sketch_bold",
+      "min_aggregate_score": 0.45,
+      "description": "Boundary case: pure white background, pure black subject"
+    },
+    {
+      "id": 32,
+      "category": "boundary",
+      "prompt": "無彩色の霧の中の幾何学的な廃墟シルエット",
+      "expected_profile": "ink_sketch_bold",
+      "min_aggregate_score": 0.45,
+      "description": "Boundary case: monochrome silhouette without hue"
+    }
+  ]
+}

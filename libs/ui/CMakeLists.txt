@@ -453,6 +453,10 @@ set(kritaui_LIB_SRCS
     aiillustration/KisAiProgramPatch.cpp
     aiillustration/KisAiVisionCritic.cpp
     aiillustration/KisAiRefinementLoop.cpp
+    aiillustration/KisAiQualityVector.cpp
+    aiillustration/KisAiPerceptualRepairer.cpp
+    aiillustration/KisAiAbstractOntology.cpp
+    aiillustration/KisAiPhysicalRenderer.cpp
     KisMainWindow.cpp
     KisOpenPane.cpp
     KisPart.cpp

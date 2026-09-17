@@ -1,0 +1,44 @@
+name: AI Quality Bench Gate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  bench-gate:
+    name: V8 Quality Benchmark Gate
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Qt6 & build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qt6-base-dev qt6-base-dev-tools ninja-build python3
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DAI_STROKE_STANDALONE_TESTS=ON
+
+      - name: Build Standalone Bench & Tests
+        run: cmake --build build -j$(nproc)
+
+      - name: Run Quality Gate Test
+        run: ctest --test-dir build -R KisAiQualityBenchGateTest --output-on-failure --no-tests=error
+
+      - name: Run Benchmark Script
+        run: |
+          python3 tools/ai_quality_bench/run_bench.py --build-dir build
+
+      - name: Upload Benchmark Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-quality-benchmark-report
+          path: tools/ai_quality_bench/benchmark_report.json

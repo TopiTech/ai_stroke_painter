@@ -26,9 +26,14 @@ if (AI_STROKE_STANDALONE_TESTS)
         libs/ui/aiillustration/KisAiVisionCritic.cpp
         libs/ui/aiillustration/KisAiModelRouter.cpp
         libs/ui/aiillustration/KisAiRefinementLoop.cpp
+        libs/ui/aiillustration/KisAiQualityVector.cpp
+        libs/ui/aiillustration/KisAiPerceptualRepairer.cpp
+        libs/ui/aiillustration/KisAiAbstractOntology.cpp
+        libs/ui/aiillustration/KisAiPhysicalRenderer.cpp
     )
     target_include_directories(ai_stroke_core PUBLIC
         libs/ui
+        libs/ui/aiillustration
     )
     target_link_libraries(ai_stroke_core PUBLIC Qt6::Core Qt6::Gui Qt6::Network)
 
@@ -83,12 +88,72 @@ if (AI_STROKE_STANDALONE_TESTS)
     )
     target_link_libraries(KisAiV6WiringTest PRIVATE ai_stroke_core Qt6::Test)
     add_test(NAME KisAiV6WiringTest COMMAND KisAiV6WiringTest)
-    set_tests_properties(
+
+    add_executable(KisAiQualityVectorTest
+        libs/ui/tests/KisAiQualityVectorTest.cpp
+    )
+    target_include_directories(KisAiQualityVectorTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiQualityVectorTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiQualityVectorTest COMMAND KisAiQualityVectorTest)
+
+    add_executable(KisAiPerceptualRepairerTest
+        libs/ui/tests/KisAiPerceptualRepairerTest.cpp
+    )
+    target_include_directories(KisAiPerceptualRepairerTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiPerceptualRepairerTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiPerceptualRepairerTest COMMAND KisAiPerceptualRepairerTest)
+
+    add_executable(KisAiPhysicalRendererTest
+        libs/ui/tests/KisAiPhysicalRendererTest.cpp
+    )
+    target_include_directories(KisAiPhysicalRendererTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiPhysicalRendererTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiPhysicalRendererTest COMMAND KisAiPhysicalRendererTest)
+
+    add_executable(KisAiAbstractOntologyTest
+        libs/ui/tests/KisAiAbstractOntologyTest.cpp
+    )
+    target_include_directories(KisAiAbstractOntologyTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiAbstractOntologyTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiAbstractOntologyTest COMMAND KisAiAbstractOntologyTest)
+
+    add_executable(KisAiQualityBenchGateTest
+        libs/ui/tests/KisAiQualityBenchGateTest.cpp
+    )
+    target_include_directories(KisAiQualityBenchGateTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiQualityBenchGateTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiQualityBenchGateTest COMMAND KisAiQualityBenchGateTest)
+
+    set(AI_STROKE_ALL_TEST_TARGETS
         KisAiStrokeProgramTest
         KisAiStrokeRendererTest
         KisAiIllustrationRendererTest
         KisAiV5EngineTest
         KisAiV6WiringTest
+        KisAiQualityVectorTest
+        KisAiPerceptualRepairerTest
+        KisAiPhysicalRendererTest
+        KisAiAbstractOntologyTest
+        KisAiQualityBenchGateTest
+    )
+
+    set_tests_properties(
+        ${AI_STROKE_ALL_TEST_TARGETS}
         PROPERTIES
             LABELS "AIStroke"
             TIMEOUT 60
@@ -102,11 +167,7 @@ if (AI_STROKE_STANDALONE_TESTS)
         set(ai_stroke_test_runtime_path
             "$<TARGET_FILE_DIR:Qt6::Core>\\;${ai_stroke_compiler_runtime_dir}\\;$ENV{PATH}")
         set_tests_properties(
-            KisAiStrokeProgramTest
-            KisAiStrokeRendererTest
-            KisAiIllustrationRendererTest
-            KisAiV5EngineTest
-            KisAiV6WiringTest
+            ${AI_STROKE_ALL_TEST_TARGETS}
             PROPERTIES ENVIRONMENT "PATH=${ai_stroke_test_runtime_path}")
     endif()
 

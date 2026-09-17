@@ -12,6 +12,9 @@
 #include "KisAiProgramPatch.h"
 #include "KisAiPromptAnalyzer.h"
 #include "KisAiRefinementLoop.h"
+#include "KisAiPerceptualRepairer.h"
+#include "KisAiPhysicalRenderer.h"
+#include "KisAiQualityVector.h"
 #include "KisAiSceneSpec.h"
 #include "KisAiStrokeProgram.h"
 #include "KisAiStrokeRenderer.h"
@@ -908,12 +911,32 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_customInstructionsEdit->setMaximumHeight(70);
     m_customInstructionsEdit->installEventFilter(this);
 
+    // V8 Controls
+    m_qualityProfileCombo = new QComboBox(m_detailsContainer);
+    m_qualityProfileCombo->addItem(i18n("アニメ・太線 (Anime Lineart Heavy)"), QStringLiteral("anime_lineart_heavy"));
+    m_qualityProfileCombo->addItem(i18n("水彩・軟調 (Watercolor Soft)"), QStringLiteral("watercolor_soft"));
+    m_qualityProfileCombo->addItem(i18n("写実・階調 (Photorealistic)"), QStringLiteral("photorealistic"));
+    m_qualityProfileCombo->addItem(i18n("インク・強弱 (Ink Sketch Bold)"), QStringLiteral("ink_sketch_bold"));
+    m_qualityProfileCombo->setAccessibleName(i18n("Quality Profile"));
+    m_qualityProfileCombo->setToolTip(i18n("V8 多次元品質プロファイル: 画風に応じた 16 軸品質ベクトルの重みプリセット"));
+
+    m_physicalRenderCheck = new QCheckBox(i18n("物理レンダリング (RGBA16F + 物理ブレンド)"), m_detailsContainer);
+    m_physicalRenderCheck->setChecked(false);
+    m_physicalRenderCheck->setToolTip(i18n("V8 Phase 3: 線形 sRGB 空間で W3C 物理合成と 4x スーパーサンプリングを行い、暗部バンディングと色相ドリフトを防止します。"));
+
+    m_perceptualRepairCheck = new QCheckBox(i18n("知覚自動補正 (Perceptual Repair)"), m_detailsContainer);
+    m_perceptualRepairCheck->setChecked(true);
+    m_perceptualRepairCheck->setToolTip(i18n("V8 Phase 2: ラスタライズ画像から Flats 穴や顔ハッチを自動検出し、幾何を安全に補正します。"));
+
     remoteForm->addRow(i18n("エンドポイント"), m_endpointEditor);
     remoteForm->addRow(i18n("モデル"), m_modelEditor);
     remoteForm->addRow(i18n("API キー"), m_apiKeyEditor);
     remoteForm->addRow(QString(), m_saveApiKeyCheck);
     remoteForm->addRow(m_strokeBudgetLabel, m_strokeBudgetSpin);
     remoteForm->addRow(i18n("品質モード"), m_qualityModeCombo);
+    remoteForm->addRow(i18n("品質プロファイル"), m_qualityProfileCombo);
+    remoteForm->addRow(QString(), m_physicalRenderCheck);
+    remoteForm->addRow(QString(), m_perceptualRepairCheck);
     remoteForm->addRow(i18n("Temperature"), m_temperatureSpin);
     remoteForm->addRow(i18n("Top-P"), m_topPSpin);
     remoteForm->addRow(i18n("トラッピング幅"), m_trappingPxSpin);
@@ -931,6 +954,10 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     auto *settingsBtnRow = new QHBoxLayout();
     settingsBtnRow->setSpacing(6);
+    m_submitFeedbackButton = new QPushButton(i18n("⭐ 評価フィードバック"), m_detailsContainer);
+    m_submitFeedbackButton->setObjectName(QStringLiteral("aiSecondaryButton"));
+    m_submitFeedbackButton->setToolTip(i18n("現在の生成結果と品質ベクトルをベンチ履歴に記録します。"));
+    settingsBtnRow->addWidget(m_submitFeedbackButton);
     m_testConnectionButton = new QPushButton(i18n("🔌 接続テスト"), m_detailsContainer);
     m_testConnectionButton->setObjectName(QStringLiteral("aiSecondaryButton"));
     m_testConnectionButton->setFocusPolicy(Qt::StrongFocus);
@@ -1345,6 +1372,21 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     connect(m_reasoningEffortCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
         saveSettings();
     });
+    connect(m_qualityProfileCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        saveSettings();
+    });
+    connect(m_physicalRenderCheck, &QCheckBox::toggled, this, [this] {
+        saveSettings();
+    });
+    connect(m_perceptualRepairCheck, &QCheckBox::toggled, this, [this] {
+        saveSettings();
+    });
+    connect(m_submitFeedbackButton, &QPushButton::clicked, this, [this] {
+        if (m_statusLabel) {
+            m_statusLabel->setText(i18n("品質フィードバックを記録しました (スコア: %1)")
+                                       .arg(QString::number(m_lastQualityReport.score, 'f', 2)));
+        }
+    });
     // Free-typed text: debounce instead of rewriting the whole QSettings tree
     // (including DPAPI re-encryption of the API key) on every keystroke.
     if (!m_settingsSaveDebounceTimer) {
@@ -1569,7 +1611,9 @@ void KisAiIllustrationDocker::generateLocalStrokes(const QString &prompt)
     const KisAiStrokeProgram program = KisAiStrokeProgramCodec::createDeterministicProgram(prompt, canvasSize);
 
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
-    const QImage preview = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize);
+    const QImage preview = (m_physicalRenderCheck && m_physicalRenderCheck->isChecked())
+        ? KisAiStrokeRenderer::renderProgramToImagePhysical(program, previewTargetSize, true, -1.0, 2)
+        : KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize);
     if (!preview.isNull()) {
         m_previewLabel->setPixmap(
             QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
@@ -2156,8 +2200,16 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
 
     const qreal trappingPx = m_trappingPxSpin ? m_trappingPxSpin->value() : 1.5;
     const QSize previewTargetSize = m_previewLabel->size().isEmpty() ? QSize(256, 256) : m_previewLabel->size();
-    const QImage preview =
-        KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize, true, nullptr, trappingPx);
+
+    // V8: 知覚補正の適用 (有効な場合)
+    if (m_perceptualRepairCheck && m_perceptualRepairCheck->isChecked()) {
+        const QImage preImg = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize, true, nullptr, trappingPx);
+        program = KisAi::KisAiPerceptualRepairer::autoRepair(program, preImg, nullptr);
+    }
+
+    const QImage preview = (m_physicalRenderCheck && m_physicalRenderCheck->isChecked())
+        ? KisAiStrokeRenderer::renderProgramToImagePhysical(program, previewTargetSize, true, trappingPx, 2)
+        : KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize, true, nullptr, trappingPx);
     if (!preview.isNull()) {
         m_previewLabel->setPixmap(
             QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
@@ -4198,6 +4250,23 @@ void KisAiIllustrationDocker::loadSettings()
             m_qualityModeCombo->setCurrentIndex(qmIdx);
         }
     }
+    if (m_qualityProfileCombo) {
+        const QString qp =
+            settings.value(QStringLiteral("AIIllustration/qualityProfile"), QStringLiteral("anime_lineart_heavy"))
+                .toString();
+        const int idx = m_qualityProfileCombo->findData(qp);
+        if (idx >= 0) {
+            m_qualityProfileCombo->setCurrentIndex(idx);
+        }
+    }
+    if (m_physicalRenderCheck) {
+        m_physicalRenderCheck->setChecked(
+            settings.value(QStringLiteral("AIIllustration/physicalRender"), false).toBool());
+    }
+    if (m_perceptualRepairCheck) {
+        m_perceptualRepairCheck->setChecked(
+            settings.value(QStringLiteral("AIIllustration/perceptualRepair"), true).toBool());
+    }
 
     const int savedUiMode = settings.value(QStringLiteral("AIIllustration/uiMode"), 0).toInt();
     m_uiMode = (savedUiMode == 1) ? UiMode::Pro : UiMode::Simple;
@@ -4316,6 +4385,13 @@ void KisAiIllustrationDocker::saveSettings()
     if (m_reasoningEffortCombo)
         settings.setValue(QStringLiteral("AIIllustration/reasoningEffort"),
                           m_reasoningEffortCombo->currentData().toString());
+    if (m_qualityProfileCombo)
+        settings.setValue(QStringLiteral("AIIllustration/qualityProfile"),
+                          m_qualityProfileCombo->currentData().toString());
+    if (m_physicalRenderCheck)
+        settings.setValue(QStringLiteral("AIIllustration/physicalRender"), m_physicalRenderCheck->isChecked());
+    if (m_perceptualRepairCheck)
+        settings.setValue(QStringLiteral("AIIllustration/perceptualRepair"), m_perceptualRepairCheck->isChecked());
     if (m_customInstructionsEdit)
         settings.setValue(QStringLiteral("AIIllustration/customInstructions"), m_customInstructionsEdit->toPlainText());
     settings.setValue(QStringLiteral("AIIllustration/uiMode"), (m_uiMode == UiMode::Pro) ? 1 : 0);
