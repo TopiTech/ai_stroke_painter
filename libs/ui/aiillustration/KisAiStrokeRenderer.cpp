@@ -234,6 +234,12 @@ KisAiStrokeRenderer::expandProceduralOperations(const QVector<KisAiStrokeOperati
             KisAiStrokeOperation smoothedOp = op;
             smoothedOp.points = KisAiStrokeQualityUtils::beautifyFacialContour(op.points, canvasSize);
             expanded.append(smoothedOp);
+        } else if (op.kind == KisAiStrokeOperation::Kind::Path && op.points.size() >= 4
+                   && !op.id.startsWith(QLatin1String("corner_ink"))) {
+            // V7: General stroke beautifier & stabilization (jitter removal + natural taper curve)
+            KisAiStrokeOperation stOp = op;
+            stOp.points = KisAiStrokeQualityUtils::stabilizeAndBeautifyStroke(op.points, op.closed);
+            expanded.append(stOp);
         } else {
             expanded.append(op);
 
@@ -329,7 +335,10 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
                                     QStringLiteral("Highlights"),
                                     QStringLiteral("FX")};
 
-    const QVector<KisAiStrokeOperation> expandedOps = expandProceduralOperations(activeProgram.operations, size);
+    QVector<KisAiStrokeOperation> expandedOps = expandProceduralOperations(activeProgram.operations, size);
+    // V7: Apply Lineart occlusion & light direction weighting (shadow-side thickening, delicate highlight lines)
+    KisAiStrokeQualityUtils::applyLineartOcclusionWeights(expandedOps);
+
     QMap<QString, QVector<KisAiStrokeOperation>> layerBuckets;
     for (const KisAiStrokeOperation &op : expandedOps) {
         const QString lName = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
@@ -556,7 +565,10 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
                                     QStringLiteral("Highlights"),
                                     QStringLiteral("FX")};
 
-    const QVector<KisAiStrokeOperation> expandedOps = expandProceduralOperations(activeProgram.operations, canvasSize);
+    QVector<KisAiStrokeOperation> expandedOps = expandProceduralOperations(activeProgram.operations, canvasSize);
+    // V7: Apply Lineart occlusion & light direction weighting
+    KisAiStrokeQualityUtils::applyLineartOcclusionWeights(expandedOps);
+
     QMap<QString, QVector<KisAiStrokeOperation>> layerBuckets;
     for (const KisAiStrokeOperation &op : expandedOps) {
         const QString lName = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
@@ -1795,11 +1807,27 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter,
         }
 
     } else {
-        // G-Pen / Default: solid crisp anti-aliased contour
+        // G-Pen / Default: solid crisp anti-aliased contour with organic corner ink fillets
         painter.setPen(Qt::NoPen);
         painter.setBrush(color);
         painter.drawPolygon(ribbonPoly);
         drawRoundJoins(color, 1.0);
+
+        // V7 Inking: Corner ink pooling at sharp turns to eliminate digital harshness
+        if (sampleCount >= 3) {
+            const int stepInterval = qMax(1, sampleCount / 32);
+            for (int i = stepInterval; i < sampleCount - stepInterval; i += stepInterval) {
+                const QPointF &pPrev = curveSamples.at(i - stepInterval).pos;
+                const QPointF &pCurr = curveSamples.at(i).pos;
+                const QPointF &pNext = curveSamples.at(i + stepInterval).pos;
+                const qreal w = curveSamples.at(i).width;
+                const QPolygonF inkingFillet =
+                    KisAiStrokeQualityUtils::generateCornerInkingPolygon(pPrev, pCurr, pNext, w);
+                if (inkingFillet.size() >= 3) {
+                    painter.drawPolygon(inkingFillet);
+                }
+            }
+        }
     }
 }
 

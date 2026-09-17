@@ -17,12 +17,16 @@ if (NOT AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
     kis_add_test(KisAiV6WiringTest.cpp
         TEST_NAME KisAiV6WiringTest
         LINK_LIBRARIES kritaui kritatestsdk)
+    kis_add_test(KisAiV7QualityTest.cpp
+        TEST_NAME KisAiV7QualityTest
+        LINK_LIBRARIES kritaui kritatestsdk)
     set_tests_properties(
         libs-ui-KisAiStrokeProgramTest
         libs-ui-KisAiStrokeRendererTest
         libs-ui-KisAiIllustrationRendererTest
         libs-ui-KisAiV5EngineTest
         libs-ui-KisAiV6WiringTest
+        libs-ui-KisAiV7QualityTest
         PROPERTIES
             LABELS "AIStroke"
             TIMEOUT 120)

@@ -104,6 +104,27 @@ public:
         const QVector<KisAiStrokeOperation> &flatsOps,
         const KisAiLightSettings &rig,
         const QSize &canvasSize);
+
+    /**
+     * V7 Volumetric Pseudo-Normal Shading:
+     * Calculates 3D surface normals (Half-Lambert lighting model) across spherical head
+     * and cylindrical torso volumes to produce naturally curved terminators, 2-tone cel shadows,
+     * and micro ambient occlusion (AO) in deep crevices.
+     */
+    static QVector<KisAiStrokeOperation> synthesizeVolumetricShading(
+        const QVector<KisAiStrokeOperation> &flatsOps,
+        const KisAiLightSettings &rig,
+        const QSize &canvasSize,
+        const HeadAnchor *headAnchor = nullptr);
+
+    /**
+     * V7 Material Optics (SSS fringe, Anisotropic hair sheen & Deep corneal highlights).
+     */
+    static QVector<KisAiStrokeOperation> synthesizeMaterialOptics(
+        const QVector<KisAiStrokeOperation> &flatsOps,
+        const KisAiLightSettings &rig,
+        const QSize &canvasSize,
+        const HeadAnchor *headAnchor = nullptr);
 };
 
 #endif // KIS_AI_LIGHT_RIG_H

@@ -68,6 +68,17 @@ public:
         const QSize &canvasSize
     );
 
+    /**
+     * V7 Art Style Shader Pipeline:
+     * Dynamically adapts lineart opacity, brush profiles, harmonic inking colors,
+     * hatching, and neon glows according to the specified artStyleId
+     * (anime_cel, watercolor, impasto, ink_sketch, cyber_neon).
+     */
+    static void applyArtStylePipeline(
+        QVector<KisAiStrokeOperation> &operations,
+        const KisAiSceneStyleV2 &style
+    );
+
 private:
     static QVector<KisAiStrokeOperation> characterProgram(
         const KisAiSceneSpec &spec,

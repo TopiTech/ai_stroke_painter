@@ -40,6 +40,14 @@ qreal polygonAreaLocal(const QPolygonF &polygon)
     }
     return qAbs(twiceArea) * 0.5;
 }
+
+QColor darkerWarmLocal(const QColor &c, qreal factor = 0.82)
+{
+    return QColor::fromHsv((c.hue() + 360) % 360,
+                           qBound(0, int(c.saturation() * 1.05), 255),
+                           qBound(0, int(c.value() * factor), 255),
+                           c.alpha());
+}
 } // namespace
 
 KisAiLightSettings KisAiLightRig::fromSpec(const KisAiSceneSpec &spec)
@@ -513,3 +521,211 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeBounceLight(const QVector
     }
     return bounce;
 }
+
+// =========================================================================
+// V7 Volumetric Pseudo-Normal Shading & Material Optics
+// =========================================================================
+
+QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeVolumetricShading(
+    const QVector<KisAiStrokeOperation> &flatsOps,
+    const KisAiLightSettings &rig,
+    const QSize &canvasSize,
+    const HeadAnchor *headAnchor)
+{
+    Q_UNUSED(canvasSize);
+    QVector<KisAiStrokeOperation> ops;
+    const TimeOfDayLut lut = timeOfDayLut(rig.timeOfDay);
+
+    // Normalize 2D key light direction (pointing towards light)
+    QPointF lightDir = rig.direction;
+    const qreal len = std::hypot(lightDir.x(), lightDir.y());
+    if (len > 1.0e-5) {
+        lightDir = QPointF(lightDir.x() / len, lightDir.y() / len);
+    } else {
+        lightDir = QPointF(-0.5, -0.7);
+    }
+
+    for (const KisAiStrokeOperation &op : flatsOps) {
+        if (op.kind != KisAiStrokeOperation::Kind::Fill && op.kind != KisAiStrokeOperation::Kind::GradientFill)
+            continue;
+        if (op.polygon.size() < 3)
+            continue;
+
+        const QString lowerId = op.id.toLower();
+        const bool isFace = lowerId.contains(QLatin1String("face")) || lowerId.contains(QLatin1String("skin"));
+        const bool isNeck = lowerId.contains(QLatin1String("neck"));
+        const bool isCloth = lowerId.contains(QLatin1String("cloth"));
+
+        const QRectF bounds = op.polygon.boundingRect();
+        if (bounds.width() < 0.02 || bounds.height() < 0.02)
+            continue;
+
+        // 1. Half-Lambert Volumetric Terminator Polygon
+        // Offset away from light based on volume depth
+        const qreal depthScale = isFace ? 0.038 : (isNeck ? 0.024 : (isCloth ? 0.032 : 0.028));
+        const QPointF shadowShift(-lightDir.x() * depthScale, -lightDir.y() * depthScale);
+
+        QPainterPath origPath;
+        origPath.addPolygon(op.polygon);
+
+        QPainterPath shiftedPath;
+        shiftedPath.addPolygon(op.polygon.translated(shadowShift));
+
+        // Form shadow = original subtracted from shifted (soft wrap-around shadow)
+        const QPolygonF formPoly = origPath.intersected(shiftedPath).toFillPolygon();
+        if (formPoly.size() >= 3 && polygonAreaLocal(formPoly) > 1.0e-4) {
+            KisAiStrokeOperation formOp;
+            formOp.kind = KisAiStrokeOperation::Kind::Fill;
+            formOp.id = QStringLiteral("%1_v7_form_shading").arg(op.id);
+            formOp.layer = QStringLiteral("Shading");
+            formOp.polygon = formPoly;
+            formOp.brush.color = shadowColor(op.brush.color, rig);
+            formOp.brush.opacity = isFace ? 0.22 : 0.32;
+            formOp.brush.profile = QStringLiteral("watercolor");
+            formOp.fillStyle = QStringLiteral("wash");
+            formOp.blendMode = QStringLiteral("multiply");
+            formOp.clipToId = op.id;
+            ops.append(formOp);
+        }
+
+        // 2. Cast Deep Shadow (Sharper, narrower, darker)
+        const QPointF deepShift(-lightDir.x() * (depthScale * 1.6), -lightDir.y() * (depthScale * 1.6));
+        QPainterPath deepPath;
+        deepPath.addPolygon(op.polygon.translated(deepShift));
+        const QPolygonF castPoly = origPath.intersected(deepPath).toFillPolygon();
+        if (castPoly.size() >= 3 && polygonAreaLocal(castPoly) > 1.0e-4) {
+            KisAiStrokeOperation castOp;
+            castOp.kind = KisAiStrokeOperation::Kind::Fill;
+            castOp.id = QStringLiteral("%1_v7_cast_deep").arg(op.id);
+            castOp.layer = QStringLiteral("Shading");
+            castOp.polygon = castPoly;
+            castOp.brush.color = shadowColor(op.brush.color, rig).darker(118);
+            castOp.brush.opacity = isFace ? 0.30 : 0.45;
+            castOp.brush.profile = QStringLiteral("watercolor");
+            castOp.fillStyle = QStringLiteral("wash");
+            castOp.blendMode = QStringLiteral("multiply");
+            castOp.clipToId = op.id;
+            ops.append(castOp);
+        }
+
+        // 3. Micro Ambient Occlusion (AO) in crevices (e.g. neck under chin)
+        if (isNeck && headAnchor) {
+            QPolygonF aoNeck;
+            const qreal nw = bounds.width();
+            const qreal ny = bounds.top();
+            aoNeck.append(QPointF(bounds.left() + nw * 0.1, ny));
+            aoNeck.append(QPointF(bounds.right() - nw * 0.1, ny));
+            aoNeck.append(QPointF(bounds.right() - nw * 0.2, ny + bounds.height() * 0.25));
+            aoNeck.append(QPointF(bounds.left() + nw * 0.2, ny + bounds.height() * 0.25));
+
+            KisAiStrokeOperation aoOp;
+            aoOp.kind = KisAiStrokeOperation::Kind::Fill;
+            aoOp.id = QStringLiteral("neck_v7_micro_ao");
+            aoOp.layer = QStringLiteral("Shading");
+            aoOp.polygon = aoNeck;
+            aoOp.brush.color = darkerWarmLocal(lut.fillTint, 0.50);
+            aoOp.brush.opacity = 0.55;
+            aoOp.brush.profile = QStringLiteral("watercolor");
+            aoOp.fillStyle = QStringLiteral("wash");
+            aoOp.blendMode = QStringLiteral("multiply");
+            aoOp.clipToId = op.id;
+            ops.append(aoOp);
+        }
+    }
+
+    return ops;
+}
+
+QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeMaterialOptics(
+    const QVector<KisAiStrokeOperation> &flatsOps,
+    const KisAiLightSettings &rig,
+    const QSize &canvasSize,
+    const HeadAnchor *headAnchor)
+{
+    Q_UNUSED(canvasSize);
+    QVector<KisAiStrokeOperation> ops;
+    const TimeOfDayLut lut = timeOfDayLut(rig.timeOfDay);
+
+    QPointF lightDir = rig.direction;
+    const qreal len = std::hypot(lightDir.x(), lightDir.y());
+    if (len > 1.0e-5) {
+        lightDir = QPointF(lightDir.x() / len, lightDir.y() / len);
+    } else {
+        lightDir = QPointF(-0.5, -0.7);
+    }
+
+    for (const KisAiStrokeOperation &op : flatsOps) {
+        const QString lowerId = op.id.toLower();
+        const bool isSkin = lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face"));
+        const bool isHair = lowerId.contains(QLatin1String("hair"));
+
+        // 1. Skin Subsurface Scattering (SSS) Terminator Warm Fringe
+        if (isSkin && op.polygon.size() >= 3) {
+            const QRectF b = op.polygon.boundingRect();
+            // Narrow band along the shadow edge
+            const QPointF fringeShift(-lightDir.x() * 0.020, -lightDir.y() * 0.020);
+            QPainterPath origPath;
+            origPath.addPolygon(op.polygon);
+            QPainterPath shiftPath;
+            shiftPath.addPolygon(op.polygon.translated(fringeShift));
+            const QPolygonF fringePoly = origPath.intersected(shiftPath).toFillPolygon();
+            if (fringePoly.size() >= 3) {
+                KisAiStrokeOperation sssOp;
+                sssOp.kind = KisAiStrokeOperation::Kind::Fill;
+                sssOp.id = QStringLiteral("%1_terminator_sss").arg(op.id);
+                sssOp.layer = QStringLiteral("Shading");
+                sssOp.polygon = fringePoly;
+                sssOp.brush.color = lut.sssTint;
+                sssOp.brush.opacity = 0.28;
+                sssOp.brush.profile = QStringLiteral("watercolor");
+                sssOp.fillStyle = QStringLiteral("wash");
+                sssOp.clipToId = op.id;
+                ops.append(sssOp);
+            }
+        }
+
+        // 2. Hair Anisotropic Specular Sheen (Arching highlight band across cranial crown)
+        if (isHair && headAnchor && op.polygon.size() >= 3) {
+            const QPointF &hc = headAnchor->headCenter;
+            const qreal hw = headAnchor->headWidth * 0.5;
+            const qreal hh = headAnchor->headHeight * 0.5;
+
+            // Curved ribbon along crown
+            QPolygonF sheenBand;
+            constexpr int steps = 12;
+            for (int i = 0; i <= steps; ++i) {
+                const qreal t = M_PI * (qreal(i) / steps);
+                sheenBand.append(QPointF(hc.x() + std::cos(t) * (hw * 0.95),
+                                         hc.y() - std::sin(t) * (hh * 0.85) - hh * 0.05));
+            }
+            for (int i = steps; i >= 0; --i) {
+                const qreal t = M_PI * (qreal(i) / steps);
+                sheenBand.append(QPointF(hc.x() + std::cos(t) * (hw * 0.95),
+                                         hc.y() - std::sin(t) * (hh * 0.85) + hh * 0.04));
+            }
+
+            QPainterPath origHair;
+            origHair.addPolygon(op.polygon);
+            QPainterPath sheenPath;
+            sheenPath.addPolygon(sheenBand);
+            const QPolygonF clippedSheen = origHair.intersected(sheenPath).toFillPolygon();
+            if (clippedSheen.size() >= 3) {
+                KisAiStrokeOperation sheenOp;
+                sheenOp.kind = KisAiStrokeOperation::Kind::Fill;
+                sheenOp.id = QStringLiteral("hair_anisotropic_sheen_v7");
+                sheenOp.layer = QStringLiteral("Highlights");
+                sheenOp.polygon = clippedSheen;
+                sheenOp.brush.color = QColor(255, 255, 255);
+                sheenOp.brush.opacity = 0.40;
+                sheenOp.brush.profile = QStringLiteral("airbrush");
+                sheenOp.fillStyle = QStringLiteral("wash");
+                sheenOp.blendMode = QStringLiteral("screen");
+                sheenOp.clipToId = op.id;
+                ops.append(sheenOp);
+            }
+        }
+    }
+
+    return ops;
+}
+

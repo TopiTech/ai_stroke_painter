@@ -1727,3 +1727,177 @@ QImage KisAiStrokeQualityUtils::generateAmbientOverlay(
 
     return overlay;
 }
+
+// =========================================================================
+// 8. V7 Organic Brush Inking & Dynamic Beautification
+// =========================================================================
+
+qreal KisAiStrokeQualityUtils::noise1D(qreal t, quint32 seed)
+{
+    // Fast deterministic pseudo-random 1D value noise with smoothstep interpolation
+    const qreal scaled = t * 12.9898 + (seed % 1000) * 0.137;
+    const int i0 = qFloor(scaled);
+    const int i1 = i0 + 1;
+    const qreal frac = scaled - i0;
+    const qreal u = frac * frac * (3.0 - 2.0 * frac);
+
+    const auto hashVal = [](int x) -> qreal {
+        quint32 n = static_cast<quint32>(x * 374761393 + 668265263);
+        n = (n ^ (n >> 13)) * 1274126177;
+        return static_cast<qreal>(n & 0x7FFFFFFF) / 2147483647.0;
+    };
+
+    const qreal v0 = hashVal(i0);
+    const qreal v1 = hashVal(i1);
+    return v0 + (v1 - v0) * u;
+}
+
+QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::stabilizeAndBeautifyStroke(
+    const QVector<KisAiStrokePoint> &points,
+    bool closed)
+{
+    if (points.size() < 2) {
+        return points;
+    }
+
+    // Step 1: Extract QPointF list for geometric simplification
+    QVector<QPointF> rawPts;
+    rawPts.reserve(points.size());
+    for (const auto &pt : points) {
+        rawPts.append(pt.pos);
+    }
+
+    // Ramer-Douglas-Peucker with a gentle threshold to kill micro-noise while preserving intent
+    const QVector<QPointF> simplified = simplifyRDP(rawPts, 0.0015);
+    if (simplified.size() < 2) {
+        return points;
+    }
+
+    // Step 2: Re-associate pressure values along the simplified spine
+    QVector<KisAiStrokePoint> rePressured;
+    rePressured.reserve(simplified.size());
+    for (int i = 0; i < simplified.size(); ++i) {
+        const QPointF &sPt = simplified.at(i);
+        // Find nearest original point for baseline pressure
+        qreal bestDistSq = 1e9;
+        qreal bestPressure = 0.5;
+        for (const auto &orig : points) {
+            const qreal dx = orig.pos.x() - sPt.x();
+            const qreal dy = orig.pos.y() - sPt.y();
+            const qreal dSq = dx * dx + dy * dy;
+            if (dSq < bestDistSq) {
+                bestDistSq = dSq;
+                bestPressure = orig.pressure;
+            }
+        }
+        rePressured.append(KisAiStrokePoint(sPt.x(), sPt.y(), bestPressure));
+    }
+
+    // Step 3: Resample equidistant for uniform stroke flow (step in normalized canvas coords ~0.006)
+    QVector<KisAiStrokePoint> resampled = resampleEquidistant(rePressured, 0.006, closed);
+    if (resampled.size() < 2) {
+        resampled = rePressured;
+    }
+
+    // Step 4: Apply professional entrance & exit pressure tapering if not closed
+    if (!closed) {
+        const int n = resampled.size();
+        const int taperSpan = qMin(8, n / 3);
+        for (int i = 0; i < taperSpan; ++i) {
+            const qreal tIn = qreal(i + 1) / qreal(taperSpan);
+            const qreal inScale = 0.20 + 0.80 * (tIn * tIn * (3.0 - 2.0 * tIn));
+            resampled[i].pressure = qBound<qreal>(0.15, resampled[i].pressure * inScale, 1.0);
+
+            const int exitIdx = n - 1 - i;
+            const qreal tOut = qreal(i + 1) / qreal(taperSpan);
+            const qreal outScale = 0.15 + 0.85 * (tOut * tOut * (3.0 - 2.0 * tOut));
+            resampled[exitIdx].pressure = qBound<qreal>(0.12, resampled[exitIdx].pressure * outScale, 1.0);
+        }
+    }
+
+    return resampled;
+}
+
+void KisAiStrokeQualityUtils::applyLineartOcclusionWeights(
+    QVector<KisAiStrokeOperation> &operations,
+    const QPointF &lightDir)
+{
+    const qreal lLen = std::hypot(lightDir.x(), lightDir.y());
+    const QPointF normLight = (lLen > 1e-4) ? QPointF(lightDir.x() / lLen, lightDir.y() / lLen) : QPointF(-0.5, -0.7);
+
+    for (KisAiStrokeOperation &op : operations) {
+        const QString lName = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
+        if (lName != QLatin1String("Lineart") || op.kind != KisAiStrokeOperation::Kind::Path) {
+            continue;
+        }
+
+        if (op.points.size() < 2) {
+            continue;
+        }
+
+        // Compute average normal along the path
+        qreal avgNormX = 0.0;
+        qreal avgNormY = 0.0;
+        int count = 0;
+        for (int i = 0; i < op.points.size() - 1; ++i) {
+            const QPointF delta = op.points.at(i + 1).pos - op.points.at(i).pos;
+            const qreal segLen = std::hypot(delta.x(), delta.y());
+            if (segLen > 1e-4) {
+                // Left perpendicular normal
+                avgNormX += -delta.y() / segLen;
+                avgNormY += delta.x() / segLen;
+                ++count;
+            }
+        }
+
+        if (count > 0) {
+            avgNormX /= count;
+            avgNormY /= count;
+            const qreal dotLight = avgNormX * normLight.x() + avgNormY * normLight.y();
+            // Negative dot means normal points away from light (shadow side): boost width
+            // Positive dot means normal points toward light: refine width
+            qreal weightMod = 1.0;
+            if (dotLight < -0.15) {
+                weightMod = 1.0 + qMin<qreal>(0.35, -dotLight * 0.40); // Thicker on shadow side
+            } else if (dotLight > 0.25) {
+                weightMod = qMax<qreal>(0.80, 1.0 - dotLight * 0.25); // Delicate on highlight side
+            }
+            op.brush.size *= weightMod;
+        }
+    }
+}
+
+QPolygonF KisAiStrokeQualityUtils::generateCornerInkingPolygon(
+    const QPointF &pPrev,
+    const QPointF &pCurr,
+    const QPointF &pNext,
+    qreal strokeWidthPx)
+{
+    QPolygonF fillet;
+    const QPointF v1 = pPrev - pCurr;
+    const QPointF v2 = pNext - pCurr;
+    const qreal l1 = std::hypot(v1.x(), v1.y());
+    const qreal l2 = std::hypot(v2.x(), v2.y());
+    if (l1 < 1e-4 || l2 < 1e-4) {
+        return fillet;
+    }
+
+    const QPointF u1(v1.x() / l1, v1.y() / l1);
+    const QPointF u2(v2.x() / l2, v2.y() / l2);
+    const qreal dot = u1.x() * u2.x() + u1.y() * u2.y();
+
+    // Sharp corners (between ~40 and 130 degrees) get ink fillet
+    if (dot > -0.70 && dot < 0.85) {
+        const qreal filletLen = qBound<qreal>(1.0, strokeWidthPx * 0.65, 8.0);
+        const QPointF ptA = pCurr + u1 * qMin(l1 * 0.4, filletLen);
+        const QPointF ptB = pCurr + u2 * qMin(l2 * 0.4, filletLen);
+        const QPointF bisector = (u1 + u2) * 0.5;
+        const qreal bLen = std::hypot(bisector.x(), bisector.y());
+        if (bLen > 1e-4) {
+            const QPointF midFillet = pCurr + (bisector / bLen) * (filletLen * 0.45);
+            fillet << ptA << midFillet << ptB << pCurr;
+        }
+    }
+    return fillet;
+}
+

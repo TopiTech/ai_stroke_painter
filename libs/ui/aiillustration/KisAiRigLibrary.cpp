@@ -7,6 +7,7 @@
 
 #include "KisAiStrokeProgram.h"
 
+#include <QRandomGenerator>
 #include <QtMath>
 #include <algorithm>
 #include <cmath>
@@ -1094,3 +1095,247 @@ KisAiRigLibrary::waterSurfaceOps(const KisAiSceneSpec &spec, const QSize &canvas
 
     return ops;
 }
+
+// =========================================================================
+// V7 Bezier Head Outline & Dynamic Pose Anatomic Geometry
+// =========================================================================
+
+QPolygonF KisAiRigLibrary::headOutlineBezier(
+    const QPointF &headCenter,
+    qreal headWidth,
+    qreal headHeight,
+    qreal tiltDeg)
+{
+    QPolygonF poly;
+    const qreal hw = headWidth * 0.5;
+    const qreal hh = headHeight * 0.5;
+    const qreal rad = tiltDeg * M_PI / 180.0;
+    const qreal cosR = std::cos(rad);
+    const qreal sinR = std::sin(rad);
+
+    const auto rotatePoint = [&](const QPointF &p) -> QPointF {
+        if (std::abs(tiltDeg) < 1e-4) return p;
+        const qreal dx = p.x() - headCenter.x();
+        const qreal dy = p.y() - headCenter.y();
+        return QPointF(headCenter.x() + dx * cosR - dy * sinR, headCenter.y() + dx * sinR + dy * cosR);
+    };
+
+    // 1. Cranium Top Dome (from right ear temple to left ear temple over crown)
+    constexpr int craniumSteps = 16;
+    for (int i = 0; i <= craniumSteps; ++i) {
+        const qreal t = M_PI * (qreal(i) / craniumSteps);
+        const qreal x = headCenter.x() + std::cos(t) * (hw * 1.02);
+        const qreal y = headCenter.y() - std::sin(t) * (hh * 0.98);
+        poly.append(rotatePoint(QPointF(x, y)));
+    }
+
+    // Cubic Bezier evaluator
+    const auto evalCubic = [](const QPointF &p0, const QPointF &p1, const QPointF &p2, const QPointF &p3, qreal t) -> QPointF {
+        const qreal it = 1.0 - t;
+        return it * it * it * p0 + 3.0 * it * it * t * p1 + 3.0 * it * t * t * p2 + t * t * t * p3;
+    };
+
+    // 2. Left Cheek & Jaw: from left temple -> cheek curve -> chin
+    const QPointF leftTemple(headCenter.x() - hw * 1.02, headCenter.y());
+    const QPointF leftCheekCtrl(headCenter.x() - hw * 1.04, headCenter.y() + hh * 0.38);
+    const QPointF leftJawCtrl(headCenter.x() - hw * 0.62, headCenter.y() + hh * 0.85);
+    const QPointF chinLeft(headCenter.x() - hw * 0.14, headCenter.y() + hh * 1.00);
+
+    constexpr int jawSteps = 10;
+    for (int i = 1; i <= jawSteps; ++i) {
+        const qreal t = qreal(i) / jawSteps;
+        poly.append(rotatePoint(evalCubic(leftTemple, leftCheekCtrl, leftJawCtrl, chinLeft, t)));
+    }
+
+    // 3. Refined Chin Arc
+    const QPointF chinTip(headCenter.x(), headCenter.y() + hh * 1.015);
+    const QPointF chinRight(headCenter.x() + hw * 0.14, headCenter.y() + hh * 1.00);
+    poly.append(rotatePoint(chinTip));
+    poly.append(rotatePoint(chinRight));
+
+    // 4. Right Jaw & Cheek: from chin -> right jaw curve -> right temple
+    const QPointF rightJawCtrl(headCenter.x() + hw * 0.62, headCenter.y() + hh * 0.85);
+    const QPointF rightCheekCtrl(headCenter.x() + hw * 1.04, headCenter.y() + hh * 0.38);
+    const QPointF rightTemple(headCenter.x() + hw * 1.02, headCenter.y());
+
+    for (int i = 1; i <= jawSteps; ++i) {
+        const qreal t = qreal(i) / jawSteps;
+        poly.append(rotatePoint(evalCubic(chinRight, rightJawCtrl, rightCheekCtrl, rightTemple, t)));
+    }
+
+    return poly;
+}
+
+QVector<KisAiStrokeOperation> KisAiRigLibrary::hierarchicalHairClumpOps(
+    const KisAiRigParameterSet &params,
+    const QSize &canvasSize,
+    quint32 seed)
+{
+    Q_UNUSED(canvasSize);
+    QVector<KisAiStrokeOperation> ops;
+    const QPointF &hc = params.headCenter;
+    const qreal hw = params.headWidth * 0.5;
+    const qreal hh = params.headHeight * 0.5;
+    const QColor hair = params.hairColor;
+    const QColor hairShadow = hair.darker(135);
+    const QColor hairLine = params.lineColor;
+
+    QRandomGenerator rng(seed);
+
+    // Generate 5 main volumetric hair fringe clumps across the forehead
+    constexpr int clumpCount = 5;
+    for (int c = 0; c < clumpCount; ++c) {
+        const qreal tRoot = qreal(c) / (clumpCount - 1);
+        const qreal rootX = hc.x() + (tRoot - 0.5) * (hw * 1.55);
+        const qreal rootY = hc.y() - hh * 0.65 - std::sin(tRoot * M_PI) * (hh * 0.15);
+
+        // Clump flow curvature (S-curve towards eyes/cheeks)
+        const qreal sBend = (rng.generateDouble() - 0.5) * 0.04;
+        const qreal tipLen = hh * (0.65 + rng.generateDouble() * 0.35);
+        const qreal tipX = rootX + (tRoot - 0.5) * (hw * 0.45) + sBend;
+        const qreal tipY = rootY + tipLen;
+        const qreal clumpW = hw * (0.28 + rng.generateDouble() * 0.12);
+
+        // Build volumetric clump ribbon polygon: rootLeft -> tip -> rootRight
+        QPolygonF clumpPoly;
+        clumpPoly.append(QPointF(rootX - clumpW * 0.5, rootY));
+        clumpPoly.append(QPointF(rootX - clumpW * 0.65, rootY + tipLen * 0.45));
+        clumpPoly.append(QPointF(tipX, tipY)); // Sharp tapered tip
+        clumpPoly.append(QPointF(rootX + clumpW * 0.65, rootY + tipLen * 0.45));
+        clumpPoly.append(QPointF(rootX + clumpW * 0.5, rootY));
+
+        // 1. Clump Cast Shadow (slightly offset downward)
+        QPolygonF shadowPoly;
+        for (const auto &p : clumpPoly) {
+            shadowPoly.append(p + QPointF(0.003, 0.008));
+        }
+        KisAiStrokeOperation shOp;
+        shOp.kind = KisAiStrokeOperation::Kind::Fill;
+        shOp.id = QStringLiteral("hair_clump_shadow_%1").arg(c);
+        shOp.layer = QStringLiteral("Shading");
+        shOp.polygon = shadowPoly;
+        shOp.brush.color = hairShadow;
+        shOp.brush.opacity = 0.45;
+        shOp.brush.profile = QStringLiteral("watercolor");
+        shOp.fillStyle = QStringLiteral("wash");
+        ops.append(shOp);
+
+        // 2. Main Clump Body (Flats)
+        KisAiStrokeOperation bodyOp;
+        bodyOp.kind = KisAiStrokeOperation::Kind::Fill;
+        bodyOp.id = QStringLiteral("hair_clump_body_%1").arg(c);
+        bodyOp.layer = QStringLiteral("Flats");
+        bodyOp.polygon = clumpPoly;
+        bodyOp.brush.color = hair;
+        bodyOp.brush.opacity = 1.0;
+        bodyOp.brush.profile = QStringLiteral("brush");
+        bodyOp.fillStyle = QStringLiteral("contour");
+        ops.append(bodyOp);
+
+        // 3. Crisp Clump Contour Lineart
+        QVector<KisAiStrokePoint> linePts;
+        linePts.append(KisAiStrokePoint(rootX - clumpW * 0.5, rootY, 0.3));
+        linePts.append(KisAiStrokePoint(rootX - clumpW * 0.65, rootY + tipLen * 0.45, 0.7));
+        linePts.append(KisAiStrokePoint(tipX, tipY, 0.9));
+        linePts.append(KisAiStrokePoint(rootX + clumpW * 0.65, rootY + tipLen * 0.45, 0.7));
+        linePts.append(KisAiStrokePoint(rootX + clumpW * 0.5, rootY, 0.3));
+
+        KisAiStrokeOperation lineOp;
+        lineOp.kind = KisAiStrokeOperation::Kind::Path;
+        lineOp.id = QStringLiteral("hair_clump_line_%1").arg(c);
+        lineOp.layer = QStringLiteral("Lineart");
+        lineOp.points = linePts;
+        lineOp.smooth = true;
+        lineOp.brush.color = hairLine;
+        lineOp.brush.size = 0.0035;
+        lineOp.brush.profile = QStringLiteral("gpen");
+        lineOp.brush.opacity = 0.90;
+        ops.append(lineOp);
+    }
+
+    // Delicate flyaway wisps (loose strands adding organic liveliness)
+    for (int f = 0; f < 3; ++f) {
+        const qreal side = (f % 2 == 0) ? -1.0 : 1.0;
+        const qreal startX = hc.x() + side * (hw * 0.85);
+        const qreal startY = hc.y() - hh * 0.40 + f * 0.05;
+        QVector<KisAiStrokePoint> flyPts;
+        flyPts.append(KisAiStrokePoint(startX, startY, 0.2));
+        flyPts.append(KisAiStrokePoint(startX + side * 0.04, startY + 0.08, 0.6));
+        flyPts.append(KisAiStrokePoint(startX + side * 0.07, startY + 0.16, 0.2));
+
+        KisAiStrokeOperation flyOp;
+        flyOp.kind = KisAiStrokeOperation::Kind::Path;
+        flyOp.id = QStringLiteral("hair_flyaway_%1").arg(f);
+        flyOp.layer = QStringLiteral("Lineart");
+        flyOp.points = flyPts;
+        flyOp.smooth = true;
+        flyOp.brush.color = hairLine;
+        flyOp.brush.size = 0.0022;
+        flyOp.brush.profile = QStringLiteral("fineliner");
+        flyOp.brush.opacity = 0.70;
+        ops.append(flyOp);
+    }
+
+    return ops;
+}
+
+QVector<KisAiStrokeOperation> KisAiRigLibrary::draperyFoldOps(
+    const QPointF &origin,
+    const QPointF &target,
+    qreal widthPx,
+    const QColor &clothColor,
+    const QColor &shadowColor)
+{
+    Q_UNUSED(clothColor);
+    Q_UNUSED(widthPx);
+    QVector<KisAiStrokeOperation> ops;
+
+    const QPointF delta = target - origin;
+    const qreal dist = std::hypot(delta.x(), delta.y());
+    if (dist < 1e-4) return ops;
+
+    const QPointF mid = (origin + target) * 0.5;
+    // Perpendicular sag vector for catenary drape curve
+    const QPointF normal(-delta.y() / dist, delta.x() / dist);
+    const qreal sag = dist * 0.18;
+    const QPointF sagPoint = mid + normal * sag;
+
+    // 1. Tension fold lineart
+    QVector<KisAiStrokePoint> foldLine;
+    foldLine.append(KisAiStrokePoint(origin.x(), origin.y(), 0.3));
+    foldLine.append(KisAiStrokePoint(sagPoint.x(), sagPoint.y(), 0.75));
+    foldLine.append(KisAiStrokePoint(target.x(), target.y(), 0.3));
+
+    KisAiStrokeOperation lineOp;
+    lineOp.kind = KisAiStrokeOperation::Kind::Path;
+    lineOp.id = QStringLiteral("drapery_tension_line");
+    lineOp.layer = QStringLiteral("Lineart");
+    lineOp.points = foldLine;
+    lineOp.smooth = true;
+    lineOp.brush.color = shadowColor.darker(120);
+    lineOp.brush.size = 0.0030;
+    lineOp.brush.profile = QStringLiteral("gpen");
+    lineOp.brush.opacity = 0.80;
+    ops.append(lineOp);
+
+    // 2. Soft under-fold shadow
+    QPolygonF foldShade;
+    foldShade.append(origin);
+    foldShade.append(sagPoint);
+    foldShade.append(target);
+    foldShade.append(sagPoint + normal * (sag * 0.65));
+
+    KisAiStrokeOperation shOp;
+    shOp.kind = KisAiStrokeOperation::Kind::Fill;
+    shOp.id = QStringLiteral("drapery_fold_shade");
+    shOp.layer = QStringLiteral("Shading");
+    shOp.polygon = foldShade;
+    shOp.brush.color = shadowColor;
+    shOp.brush.opacity = 0.40;
+    shOp.brush.profile = QStringLiteral("watercolor");
+    shOp.fillStyle = QStringLiteral("wash");
+    ops.append(shOp);
+
+    return ops;
+}
+

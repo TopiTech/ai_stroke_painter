@@ -91,6 +91,11 @@ struct KRITAUI_EXPORT KisAiRigParameterSet {
     QColor skinTone{QColor(255, 224, 192)};
     QColor lineColor{QColor(35, 35, 45)};
     QString lineWeight{QStringLiteral("standard")};
+
+    // V7: Contrapposto & Upper-body Pose Dynamics
+    qreal headTiltDeg{0.0}; // [-15, 15] head tilt in degrees
+    qreal shoulderSlope{0.0}; // [-0.08, 0.08] vertical offset between shoulders
+    qreal torsoTurn{0.0}; // [-0.10, 0.10] torso turn angle / depth shift
 };
 
 /**
@@ -194,6 +199,42 @@ public:
      */
     static QVector<KisAiStrokeOperation>
     waterSurfaceOps(const KisAiSceneSpec &spec, const QSize &canvasSize, qreal horizonY = 0.62, quint32 seed = 42);
+
+    /**
+     * V7 Bezier Head Outline Generator:
+     * High-continuity cubic Bezier curvature for smooth cheeks, defined jawline,
+     * and refined chin contour, with optional tilt rotation.
+     */
+    static QPolygonF headOutlineBezier(
+        const QPointF &headCenter,
+        qreal headWidth,
+        qreal headHeight,
+        qreal tiltDeg = 0.0
+    );
+
+    /**
+     * V7 Hierarchical 3D Hair Clump Dynamics:
+     * Synthesizes volumetric ribbon hair strands with S-curve bezier flows,
+     * sharp tapered tips, and ambient occlusion cast shadows.
+     */
+    static QVector<KisAiStrokeOperation> hierarchicalHairClumpOps(
+        const KisAiRigParameterSet &params,
+        const QSize &canvasSize,
+        quint32 seed = 42
+    );
+
+    /**
+     * V7 Procedural Drapery & Tension Folds:
+     * Synthesizes clothing tension folds between anchor points (e.g. shoulders, neck, waist)
+     * with delicate lineart and soft fold shading.
+     */
+    static QVector<KisAiStrokeOperation> draperyFoldOps(
+        const QPointF &origin,
+        const QPointF &target,
+        qreal widthPx,
+        const QColor &clothColor,
+        const QColor &shadowColor
+    );
 
     /** Stable sub-seed for a named rig part (deterministic across sessions). */
     static quint32 partSeed(const QString &partName, quint32 baseSeed);

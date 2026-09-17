@@ -358,6 +358,46 @@ public:
         int artStyle = 0,
         int timeOfDay = 0
     );
+
+    // =========================================================================
+    // 8. V7 Organic Brush Inking & Dynamic Beautification
+    // =========================================================================
+
+    /**
+     * Fast deterministic 1D/2D value noise for procedural bristle jitter and paper texture.
+     */
+    static qreal noise1D(qreal t, quint32 seed = 42);
+
+    /**
+     * V7 Stroke Beautifier & Stabilizer.
+     * Removes micro-jitter, repairs degenerate loops, smooths curvature,
+     * and shapes dynamic pressure taper profiles along raw input points.
+     */
+    static QVector<KisAiStrokePoint> stabilizeAndBeautifyStroke(
+        const QVector<KisAiStrokePoint> &points,
+        bool closed = false
+    );
+
+    /**
+     * V7 Lineart Occlusion & Light Direction Weighting.
+     * Modulates Lineart stroke widths based on whether they fall on the shadow side
+     * (thicker, heavier) vs light side (thinner, delicate) or outer silhouettes.
+     */
+    static void applyLineartOcclusionWeights(
+        QVector<KisAiStrokeOperation> &operations,
+        const QPointF &lightDir = QPointF(-0.5, -0.7)
+    );
+
+    /**
+     * V7 Inking Corner Fillet / Ink Pooling Polygon.
+     * Computes a smooth organic wedge at sharp corners to simulate ink surface tension.
+     */
+    static QPolygonF generateCornerInkingPolygon(
+        const QPointF &pPrev,
+        const QPointF &pCurr,
+        const QPointF &pNext,
+        qreal strokeWidthPx
+    );
 };
 
 #endif // KIS_AI_STROKE_QUALITY_UTILS_H

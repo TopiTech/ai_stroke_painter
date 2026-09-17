@@ -115,45 +115,8 @@ KisAiStrokeOperation KisAiLayoutEngine::makePath(const QString &id,
 
 QPolygonF KisAiLayoutEngine::headOutlinePolygon(const QPointF &center, qreal width, qreal height)
 {
-    // Canonical anime head contour:
-    // - Smooth cranial dome
-    // - Plump youthful cheek fullness around eye level
-    // - Graceful jaw curve tapering to a delicate, softly rounded chin
-    // Strictly symmetric around center.x().
-    QPolygonF poly;
-    const int segments = 48; // Multiple of 4 guarantees symmetry
-    poly.reserve(segments);
-
-    for (int i = 0; i < segments; ++i) {
-        const qreal t = 2.0 * M_PI * i / segments;
-        const qreal c = std::cos(t);
-        const qreal s = std::sin(t); // -1 = crown, 0 = eyes/cheeks, +1 = chin tip
-
-        qreal hw = width * 0.50;
-        qreal y = center.y();
-
-        if (s <= 0.0) {
-            // Crown hemisphere (smooth dome)
-            y += s * (height * 0.46);
-        } else {
-            // Lower face
-            y += s * (height * 0.44);
-
-            if (s < 0.35) {
-                // Cheeks stay wide and plump
-                hw *= (1.0 + 0.03 * std::sin(s / 0.35 * M_PI));
-            } else {
-                // Jaw taper: smooth transition to a soft, rounded chin (not a needle)
-                const qreal jawT = (s - 0.35) / 0.65;
-                const qreal taper = 1.0 - 0.35 * jawT + 0.06 * (jawT * jawT);
-                hw *= taper;
-            }
-        }
-
-        const qreal x = center.x() + c * hw;
-        poly.append(QPointF(x, y));
-    }
-    return poly;
+    // V7: High-continuity cubic Bezier curvature from KisAiRigLibrary
+    return KisAiRigLibrary::headOutlineBezier(center, width, height, 0.0);
 }
 
 QPair<QPointF, QPointF>
@@ -767,6 +730,14 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::clothingForSpec(const KisAiScen
                         1.0,
                         QStringLiteral("contour")));
 
+    // V7: Procedural Drapery Folds (Tension folds from shoulders toward chest center)
+    const QColor clothShadow = darkerWarm(mainCloth, 0.72);
+    const QPointF leftShoulder(hc.x() - shoulderW * 0.40, shoulderY + hh * 0.15);
+    const QPointF rightShoulder(hc.x() + shoulderW * 0.40, shoulderY + hh * 0.15);
+    const QPointF chestCenter(hc.x(), shoulderY + hh * 0.35);
+    ops.append(KisAiRigLibrary::draperyFoldOps(leftShoulder, chestCenter, 2.0, mainCloth, clothShadow));
+    ops.append(KisAiRigLibrary::draperyFoldOps(rightShoulder, chestCenter, 2.0, mainCloth, clothShadow));
+
     // 4. Style-Specific Costume Details
     if (style == QLatin1String("school_uniform") || style == QLatin1String("sailor")) {
         // Sailor Collar: V-neck triangular flap
@@ -1100,6 +1071,9 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(const KisAiSce
     // Hair front mass (fringe, side locks, ahoge, halo) over face skin and contour
     ops.append(hairFrontMassForStyle(spec, hc, hw, hh));
 
+    // V7: Hierarchical 3D hair clumps with ribbon flows, tapered tips & cast shadows
+    ops.append(KisAiRigLibrary::hierarchicalHairClumpOps(rigParams, canvasSize, 42));
+
     // V6 W1: character weather/props share the landscape BackdropRig.
     // The face-box guard inside backdropWeatherOps keeps skies off faces.
     ops.append(KisAiRigLibrary::backdropWeatherOps(rigParams, canvasSize, 42));
@@ -1120,6 +1094,9 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(const KisAiSce
     ops.append(KisAiLightRig::synthesizeShading(flatsOnly, rig, canvasSize, &anchor));
     ops.append(KisAiLightRig::synthesizeFormShading(flatsOnly, rig, canvasSize));
     ops.append(KisAiLightRig::synthesizeBounceLight(flatsOnly, rig, canvasSize));
+    // V7: Volumetric Half-Lambert shading + Material optics (SSS fringe & Anisotropic hair sheen)
+    ops.append(KisAiLightRig::synthesizeVolumetricShading(flatsOnly, rig, canvasSize, &anchor));
+    ops.append(KisAiLightRig::synthesizeMaterialOptics(flatsOnly, rig, canvasSize, &anchor));
 
     // Opt-in lineart hierarchy (outer contours heavier than details).
     KisAiStrokeQualityUtils::applyLineartHierarchy(ops);
@@ -1223,6 +1200,9 @@ KisAiStrokeProgram KisAiLayoutEngine::generateProgram(const KisAiSceneSpec &spec
         ops.append(characterProgram(resolved, program.canvasSize));
     }
 
+    // V7: Apply Art Style Pipeline before final packaging
+    applyArtStylePipeline(ops, resolved.style);
+
     program.operations = ops;
     KisAiStrokeQualityReport report;
     KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(program, &report);
@@ -1231,4 +1211,60 @@ KisAiStrokeProgram KisAiLayoutEngine::generateProgram(const KisAiSceneSpec &spec
     // V6 W4: brush preset hints (KisPainter path groundwork) at the single exit.
     KisAiStrokeQualityUtils::assignBrushPresetHints(refined);
     return refined;
+}
+
+void KisAiLayoutEngine::applyArtStylePipeline(
+    QVector<KisAiStrokeOperation> &operations,
+    const KisAiSceneStyleV2 &style)
+{
+    const QString art = style.artStyleId.toLower();
+
+    if (art == QLatin1String("watercolor")) {
+        // Watercolor Style: soft washes, wet edges, translucent pencil lineart
+        for (KisAiStrokeOperation &op : operations) {
+            const QString lName = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
+            if (op.kind == KisAiStrokeOperation::Kind::Fill) {
+                op.brush.profile = QStringLiteral("watercolor");
+                op.fillStyle = QStringLiteral("wash");
+                if (lName == QLatin1String("Flats")) {
+                    op.brush.opacity = qBound<qreal>(0.75, op.brush.opacity * 0.90, 0.95);
+                }
+            } else if (op.kind == KisAiStrokeOperation::Kind::Path && lName == QLatin1String("Lineart")) {
+                op.brush.profile = QStringLiteral("pencil");
+                op.brush.opacity = qBound<qreal>(0.55, op.brush.opacity * 0.78, 0.85);
+            }
+        }
+    } else if (art == QLatin1String("impasto") || art == QLatin1String("painterly")) {
+        // Impasto / Painterly Style: visible bristle brushwork, thicker energetic lines
+        for (KisAiStrokeOperation &op : operations) {
+            const QString lName = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
+            if (op.kind == KisAiStrokeOperation::Kind::Fill) {
+                op.brush.profile = QStringLiteral("brush");
+                op.brush.opacity = 1.0;
+            } else if (op.kind == KisAiStrokeOperation::Kind::Path && lName == QLatin1String("Lineart")) {
+                op.brush.size *= 1.25;
+                op.brush.profile = QStringLiteral("brush");
+            }
+        }
+    } else if (art == QLatin1String("ink_sketch") || art == QLatin1String("ink_manga")) {
+        // Ink Manga / Sketch Style: high-contrast dark ink lines, crisp cross-hatching
+        for (KisAiStrokeOperation &op : operations) {
+            const QString lName = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
+            if (op.kind == KisAiStrokeOperation::Kind::Path && lName == QLatin1String("Lineart")) {
+                op.brush.profile = QStringLiteral("gpen");
+                op.brush.opacity = 1.0;
+                op.brush.color = QColor(18, 18, 24);
+            }
+        }
+    } else if (art == QLatin1String("cyber_neon")) {
+        // Cyber Neon: luminous neon tubes, screen-blend highlights
+        for (KisAiStrokeOperation &op : operations) {
+            const QString lName = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
+            if (lName == QLatin1String("Highlights") || lName == QLatin1String("FX")) {
+                op.brush.profile = QStringLiteral("neon");
+                op.blendMode = QStringLiteral("screen");
+                op.brush.opacity = qMin<qreal>(1.0, op.brush.opacity * 1.35);
+            }
+        }
+    }
 }
