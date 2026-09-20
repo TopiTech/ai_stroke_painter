@@ -21,6 +21,10 @@ if (AI_STROKE_STANDALONE_TESTS)
         libs/ui/aiillustration/KisAiLayoutEngine.cpp
         libs/ui/aiillustration/KisAiLightRig.cpp
         libs/ui/aiillustration/KisAiDeliberateStroke.cpp
+        libs/ui/aiillustration/KisAiInkStroke.cpp
+        libs/ui/aiillustration/KisAiPrimitiveExpander.cpp
+        libs/ui/aiillustration/KisAiStrokeGraph.cpp
+        libs/ui/aiillustration/KisAiStrokeCommitter.cpp
         libs/ui/aiillustration/KisAiRigLibrary.cpp
         libs/ui/aiillustration/KisAiProgramPatch.cpp
         libs/ui/aiillustration/KisAiVisionCritic.cpp
@@ -149,6 +153,16 @@ if (AI_STROKE_STANDALONE_TESTS)
     target_link_libraries(KisAiQualityBenchGateTest PRIVATE ai_stroke_core Qt6::Test)
     add_test(NAME KisAiQualityBenchGateTest COMMAND KisAiQualityBenchGateTest)
 
+    add_executable(KisAiAtomicInkTest
+        libs/ui/tests/KisAiAtomicInkTest.cpp
+    )
+    target_include_directories(KisAiAtomicInkTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiAtomicInkTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiAtomicInkTest COMMAND KisAiAtomicInkTest)
+
     set(AI_STROKE_ALL_TEST_TARGETS
         KisAiStrokeProgramTest
         KisAiStrokeRendererTest
@@ -161,6 +175,7 @@ if (AI_STROKE_STANDALONE_TESTS)
         KisAiPhysicalRendererTest
         KisAiAbstractOntologyTest
         KisAiQualityBenchGateTest
+        KisAiAtomicInkTest
     )
 
     set_tests_properties(

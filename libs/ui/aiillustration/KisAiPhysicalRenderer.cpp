@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "KisAiStrokeCommitter.h"
 #include "KisAiStrokeQualityUtils.h"
 #include "KisAiStrokeRenderer.h"
 
@@ -43,7 +44,7 @@ QPolygonF scalePolygon(const QPolygonF &poly, const QSize &size)
     }
     return res;
 }
-}
+} // namespace
 
 // ===========================================================================
 // 色空間変換 (IEC 61966-2-1 sRGB <-> Linear sRGB)
@@ -125,13 +126,19 @@ float KisAiPhysicalRenderer::blendLinearBurn(float cb, float cs)
 // ===========================================================================
 
 void KisAiPhysicalRenderer::blendPixel(const QString &blendMode,
-                                       float srcR, float srcG, float srcB, float srcA,
-                                       float &dstR, float &dstG, float &dstB, float &dstA,
+                                       float srcR,
+                                       float srcG,
+                                       float srcB,
+                                       float srcA,
+                                       float &dstR,
+                                       float &dstG,
+                                       float &dstB,
+                                       float &dstA,
                                        float opacity)
 {
-    if (!std::isfinite(srcA) || !std::isfinite(dstA) || !std::isfinite(opacity) ||
-        !std::isfinite(srcR) || !std::isfinite(srcG) || !std::isfinite(srcB) ||
-        !std::isfinite(dstR) || !std::isfinite(dstG) || !std::isfinite(dstB)) {
+    if (!std::isfinite(srcA) || !std::isfinite(dstA) || !std::isfinite(opacity) || !std::isfinite(srcR)
+        || !std::isfinite(srcG) || !std::isfinite(srcB) || !std::isfinite(dstR) || !std::isfinite(dstG)
+        || !std::isfinite(dstB)) {
         return;
     }
 
@@ -319,9 +326,7 @@ QImage KisAiPhysicalRenderer::toSrgbLdr(const QImage &hdrImage)
 // レイヤー間物理合成 (dstImage 上に srcLayer を物理ブレンドで重ねる)
 // ===========================================================================
 
-void KisAiPhysicalRenderer::compositeLayer(QImage &dstImage,
-                                           const KisAiLayerImage &srcLayer,
-                                           const QImage *clipMask)
+void KisAiPhysicalRenderer::compositeLayer(QImage &dstImage, const KisAiLayerImage &srcLayer, const QImage *clipMask)
 {
     if (!srcLayer.isValid() || dstImage.isNull()) {
         return;
@@ -421,7 +426,8 @@ QImage KisAiCompositeGraph::evaluate() const
     composite.fill(Qt::transparent);
 
     if (!backgroundImage.isNull()) {
-        const QImage bgHdr = KisAiPhysicalRenderer::toLinearHdr(backgroundImage.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
+        const QImage bgHdr = KisAiPhysicalRenderer::toLinearHdr(
+            backgroundImage.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
         composite = bgHdr;
     }
 
@@ -512,8 +518,11 @@ QImage KisAiPhysicalRenderer::renderProgramToPhysicalImage(const KisAiStrokeProg
                                     QStringLiteral("Highlights"),
                                     QStringLiteral("FX")};
 
+    // V9: explode composites before layer buckets so lashes land on Lineart,
+    // then each layer image still goes through StrokeCommitter.
     QVector<KisAiStrokeOperation> expandedOps =
         KisAiStrokeRenderer::expandProceduralOperations(activeProgram.operations, renderSize);
+    expandedOps = KisAiStrokeCommitter::prepareAtomicOps(expandedOps, renderSize);
     KisAiStrokeQualityUtils::applyLineartOcclusionWeights(expandedOps);
 
     QMap<QString, QVector<KisAiStrokeOperation>> layerBuckets;
@@ -589,7 +598,10 @@ QImage KisAiPhysicalRenderer::renderProgramToPhysicalImage(const KisAiStrokeProg
 
             QImage formImage;
             if (!formOps.isEmpty()) {
-                formImage = KisAiStrokeRenderer::renderOperationsToImage(formOps, renderSize, QPainterPath(), globalSilhouettes);
+                formImage = KisAiStrokeRenderer::renderOperationsToImage(formOps,
+                                                                         renderSize,
+                                                                         QPainterPath(),
+                                                                         globalSilhouettes);
                 const int formDiffusionRadius = qMax(4, qRound(qMin(renderSize.width(), renderSize.height()) * 0.010));
                 KisAiStrokeRenderer::applySoftEdgeDiffusion(formImage, formDiffusionRadius);
             } else {
@@ -598,7 +610,10 @@ QImage KisAiPhysicalRenderer::renderProgramToPhysicalImage(const KisAiStrokeProg
             }
 
             if (!castOps.isEmpty()) {
-                QImage castImage = KisAiStrokeRenderer::renderOperationsToImage(castOps, renderSize, QPainterPath(), globalSilhouettes);
+                QImage castImage = KisAiStrokeRenderer::renderOperationsToImage(castOps,
+                                                                                renderSize,
+                                                                                QPainterPath(),
+                                                                                globalSilhouettes);
                 KisAiStrokeRenderer::applySoftEdgeDiffusion(castImage, 1);
                 QPainter p(&formImage);
                 p.setCompositionMode(QPainter::CompositionMode_SourceOver);
@@ -611,7 +626,8 @@ QImage KisAiPhysicalRenderer::renderProgramToPhysicalImage(const KisAiStrokeProg
                 lyr.clipToLayer = QStringLiteral("Flats");
             }
         } else if (isHighlights) {
-            const QImage hlImg = KisAiStrokeRenderer::renderOperationsToImage(ops, renderSize, QPainterPath(), globalSilhouettes);
+            const QImage hlImg =
+                KisAiStrokeRenderer::renderOperationsToImage(ops, renderSize, QPainterPath(), globalSilhouettes);
             lyr.image = toLinearHdr(hlImg);
 
             bool hasDodge = false;
@@ -626,12 +642,14 @@ QImage KisAiPhysicalRenderer::renderProgramToPhysicalImage(const KisAiStrokeProg
                 lyr.clipToLayer = QStringLiteral("Flats");
             }
         } else if (isFx) {
-            const QImage fxImg = KisAiStrokeRenderer::renderOperationsToImage(ops, renderSize, faceExclusionPath, globalSilhouettes);
+            const QImage fxImg =
+                KisAiStrokeRenderer::renderOperationsToImage(ops, renderSize, faceExclusionPath, globalSilhouettes);
             lyr.image = toLinearHdr(fxImg);
             lyr.blendMode = QStringLiteral("screen");
         } else {
             // Background, Flats, Lineart
-            const QImage baseImg = KisAiStrokeRenderer::renderOperationsToImage(ops, renderSize, QPainterPath(), globalSilhouettes);
+            const QImage baseImg =
+                KisAiStrokeRenderer::renderOperationsToImage(ops, renderSize, QPainterPath(), globalSilhouettes);
             lyr.image = toLinearHdr(baseImg);
             lyr.blendMode = QStringLiteral("normal");
         }

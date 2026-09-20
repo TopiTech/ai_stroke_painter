@@ -6,6 +6,8 @@
 #include "KisAiStrokeRenderer.h"
 #include "KisAiDeliberateStroke.h"
 #include "KisAiPhysicalRenderer.h"
+#include "KisAiPrimitiveExpander.h"
+#include "KisAiStrokeCommitter.h"
 #include "KisAiStrokeQualityUtils.h"
 
 #ifndef AI_STROKE_STANDALONE
@@ -151,7 +153,8 @@ KisAiStrokeRenderer::generateCatmullRomSpline(const QVector<QPointF> &points, in
     }
 
     if (!closed) {
-        // The last segment sampled [0, 1); append points.last() (t == 1) to close the open curve cleanly without duplicate knots.
+        // The last segment sampled [0, 1); append points.last() (t == 1) to close the open curve cleanly without
+        // duplicate knots.
         if (result.isEmpty() || result.last() != points.last()) {
             result.append(points.last());
         }
@@ -235,12 +238,6 @@ KisAiStrokeRenderer::expandProceduralOperations(const QVector<KisAiStrokeOperati
             KisAiStrokeOperation smoothedOp = op;
             smoothedOp.points = KisAiStrokeQualityUtils::beautifyFacialContour(op.points, canvasSize);
             expanded.append(smoothedOp);
-        } else if (op.kind == KisAiStrokeOperation::Kind::Path && op.points.size() >= 4
-                   && !op.id.startsWith(QLatin1String("corner_ink"))) {
-            // V7: General stroke beautifier & stabilization (jitter removal + natural taper curve)
-            KisAiStrokeOperation stOp = op;
-            stOp.points = KisAiStrokeQualityUtils::stabilizeAndBeautifyStroke(op.points, op.closed);
-            expanded.append(stOp);
         } else {
             expanded.append(op);
 
@@ -301,8 +298,11 @@ QImage KisAiStrokeRenderer::renderProgramToImagePhysical(const KisAiStrokeProgra
                                                          int superSampleFactor)
 {
     try {
-        const QImage physicalImg = KisAi::KisAiPhysicalRenderer::renderProgramToPhysicalImage(
-            program, targetSize, clipShadingToFlats, trappingPx, superSampleFactor);
+        const QImage physicalImg = KisAi::KisAiPhysicalRenderer::renderProgramToPhysicalImage(program,
+                                                                                              targetSize,
+                                                                                              clipShadingToFlats,
+                                                                                              trappingPx,
+                                                                                              superSampleFactor);
         if (!physicalImg.isNull() && physicalImg.width() > 0 && physicalImg.height() > 0) {
             return physicalImg;
         }
@@ -355,6 +355,7 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
                                     QStringLiteral("FX")};
 
     QVector<KisAiStrokeOperation> expandedOps = expandProceduralOperations(activeProgram.operations, size);
+    expandedOps = KisAiStrokeCommitter::prepareAtomicOps(expandedOps, size);
     // V7: Apply Lineart occlusion & light direction weighting (shadow-side thickening, delicate highlight lines)
     KisAiStrokeQualityUtils::applyLineartOcclusionWeights(expandedOps);
 
@@ -585,6 +586,7 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
                                     QStringLiteral("FX")};
 
     QVector<KisAiStrokeOperation> expandedOps = expandProceduralOperations(activeProgram.operations, canvasSize);
+    expandedOps = KisAiStrokeCommitter::prepareAtomicOps(expandedOps, canvasSize);
     // V7: Apply Lineart occlusion & light direction weighting
     KisAiStrokeQualityUtils::applyLineartOcclusionWeights(expandedOps);
 
@@ -1048,57 +1050,21 @@ QImage KisAiStrokeRenderer::renderOperationsToImage(const QVector<KisAiStrokeOpe
         scaledFacePath = tr.map(scaledFacePath);
     }
 
-    // D1: deliberate paint order — large masses first, facial details last.
-    const QVector<KisAiStrokeOperation> orderedOps =
-        KisAiDeliberateStroke::orderOperationsForRendering(operations, canvasSize);
+    // V9: expand composites, graph-order, then commit one stroke at a time.
+    const QVector<KisAiStrokeOperation> atomicOps = KisAiStrokeCommitter::prepareAtomicOps(operations, canvasSize);
 
     {
         QPainter painter(&working);
         painter.setRenderHint(QPainter::Antialiasing, true);
         painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-        for (const KisAiStrokeOperation &op : orderedOps) {
-            // D1: per-stroke gate — degenerate/off-canvas strokes never reach ink.
-            const KisAiStrokeLintReport lint = KisAiDeliberateStroke::lintStroke(op, canvasSize);
-            if (lint.drop)
-                continue;
-
-            // Phase 2/3: Targeted silhouette clipping (clip_to_id)
-            if (!op.clipToId.isEmpty()) {
-                bool clipped = false;
-                // 1. Cross-layer global silhouette lookup (e.g. Flats base parts)
-                if (globalSilhouettes.contains(op.clipToId)) {
-                    const QPolygonF &basePoly = globalSilhouettes.value(op.clipToId);
-                    if (basePoly.size() >= 3) {
-                        painter.save();
-                        QPainterPath clipP;
-                        clipP.addPolygon(scalePolygon(basePoly, workingSize));
-                        painter.setClipPath(clipP, Qt::IntersectClip);
-                        rasterizeOperation(painter, op, workingSize, scale, scaledFacePath);
-                        painter.restore();
-                        clipped = true;
-                    }
-                }
-                // 2. Intra-layer fallback search
-                if (!clipped) {
-                    for (const KisAiStrokeOperation &baseOp : orderedOps) {
-                        if (baseOp.id == op.clipToId && baseOp.polygon.size() >= 3) {
-                            painter.save();
-                            QPainterPath clipP;
-                            clipP.addPolygon(scalePolygon(baseOp.polygon, workingSize));
-                            painter.setClipPath(clipP, Qt::IntersectClip);
-                            rasterizeOperation(painter, op, workingSize, scale, scaledFacePath);
-                            painter.restore();
-                            clipped = true;
-                            break;
-                        }
-                    }
-                }
-                if (clipped)
-                    continue;
-            }
-
-            rasterizeOperation(painter, op, workingSize, scale, scaledFacePath);
-        }
+        KisAiStrokeCommitter::commitToPainter(painter,
+                                              atomicOps,
+                                              workingSize,
+                                              canvasSize,
+                                              scale,
+                                              scaledFacePath,
+                                              globalSilhouettes,
+                                              nullptr);
     }
 
     if (scale == 1)
@@ -1113,6 +1079,20 @@ void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter,
                                              const QPainterPath &faceExclusionPath)
 {
     painter.save();
+
+    if (!faceExclusionPath.isEmpty() && op.kind == KisAiStrokeOperation::Kind::Fill
+        && op.id.contains(QLatin1String("_dot_"))) {
+        QPointF acc;
+        for (const QPointF &p : op.polygon)
+            acc += p;
+        if (!op.polygon.isEmpty()) {
+            const QPointF c = scalePoint(acc / qreal(op.polygon.size()), canvasSize);
+            if (faceExclusionPath.contains(c)) {
+                painter.restore();
+                return;
+            }
+        }
+    }
 
     if (op.brush.isEraser) {
         painter.setCompositionMode(QPainter::CompositionMode_Clear);
@@ -1174,7 +1154,6 @@ static bool renderFineLineStroke(QPainter &painter,
                                  const QSize &canvasSize,
                                  int supersampleScale)
 {
-    Q_UNUSED(canvasSize);
     const int sampleCount = curveSamples.size();
     if (sampleCount < 2)
         return false;
@@ -1252,13 +1231,7 @@ static bool renderFineLineStroke(QPainter &painter,
         return true;
     }
 
-    // For fineliner, maru_pen, gpen, or delicate strokes:
-    // Render with continuous varying width segment-by-segment for natural pressure taper,
-    // avoiding polygon bowtie spikes and ribbon faceting entirely.
-    const int segCount = sampleCount - 1;
-    const int taperSteps = qMin(5, qMax(2, segCount / 4));
-
-    // V5: Harmonic Colored Lineart (色トレス) for skin contours
+    // V9: fine ink uses the shared envelope so taper/bowtie match wide strokes.
     QColor segmentColor = color;
     const QString lowerId = op.id.toLower();
     const bool isSkinContour = (op.layer.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) == 0)
@@ -1269,44 +1242,49 @@ static bool renderFineLineStroke(QPainter &painter,
         segmentColor = KisAiStrokeQualityUtils::calculateHarmonicLineColor(color, QColor(255, 220, 205), true);
     }
 
-    for (int i = 0; i < segCount; ++i) {
-        const QPointF &p1 = curveSamples.at(i).pos;
-        const QPointF &p2 = curveSamples.at(i + 1).pos;
-        const qreal w = qMax<qreal>(0.5, (curveSamples.at(i).width + curveSamples.at(i + 1).width) * 0.5);
-
-        // Sharp tapering at stroke endpoints (natural flick / 抜き and entry / 入り)
-        qreal tipFactor = 1.0;
-        if (!op.closed && segCount > 2) {
-            if (i < taperSteps) {
-                const qreal progress = qreal(i + 1) / qreal(taperSteps + 1);
-                // Sigmoid ease-in for delicate touch
-                tipFactor = qBound<qreal>(0.25, 0.25 + 0.75 * (progress * progress * (3.0 - 2.0 * progress)), 1.0);
-            } else if (i >= segCount - taperSteps) {
-                const qreal progress = qreal(segCount - i) / qreal(taperSteps + 1);
-                // Sharp release for crisp tail / flick
-                tipFactor = qBound<qreal>(0.15, 0.15 + 0.85 * (progress * progress), 1.0);
+    QVector<KisAiStrokePoint> envelopePts;
+    envelopePts.reserve(sampleCount);
+    const qreal wNorm = qMax<qreal>(1.0, qMin(canvasSize.width(), canvasSize.height()));
+    for (const SampledStrokePoint &s : curveSamples) {
+        envelopePts.append(
+            KisAiStrokePoint(s.pos.x() / canvasSize.width(),
+                             s.pos.y() / canvasSize.height(),
+                             qBound<qreal>(0.05, s.width / qMax<qreal>(0.5, op.brush.size * wNorm), 1.0)));
+    }
+    QPolygonF finePoly =
+        KisAiDeliberateStroke::buildEnvelopePolygon(envelopePts, op.brush, canvasSize, op.closed, supersampleScale);
+    if (finePoly.size() >= 3) {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(segmentColor);
+        painter.drawPolygon(finePoly);
+        if (!op.closed && sampleCount >= 2) {
+            painter.drawEllipse(curveSamples.first().pos,
+                                qMax<qreal>(0.25, curveSamples.first().width * 0.45),
+                                qMax<qreal>(0.25, curveSamples.first().width * 0.45));
+        }
+        if (sampleCount >= 3) {
+            const int stepInterval = qMax(1, sampleCount / 32);
+            for (int i = stepInterval; i < sampleCount - stepInterval; i += stepInterval) {
+                const QPolygonF inkingFillet =
+                    KisAiStrokeQualityUtils::generateCornerInkingPolygon(curveSamples.at(i - stepInterval).pos,
+                                                                         curveSamples.at(i).pos,
+                                                                         curveSamples.at(i + stepInterval).pos,
+                                                                         curveSamples.at(i).width);
+                if (inkingFillet.size() >= 3)
+                    painter.drawPolygon(inkingFillet);
             }
         }
-
-        // V5: Curvature modulation for dynamic G-pen variation (slight expansion on sharp turns)
-        qreal curvatureFactor = 1.0;
-        if (i > 0 && i < segCount - 1) {
-            const QPointF v1 = p1 - curveSamples.at(i - 1).pos;
-            const QPointF v2 = curveSamples.at(i + 2).pos - p2;
-            const qreal l1 = std::hypot(v1.x(), v1.y());
-            const qreal l2 = std::hypot(v2.x(), v2.y());
-            if (l1 > 1.0e-3 && l2 > 1.0e-3) {
-                const qreal cross = std::abs(v1.x() * v2.y() - v1.y() * v2.x());
-                curvatureFactor = 1.0 + qMin<qreal>(0.25, (cross / (l1 * l2)) * 0.25);
-            }
-        }
-
-        QPen pen(segmentColor, w * tipFactor * curvatureFactor, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
-        painter.setPen(pen);
-        painter.setBrush(Qt::NoBrush);
-        painter.drawLine(p1, p2);
+        return true;
     }
 
+    QPainterPath spine;
+    spine.moveTo(curveSamples.first().pos);
+    for (int i = 1; i < sampleCount; ++i)
+        spine.lineTo(curveSamples.at(i).pos);
+    QPen pen(segmentColor, qMax<qreal>(0.5, avgW), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
+    painter.setPen(pen);
+    painter.setBrush(Qt::NoBrush);
+    painter.drawPath(spine);
     return true;
 }
 
@@ -1331,17 +1309,17 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter,
         return;
     }
 
-    // D0: deliberate pre-pass — jitter removal + uniform resampling so long
-    // LLM spans and dense facial clusters share one clean representation.
-    // V5 R7-1: ink dynamics run after stabilization so slow passes pool ink
-    // and fast passes fade — deterministic pen physics for every path.
+    // V9: the committer already stabilized + linted. Re-stabilize is
+    // idempotent and cheap; lint uses the same geometry that will be inked.
     const QVector<KisAiStrokePoint> stablePoints = KisAiDeliberateStroke::applyInkDynamics(
         KisAiDeliberateStroke::stabilizeStroke(op.points,
                                                canvasSize,
                                                op.closed,
                                                KisAiStrokeProgramCodec::stableSeed(op.id)),
         canvasSize);
-    const KisAiStrokeLintReport lint = KisAiDeliberateStroke::lintStroke(op, canvasSize);
+    KisAiStrokeOperation lintOp = op;
+    lintOp.points = stablePoints;
+    const KisAiStrokeLintReport lint = KisAiDeliberateStroke::lintStroke(lintOp, canvasSize);
     if (lint.drop) {
         return; // micro/off-canvas/degenerate strokes never reach ink
     }
@@ -2132,9 +2110,8 @@ void KisAiStrokeRenderer::drawGradientFillOperation(QPainter &painter,
         const QRect bounds = poly.boundingRect().toAlignedRect().intersected(QRect(QPoint(0, 0), canvasSize));
         // width()/height() は int のため巨大キャンバスで積が int オーバーフローし、
         // 負値になってゲートをすり抜ける。qint64 で面積判定する。
-        const qint64 boundsArea = bounds.isEmpty()
-            ? 0
-            : static_cast<qint64>(bounds.width()) * static_cast<qint64>(bounds.height());
+        const qint64 boundsArea =
+            bounds.isEmpty() ? 0 : static_cast<qint64>(bounds.width()) * static_cast<qint64>(bounds.height());
         if (!bounds.isEmpty() && boundsArea < static_cast<qint64>(4096) * 4096) {
             QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/dither")));
             painter.setPen(Qt::NoPen);

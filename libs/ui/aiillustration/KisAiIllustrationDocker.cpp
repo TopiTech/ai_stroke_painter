@@ -9,13 +9,14 @@
 #include "KisAiIllustrationRenderer.h"
 #include "KisAiLayoutEngine.h"
 #include "KisAiModelRouter.h"
-#include "KisAiProgramPatch.h"
-#include "KisAiPromptAnalyzer.h"
-#include "KisAiRefinementLoop.h"
 #include "KisAiPerceptualRepairer.h"
 #include "KisAiPhysicalRenderer.h"
+#include "KisAiProgramPatch.h"
+#include "KisAiPromptAnalyzer.h"
 #include "KisAiQualityVector.h"
+#include "KisAiRefinementLoop.h"
 #include "KisAiSceneSpec.h"
+#include "KisAiStrokeCommitter.h"
 #include "KisAiStrokeProgram.h"
 #include "KisAiStrokeRenderer.h"
 #include "KisDocument.h"
@@ -80,9 +81,8 @@
 #include <algorithm>
 
 #if defined(Q_OS_WIN)
-#include <windows.h>
 #include <wincrypt.h>
-
+#include <windows.h>
 
 #endif
 
@@ -948,17 +948,21 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_qualityProfileCombo->addItem(i18n("写実・階調 (Photorealistic)"), QStringLiteral("photorealistic"));
     m_qualityProfileCombo->addItem(i18n("インク・強弱 (Ink Sketch Bold)"), QStringLiteral("ink_sketch_bold"));
     m_qualityProfileCombo->setAccessibleName(i18n("Quality Profile"));
-    m_qualityProfileCombo->setToolTip(i18n("V8 多次元品質プロファイル: 画風に応じた 16 軸品質ベクトルの重みプリセット"));
+    m_qualityProfileCombo->setToolTip(
+        i18n("V8 多次元品質プロファイル: 画風に応じた 16 軸品質ベクトルの重みプリセット"));
 
     m_physicalRenderCheck = new QCheckBox(i18n("物理レンダリング (RGBA16F + 物理ブレンド)"), m_detailsContainer);
     m_physicalRenderCheck->setChecked(false);
     m_physicalRenderCheck->setAccessibleName(i18n("Physical rendering"));
-    m_physicalRenderCheck->setToolTip(i18n("V8 Phase 3: 線形 sRGB 空間で W3C 物理合成と 4x スーパーサンプリングを行い、暗部バンディングと色相ドリフトを防止します。"));
+    m_physicalRenderCheck->setToolTip(
+        i18n("V8 Phase 3: 線形 sRGB 空間で W3C 物理合成と 4x "
+             "スーパーサンプリングを行い、暗部バンディングと色相ドリフトを防止します。"));
 
     m_perceptualRepairCheck = new QCheckBox(i18n("知覚自動補正 (Perceptual Repair)"), m_detailsContainer);
     m_perceptualRepairCheck->setChecked(true);
     m_perceptualRepairCheck->setAccessibleName(i18n("Perceptual auto repair"));
-    m_perceptualRepairCheck->setToolTip(i18n("V8 Phase 2: ラスタライズ画像から Flats 穴や顔ハッチを自動検出し、幾何を安全に補正します。"));
+    m_perceptualRepairCheck->setToolTip(
+        i18n("V8 Phase 2: ラスタライズ画像から Flats 穴や顔ハッチを自動検出し、幾何を安全に補正します。"));
 
     remoteForm->addRow(i18n("エンドポイント"), m_endpointEditor);
     remoteForm->addRow(i18n("モデル"), m_modelEditor);
@@ -1450,7 +1454,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     {
         QWidget *prev = nullptr;
         auto chainTab = [&prev](QWidget *w) {
-            if (!w) return;
+            if (!w)
+                return;
             if (prev) {
                 QWidget::setTabOrder(prev, w);
             }
@@ -2303,13 +2308,23 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
 
     // V8: 知覚補正の適用 (有効な場合)
     if (m_perceptualRepairCheck && m_perceptualRepairCheck->isChecked()) {
-        const QImage preImg = KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize, true, nullptr, trappingPx);
+        const QImage preImg =
+            KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize, true, nullptr, trappingPx);
         program = KisAi::KisAiPerceptualRepairer::autoRepair(program, preImg, nullptr);
     }
 
     const QImage preview = (m_physicalRenderCheck && m_physicalRenderCheck->isChecked())
         ? KisAiStrokeRenderer::renderProgramToImagePhysical(program, previewTargetSize, true, trappingPx, 2)
         : KisAiStrokeRenderer::renderProgramToImage(program, previewTargetSize, true, nullptr, trappingPx);
+    {
+        const KisAiStrokeCommitLog inkLog = KisAiStrokeCommitter::lastLog();
+        if (!inkLog.isEmpty()) {
+            logDebug(QStringLiteral("ATOMIC_INK"), inkLog.summary());
+            const int n = qMin(12, inkLog.lines.size());
+            if (n > 0)
+                logDebug(QStringLiteral("ATOMIC_INK"), inkLog.lines.mid(0, n).join(QLatin1Char(';')));
+        }
+    }
     if (!preview.isNull()) {
         m_previewLabel->setPixmap(
             QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
@@ -4801,7 +4816,8 @@ void KisAiIllustrationDocker::updateActiveStyleCards(int styleIndex)
 {
     QPushButton *matched = nullptr;
     for (auto *b : m_styleCardButtons) {
-        if (!b) continue;
+        if (!b)
+            continue;
         const bool match = (b->property("styleIndex").toInt() == styleIndex && styleIndex != 0);
         if (match) {
             matched = b;
@@ -4917,13 +4933,16 @@ void KisAiIllustrationDocker::expandPromptWithAi()
         if (!savedLlmEp.isEmpty()) {
             endpoint = savedLlmEp;
         } else {
-            endpoint.replace(QStringLiteral("/images/generations"), QStringLiteral("/chat/completions"), Qt::CaseInsensitive);
+            endpoint.replace(QStringLiteral("/images/generations"),
+                             QStringLiteral("/chat/completions"),
+                             Qt::CaseInsensitive);
         }
     }
-    if (model.contains(QLatin1String("dall-e"), Qt::CaseInsensitive) ||
-        model.contains(QLatin1String("image"), Qt::CaseInsensitive)) {
-        const QString savedLlmModel = s.value(QStringLiteral("AIIllustration/llmModel"),
-                                             s.value(QStringLiteral("AIIllustration/model"))).toString();
+    if (model.contains(QLatin1String("dall-e"), Qt::CaseInsensitive)
+        || model.contains(QLatin1String("image"), Qt::CaseInsensitive)) {
+        const QString savedLlmModel =
+            s.value(QStringLiteral("AIIllustration/llmModel"), s.value(QStringLiteral("AIIllustration/model")))
+                .toString();
         model = savedLlmModel.isEmpty() ? QStringLiteral("gpt-4o") : savedLlmModel;
     }
 

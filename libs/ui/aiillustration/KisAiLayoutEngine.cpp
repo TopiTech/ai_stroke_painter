@@ -362,23 +362,46 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::hairFrontMassForStyle(const Kis
             }
         }
 
-        ops.append(makeFill(QStringLiteral("hair_fringe"),
-                            QStringLiteral("Flats"),
-                            fringe,
-                            darkerWarm(hair, 0.96),
-                            QStringLiteral("brush"),
-                            1.0,
-                            QStringLiteral("contour")));
+        KisAiStrokeOperation fringeFill = makeFill(QStringLiteral("hair_fringe"),
+                                                   QStringLiteral("Flats"),
+                                                   fringe,
+                                                   darkerWarm(hair, 0.96),
+                                                   QStringLiteral("brush"),
+                                                   1.0,
+                                                   QStringLiteral("contour"));
+        fringeFill.groupId = QStringLiteral("hair_fringe");
+        fringeFill.role = QStringLiteral("mass");
+        ops.append(fringeFill);
 
-        // Fringe clump lineart (GPen outline for clean anime cel look)
+        // V9: one Path per fringe clump (valley-to-valley), never a single zigzag.
         if (fringeLine.size() >= 2) {
-            ops.append(makePath(QStringLiteral("hair_fringe_line"),
-                                QStringLiteral("Lineart"),
-                                fringeLine,
-                                darkerWarm(hair, 0.65),
-                                QStringLiteral("gpen"),
-                                0.0035,
-                                0.95));
+            int clumpIdx = 0;
+            QVector<KisAiStrokePoint> current;
+            current.reserve(6);
+            for (int i = 0; i < fringeLine.size(); ++i) {
+                current.append(fringeLine.at(i));
+                const bool isValley =
+                    (i > 0 && i + 1 < fringeLine.size() && fringeLine.at(i).pos.y() < fringeLine.at(i - 1).pos.y()
+                     && fringeLine.at(i).pos.y() < fringeLine.at(i + 1).pos.y());
+                const bool isEnd = (i == fringeLine.size() - 1);
+                if ((isValley || isEnd) && current.size() >= 2) {
+                    KisAiStrokeOperation clump = makePath(QStringLiteral("hair_fringe_clump_%1").arg(clumpIdx),
+                                                          QStringLiteral("Lineart"),
+                                                          current,
+                                                          darkerWarm(hair, 0.65),
+                                                          QStringLiteral("gpen"),
+                                                          0.0035,
+                                                          0.95);
+                    clump.groupId = QStringLiteral("hair_fringe_%1").arg(clumpIdx);
+                    clump.parentId = QStringLiteral("hair_fringe");
+                    clump.role = QStringLiteral("contour");
+                    ops.append(clump);
+                    ++clumpIdx;
+                    current.clear();
+                    if (isValley)
+                        current.append(fringeLine.at(i));
+                }
+            }
         }
 
         // D3-3: Internal Hair Flow Strands (細密毛流れ線) - flowing from crown towards clump tips
@@ -735,8 +758,10 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::clothingForSpec(const KisAiScen
     const QPointF leftShoulder(hc.x() - shoulderW * 0.40, shoulderY + hh * 0.15);
     const QPointF rightShoulder(hc.x() + shoulderW * 0.40, shoulderY + hh * 0.15);
     const QPointF chestCenter(hc.x(), shoulderY + hh * 0.35);
-    ops.append(KisAiRigLibrary::draperyFoldOps(leftShoulder, chestCenter, 2.0, mainCloth, clothShadow, QStringLiteral("l")));
-    ops.append(KisAiRigLibrary::draperyFoldOps(rightShoulder, chestCenter, 2.0, mainCloth, clothShadow, QStringLiteral("r")));
+    ops.append(
+        KisAiRigLibrary::draperyFoldOps(leftShoulder, chestCenter, 2.0, mainCloth, clothShadow, QStringLiteral("l")));
+    ops.append(
+        KisAiRigLibrary::draperyFoldOps(rightShoulder, chestCenter, 2.0, mainCloth, clothShadow, QStringLiteral("r")));
 
     // 4. Style-Specific Costume Details
     if (style == QLatin1String("school_uniform") || style == QLatin1String("sailor")) {
@@ -1058,13 +1083,16 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(const KisAiSce
                 jaw.append(KisAiStrokePoint(pt.x(), pt.y(), 0.85));
         }
         if (jaw.size() >= 2) {
-            ops.append(makePath(QStringLiteral("face_contour"),
-                                QStringLiteral("Lineart"),
-                                jaw,
-                                QColor(28, 24, 40),
-                                QStringLiteral("gpen"),
-                                0.005,
-                                1.0));
+            KisAiStrokeOperation jawOp = makePath(QStringLiteral("face_contour"),
+                                                  QStringLiteral("Lineart"),
+                                                  jaw,
+                                                  QColor(28, 24, 40),
+                                                  QStringLiteral("gpen"),
+                                                  0.005,
+                                                  1.0);
+            jawOp.groupId = QStringLiteral("jaw");
+            jawOp.role = QStringLiteral("contour");
+            ops.append(jawOp);
         }
     }
 
@@ -1213,9 +1241,7 @@ KisAiStrokeProgram KisAiLayoutEngine::generateProgram(const KisAiSceneSpec &spec
     return refined;
 }
 
-void KisAiLayoutEngine::applyArtStylePipeline(
-    QVector<KisAiStrokeOperation> &operations,
-    const KisAiSceneStyleV2 &style)
+void KisAiLayoutEngine::applyArtStylePipeline(QVector<KisAiStrokeOperation> &operations, const KisAiSceneStyleV2 &style)
 {
     const QString art = style.artStyleId.toLower();
 

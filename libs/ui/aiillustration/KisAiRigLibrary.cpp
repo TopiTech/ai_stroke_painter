@@ -1106,11 +1106,8 @@ KisAiRigLibrary::waterSurfaceOps(const KisAiSceneSpec &spec, const QSize &canvas
 // V7 Bezier Head Outline & Dynamic Pose Anatomic Geometry
 // =========================================================================
 
-QPolygonF KisAiRigLibrary::headOutlineBezier(
-    const QPointF &headCenter,
-    qreal headWidth,
-    qreal headHeight,
-    qreal tiltDeg)
+QPolygonF
+KisAiRigLibrary::headOutlineBezier(const QPointF &headCenter, qreal headWidth, qreal headHeight, qreal tiltDeg)
 {
     QPolygonF poly;
     const qreal hw = headWidth * 0.5;
@@ -1120,7 +1117,8 @@ QPolygonF KisAiRigLibrary::headOutlineBezier(
     const qreal sinR = std::sin(rad);
 
     const auto rotatePoint = [&](const QPointF &p) -> QPointF {
-        if (std::abs(tiltDeg) < 1e-4) return p;
+        if (std::abs(tiltDeg) < 1e-4)
+            return p;
         const qreal dx = p.x() - headCenter.x();
         const qreal dy = p.y() - headCenter.y();
         return QPointF(headCenter.x() + dx * cosR - dy * sinR, headCenter.y() + dx * sinR + dy * cosR);
@@ -1136,7 +1134,8 @@ QPolygonF KisAiRigLibrary::headOutlineBezier(
     }
 
     // Cubic Bezier evaluator
-    const auto evalCubic = [](const QPointF &p0, const QPointF &p1, const QPointF &p2, const QPointF &p3, qreal t) -> QPointF {
+    const auto evalCubic =
+        [](const QPointF &p0, const QPointF &p1, const QPointF &p2, const QPointF &p3, qreal t) -> QPointF {
         const qreal it = 1.0 - t;
         return it * it * it * p0 + 3.0 * it * it * t * p1 + 3.0 * it * t * t * p2 + t * t * t * p3;
     };
@@ -1172,10 +1171,8 @@ QPolygonF KisAiRigLibrary::headOutlineBezier(
     return poly;
 }
 
-QVector<KisAiStrokeOperation> KisAiRigLibrary::hierarchicalHairClumpOps(
-    const KisAiRigParameterSet &params,
-    const QSize &canvasSize,
-    quint32 seed)
+QVector<KisAiStrokeOperation>
+KisAiRigLibrary::hierarchicalHairClumpOps(const KisAiRigParameterSet &params, const QSize &canvasSize, quint32 seed)
 {
     Q_UNUSED(canvasSize);
     QVector<KisAiStrokeOperation> ops;
@@ -1215,9 +1212,12 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::hierarchicalHairClumpOps(
         for (const auto &p : clumpPoly) {
             shadowPoly.append(p + QPointF(0.003, 0.008));
         }
+        const QString group = QStringLiteral("hair_clump_%1").arg(c);
         KisAiStrokeOperation shOp;
         shOp.kind = KisAiStrokeOperation::Kind::Fill;
         shOp.id = QStringLiteral("hair_clump_shadow_%1").arg(c);
+        shOp.groupId = group;
+        shOp.role = QStringLiteral("mass");
         shOp.layer = QStringLiteral("Shading");
         shOp.polygon = shadowPoly;
         shOp.brush.color = hairShadow;
@@ -1230,6 +1230,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::hierarchicalHairClumpOps(
         KisAiStrokeOperation bodyOp;
         bodyOp.kind = KisAiStrokeOperation::Kind::Fill;
         bodyOp.id = QStringLiteral("hair_clump_body_%1").arg(c);
+        bodyOp.groupId = group;
+        bodyOp.role = QStringLiteral("mass");
         bodyOp.layer = QStringLiteral("Flats");
         bodyOp.polygon = clumpPoly;
         bodyOp.brush.color = hair;
@@ -1238,25 +1240,45 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::hierarchicalHairClumpOps(
         bodyOp.fillStyle = QStringLiteral("contour");
         ops.append(bodyOp);
 
-        // 3. Crisp Clump Contour Lineart
-        QVector<KisAiStrokePoint> linePts;
-        linePts.append(KisAiStrokePoint(rootX - clumpW * 0.5, rootY, 0.3));
-        linePts.append(KisAiStrokePoint(rootX - clumpW * 0.65, rootY + tipLen * 0.45, 0.7));
-        linePts.append(KisAiStrokePoint(tipX, tipY, 0.9));
-        linePts.append(KisAiStrokePoint(rootX + clumpW * 0.65, rootY + tipLen * 0.45, 0.7));
-        linePts.append(KisAiStrokePoint(rootX + clumpW * 0.5, rootY, 0.3));
+        // 3. V9: left and right clump contours as separate strokes (入り抜き).
 
-        KisAiStrokeOperation lineOp;
-        lineOp.kind = KisAiStrokeOperation::Kind::Path;
-        lineOp.id = QStringLiteral("hair_clump_line_%1").arg(c);
-        lineOp.layer = QStringLiteral("Lineart");
-        lineOp.points = linePts;
-        lineOp.smooth = true;
-        lineOp.brush.color = hairLine;
-        lineOp.brush.size = 0.0035;
-        lineOp.brush.profile = QStringLiteral("gpen");
-        lineOp.brush.opacity = 0.90;
-        ops.append(lineOp);
+        QVector<KisAiStrokePoint> leftPts;
+        leftPts.append(KisAiStrokePoint(rootX - clumpW * 0.5, rootY, 0.3));
+        leftPts.append(KisAiStrokePoint(rootX - clumpW * 0.65, rootY + tipLen * 0.45, 0.7));
+        leftPts.append(KisAiStrokePoint(tipX, tipY, 0.2));
+        KisAiStrokeOperation leftOp;
+        leftOp.kind = KisAiStrokeOperation::Kind::Path;
+        leftOp.id = QStringLiteral("hair_clump_line_%1_l").arg(c);
+        leftOp.groupId = group;
+        leftOp.parentId = bodyOp.id;
+        leftOp.role = QStringLiteral("contour");
+        leftOp.layer = QStringLiteral("Lineart");
+        leftOp.points = leftPts;
+        leftOp.smooth = true;
+        leftOp.brush.color = hairLine;
+        leftOp.brush.size = 0.0035;
+        leftOp.brush.profile = QStringLiteral("gpen");
+        leftOp.brush.opacity = 0.90;
+        ops.append(leftOp);
+
+        QVector<KisAiStrokePoint> rightPts;
+        rightPts.append(KisAiStrokePoint(rootX + clumpW * 0.5, rootY, 0.3));
+        rightPts.append(KisAiStrokePoint(rootX + clumpW * 0.65, rootY + tipLen * 0.45, 0.7));
+        rightPts.append(KisAiStrokePoint(tipX, tipY, 0.2));
+        KisAiStrokeOperation rightOp;
+        rightOp.kind = KisAiStrokeOperation::Kind::Path;
+        rightOp.id = QStringLiteral("hair_clump_line_%1_r").arg(c);
+        rightOp.groupId = group;
+        rightOp.parentId = bodyOp.id;
+        rightOp.role = QStringLiteral("contour");
+        rightOp.layer = QStringLiteral("Lineart");
+        rightOp.points = rightPts;
+        rightOp.smooth = true;
+        rightOp.brush.color = hairLine;
+        rightOp.brush.size = 0.0035;
+        rightOp.brush.profile = QStringLiteral("gpen");
+        rightOp.brush.opacity = 0.90;
+        ops.append(rightOp);
     }
 
     // Delicate flyaway wisps (loose strands adding organic liveliness)
@@ -1285,13 +1307,12 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::hierarchicalHairClumpOps(
     return ops;
 }
 
-QVector<KisAiStrokeOperation> KisAiRigLibrary::draperyFoldOps(
-    const QPointF &origin,
-    const QPointF &target,
-    qreal widthPx,
-    const QColor &clothColor,
-    const QColor &shadowColor,
-    const QString &idSuffix)
+QVector<KisAiStrokeOperation> KisAiRigLibrary::draperyFoldOps(const QPointF &origin,
+                                                              const QPointF &target,
+                                                              qreal widthPx,
+                                                              const QColor &clothColor,
+                                                              const QColor &shadowColor,
+                                                              const QString &idSuffix)
 {
     Q_UNUSED(clothColor);
     Q_UNUSED(widthPx);
@@ -1299,7 +1320,8 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::draperyFoldOps(
 
     const QPointF delta = target - origin;
     const qreal dist = std::hypot(delta.x(), delta.y());
-    if (dist < 1e-4) return ops;
+    if (dist < 1e-4)
+        return ops;
 
     const QPointF mid = (origin + target) * 0.5;
     // Perpendicular sag vector for catenary drape curve
@@ -1347,4 +1369,3 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::draperyFoldOps(
 
     return ops;
 }
-

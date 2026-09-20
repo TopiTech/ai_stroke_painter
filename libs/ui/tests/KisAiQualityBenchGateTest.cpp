@@ -8,12 +8,12 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
-#include <QTextStream>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSize>
+#include <QTextStream>
 #ifndef AI_STROKE_STANDALONE
 #include <testui.h>
 #else
@@ -24,10 +24,13 @@
 #endif
 
 #include "aiillustration/KisAiAbstractOntology.h"
+#include "aiillustration/KisAiDeliberateStroke.h"
+#include "aiillustration/KisAiLayoutEngine.h"
 #include "aiillustration/KisAiPerceptualRepairer.h"
 #include "aiillustration/KisAiPhysicalRenderer.h"
 #include "aiillustration/KisAiQualityVector.h"
 #include "aiillustration/KisAiSceneSpec.h"
+#include "aiillustration/KisAiStrokeCommitter.h"
 #include "aiillustration/KisAiStrokeProgram.h"
 
 using namespace KisAi;
@@ -38,13 +41,11 @@ namespace
 QString findGoldenSetPath()
 {
     const QString appDir = QCoreApplication::applicationDirPath();
-    const QStringList candidates = {
-        appDir + QStringLiteral("/../../tools/ai_quality_bench/golden_set.json"),
-        appDir + QStringLiteral("/../../../tools/ai_quality_bench/golden_set.json"),
-        appDir + QStringLiteral("/../tools/ai_quality_bench/golden_set.json"),
-        QStringLiteral("tools/ai_quality_bench/golden_set.json"),
-        QStringLiteral("../tools/ai_quality_bench/golden_set.json")
-    };
+    const QStringList candidates = {appDir + QStringLiteral("/../../tools/ai_quality_bench/golden_set.json"),
+                                    appDir + QStringLiteral("/../../../tools/ai_quality_bench/golden_set.json"),
+                                    appDir + QStringLiteral("/../tools/ai_quality_bench/golden_set.json"),
+                                    QStringLiteral("tools/ai_quality_bench/golden_set.json"),
+                                    QStringLiteral("../tools/ai_quality_bench/golden_set.json")};
 
     for (const QString &path : candidates) {
         if (QFile::exists(path)) {
@@ -68,22 +69,17 @@ QJsonArray loadGoldenSetArray()
     return doc.object().value(QStringLiteral("prompts")).toArray();
 }
 
-bool evaluatePromptQuality(const QString &prompt,
-                           const QString &profileName,
-                           qreal minScore,
-                           qreal *outScore = nullptr)
+bool evaluatePromptQuality(const QString &prompt, const QString &profileName, qreal minScore, qreal *outScore = nullptr)
 {
     KisAiSceneSpec spec;
     OntologyApplier::apply(prompt, &spec);
 
-    const KisAiStrokeProgram prog =
-        KisAiStrokeProgramCodec::createDeterministicProgram(prompt, QSize(256, 256));
+    const KisAiStrokeProgram prog = KisAiStrokeProgramCodec::createDeterministicProgram(prompt, QSize(256, 256));
     if (prog.operations.isEmpty()) {
         return false;
     }
 
-    const QImage rendered =
-        KisAiPhysicalRenderer::renderProgramToPhysicalImage(prog, QSize(256, 256), true, -1.0, 1);
+    const QImage rendered = KisAiPhysicalRenderer::renderProgramToPhysicalImage(prog, QSize(256, 256), true, -1.0, 1);
 
     QualityVector qv = QualityVectorEvaluator::evaluate(prog, rendered, &spec);
     // 指定されたプロファイルの重みを適用
@@ -176,7 +172,8 @@ void KisAiQualityBenchGateTest::testBenchmarkFullGatePass()
 
     int passedCount = 0;
     QString failures;
-    const QString diagPath = QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("bench_gate_debug.txt"));
+    const QString diagPath =
+        QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("bench_gate_debug.txt"));
     QFile diagOut(diagPath);
     if (!diagOut.open(QIODevice::WriteOnly | QIODevice::Text)) {
         QFAIL(qPrintable(QStringLiteral("cannot open diag output: %1").arg(diagPath)));
@@ -199,8 +196,8 @@ void KisAiQualityBenchGateTest::testBenchmarkFullGatePass()
                             .arg(score, 0, 'f', 3)
                             .arg(minScore, 0, 'f', 3);
         }
-        diag << "bench " << p.value(QStringLiteral("id")).toInt() << " score=" << score
-             << " min=" << minScore << (score >= minScore ? " PASS" : " FAIL") << "\n";
+        diag << "bench " << p.value(QStringLiteral("id")).toInt() << " score=" << score << " min=" << minScore
+             << (score >= minScore ? " PASS" : " FAIL") << "\n";
         diag.flush();
     }
     diag << "bench failures:\n" << failures << "\n";
@@ -216,6 +213,30 @@ void KisAiQualityBenchGateTest::testBenchmarkFullGatePass()
                             .arg(passedCount)
                             .arg(arr.size())
                             .arg(failures)));
+}
+
+void KisAiQualityBenchGateTest::testAtomicInkRatioOnPortrait()
+{
+    KisAiSceneSpec spec;
+    spec.prompt = QStringLiteral("黒髪ショートボブの少女、窓辺で微笑む");
+    spec.subject.type = QStringLiteral("character");
+    spec.composition.headCenter = QPointF(0.5, 0.4);
+    spec.composition.headHeight = 0.40;
+    const KisAiStrokeProgram prog = KisAiLayoutEngine::generateProgram(spec, QSize(256, 256));
+    const QVector<KisAiStrokeOperation> atoms =
+        KisAiStrokeCommitter::prepareAtomicOps(prog.operations, QSize(256, 256));
+    QCOMPARE(KisAiStrokeCommitter::atomicStrokeRatio(atoms), 1.0);
+}
+
+void KisAiQualityBenchGateTest::testEyeSymmetryWarningsOnPortrait()
+{
+    KisAiSceneSpec spec;
+    spec.prompt = QStringLiteral("黒髪ショートボブの少女、窓辺で微笑む");
+    spec.subject.type = QStringLiteral("character");
+    spec.composition.headCenter = QPointF(0.5, 0.4);
+    spec.composition.headHeight = 0.40;
+    const KisAiStrokeProgram prog = KisAiLayoutEngine::generateProgram(spec, QSize(256, 256));
+    QVERIFY(KisAiDeliberateStroke::eyePairSymmetryWarnings(prog.operations).isEmpty());
 }
 
 KISTEST_MAIN(KisAiQualityBenchGateTest)

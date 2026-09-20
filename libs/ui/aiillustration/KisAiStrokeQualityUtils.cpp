@@ -82,18 +82,15 @@ QPointF catmullRomPoint(const QPointF &p0, const QPointF &p1, const QPointF &p2,
     const qreal t2 = t * t;
     const qreal t3 = t2 * t;
 
-    return 0.5 * ((2.0 * p1) +
-                  (-p0 + p2) * t +
-                  (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 +
-                  (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3);
+    return 0.5
+        * ((2.0 * p1) + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+           + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3);
 }
 
 } // namespace
 
-QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::resampleEquidistant(
-    const QVector<KisAiStrokePoint> &points,
-    qreal stepPx,
-    bool closed)
+QVector<KisAiStrokePoint>
+KisAiStrokeQualityUtils::resampleEquidistant(const QVector<KisAiStrokePoint> &points, qreal stepPx, bool closed)
 {
     if (points.size() < 2) {
         return points;
@@ -244,10 +241,9 @@ QVector<QPointF> KisAiStrokeQualityUtils::simplifyRDP(const QVector<QPointF> &po
     return simplified;
 }
 
-QPolygonF KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(
-    const QPolygonF &polygon,
-    qreal cornerAngleThresholdDeg,
-    int subdivisions)
+QPolygonF KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(const QPolygonF &polygon,
+                                                                 qreal cornerAngleThresholdDeg,
+                                                                 int subdivisions)
 {
     const int n = polygon.size();
     if (n < 3) {
@@ -486,12 +482,12 @@ qreal KisAiStrokeQualityUtils::calculateTaper(qreal globalT, const QString &prof
     return 1.0;
 }
 
-QVector<KisAiStrokeQualityUtils::StrokeEnvelopeSegment> KisAiStrokeQualityUtils::generateStrokeEnvelope(
-    const QVector<KisAiStrokePoint> &points,
-    const KisAiStrokeBrush &brush,
-    const QSize &canvasSize,
-    bool closed,
-    int supersampleScale)
+QVector<KisAiStrokeQualityUtils::StrokeEnvelopeSegment>
+KisAiStrokeQualityUtils::generateStrokeEnvelope(const QVector<KisAiStrokePoint> &points,
+                                                const KisAiStrokeBrush &brush,
+                                                const QSize &canvasSize,
+                                                bool closed,
+                                                int supersampleScale)
 {
     QVector<StrokeEnvelopeSegment> segments;
     if (points.size() < 2) {
@@ -590,11 +586,10 @@ QVector<KisAiStrokeQualityUtils::StrokeEnvelopeSegment> KisAiStrokeQualityUtils:
     return segments;
 }
 
-QVector<QVector<QPointF>> KisAiStrokeQualityUtils::generateBristleStrands(
-    const QVector<KisAiStrokePoint> &spine,
-    int strandCount,
-    qreal maxSpreadPx,
-    quint32 seed)
+QVector<QVector<QPointF>> KisAiStrokeQualityUtils::generateBristleStrands(const QVector<KisAiStrokePoint> &spine,
+                                                                          int strandCount,
+                                                                          qreal maxSpreadPx,
+                                                                          quint32 seed)
 {
     QVector<QVector<QPointF>> strands;
     if (spine.size() < 2 || strandCount <= 0) {
@@ -645,11 +640,10 @@ QVector<QVector<QPointF>> KisAiStrokeQualityUtils::generateBristleStrands(
     return strands;
 }
 
-qreal KisAiStrokeQualityUtils::calculateCalligraphyWidth(
-    const QPointF &tangent,
-    qreal baseWidthPx,
-    qreal nibAngleDeg,
-    qreal thinRatio)
+qreal KisAiStrokeQualityUtils::calculateCalligraphyWidth(const QPointF &tangent,
+                                                         qreal baseWidthPx,
+                                                         qreal nibAngleDeg,
+                                                         qreal thinRatio)
 {
     const qreal nibRad = nibAngleDeg * DEG2RAD;
     const QPointF nibNormal(-std::sin(nibRad), std::cos(nibRad));
@@ -663,14 +657,13 @@ qreal KisAiStrokeQualityUtils::calculateCalligraphyWidth(
     return minW + (baseWidthPx - minW) * projection;
 }
 
-void KisAiStrokeQualityUtils::drawHalftonePattern(
-    QPainter &painter,
-    const QPolygonF &polygon,
-    const QColor &color,
-    qreal dotSpacingPx,
-    qreal dotRadiusPx,
-    qreal angleDeg,
-    bool lineScreen)
+void KisAiStrokeQualityUtils::drawHalftonePattern(QPainter &painter,
+                                                  const QPolygonF &polygon,
+                                                  const QColor &color,
+                                                  qreal dotSpacingPx,
+                                                  qreal dotRadiusPx,
+                                                  qreal angleDeg,
+                                                  bool lineScreen)
 {
     if (polygon.size() < 3) {
         return;
@@ -763,10 +756,9 @@ void KisAiStrokeQualityUtils::drawHalftonePattern(
     painter.restore();
 }
 
-QColor KisAiStrokeQualityUtils::calculateHueShiftedShadow(
-    const QColor &baseColor,
-    const QColor &ambientShadowTint,
-    qreal shadowDepth)
+QColor KisAiStrokeQualityUtils::calculateHueShiftedShadow(const QColor &baseColor,
+                                                          const QColor &ambientShadowTint,
+                                                          qreal shadowDepth)
 {
     if (!baseColor.isValid()) {
         return QColor(30, 30, 45);
@@ -799,14 +791,18 @@ QColor KisAiStrokeQualityUtils::calculateHueShiftedShadow(
             targetHue = h + 0.05f;
         }
 
-        if (targetHue < 0.0f) targetHue += 1.0f;
-        if (targetHue >= 1.0f) targetHue -= 1.0f;
+        if (targetHue < 0.0f)
+            targetHue += 1.0f;
+        if (targetHue >= 1.0f)
+            targetHue -= 1.0f;
         targetHue = qBound(0.0f, targetHue, 0.9999f);
     }
 
     const float depth = static_cast<float>(qBound<qreal>(0.1, shadowDepth, 0.8));
     const float newL = qMax<float>(0.05f, l * (1.0f - depth * 0.65f));
-    const float newS = isAchromatic ? (ambientShadowTint.isValid() ? 0.04f : 0.0f) : qBound<float>(0.1f, s * 1.15f, 1.0f); // Maintain rich chroma in shadows, neutral for achromatic
+    const float newS = isAchromatic
+        ? (ambientShadowTint.isValid() ? 0.04f : 0.0f)
+        : qBound<float>(0.1f, s * 1.15f, 1.0f); // Maintain rich chroma in shadows, neutral for achromatic
 
     QColor shifted;
     shifted.setHslF(targetHue, newS, newL, a);
@@ -823,10 +819,9 @@ QColor KisAiStrokeQualityUtils::calculateHueShiftedShadow(
     return shifted;
 }
 
-QColor KisAiStrokeQualityUtils::calculateHueShiftedHighlight(
-    const QColor &baseColor,
-    const QColor &keyLightTint,
-    qreal intensity)
+QColor KisAiStrokeQualityUtils::calculateHueShiftedHighlight(const QColor &baseColor,
+                                                             const QColor &keyLightTint,
+                                                             qreal intensity)
 {
     if (!baseColor.isValid()) {
         return QColor(255, 255, 255);
@@ -854,14 +849,17 @@ QColor KisAiStrokeQualityUtils::calculateHueShiftedHighlight(
             targetHue = h - 0.06f; // Blues shift toward turquoise highlight
         }
 
-        if (targetHue < 0.0f) targetHue += 1.0f;
-        if (targetHue >= 1.0f) targetHue -= 1.0f;
+        if (targetHue < 0.0f)
+            targetHue += 1.0f;
+        if (targetHue >= 1.0f)
+            targetHue -= 1.0f;
         targetHue = qBound(0.0f, targetHue, 0.9999f);
     }
 
     const float boost = static_cast<float>(qBound<qreal>(0.1, intensity, 0.9));
     const float newL = qMin<float>(0.98f, l + (1.0f - l) * boost);
-    const float newS = isAchromatic ? (keyLightTint.isValid() ? 0.03f : 0.0f) : qMax<float>(0.15f, s * (1.0f - boost * 0.4f));
+    const float newS =
+        isAchromatic ? (keyLightTint.isValid() ? 0.03f : 0.0f) : qMax<float>(0.15f, s * (1.0f - boost * 0.4f));
 
     QColor highlight;
     highlight.setHslF(targetHue, newS, newL, a);
@@ -877,24 +875,21 @@ QColor KisAiStrokeQualityUtils::calculateHueShiftedHighlight(
     return highlight;
 }
 
-KisAiStrokeProgram KisAiStrokeQualityUtils::applyTrapping(
-    const KisAiStrokeProgram &program,
-    qreal trappingPx)
+KisAiStrokeProgram KisAiStrokeQualityUtils::applyTrapping(const KisAiStrokeProgram &program, qreal trappingPx)
 {
     if (qAbs(trappingPx) < 1.0e-4 || program.operations.isEmpty()) {
         return program;
     }
 
     // QSize::isValid() is true for (0, 0), which would then be used as a divisor.
-    const QSize canvasSize = (program.canvasSize.width() > 0 && program.canvasSize.height() > 0)
-        ? program.canvasSize
-        : QSize(1024, 1024);
+    const QSize canvasSize =
+        (program.canvasSize.width() > 0 && program.canvasSize.height() > 0) ? program.canvasSize : QSize(1024, 1024);
     KisAiStrokeProgram trapped = program;
 
     for (KisAiStrokeOperation &op : trapped.operations) {
         const QString lName = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
-        if (lName == QLatin1String("Flats") && (op.kind == KisAiStrokeOperation::Kind::Fill ||
-                                                op.kind == KisAiStrokeOperation::Kind::GradientFill)) {
+        if (lName == QLatin1String("Flats")
+            && (op.kind == KisAiStrokeOperation::Kind::Fill || op.kind == KisAiStrokeOperation::Kind::GradientFill)) {
             if (op.polygon.size() >= 3) {
                 // Scale polygon to pixels
                 QPolygonF pixelPoly;
@@ -910,8 +905,8 @@ KisAiStrokeProgram KisAiStrokeQualityUtils::applyTrapping(
                 QPolygonF normPoly;
                 normPoly.reserve(dilated.size());
                 for (const QPointF &pt : dilated) {
-                    normPoly.append(QPointF(clamp01(pt.x() / canvasSize.width()),
-                                            clamp01(pt.y() / canvasSize.height())));
+                    normPoly.append(
+                        QPointF(clamp01(pt.x() / canvasSize.width()), clamp01(pt.y() / canvasSize.height())));
                 }
                 op.polygon = normPoly;
             }
@@ -921,19 +916,18 @@ KisAiStrokeProgram KisAiStrokeQualityUtils::applyTrapping(
     return trapped;
 }
 
-namespace {
+namespace
+{
 bool isFrontHairOp(const KisAiStrokeOperation &op)
 {
     const QString id = op.id.toLower();
-    return id.contains(QLatin1String("fringe")) ||
-           id.contains(QLatin1String("bangs")) ||
-           id.contains(QLatin1String("front")) ||
-           id.contains(QLatin1String("side_lock"));
+    return id.contains(QLatin1String("fringe")) || id.contains(QLatin1String("bangs"))
+        || id.contains(QLatin1String("front")) || id.contains(QLatin1String("side_lock"));
 }
 } // namespace
 
-QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::uniteOverlappingHairFlats(
-    const QVector<KisAiStrokeOperation> &operations)
+QVector<KisAiStrokeOperation>
+KisAiStrokeQualityUtils::uniteOverlappingHairFlats(const QVector<KisAiStrokeOperation> &operations)
 {
     QVector<KisAiStrokeOperation> others;
     QVector<KisAiStrokeOperation> hairCandidates;
@@ -941,8 +935,7 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::uniteOverlappingHairFlats
     for (const KisAiStrokeOperation &op : operations) {
         const bool isHairFill = op.kind == KisAiStrokeOperation::Kind::Fill
             && KisAiStrokeProgramCodec::normalizeLayerName(op.layer) == QLatin1String("Flats")
-            && op.id.contains(QLatin1String("hair"), Qt::CaseInsensitive)
-            && op.polygon.size() >= 3;
+            && op.id.contains(QLatin1String("hair"), Qt::CaseInsensitive) && op.polygon.size() >= 3;
         if (isHairFill)
             hairCandidates.append(op);
         else
@@ -1011,8 +1004,7 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::uniteOverlappingHairFlats
     for (const KisAiStrokeOperation &op : operations) {
         const bool isHairFill = op.kind == KisAiStrokeOperation::Kind::Fill
             && KisAiStrokeProgramCodec::normalizeLayerName(op.layer) == QLatin1String("Flats")
-            && op.id.contains(QLatin1String("hair"), Qt::CaseInsensitive)
-            && op.polygon.size() >= 3;
+            && op.id.contains(QLatin1String("hair"), Qt::CaseInsensitive) && op.polygon.size() >= 3;
         if (isHairFill) {
             const int massIdx = candidateMassIndex.value(hairCandidateCursor++, -1);
             if (massIdx >= 0 && !emittedMasses.contains(massIdx)) {
@@ -1026,8 +1018,7 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::uniteOverlappingHairFlats
     return result;
 }
 
-int KisAiStrokeQualityUtils::applyLineartHierarchy(
-    QVector<KisAiStrokeOperation> &operations)
+int KisAiStrokeQualityUtils::applyLineartHierarchy(QVector<KisAiStrokeOperation> &operations)
 {
     int adjusted = 0;
     for (KisAiStrokeOperation &op : operations) {
@@ -1093,15 +1084,15 @@ QString KisAiStrokeQualityUtils::brushPresetName(const QString &profile)
         return QStringLiteral("Pencil-2");
     if (p == QLatin1String("airbrush"))
         return QStringLiteral("Airbrush Soft");
-    if (p == QLatin1String("crayon") || p == QLatin1String("charcoal") || p == QLatin1String("splatter") || p == QLatin1String("stipple"))
+    if (p == QLatin1String("crayon") || p == QLatin1String("charcoal") || p == QLatin1String("splatter")
+        || p == QLatin1String("stipple"))
         return QStringLiteral("Chalk Soft");
     if (p == QLatin1String("watercolor"))
         return QStringLiteral("Watercolor Soft");
     return QStringLiteral("Basic-5 Size");
 }
 
-int KisAiStrokeQualityUtils::assignBrushPresetHints(
-    KisAiStrokeProgram &program)
+int KisAiStrokeQualityUtils::assignBrushPresetHints(KisAiStrokeProgram &program)
 {
     int assigned = 0;
     for (KisAiStrokeOperation &op : program.operations) {
@@ -1113,10 +1104,10 @@ int KisAiStrokeQualityUtils::assignBrushPresetHints(
     return assigned;
 }
 
-KisAiStrokeQualityUtils::HairClumpSynthesis KisAiStrokeQualityUtils::synthesizeHairClump(
-    const KisAiStrokeOperation &ribbonOp,
-    const QSize &canvasSize,
-    quint32 seed)
+KisAiStrokeQualityUtils::HairClumpSynthesis
+KisAiStrokeQualityUtils::synthesizeHairClump(const KisAiStrokeOperation &ribbonOp,
+                                             const QSize &canvasSize,
+                                             quint32 seed)
 {
     HairClumpSynthesis out;
     out.mainMass = ribbonOp;
@@ -1168,7 +1159,8 @@ KisAiStrokeQualityUtils::HairClumpSynthesis KisAiStrokeQualityUtils::synthesizeH
             const QPointF normal = (tLen > 1.0e-5) ? QPointF(-tangent.y() / tLen, tangent.x() / tLen) : QPointF(0, 1);
 
             const qreal progress = qreal(i) / qMax(1, spine.size() - 1);
-            // Converge smoothly toward the lock tip (0.25 offset at tip vs 1.0 at root) to eliminate parallel sukkari lines
+            // Converge smoothly toward the lock tip (0.25 offset at tip vs 1.0 at root) to eliminate parallel sukkari
+            // lines
             const qreal convergenceFactor = 1.0 - progress * 0.70;
             // Elegant S-curve wave along strand
             const qreal wave = std::sin(qreal(i) * 1.1 + s * 1.4) * (avgWidth * 0.07) * (1.0 - progress * 0.4);
@@ -1205,9 +1197,8 @@ KisAiStrokeQualityUtils::HairClumpSynthesis KisAiStrokeQualityUtils::synthesizeH
             const qreal progress = qreal(i - startIdx) / qMax(1, spine.size() - 1 - startIdx);
             const qreal flarePx = dirSign * (avgWidth * 0.55) * progress * (1.0 + rng.generateDouble() * 0.3);
 
-            QPointF tangent = (i < spine.size() - 1)
-                ? (scalePoint(spine.at(i + 1), canvasSize) - curr)
-                : (curr - scalePoint(spine.at(i - 1), canvasSize));
+            QPointF tangent = (i < spine.size() - 1) ? (scalePoint(spine.at(i + 1), canvasSize) - curr)
+                                                     : (curr - scalePoint(spine.at(i - 1), canvasSize));
             const qreal tLen = std::hypot(tangent.x(), tangent.y());
             const QPointF normal = (tLen > 1.0e-5) ? QPointF(-tangent.y() / tLen, tangent.x() / tLen) : QPointF(0, 1);
 
@@ -1246,10 +1237,9 @@ KisAiStrokeQualityUtils::HairClumpSynthesis KisAiStrokeQualityUtils::synthesizeH
     return out;
 }
 
-QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::synthesizeFoliageClusters(
-    const KisAiStrokeOperation &fillOp,
-    const QSize &canvasSize,
-    quint32 seed)
+QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::synthesizeFoliageClusters(const KisAiStrokeOperation &fillOp,
+                                                                                 const QSize &canvasSize,
+                                                                                 quint32 seed)
 {
     QVector<KisAiStrokeOperation> out;
     if (fillOp.polygon.size() < 3 || canvasSize.width() <= 0 || canvasSize.height() <= 0) {
@@ -1308,8 +1298,7 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::synthesizeFoliageClusters
             const qreal rPerturb = 0.80 + rng.generateDouble() * 0.40;
             const qreal px = centerPx.x() + std::cos(angle) * clusterRadiusPx * rPerturb;
             const qreal py = centerPx.y() + std::sin(angle) * (clusterRadiusPx * 0.75) * rPerturb;
-            clusterNormPoly.append(QPointF(clamp01(px / canvasSize.width()),
-                                          clamp01(py / canvasSize.height())));
+            clusterNormPoly.append(QPointF(clamp01(px / canvasSize.width()), clamp01(py / canvasSize.height())));
         }
 
         KisAiStrokeOperation clusterOp;
@@ -1344,17 +1333,18 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::synthesizeFoliageClusters
     return out;
 }
 
-bool KisAiStrokeQualityUtils::isCastShadow(
-    const QPolygonF &polygon,
-    const QSize &canvasSize)
+bool KisAiStrokeQualityUtils::isCastShadow(const QPolygonF &polygon, const QSize &canvasSize)
 {
-    if (polygon.size() < 3 || canvasSize.width() <= 0 || canvasSize.height() <= 0) return false;
+    if (polygon.size() < 3 || canvasSize.width() <= 0 || canvasSize.height() <= 0)
+        return false;
     const QPolygonF pixelPoly = scalePolygon(polygon, canvasSize);
     const QRectF b = pixelPoly.boundingRect();
-    if (b.width() <= 0.0 || b.height() <= 0.0) return false;
+    if (b.width() <= 0.0 || b.height() <= 0.0)
+        return false;
     const qreal area = b.width() * b.height();
     const qreal canvasArea = qreal(canvasSize.width()) * canvasSize.height();
-    if (canvasArea <= 0.0) return false;
+    if (canvasArea <= 0.0)
+        return false;
 
     const qreal aspect = b.height() > 0 ? b.width() / b.height() : 1.0;
     return (area < canvasArea * 0.015 || aspect > 4.0 || aspect < 0.25);
@@ -1364,12 +1354,13 @@ bool KisAiStrokeQualityUtils::isCastShadow(
 // 7. Advanced Artistic Fidelity & Inking Utilities (V5)
 // =========================================================================
 
-QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateCornerInkingDots(
-    const QVector<KisAiStrokeOperation> &operations,
-    const QSize &canvasSize)
+QVector<KisAiStrokeOperation>
+KisAiStrokeQualityUtils::generateCornerInkingDots(const QVector<KisAiStrokeOperation> &operations,
+                                                  const QSize &canvasSize)
 {
     QVector<KisAiStrokeOperation> dots;
-    if (canvasSize.width() <= 0 || canvasSize.height() <= 0) return dots;
+    if (canvasSize.width() <= 0 || canvasSize.height() <= 0)
+        return dots;
 
     struct LineSegment {
         QPointF p1;
@@ -1384,8 +1375,10 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateCornerInkingDots(
     constexpr int MAX_CORNER_SEGMENTS = 4000;
 
     for (const auto &op : operations) {
-        if (op.kind != KisAiStrokeOperation::Kind::Path || op.points.size() < 2) continue;
-        if (op.layer.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) != 0) continue;
+        if (op.kind != KisAiStrokeOperation::Kind::Path || op.points.size() < 2)
+            continue;
+        if (op.layer.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) != 0)
+            continue;
 
         const qreal baseW = op.brush.size > 0.0 ? op.brush.size : 0.004;
         for (int i = 0; i < op.points.size() - 1; ++i) {
@@ -1412,10 +1405,19 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateCornerInkingDots(
 
             QPointF candidate;
             bool found = false;
-            if (d1 < 0.008) { candidate = (s1.p1 + s2.p1) * 0.5; found = true; }
-            else if (d2 < 0.008) { candidate = (s1.p1 + s2.p2) * 0.5; found = true; }
-            else if (d3 < 0.008) { candidate = (s1.p2 + s2.p1) * 0.5; found = true; }
-            else if (d4 < 0.008) { candidate = (s1.p2 + s2.p2) * 0.5; found = true; }
+            if (d1 < 0.008) {
+                candidate = (s1.p1 + s2.p1) * 0.5;
+                found = true;
+            } else if (d2 < 0.008) {
+                candidate = (s1.p1 + s2.p2) * 0.5;
+                found = true;
+            } else if (d3 < 0.008) {
+                candidate = (s1.p2 + s2.p1) * 0.5;
+                found = true;
+            } else if (d4 < 0.008) {
+                candidate = (s1.p2 + s2.p2) * 0.5;
+                found = true;
+            }
 
             if (found) {
                 bool tooClose = false;
@@ -1446,10 +1448,9 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateCornerInkingDots(
     return dots;
 }
 
-QColor KisAiStrokeQualityUtils::calculateHarmonicLineColor(
-    const QColor &baseInkColor,
-    const QColor &underlyingFlatsColor,
-    bool isSkin)
+QColor KisAiStrokeQualityUtils::calculateHarmonicLineColor(const QColor &baseInkColor,
+                                                           const QColor &underlyingFlatsColor,
+                                                           bool isSkin)
 {
     if (!underlyingFlatsColor.isValid() || underlyingFlatsColor.alpha() < 30) {
         return baseInkColor;
@@ -1474,9 +1475,8 @@ QColor KisAiStrokeQualityUtils::calculateHarmonicLineColor(
     }
 }
 
-QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateSkinSssFringe(
-    const KisAiStrokeOperation &shadingOp,
-    const QSize &canvasSize)
+QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateSkinSssFringe(const KisAiStrokeOperation &shadingOp,
+                                                                             const QSize &canvasSize)
 {
     Q_UNUSED(canvasSize);
     QVector<KisAiStrokeOperation> out;
@@ -1484,8 +1484,10 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateSkinSssFringe(
         return out;
 
     const QString lowerId = shadingOp.id.toLower();
-    const bool isSkin = lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face")) || lowerId.contains(QLatin1String("body"));
-    if (!isSkin) return out;
+    const bool isSkin = lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face"))
+        || lowerId.contains(QLatin1String("body"));
+    if (!isSkin)
+        return out;
 
     const qreal fringeWidth = 0.0035;
     KisAiStrokeOperation fringeOp;
@@ -1508,9 +1510,8 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateSkinSssFringe(
     return out;
 }
 
-QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::beautifyFacialContour(
-    const QVector<KisAiStrokePoint> &rawPoints,
-    const QSize &canvasSize)
+QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::beautifyFacialContour(const QVector<KisAiStrokePoint> &rawPoints,
+                                                                         const QSize &canvasSize)
 {
     if (rawPoints.size() < 7 || canvasSize.isEmpty()) {
         return rawPoints;
@@ -1519,29 +1520,31 @@ QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::beautifyFacialContour(
     return resampleEquidistant(rawPoints, qMax<qreal>(4.0, canvasSize.width() * 0.008), false);
 }
 
-QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateRimLightStrokes(
-    const QVector<KisAiStrokeOperation> &operations,
-    const QSize &canvasSize,
-    const QPointF &lightDir)
+QVector<KisAiStrokeOperation>
+KisAiStrokeQualityUtils::generateRimLightStrokes(const QVector<KisAiStrokeOperation> &operations,
+                                                 const QSize &canvasSize,
+                                                 const QPointF &lightDir)
 {
     QVector<KisAiStrokeOperation> out;
-    if (canvasSize.width() <= 0 || canvasSize.height() <= 0) return out;
+    if (canvasSize.width() <= 0 || canvasSize.height() <= 0)
+        return out;
 
     const QPointF normLight = normalizeVector(lightDir.isNull() ? QPointF(0.707, -0.707) : lightDir);
 
     for (const auto &op : operations) {
-        if (op.kind != KisAiStrokeOperation::Kind::Fill || op.polygon.size() < 4) continue;
-        if (op.layer.compare(QLatin1String("Flats"), Qt::CaseInsensitive) != 0) continue;
+        if (op.kind != KisAiStrokeOperation::Kind::Fill || op.polygon.size() < 4)
+            continue;
+        if (op.layer.compare(QLatin1String("Flats"), Qt::CaseInsensitive) != 0)
+            continue;
 
         // Skip small decorative clusters, foliage patches, and particles that cause messy wireframe clutter
         const QString lowerId = op.id.toLower();
-        if (lowerId.contains(QLatin1String("cluster")) ||
-            lowerId.contains(QLatin1String("foliage")) ||
-            lowerId.contains(QLatin1String("petal")) ||
-            lowerId.contains(QLatin1String("sparkle")) ||
-            lowerId.contains(QLatin1String("particle")) ||
-            lowerId.contains(QLatin1String("dot")) ||
-            lowerId.contains(QLatin1String("haze"))) {
+        if (lowerId.contains(QLatin1String("cluster")) || lowerId.contains(QLatin1String("foliage"))
+            || lowerId.contains(QLatin1String("petal")) || lowerId.contains(QLatin1String("sparkle"))
+            || lowerId.contains(QLatin1String("particle")) || lowerId.contains(QLatin1String("dot"))
+            || lowerId.contains(QLatin1String("haze")) || lowerId.contains(QLatin1String("sclera"))
+            || lowerId.contains(QLatin1String("iris")) || lowerId.contains(QLatin1String("pupil"))
+            || lowerId.contains(QLatin1String("eye"))) {
             continue;
         }
 
@@ -1559,7 +1562,8 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateRimLightStrokes(
             const QPointF &pB = op.polygon.at((i + 1) % polySize);
             signedArea += pA.x() * pB.y() - pB.x() * pA.y();
         }
-        if (qAbs(signedArea) < 1.0e-9) continue;
+        if (qAbs(signedArea) < 1.0e-9)
+            continue;
         const qreal normalSign = signedArea > 0.0 ? 1.0 : -1.0;
 
         const auto &poly = op.polygon;
@@ -1568,7 +1572,8 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateRimLightStrokes(
         auto flushRim = [&](QVector<KisAiStrokePoint> &pts) {
             if (pts.size() >= 3 && out.size() < 12) {
                 // Smooth rim light points to prevent harsh polygonal wireframe lines
-                QVector<KisAiStrokePoint> smoothed = resampleEquidistant(pts, qMax<qreal>(3.0, canvasSize.width() * 0.006), false);
+                QVector<KisAiStrokePoint> smoothed =
+                    resampleEquidistant(pts, qMax<qreal>(3.0, canvasSize.width() * 0.006), false);
                 if (smoothed.size() >= 2) {
                     KisAiStrokeOperation rimOp;
                     rimOp.kind = KisAiStrokeOperation::Kind::Path;
@@ -1606,12 +1611,13 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateRimLightStrokes(
     return out;
 }
 
-QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateProceduralBlush(
-    const QVector<KisAiStrokeOperation> &operations,
-    const QSize &canvasSize)
+QVector<KisAiStrokeOperation>
+KisAiStrokeQualityUtils::generateProceduralBlush(const QVector<KisAiStrokeOperation> &operations,
+                                                 const QSize &canvasSize)
 {
     QVector<KisAiStrokeOperation> out;
-    if (canvasSize.width() <= 0 || canvasSize.height() <= 0) return out;
+    if (canvasSize.width() <= 0 || canvasSize.height() <= 0)
+        return out;
 
     QVector<QPointF> eyeCenters;
     qreal avgEyeWidth = 0.08;
@@ -1622,7 +1628,8 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateProceduralBlush(
         }
     }
 
-    if (eyeCenters.isEmpty()) return out;
+    if (eyeCenters.isEmpty())
+        return out;
 
     int idx = 0;
     for (const auto &eyePt : eyeCenters) {
@@ -1643,8 +1650,8 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateProceduralBlush(
         const qreal r = blushOp.gradientRadius;
         for (int v = 0; v < verts; ++v) {
             const qreal a = (2.0 * PI * v) / verts;
-            blushOp.polygon.append(QPointF(cheekCenter.x() + std::cos(a) * r,
-                                          cheekCenter.y() + std::sin(a) * (r * 0.75)));
+            blushOp.polygon.append(
+                QPointF(cheekCenter.x() + std::cos(a) * r, cheekCenter.y() + std::sin(a) * (r * 0.75)));
         }
 
         out.append(blushOp);
@@ -1653,18 +1660,16 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateProceduralBlush(
     return out;
 }
 
-QImage KisAiStrokeQualityUtils::generateFilmGrain(
-    const QSize &size,
-    qreal intensity,
-    quint32 seed)
+QImage KisAiStrokeQualityUtils::generateFilmGrain(const QSize &size, qreal intensity, quint32 seed)
 {
-    if (size.isEmpty()) return QImage();
+    if (size.isEmpty())
+        return QImage();
     QImage grain(size, QImage::Format_ARGB32_Premultiplied);
     QRandomGenerator rng(seed);
 
     const int alpha = qRound(qBound<qreal>(0.02, intensity, 0.25) * 255.0);
     for (int y = 0; y < size.height(); ++y) {
-        auto *scanLine = reinterpret_cast<QRgb*>(grain.scanLine(y));
+        auto *scanLine = reinterpret_cast<QRgb *>(grain.scanLine(y));
         for (int x = 0; x < size.width(); ++x) {
             const int noise = rng.bounded(256);
             const int premul = (noise * alpha + 127) / 255;
@@ -1675,11 +1680,10 @@ QImage KisAiStrokeQualityUtils::generateFilmGrain(
     return grain;
 }
 
-QImage KisAiStrokeQualityUtils::generateVignetteImage(
-    const QSize &size,
-    qreal strength)
+QImage KisAiStrokeQualityUtils::generateVignetteImage(const QSize &size, qreal strength)
 {
-    if (size.isEmpty()) return QImage();
+    if (size.isEmpty())
+        return QImage();
     QImage vignette(size, QImage::Format_ARGB32_Premultiplied);
     vignette.fill(Qt::transparent);
 
@@ -1702,12 +1706,10 @@ QImage KisAiStrokeQualityUtils::generateVignetteImage(
     return vignette;
 }
 
-QImage KisAiStrokeQualityUtils::generateAmbientOverlay(
-    const QSize &size,
-    int artStyle,
-    int timeOfDay)
+QImage KisAiStrokeQualityUtils::generateAmbientOverlay(const QSize &size, int artStyle, int timeOfDay)
 {
-    if (size.isEmpty()) return QImage();
+    if (size.isEmpty())
+        return QImage();
     QImage overlay(size, QImage::Format_ARGB32_Premultiplied);
     overlay.fill(Qt::transparent);
 
@@ -1760,9 +1762,8 @@ qreal KisAiStrokeQualityUtils::noise1D(qreal t, quint32 seed)
     return v0 + (v1 - v0) * u;
 }
 
-QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::stabilizeAndBeautifyStroke(
-    const QVector<KisAiStrokePoint> &points,
-    bool closed)
+QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::stabilizeAndBeautifyStroke(const QVector<KisAiStrokePoint> &points,
+                                                                              bool closed)
 {
     if (points.size() < 2) {
         return points;
@@ -1826,9 +1827,8 @@ QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::stabilizeAndBeautifyStroke(
     return resampled;
 }
 
-void KisAiStrokeQualityUtils::applyLineartOcclusionWeights(
-    QVector<KisAiStrokeOperation> &operations,
-    const QPointF &lightDir)
+void KisAiStrokeQualityUtils::applyLineartOcclusionWeights(QVector<KisAiStrokeOperation> &operations,
+                                                           const QPointF &lightDir)
 {
     const qreal lLen = std::hypot(lightDir.x(), lightDir.y());
     const QPointF normLight = (lLen > 1e-4) ? QPointF(lightDir.x() / lLen, lightDir.y() / lLen) : QPointF(-0.5, -0.7);
@@ -1875,11 +1875,10 @@ void KisAiStrokeQualityUtils::applyLineartOcclusionWeights(
     }
 }
 
-QPolygonF KisAiStrokeQualityUtils::generateCornerInkingPolygon(
-    const QPointF &pPrev,
-    const QPointF &pCurr,
-    const QPointF &pNext,
-    qreal strokeWidthPx)
+QPolygonF KisAiStrokeQualityUtils::generateCornerInkingPolygon(const QPointF &pPrev,
+                                                               const QPointF &pCurr,
+                                                               const QPointF &pNext,
+                                                               qreal strokeWidthPx)
 {
     QPolygonF fillet;
     const QPointF v1 = pPrev - pCurr;
@@ -1908,4 +1907,3 @@ QPolygonF KisAiStrokeQualityUtils::generateCornerInkingPolygon(
     }
     return fillet;
 }
-

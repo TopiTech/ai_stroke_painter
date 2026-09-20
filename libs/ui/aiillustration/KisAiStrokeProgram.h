@@ -24,30 +24,32 @@
 #include "kritaui_export.h"
 #endif
 
-struct KRITAUI_EXPORT KisAiStrokePoint
-{
-    QPointF pos;       // Normalized coordinates [0.0, 1.0]
-    qreal pressure {0.8}; // Pressure [0.0, 1.0]
-    qint64 timeMs {0};
+struct KRITAUI_EXPORT KisAiStrokePoint {
+    QPointF pos; // Normalized coordinates [0.0, 1.0]
+    qreal pressure{0.8}; // Pressure [0.0, 1.0]
+    qint64 timeMs{0};
 
     KisAiStrokePoint() = default;
     KisAiStrokePoint(qreal x, qreal y, qreal p = 0.8, qint64 t = 0)
-        : pos(x, y), pressure(p), timeMs(t) {}
+        : pos(x, y)
+        , pressure(p)
+        , timeMs(t)
+    {
+    }
 };
 
-struct KRITAUI_EXPORT KisAiStrokeBrush
-{
-    QString profile {QStringLiteral("auto")}; // auto, gpen, brush, watercolor, airbrush, eraser, marker, crayon, neon, splatter, calligraphy, charcoal
-    QColor color {QColor(35, 35, 35)};
-    qreal size {0.008};                       // ratio [0.0, 1.0] or px
-    QString sizeMode {QStringLiteral("ratio")}; // ratio or px
-    qreal opacity {1.0};
-    bool isEraser {false};
+struct KRITAUI_EXPORT KisAiStrokeBrush {
+    QString profile{QStringLiteral("auto")}; // auto, gpen, brush, watercolor, airbrush, eraser, marker, crayon, neon,
+                                             // splatter, calligraphy, charcoal
+    QColor color{QColor(35, 35, 35)};
+    qreal size{0.008}; // ratio [0.0, 1.0] or px
+    QString sizeMode{QStringLiteral("ratio")}; // ratio or px
+    qreal opacity{1.0};
+    bool isEraser{false};
     QString presetHint;
 };
 
-struct KRITAUI_EXPORT KisAiStrokeOperation
-{
+struct KRITAUI_EXPORT KisAiStrokeOperation {
     enum class Kind {
         Path,
         Fill,
@@ -61,120 +63,123 @@ struct KRITAUI_EXPORT KisAiStrokeOperation
         Unknown
     };
 
-    Kind kind {Kind::Unknown};
+    Kind kind{Kind::Unknown};
     QString id;
-    QString layer {QStringLiteral("Lineart")};
+    QString layer{QStringLiteral("Lineart")};
     KisAiStrokeBrush brush;
 
     // Path
     QVector<KisAiStrokePoint> points;
-    bool closed {false};
-    bool smooth {true};
-    QString role {QStringLiteral("auto")};
+    bool closed{false};
+    bool smooth{true};
+    QString role{QStringLiteral("auto")};
 
     // Fill & GradientFill & Hatch
     QPolygonF polygon;
-    QString fillStyle {QStringLiteral("wash")}; // wash, contour, scanline, radial, directional
+    QString fillStyle{QStringLiteral("wash")}; // wash, contour, scanline, radial, directional
     QVector<QColor> gradientColors;
-    qreal angleDeg {0.0};
-    qreal spacing {0.5};
+    qreal angleDeg{0.0};
+    qreal spacing{0.5};
 
     // GradientFill & MangaLines detailed properties
-    bool isRadial {false};
-    QPointF gradientCenter {0.5, 0.5};
-    qreal gradientRadius {0.5};
+    bool isRadial{false};
+    QPointF gradientCenter{0.5, 0.5};
+    qreal gradientRadius{0.5};
 
     // Hatch
-    bool crossHatch {false};
+    bool crossHatch{false};
 
     // Ribbon
     QVector<QPointF> spine;
-    qreal widthStart {0.02};
-    qreal widthMid {0.015};
-    qreal widthEnd {0.005};
+    qreal widthStart{0.02};
+    qreal widthMid{0.015};
+    qreal widthEnd{0.005};
 
     // Particles
     QRectF bounds;
-    QString particleShape {QStringLiteral("petal")}; // petal, sparkle, star, bokeh, dot
-    int particleCount {16};
+    QString particleShape{QStringLiteral("petal")}; // petal, sparkle, star, bokeh, dot
+    int particleCount{16};
 
     // MangaLines (Speed / Focus Lines)
-    qreal innerRadius {0.15};
-    qreal outerRadius {0.70};
-    int density {48};
-    qreal lineLengthJitter {0.20};
+    qreal innerRadius{0.15};
+    qreal outerRadius{0.70};
+    int density{48};
+    qreal lineLengthJitter{0.20};
 
     // AnimeEye (Procedural high-fidelity anime eye assembly)
-    QPointF eyeCenter {0.5, 0.5};
-    QSizeF eyeSize {0.10, 0.12};
-    QColor eyeIrisColor {QColor(60, 120, 240)};
-    QColor eyeSecondaryColor {QColor(160, 210, 255)};
-    QString eyeStyle {QStringLiteral("sparkle")}; // sparkle, dual_dot, gradient
-    QString eyeExpression {QStringLiteral("open")}; // open, smile, half, closed
-    bool eyeIsRight {false};
+    QPointF eyeCenter{0.5, 0.5};
+    QSizeF eyeSize{0.10, 0.12};
+    QColor eyeIrisColor{QColor(60, 120, 240)};
+    QColor eyeSecondaryColor{QColor(160, 210, 255)};
+    QString eyeStyle{QStringLiteral("sparkle")}; // sparkle, dual_dot, gradient
+    QString eyeExpression{QStringLiteral("open")}; // open, smile, half, closed
+    bool eyeIsRight{false};
 
     // AnimeMouth (Procedural high-fidelity anime mouth/lip assembly)
-    QPointF mouthCenter {0.5, 0.65};
-    QSizeF mouthSize {0.06, 0.03};
-    QString mouthExpression {QStringLiteral("smile")}; // smile, open_smile, small_open, closed_line, cat_mouth, pout
-    QColor mouthLipColor {QColor(225, 115, 125)};
-    bool mouthHasHighlight {true};
+    QPointF mouthCenter{0.5, 0.65};
+    QSizeF mouthSize{0.06, 0.03};
+    QString mouthExpression{QStringLiteral("smile")}; // smile, open_smile, small_open, closed_line, cat_mouth, pout
+    QColor mouthLipColor{QColor(225, 115, 125)};
+    bool mouthHasHighlight{true};
 
     // Layer blending & Clipping (Phase 2)
-    QString blendMode {QStringLiteral("normal")}; // normal, multiply, screen, color_dodge, overlay, linear_burn, add
-    QString clipToId;                             // Base operation ID to clip this stroke/fill to
-    QString fillProfile {QStringLiteral("flat")}; // flat, watercolor, gradient
+    QString blendMode{QStringLiteral("normal")}; // normal, multiply, screen, color_dodge, overlay, linear_burn, add
+    QString clipToId; // Base operation ID to clip this stroke/fill to
+    QString fillProfile{QStringLiteral("flat")}; // flat, watercolor, gradient
+
+    // V9 Atomic Ink annotations (copied onto InkStroke IR)
+    QString groupId; // eye_l, jaw, hair_fringe_2
+    QString parentId; // T-junction snap target
 };
 
-struct KRITAUI_EXPORT KisAiCritiqueRegion
-{
-    QString area;      // left_eye, right_eye, hair, face_skin, mouth, shading, highlights, background, fx
-    QString issue;     // concise defect description
-    QString action;    // repaint, soften, remove, keep
-    int priority {1};  // 1 (low) to 5 (critical)
+struct KRITAUI_EXPORT KisAiCritiqueRegion {
+    QString area; // left_eye, right_eye, hair, face_skin, mouth, shading, highlights, background, fx
+    QString issue; // concise defect description
+    QString action; // repaint, soften, remove, keep
+    int priority{1}; // 1 (low) to 5 (critical)
 };
 
-struct KRITAUI_EXPORT KisAiStrokeProgram
-{
-    int schemaVersion {2};
+struct KRITAUI_EXPORT KisAiStrokeProgram {
+    int schemaVersion{2};
     QString prompt;
-    int seed {42};
+    int seed{42};
     QString title;
-    int iteration {1};
-    int currentStep {1};
-    int totalSteps {1};
-    QString stepPhase {QStringLiteral("complete")}; // blocking, shading, lineart, finishing, complete
+    int iteration{1};
+    int currentStep{1};
+    int totalSteps{1};
+    QString stepPhase{QStringLiteral("complete")}; // blocking, shading, lineart, finishing, complete
     QString visualCritique;
-    QString agentCritique;                          // Autonomous illustration agent visual critique & assessment
-    QVector<KisAiCritiqueRegion> critiqueRegions;   // Machine-readable region-specific critique actions (Phase 3.2)
-    QString targetFocusArea;                        // Current agent compositional focus area
-    qreal readinessScore {1.0};                     // Agent self-scored visual completion readiness in [0.0, 1.0]
-    QString recommendedAction;                      // Agent next proposed action or refinement
-    bool goalReached {true};
-    qreal completionScore {1.0};
-    QSize canvasSize {1024, 1024};
+    QString agentCritique; // Autonomous illustration agent visual critique & assessment
+    QVector<KisAiCritiqueRegion> critiqueRegions; // Machine-readable region-specific critique actions (Phase 3.2)
+    QString targetFocusArea; // Current agent compositional focus area
+    qreal readinessScore{1.0}; // Agent self-scored visual completion readiness in [0.0, 1.0]
+    QString recommendedAction; // Agent next proposed action or refinement
+    bool goalReached{true};
+    qreal completionScore{1.0};
+    QSize canvasSize{1024, 1024};
     QVector<KisAiStrokeOperation> operations;
 
-    bool isValid() const { return !operations.isEmpty(); }
+    bool isValid() const
+    {
+        return !operations.isEmpty();
+    }
 };
 
-struct KRITAUI_EXPORT KisAiStrokeQualityReport
-{
-    int inputOperations {0};
-    int outputOperations {0};
-    int droppedOperations {0};
-    int repairedValues {0};
-    int deduplicatedPoints {0};
-    qreal score {0.0};
+struct KRITAUI_EXPORT KisAiStrokeQualityReport {
+    int inputOperations{0};
+    int outputOperations{0};
+    int droppedOperations{0};
+    int repairedValues{0};
+    int deduplicatedPoints{0};
+    qreal score{0.0};
     QStringList warnings;
 };
 
-struct KRITAUI_EXPORT KisAiJsonDiagnostic
-{
-    bool hasError {false};
-    int errorOffset {-1};
-    int errorLine {-1};
-    int errorColumn {-1};
+struct KRITAUI_EXPORT KisAiJsonDiagnostic {
+    bool hasError{false};
+    int errorOffset{-1};
+    int errorLine{-1};
+    int errorColumn{-1};
     QString errorSnippet;
     QString errorMessage;
     QStringList appliedRepairs;
@@ -192,32 +197,28 @@ public:
     /**
      * Build the OpenAI Chat Completions request payload (messages, json_schema / response_format).
      */
-    static QJsonObject buildChatCompletionsPayload(
-        const QString &model,
-        const QString &prompt,
-        const QSize &canvasSize,
-        int strokeBudget = 500,
-        const QString &reasoningEffort = QString(),
-        const QString &customInstructions = QString(),
-        bool enableStreaming = true,
-        bool enforceJsonFormat = false,
-        qreal temperature = 0.7,
-        qreal topP = 1.0,
-        int maxTokensOverride = 0,
-        int artStyle = 0,
-        bool forceJsonObjectOnly = false
-    );
+    static QJsonObject buildChatCompletionsPayload(const QString &model,
+                                                   const QString &prompt,
+                                                   const QSize &canvasSize,
+                                                   int strokeBudget = 500,
+                                                   const QString &reasoningEffort = QString(),
+                                                   const QString &customInstructions = QString(),
+                                                   bool enableStreaming = true,
+                                                   bool enforceJsonFormat = false,
+                                                   qreal temperature = 0.7,
+                                                   qreal topP = 1.0,
+                                                   int maxTokensOverride = 0,
+                                                   int artStyle = 0,
+                                                   bool forceJsonObjectOnly = false);
 
     /**
      * Generate the comprehensive artistic digital painting system prompt with
      * layer hierarchy, 4-tier lighting, spatial anchors, and schema instructions.
      */
-    static QString buildSystemPrompt(
-        const QSize &canvasSize,
-        const QString &prompt,
-        const QString &customInstructions = QString(),
-        int artStyle = 0
-    );
+    static QString buildSystemPrompt(const QSize &canvasSize,
+                                     const QString &prompt,
+                                     const QString &customInstructions = QString(),
+                                     int artStyle = 0);
 
     /**
      * JSON schema for OpenAI Structured Outputs (response_format: json_schema).
@@ -234,13 +235,11 @@ public:
      * Handles markdown codeblocks, thinking tokens, and minor repairs.
      * Optionally returns the KisAiStrokeQualityReport computed during refinement.
      */
-    static bool parseResponse(
-        const QByteArray &responseBytes,
-        KisAiStrokeProgram *outProgram,
-        QString *errorMessage = nullptr,
-        KisAiJsonDiagnostic *diagnostic = nullptr,
-        KisAiStrokeQualityReport *qualityReport = nullptr
-    );
+    static bool parseResponse(const QByteArray &responseBytes,
+                              KisAiStrokeProgram *outProgram,
+                              QString *errorMessage = nullptr,
+                              KisAiJsonDiagnostic *diagnostic = nullptr,
+                              KisAiStrokeQualityReport *qualityReport = nullptr);
 
     // Section builders for modular prompt composition
     static QString buildJsonContractSection();
@@ -256,11 +255,8 @@ public:
      * Coordinate units are decoded here; call refineForRendering() before
      * rasterization when using this low-level parser directly.
      */
-    static bool parseProgramJson(
-        const QJsonObject &rootObj,
-        KisAiStrokeProgram *outProgram,
-        QString *errorMessage = nullptr
-    );
+    static bool
+    parseProgramJson(const QJsonObject &rootObj, KisAiStrokeProgram *outProgram, QString *errorMessage = nullptr);
 
     /**
      * Canonicalize unreliable model geometry before rasterization. This pass
@@ -268,10 +264,8 @@ public:
      * degenerate operations, normalizes brush dynamics, and computes a
      * structural quality score without changing the intended composition.
      */
-    static KisAiStrokeProgram refineForRendering(
-        const KisAiStrokeProgram &program,
-        KisAiStrokeQualityReport *report = nullptr
-    );
+    static KisAiStrokeProgram refineForRendering(const KisAiStrokeProgram &program,
+                                                 KisAiStrokeQualityReport *report = nullptr);
 
     /** Return a deterministic structural quality score in [0, 1]. */
     static qreal qualityScore(const KisAiStrokeProgram &program);
@@ -279,10 +273,7 @@ public:
     /**
      * Extract JSON substring from raw model output (handles ```json ... ``` and <think>...</think>).
      */
-    static QString sanitizeAndExtractJson(
-        const QString &rawText,
-        KisAiJsonDiagnostic *diagnostic = nullptr
-    );
+    static QString sanitizeAndExtractJson(const QString &rawText, KisAiJsonDiagnostic *diagnostic = nullptr);
 
     /**
      * Offline deterministic procedural stroke generator for testing coordinate rendering
@@ -304,30 +295,22 @@ public:
      * Attempt to repair common JSON syntax errors (comments, trailing commas, single quotes,
      * unquoted keys, dirty numbers, dirty booleans, stray tokens) using token masking.
      */
-    static QString repairJsonSyntax(
-        const QString &text,
-        KisAiJsonDiagnostic *diagnostic = nullptr
-    );
+    static QString repairJsonSyntax(const QString &text, KisAiJsonDiagnostic *diagnostic = nullptr);
 
     /**
      * Attempt to repair truncated JSON containing an operations or strokes array.
      */
-    static QString repairTruncatedJson(
-        const QString &jsonText,
-        KisAiJsonDiagnostic *diagnostic = nullptr
-    );
+    static QString repairTruncatedJson(const QString &jsonText, KisAiJsonDiagnostic *diagnostic = nullptr);
 
     /**
      * Extract individual stroke operations from arbitrary or severely mangled text when
      * document-level JSON parsing fails completely.
      */
-    static bool extractOperationsFromRawText(
-        const QString &rawText,
-        KisAiStrokeProgram *outProgram,
-        QString *errorMessage = nullptr,
-        KisAiJsonDiagnostic *diagnostic = nullptr,
-        KisAiStrokeQualityReport *qualityReport = nullptr
-    );
+    static bool extractOperationsFromRawText(const QString &rawText,
+                                             KisAiStrokeProgram *outProgram,
+                                             QString *errorMessage = nullptr,
+                                             KisAiJsonDiagnostic *diagnostic = nullptr,
+                                             KisAiStrokeQualityReport *qualityReport = nullptr);
 
     /**
      * Check if an API endpoint is known to support structured JSON mode (response_format: {"type": "json_object"}).
@@ -358,21 +341,14 @@ public:
     /**
      * Build two-phase composition plan payload.
      */
-    static QJsonObject buildCompositionPlanPayload(
-        const QString &model,
-        const QString &prompt,
-        const QSize &canvasSize,
-        int artStyle = 0
-    );
+    static QJsonObject
+    buildCompositionPlanPayload(const QString &model, const QString &prompt, const QSize &canvasSize, int artStyle = 0);
 
     /**
      * Parse composition plan response JSON and extract artistic directives.
      */
-    static bool parseCompositionPlan(
-        const QByteArray &responseBytes,
-        QString *outDirectives,
-        QString *errorMessage = nullptr
-    );
+    static bool
+    parseCompositionPlan(const QByteArray &responseBytes, QString *outDirectives, QString *errorMessage = nullptr);
 
     /**
      * Calculate hue-shifted shadow color avoiding dirty black shading.
@@ -390,7 +366,8 @@ public:
     static QMap<QString, int> countLayerOperations(const KisAiStrokeProgram &program);
 
     /**
-     * Format a summary of operations per standard layer (e.g. "Flats: 2, Shading: 3, Lineart: 4, Highlights: 1, FX: 0").
+     * Format a summary of operations per standard layer (e.g. "Flats: 2, Shading: 3, Lineart: 4, Highlights: 1, FX:
+     * 0").
      */
     static QString formatLayerSummary(const KisAiStrokeProgram &program);
 
@@ -402,40 +379,36 @@ public:
     /**
      * Build the Goal Mode Chat Completions request payload with vision feedback (image base64 data URL).
      */
-    static QJsonObject buildGoalStepPayload(
-        const QString &model,
-        const QString &prompt,
-        const QSize &canvasSize,
-        int step,
-        int totalSteps = 4,
-        const QString &imageBase64 = QString(),
-        const QString &additionalInstruction = QString(),
-        int strokeBudget = 400,
-        const QString &reasoningEffort = QString(),
-        bool includeVision = true,
-        bool enableStreaming = true,
-        bool enforceJsonFormat = false,
-        qreal temperature = 0.5,
-        qreal topP = 1.0,
-        int maxTokensOverride = 0,
-        int artStyle = 0,
-        const KisAiStrokeProgram *accumulatedProgram = nullptr,
-        const QString &previousCritique = QString(),
-        const QString &visionDetail = QStringLiteral("auto"),
-        bool forceJsonObjectOnly = false
-    );
+    static QJsonObject buildGoalStepPayload(const QString &model,
+                                            const QString &prompt,
+                                            const QSize &canvasSize,
+                                            int step,
+                                            int totalSteps = 4,
+                                            const QString &imageBase64 = QString(),
+                                            const QString &additionalInstruction = QString(),
+                                            int strokeBudget = 400,
+                                            const QString &reasoningEffort = QString(),
+                                            bool includeVision = true,
+                                            bool enableStreaming = true,
+                                            bool enforceJsonFormat = false,
+                                            qreal temperature = 0.5,
+                                            qreal topP = 1.0,
+                                            int maxTokensOverride = 0,
+                                            int artStyle = 0,
+                                            const KisAiStrokeProgram *accumulatedProgram = nullptr,
+                                            const QString &previousCritique = QString(),
+                                            const QString &visionDetail = QStringLiteral("auto"),
+                                            bool forceJsonObjectOnly = false);
 
     /**
      * Parse SSE (Server-Sent Events) chunks into accumulated text content.
      * Updates unprocessedBuffer with any trailing line fragment and appends extracted
      * delta content to accumulatedContent. Sets isDone to true when [DONE] is encountered.
      */
-    static bool parseSseStreamChunk(
-        const QByteArray &chunk,
-        QByteArray *unprocessedBuffer,
-        QString *accumulatedContent,
-        bool *isDone = nullptr
-    );
+    static bool parseSseStreamChunk(const QByteArray &chunk,
+                                    QByteArray *unprocessedBuffer,
+                                    QString *accumulatedContent,
+                                    bool *isDone = nullptr);
 
     /**
      * Check if a model is treated as vision-capable. The hardcoded whitelist is deprecated;
@@ -460,12 +433,8 @@ public:
      * Offline deterministic procedural stroke generator for a specific Goal Mode step.
      * Step 1: Background & Flats, Step 2: Shading, Step 3: Lineart, Step 4: Highlights & FX.
      */
-    static KisAiStrokeProgram createDeterministicProgramStep(
-        const QString &prompt,
-        const QSize &canvasSize,
-        int step,
-        int totalSteps = 4
-    );
+    static KisAiStrokeProgram
+    createDeterministicProgramStep(const QString &prompt, const QSize &canvasSize, int step, int totalSteps = 4);
 
     /**
      * Merge operations from an extension program into a base program.
@@ -473,10 +442,7 @@ public:
      * operations are dropped if the base already contains particles, blocking
      * Goal Mode blizzard-noise accumulation across steps.
      */
-    static KisAiStrokeProgram mergePrograms(
-        const KisAiStrokeProgram &base,
-        const KisAiStrokeProgram &extension
-    );
+    static KisAiStrokeProgram mergePrograms(const KisAiStrokeProgram &base, const KisAiStrokeProgram &extension);
 
     /**
      * V3 Phase 0.1: Particle (dot/stipple) suppression policy.

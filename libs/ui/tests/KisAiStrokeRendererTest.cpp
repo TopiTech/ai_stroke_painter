@@ -38,7 +38,6 @@
 #include "aiillustration/KisAiStrokeRenderer.h"
 #include "aiillustration/KisAiStrokeTypeChecker.h"
 
-
 void KisAiStrokeRendererTest::testCatmullRomSpline()
 {
     const QVector<QPointF> input = {QPointF(0.0, 0.0), QPointF(10.0, 30.0), QPointF(25.0, 15.0), QPointF(40.0, 0.0)};

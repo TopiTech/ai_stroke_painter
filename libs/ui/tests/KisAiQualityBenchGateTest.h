@@ -20,6 +20,8 @@ private Q_SLOTS:
     void testBenchmarkEvaluationComplexPrompts();
     void testBenchmarkEvaluationBoundaryPrompts();
     void testBenchmarkFullGatePass();
+    void testAtomicInkRatioOnPortrait();
+    void testEyeSymmetryWarningsOnPortrait();
 };
 
 #endif // KIS_AI_QUALITY_BENCH_GATE_TEST_H

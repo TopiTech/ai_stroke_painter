@@ -167,13 +167,17 @@ public:
                             const QPainterPath &faceExclusionPath = QPainterPath(),
                             const QMap<QString, QPolygonF> &globalSilhouettes = QMap<QString, QPolygonF>());
 
-private:
+    /**
+     * V9: rasterize a single already-atomic operation. Used by the
+     * stroke committer; composite kinds should be expanded first.
+     */
     static void rasterizeOperation(QPainter &painter,
                                    const KisAiStrokeOperation &op,
                                    const QSize &canvasSize,
                                    int supersampleScale = 1,
                                    const QPainterPath &faceExclusionPath = QPainterPath());
 
+private:
     static void drawPathOperation(QPainter &painter,
                                   const KisAiStrokeOperation &op,
                                   const QSize &canvasSize,
