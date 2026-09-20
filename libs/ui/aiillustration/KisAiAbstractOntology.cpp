@@ -688,16 +688,6 @@ int OntologyApplier::apply(const QString &prompt,
     if (!spec)
         return 0;
 
-    // specPath ごとに重み付き集約用バッファ
-    struct NumericAcc {
-        qreal value;
-        qreal weight;
-    };
-    struct ColorAcc {
-        qreal r, g, b;
-        qreal weight;
-        QColor lastColor;
-    };
     // 簡略化のため、各 specPath を 1 度だけ処理する (集約は同一種別内で実施)
 
     for (int i = 0; i < ruleset.rules.size(); ++i) {

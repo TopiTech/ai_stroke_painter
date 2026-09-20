@@ -34,6 +34,7 @@ private Q_SLOTS:
     void testColorBandingSkipsSharpLineart();
     void testJitterFixTargetsOnlyJitteryOps();
     void testAutoRepairHatchOnFaceSynthesizesPolygon();
+    void testColorBandingOnColoredGradients();
 };
 
 #endif // KIS_AI_PERCEPTUAL_REPAIRER_TEST_H

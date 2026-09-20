@@ -531,4 +531,34 @@ void KisAiPerceptualRepairerTest::testAutoRepairHatchOnFaceSynthesizesPolygon()
     QVERIFY(b.height() > 0.0);
 }
 
+void KisAiPerceptualRepairerTest::testColorBandingOnColoredGradients()
+{
+    // 純粋なグリーン/シアンのステップ段差（Red=0）を持つ画像。
+    // 旧実装は qRed() のみでラプラシアンを算出していたため、赤成分のない
+    // 青空や緑のグラデーションのバンディングを一切検出できなかった。
+    // ITU-R BT.709 輝度を導入した新実装では正しく検出される。
+    QImage coloredBanded(64, 64, QImage::Format_ARGB32);
+    coloredBanded.fill(Qt::transparent);
+    for (int y = 0; y < 64; ++y) {
+        // 8行ごとにGが60と140で切り替わる（delta=80、Luminance delta = 0.7152 * 80 / 255 = 0.224）
+        // Redは0なので、旧実装では lap = 0 となり検出されなかった。
+        const int g = ((y / 8) % 2 == 0) ? 60 : 140;
+        for (int x = 0; x < 64; ++x) {
+            coloredBanded.setPixelColor(x, y, QColor(0, g, 100, 255));
+        }
+    }
+
+    KisAiStrokeProgram prog;
+    prog.canvasSize = QSize(64, 64);
+    KisAiStrokeOperation op;
+    op.id = QStringLiteral("bg");
+    op.layer = QStringLiteral("Flats");
+    op.kind = KisAiStrokeOperation::Kind::Fill;
+    op.polygon << QPointF(0, 0) << QPointF(1, 0) << QPointF(1, 1) << QPointF(0, 1);
+    prog.operations.append(op);
+
+    const PerceptualRepairPlan plan = KisAiPerceptualRepairer::diagnose(prog, coloredBanded, nullptr);
+    QVERIFY(plan.issueCount(PerceptualIssue::ColorBanding) >= 1);
+}
+
 KISTEST_MAIN(KisAiPerceptualRepairerTest)

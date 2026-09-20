@@ -594,16 +594,19 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
             const int H2 = sample.height();
             QVector<qreal> lap;
             lap.reserve((W2 - 2) * (H2 - 2));
+            auto luminanceOf = [](QRgb px) -> qreal {
+                return (0.2126 * qRed(px) + 0.7152 * qGreen(px) + 0.0722 * qBlue(px)) / 255.0;
+            };
             for (int y = 1; y < H2 - 1; ++y) {
                 const QRgb *prev = reinterpret_cast<const QRgb *>(sample.constScanLine(y - 1));
                 const QRgb *curr = reinterpret_cast<const QRgb *>(sample.constScanLine(y));
                 const QRgb *next = reinterpret_cast<const QRgb *>(sample.constScanLine(y + 1));
                 for (int x = 1; x < W2 - 1; ++x) {
-                    const qreal c = qRed(curr[x]) / 255.0;
-                    const qreal l = qRed(prev[x]) / 255.0;
-                    const qreal r = qRed(next[x]) / 255.0;
-                    const qreal u = qRed(curr[x - 1]) / 255.0;
-                    const qreal d = qRed(curr[x + 1]) / 255.0;
+                    const qreal c = luminanceOf(curr[x]);
+                    const qreal u = luminanceOf(prev[x]);
+                    const qreal d = luminanceOf(next[x]);
+                    const qreal l = luminanceOf(curr[x - 1]);
+                    const qreal r = luminanceOf(curr[x + 1]);
                     const qreal v = qAbs(4.0 * c - l - r - u - d);
                     // 線画エッジ (lap >= 0.5) は除外し、wash の微細段差のみ集計する。
                     if (v < 0.5)

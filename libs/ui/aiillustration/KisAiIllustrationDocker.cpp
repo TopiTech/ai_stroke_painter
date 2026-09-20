@@ -501,6 +501,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         chipBtn->setFocusPolicy(Qt::StrongFocus);
         chipBtn->setAccessibleName(i18n("Prompt preset %1", chip.first));
         chipBtn->setCursor(Qt::PointingHandCursor);
+        m_chipButtons.append(chipBtn);
         connect(chipBtn, &QPushButton::clicked, this, [this, prompt = chip.second] {
             if (m_promptEditor) {
                 m_promptEditor->setPlainText(prompt);
@@ -593,6 +594,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     for (int i = 0; i < stylePresets.size(); ++i) {
         const auto &sp = stylePresets.at(i);
         auto *btn = new QPushButton(sp.first, m_visualCardsCard);
+        btn->setProperty("styleIndex", sp.second);
         btn->setProperty("class", "aiVisualCard");
         btn->setCursor(Qt::PointingHandCursor);
         btn->setFocusPolicy(Qt::StrongFocus);
@@ -681,6 +683,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         ratioBtn->setFocusPolicy(Qt::StrongFocus);
         ratioBtn->setAccessibleName(i18n("Aspect ratio %1", ratio.first));
         ratioBtn->setCursor(Qt::PointingHandCursor);
+        m_ratioButtons.append(ratioBtn);
         const int w = ratio.second.first;
         const int h = ratio.second.second;
         connect(ratioBtn, &QPushButton::clicked, this, [this, w, h] {
@@ -1366,6 +1369,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         saveSettings();
     });
     connect(m_artStyleCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        updateActiveStyleCards(m_artStyleCombo->currentData().toInt());
         saveSettings();
     });
     connect(m_pausePerStepCheck, &QCheckBox::toggled, this, [this] {
@@ -1453,14 +1457,31 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
             prev = w;
         };
 
-        // Header & prompt card
+        // Header & prompt card (in top-to-bottom visual order)
         chainTab(m_uiModeTabs);
-        chainTab(m_presetCombo);
-        chainTab(m_promptEditor);
         chainTab(m_expandPromptButton);
         chainTab(m_syncColorButton);
+        for (auto *chip : m_chipButtons) {
+            chainTab(chip);
+        }
+        chainTab(m_presetCombo);
+        chainTab(m_promptEditor);
+
+        // Visual Style, Composition & Lighting Cards
+        for (auto *btn : m_styleCardButtons) {
+            chainTab(btn);
+        }
+        for (auto *btn : m_compositionCardButtons) {
+            chainTab(btn);
+        }
+        for (auto *btn : m_lightingCardButtons) {
+            chainTab(btn);
+        }
 
         // Canvas setup & generation mode
+        for (auto *btn : m_ratioButtons) {
+            chainTab(btn);
+        }
         chainTab(m_widthSpin);
         chainTab(m_heightSpin);
         chainTab(m_newCanvasButton);
@@ -1662,25 +1683,27 @@ void KisAiIllustrationDocker::generateIllustration()
         return;
     }
 
+    const QString effectivePrompt = buildEffectivePrompt(prompt);
+
     const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
     if (m_goalModeCheck && m_goalModeCheck->isChecked()
         && (mode == GenerationMode::LlmStrokes || mode == GenerationMode::LocalStrokes)) {
-        startGoalMode(prompt);
+        startGoalMode(effectivePrompt);
         return;
     }
 
     switch (mode) {
     case GenerationMode::LlmStrokes:
-        generateLlmStrokes(prompt);
+        generateLlmStrokes(effectivePrompt);
         break;
     case GenerationMode::LocalStrokes:
-        generateLocalStrokes(prompt);
+        generateLocalStrokes(effectivePrompt);
         break;
     case GenerationMode::RemoteImage:
-        generateRemoteImage(prompt);
+        generateRemoteImage(effectivePrompt);
         break;
     case GenerationMode::LocalConcept:
-        generateLocalConcept(prompt);
+        generateLocalConcept(effectivePrompt);
         break;
     }
 }
@@ -1869,13 +1892,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     }
     const int artStyle = m_artStyleCombo ? m_artStyleCombo->currentData().toInt() : 0;
 
-    QString effectivePrompt = prompt;
-    if (!m_selectedFraming.isEmpty()) {
-        effectivePrompt += QStringLiteral("、構図: ") + m_selectedFraming;
-    }
-    if (!m_selectedLighting.isEmpty()) {
-        effectivePrompt += QStringLiteral("、照明: ") + m_selectedLighting;
-    }
+    const QString effectivePrompt = prompt;
 
     const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
     const QSize canvasSize = effectiveCanvasSize();
@@ -4221,6 +4238,7 @@ void KisAiIllustrationDocker::loadSettings()
         if (idx >= 0)
             m_artStyleCombo->setCurrentIndex(idx);
     }
+    updateActiveStyleCards(artStyle);
     const bool pauseStep = settings.value(QStringLiteral("AIIllustration/pausePerStep"), false).toBool();
     if (m_pausePerStepCheck)
         m_pausePerStepCheck->setChecked(pauseStep);
@@ -4761,37 +4779,62 @@ void KisAiIllustrationDocker::setUiMode(UiMode mode)
     }
 }
 
+QString KisAiIllustrationDocker::buildEffectivePrompt(const QString &basePrompt) const
+{
+    QString effectivePrompt = basePrompt.trimmed();
+    if (!m_selectedFraming.isEmpty()) {
+        if (!effectivePrompt.isEmpty()) {
+            effectivePrompt += QStringLiteral("、構図: ");
+        }
+        effectivePrompt += m_selectedFraming;
+    }
+    if (!m_selectedLighting.isEmpty()) {
+        if (!effectivePrompt.isEmpty()) {
+            effectivePrompt += QStringLiteral("、照明: ");
+        }
+        effectivePrompt += m_selectedLighting;
+    }
+    return effectivePrompt;
+}
+
+void KisAiIllustrationDocker::updateActiveStyleCards(int styleIndex)
+{
+    QPushButton *matched = nullptr;
+    for (auto *b : m_styleCardButtons) {
+        if (!b) continue;
+        const bool match = (b->property("styleIndex").toInt() == styleIndex && styleIndex != 0);
+        if (match) {
+            matched = b;
+            b->setProperty("active", "true");
+        } else {
+            b->setProperty("active", "false");
+        }
+        b->style()->unpolish(b);
+        b->style()->polish(b);
+    }
+    m_activeStyleCard = matched;
+}
+
 void KisAiIllustrationDocker::onStyleCardClicked(QPushButton *btn, int styleIndex)
 {
     if (!btn)
         return;
-    for (auto *b : m_styleCardButtons) {
-        if (b != btn) {
-            b->setProperty("active", "false");
-            b->style()->unpolish(b);
-            b->style()->polish(b);
-        }
-    }
 
     const bool wasActive = (m_activeStyleCard == btn);
     if (wasActive) {
-        m_activeStyleCard = nullptr;
-        btn->setProperty("active", "false");
         if (m_artStyleCombo) {
             m_artStyleCombo->setCurrentIndex(0); // Auto
         }
+        updateActiveStyleCards(0);
     } else {
-        m_activeStyleCard = btn;
-        btn->setProperty("active", "true");
         if (m_artStyleCombo) {
             const int idx = m_artStyleCombo->findData(styleIndex);
             if (idx >= 0) {
                 m_artStyleCombo->setCurrentIndex(idx);
             }
         }
+        updateActiveStyleCards(styleIndex);
     }
-    btn->style()->unpolish(btn);
-    btn->style()->polish(btn);
 }
 
 void KisAiIllustrationDocker::onCompositionCardClicked(QPushButton *btn, const QString &framing)
@@ -4889,6 +4932,9 @@ void KisAiIllustrationDocker::expandPromptWithAi()
     // every other request path in this docker.
     QString endpointError;
     if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &endpointError)) {
+        if (m_uiMode != UiMode::Pro) {
+            setUiMode(UiMode::Pro);
+        }
         if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
             m_detailsToggleBtn->setChecked(true);
         }
@@ -4896,6 +4942,21 @@ void KisAiIllustrationDocker::expandPromptWithAi()
             m_endpointEditor->setFocus();
         }
         setStatus(endpointError, true);
+        return;
+    }
+
+    const bool isLoopback = KisAiIllustrationRenderer::isLoopbackEndpoint(endpoint);
+    if (apiKey.isEmpty() && !isLoopback) {
+        if (m_uiMode != UiMode::Pro) {
+            setUiMode(UiMode::Pro);
+        }
+        if (m_detailsToggleBtn && !m_detailsToggleBtn->isChecked()) {
+            m_detailsToggleBtn->setChecked(true);
+        }
+        if (m_apiKeyEditor) {
+            m_apiKeyEditor->setFocus();
+        }
+        setStatus(i18n("推敲リクエストに使う API キーを入力してください。"), true);
         return;
     }
 
@@ -5078,6 +5139,7 @@ void KisAiIllustrationDocker::updateHistoryUi()
         return;
     }
 
+    QWidget *prevThumb = nullptr;
     for (int i = 0; i < m_historySnapshots.size(); ++i) {
         const auto &snap = m_historySnapshots.at(i);
         auto *thumbBtn = new QPushButton(m_historyCard);
@@ -5099,6 +5161,10 @@ void KisAiIllustrationDocker::updateHistoryUi()
         connect(thumbBtn, &QPushButton::clicked, this, [this, i] {
             restoreHistorySnapshot(i);
         });
+        if (prevThumb) {
+            QWidget::setTabOrder(prevThumb, thumbBtn);
+        }
+        prevThumb = thumbBtn;
         m_historyThumbsLayout->addWidget(thumbBtn);
     }
     m_historyThumbsLayout->addStretch(1);
@@ -5127,6 +5193,7 @@ void KisAiIllustrationDocker::restoreHistorySnapshot(int index)
         if (idx >= 0) {
             m_artStyleCombo->setCurrentIndex(idx);
         }
+        updateActiveStyleCards(snap.artStyleIndex);
     }
     if (m_modeCombo && snap.modeIndex >= 0) {
         // Map the stored enum through item data rather than assuming the combo

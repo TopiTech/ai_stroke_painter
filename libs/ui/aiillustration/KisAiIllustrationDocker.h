@@ -260,6 +260,8 @@ private:
     void expandPromptWithAi();
     void finishExpandPromptRequest();
     void syncForegroundPalette();
+    QString buildEffectivePrompt(const QString &basePrompt) const;
+    void updateActiveStyleCards(int styleIndex);
     void onStyleCardClicked(QPushButton *btn, int styleIndex);
     void onCompositionCardClicked(QPushButton *btn, const QString &framing);
     void onLightingCardClicked(QPushButton *btn, const QString &lighting);
@@ -270,6 +272,7 @@ private:
     // Prompt Expander & Color Sync
     QPushButton *m_expandPromptButton {nullptr};
     QPushButton *m_syncColorButton {nullptr};
+    QVector<QPushButton*> m_chipButtons;
     QPointer<QNetworkReply> m_expandPromptReply;
     QByteArray m_expandPromptResponseBuffer;
     bool m_expandPromptResponseTooLarge {false};
@@ -284,6 +287,7 @@ private:
     QPushButton *m_activeLightingCard {nullptr};
     QString m_selectedFraming;
     QString m_selectedLighting;
+    QVector<QPushButton*> m_ratioButtons;
 
     // History Gallery
     QFrame *m_historyCard {nullptr};
