@@ -709,21 +709,34 @@ QString KisAiStrokeProgramCodec::buildSystemPrompt(const QSize &canvasSize,
 }
 
 QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &model,
-                                                                 const QString &prompt,
-                                                                 const QSize &canvasSize,
-                                                                 int strokeBudget,
-                                                                 const QString &reasoningEffort,
-                                                                 const QString &customInstructions,
-                                                                 bool enableStreaming,
-                                                                 bool enforceJsonFormat,
-                                                                 qreal temperature,
-                                                                 qreal topP,
-                                                                 int maxTokensOverride,
-                                                                 int artStyle,
-                                                                 bool forceJsonObjectOnly)
+                                                                  const QString &prompt,
+                                                                  const QSize &canvasSize,
+                                                                  int strokeBudget,
+                                                                  const QString &reasoningEffort,
+                                                                  const QString &customInstructions,
+                                                                  bool enableStreaming,
+                                                                  bool enforceJsonFormat,
+                                                                  qreal temperature,
+                                                                  qreal topP,
+                                                                  int maxTokensOverride,
+                                                                  int artStyle,
+                                                                  bool forceJsonObjectOnly,
+                                                                  const QString &referenceImageBase64)
 {
     const bool reasoning = isReasoningModel(model);
-    const QString systemText = buildSystemPrompt(canvasSize, prompt, customInstructions, artStyle);
+    QString effectiveInstructions = customInstructions;
+    const bool hasReferenceImage = !referenceImageBase64.trimmed().isEmpty();
+    if (hasReferenceImage) {
+        if (!effectiveInstructions.isEmpty()) {
+            effectiveInstructions += QStringLiteral("\n\n");
+        }
+        effectiveInstructions += QStringLiteral(
+            "[REFERENCE IMAGE GUIDANCE]\n"
+            "An attached reference image is provided. Faithfully inspect and analyze the character design, "
+            "costume/outfit, hairstyle, color palette, lighting atmosphere, and key visual motifs in the reference image. "
+            "Reflect these visual traits accurately into the generated strokes while honoring the user prompt.");
+    }
+    const QString systemText = buildSystemPrompt(canvasSize, prompt, effectiveInstructions, artStyle);
 
     QJsonObject userObj;
     userObj[QStringLiteral("prompt")] = prompt;
@@ -747,14 +760,41 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
         "Draw lineart with deliberate care, varying line weights from bold contours to fine facial micro-details. "
         "Spend geometry on volumetric shapes, deep multi-tier shadows, and exquisite inking. Output strictly valid RFC "
         "8259 JSON.");
+    if (hasReferenceImage) {
+        userObj[QStringLiteral("reference_image_guidance")] = QStringLiteral(
+            "Faithfully inspect the attached reference image for character appearance, styling, and color harmony.");
+    }
 
     const QString userText = QString::fromUtf8(QJsonDocument(userObj).toJson(QJsonDocument::Compact));
 
     QJsonArray messages;
     messages.append(
         QJsonObject{{QStringLiteral("role"), QStringLiteral("system")}, {QStringLiteral("content"), systemText}});
-    messages.append(
-        QJsonObject{{QStringLiteral("role"), QStringLiteral("user")}, {QStringLiteral("content"), userText}});
+
+    QJsonObject userMsg;
+    userMsg.insert(QStringLiteral("role"), QStringLiteral("user"));
+    if (hasReferenceImage) {
+        QJsonArray contentArray;
+        contentArray.append(QJsonObject{
+            {QStringLiteral("type"), QStringLiteral("text")},
+            {QStringLiteral("text"), userText}
+        });
+        QString imageUrl = referenceImageBase64.trimmed();
+        if (!imageUrl.startsWith(QLatin1String("data:image/"))) {
+            imageUrl = QStringLiteral("data:image/jpeg;base64,") + imageUrl;
+        }
+        contentArray.append(QJsonObject{
+            {QStringLiteral("type"), QStringLiteral("image_url")},
+            {QStringLiteral("image_url"), QJsonObject{
+                {QStringLiteral("url"), imageUrl},
+                {QStringLiteral("detail"), QStringLiteral("auto")}
+            }}
+        });
+        userMsg.insert(QStringLiteral("content"), contentArray);
+    } else {
+        userMsg.insert(QStringLiteral("content"), userText);
+    }
+    messages.append(userMsg);
 
     QJsonObject payload;
     payload[QStringLiteral("model")] = model.trimmed();
@@ -5039,7 +5079,9 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
                                                           const KisAiStrokeProgram *accumulatedProgram,
                                                           const QString &previousCritique,
                                                           const QString &visionDetail,
-                                                          bool forceJsonObjectOnly)
+                                                          bool forceJsonObjectOnly,
+                                                          bool isRefinementExtraStep,
+                                                          qreal targetReadiness)
 {
     const bool reasoning = isReasoningModel(model);
     const bool vision = includeVision && isVisionModel(model) && !imageBase64.trimmed().isEmpty();
@@ -5065,8 +5107,11 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
     const int baseStepTarget = geometryBudget / (totalSteps > 0 ? qMax(1, totalSteps) : 4);
     const int operationTarget = qBound(24, baseStepTarget, 150);
 
+    const bool isExtraRefine = (isRefinementExtraStep || step > totalSteps);
     QString phaseName;
-    if (totalSteps <= 2) {
+    if (isExtraRefine) {
+        phaseName = QStringLiteral("Autonomous Polish & Defect Correction (Refinement %1)").arg(qMax(1, step - totalSteps));
+    } else if (totalSteps <= 2) {
         phaseName =
             (step == 1) ? QStringLiteral("Flats & Shading Foundation") : QStringLiteral("Lineart, Highlights & Polish");
     } else if (totalSteps == 3) {
@@ -5102,6 +5147,10 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
     userObj[QStringLiteral("total_steps")] = totalSteps;
     userObj[QStringLiteral("step_phase")] = phaseName;
     userObj[QStringLiteral("operation_target")] = operationTarget;
+    if (isExtraRefine) {
+        userObj[QStringLiteral("is_refinement_mode")] = true;
+        userObj[QStringLiteral("target_readiness")] = targetReadiness;
+    }
 
     if (accumulatedProgram && !accumulatedProgram->operations.isEmpty()) {
         userObj[QStringLiteral("accumulated_context")] = buildGeometryDigest(*accumulatedProgram);
@@ -5122,33 +5171,54 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
         userObj[QStringLiteral("previous_step_critique")] = previousCritique.trimmed();
     }
 
-    userObj[QStringLiteral("directive")] =
-        QStringLiteral(
-            "Execute Step %1 of %2 in Goal Mode for prompt: '%5'. "
-            "Perform your artistic cognitive cycle: "
-            "1. [OBSERVE & CRITIQUE]: Inspect the canvas screenshot (if attached) and accumulated geometry. "
-            "Provide concise 'agent_critique' and structured 'regions' array: "
-            "[{\"area\": \"left_eye|right_eye|hair|face_skin|shading|highlights|background|fx\", \"issue\": \"defect "
-            "description\", \"action\": \"repaint|soften|remove|keep\", \"priority\": 1-5}]. "
-            "2. [FOCUS]: Specify 'target_focus_area' (e.g. 'Face & Expression', 'Hair Strands & Volume', 'Form Shading "
-            "& Ambient Occlusion', 'Specular Highlights & Atmosphere'). "
-            "3. [READINESS EVALUATION]: Provide 'readiness_score' from 0.0 (bare outline) to 1.0 (finished "
-            "presentation). If >= 0.85 and presentation-ready, set 'goal_reached' to true. "
-            "4. [ACT & REFINE]: Generate the necessary high-precision operations for phase '%3'. "
-            "If previous critique regions identified defects (e.g. weak facial lines, missing cast shadows, misaligned "
-            "features), "
-            "actively emit targeted correction operations: refine those specific features with exquisite linework, add "
-            "localized directional shading, "
-            "or use is_eraser: true to clean up errant strokes. Set 'step_phase' to '%3', 'current_step' to %1, and "
-            "'goal_reached' to %4. "
-            "Your operations are cumulatively merged onto the canvas; do NOT redraw base silhouettes from scratch "
-            "unless correcting them. "
-            "Output strictly valid RFC 8259 JSON without markdown fences.")
-            .arg(step)
-            .arg(totalSteps)
-            .arg(phaseName)
-            .arg(step >= totalSteps ? QStringLiteral("true") : QStringLiteral("false"))
-            .arg(prompt);
+    if (isExtraRefine) {
+        userObj[QStringLiteral("directive")] =
+            QStringLiteral(
+                "Execute Autonomous Refinement Step %1 (Refinement Round %2) in Goal Mode for prompt: '%3'. "
+                "Baseline structural phases are complete, but quality is below target readiness (%4). "
+                "Perform surgical refinement: "
+                "1. [OBSERVE & CRITIQUE]: Inspect the canvas screenshot and accumulated geometry. "
+                "Provide concise 'agent_critique' and structured 'regions' array: "
+                "[{\"area\": \"left_eye|right_eye|hair|face_skin|shading|highlights|background|fx\", \"issue\": \"defect "
+                "description\", \"action\": \"repaint|soften|remove|keep\", \"priority\": 1-5}]. "
+                "2. [READINESS EVALUATION]: Accurately assess 'readiness_score' (0.0 to 1.0). If >= %4 and truly finished with no remaining defects, set 'goal_reached' to true. Otherwise keep 'goal_reached' false and state what needs work. "
+                "3. [SURGICAL POLISH]: Do NOT redraw whole silhouettes. Emit high-impact corrective strokes: exquisite micro-linework, occlusion shading, highlights, or eraser strokes (is_eraser: true) to clean stray lines. "
+                "Set 'step_phase' to '%5', 'current_step' to %1. Output strictly valid RFC 8259 JSON.")
+                .arg(step)
+                .arg(qMax(1, step - totalSteps))
+                .arg(prompt)
+                .arg(QString::number(targetReadiness, 'f', 2))
+                .arg(phaseName);
+    } else {
+        userObj[QStringLiteral("directive")] =
+            QStringLiteral(
+                "Execute Step %1 of %2 in Goal Mode for prompt: '%5'. "
+                "Perform your artistic cognitive cycle: "
+                "1. [OBSERVE & CRITIQUE]: Inspect the canvas screenshot (if attached) and accumulated geometry. "
+                "Provide concise 'agent_critique' and structured 'regions' array: "
+                "[{\"area\": \"left_eye|right_eye|hair|face_skin|shading|highlights|background|fx\", \"issue\": \"defect "
+                "description\", \"action\": \"repaint|soften|remove|keep\", \"priority\": 1-5}]. "
+                "2. [FOCUS]: Specify 'target_focus_area' (e.g. 'Face & Expression', 'Hair Strands & Volume', 'Form Shading "
+                "& Ambient Occlusion', 'Specular Highlights & Atmosphere'). "
+                "3. [READINESS EVALUATION]: Provide 'readiness_score' from 0.0 (bare outline) to 1.0 (finished "
+                "presentation). If >= %6 and presentation-ready, set 'goal_reached' to true. "
+                "4. [ACT & REFINE]: Generate the necessary high-precision operations for phase '%3'. "
+                "If previous critique regions identified defects (e.g. weak facial lines, missing cast shadows, misaligned "
+                "features), "
+                "actively emit targeted correction operations: refine those specific features with exquisite linework, add "
+                "localized directional shading, "
+                "or use is_eraser: true to clean up errant strokes. Set 'step_phase' to '%3', 'current_step' to %1, and "
+                "'goal_reached' to %4. "
+                "Your operations are cumulatively merged onto the canvas; do NOT redraw base silhouettes from scratch "
+                "unless correcting them. "
+                "Output strictly valid RFC 8259 JSON without markdown fences.")
+                .arg(step)
+                .arg(totalSteps)
+                .arg(phaseName)
+                .arg(step >= totalSteps ? QStringLiteral("true") : QStringLiteral("false"))
+                .arg(prompt)
+                .arg(QString::number(targetReadiness, 'f', 2));
+    }
 
     const QString userText = QString::fromUtf8(QJsonDocument(userObj).toJson(QJsonDocument::Compact));
 

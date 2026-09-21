@@ -127,6 +127,8 @@ private Q_SLOTS:
     void testLandscapeRigsAndMultiTierComposition();
     void testRichOperationsLimitExpanded();
     void testTypeCheckerBleedAndCrossingCoordinatesPreserved();
+    void testReferenceImagePayloadMultimodal();
+    void testGoalModeAutonomousRefinementContinuation();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

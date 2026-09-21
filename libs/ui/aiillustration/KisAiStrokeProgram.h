@@ -209,7 +209,8 @@ public:
                                                    qreal topP = 1.0,
                                                    int maxTokensOverride = 0,
                                                    int artStyle = 0,
-                                                   bool forceJsonObjectOnly = false);
+                                                   bool forceJsonObjectOnly = false,
+                                                   const QString &referenceImageBase64 = QString());
 
     /**
      * Generate the comprehensive artistic digital painting system prompt with
@@ -398,7 +399,9 @@ public:
                                             const KisAiStrokeProgram *accumulatedProgram = nullptr,
                                             const QString &previousCritique = QString(),
                                             const QString &visionDetail = QStringLiteral("auto"),
-                                            bool forceJsonObjectOnly = false);
+                                            bool forceJsonObjectOnly = false,
+                                            bool isRefinementExtraStep = false,
+                                            qreal targetReadiness = 0.85);
 
     /**
      * Parse SSE (Server-Sent Events) chunks into accumulated text content.

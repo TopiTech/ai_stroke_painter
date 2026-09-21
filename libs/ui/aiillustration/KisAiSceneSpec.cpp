@@ -819,7 +819,8 @@ QJsonObject KisAiSceneSpecCodec::buildSceneSpecPayload(const QString &model,
                                                        qreal temperature,
                                                        qreal topP,
                                                        int maxTokensOverride,
-                                                       bool forceJsonObjectOnly)
+                                                       bool forceJsonObjectOnly,
+                                                       const QString &referenceImageBase64)
 {
     // V6 W5: the Docker art-style combo finally reaches the Spec.
     // Index 0 (General/Auto) leaves the style block untouched; 1..6 map
@@ -863,6 +864,14 @@ QJsonObject KisAiSceneSpecCodec::buildSceneSpecPayload(const QString &model,
         systemText += QStringLiteral("\n\n[ART STYLE OVERRIDE]\nUse art_style \"") + artStyleId
             + QStringLiteral("\" in the style block unless the USER REQUEST demands otherwise.");
     }
+    const bool hasReferenceImage = !referenceImageBase64.trimmed().isEmpty();
+    if (hasReferenceImage) {
+        systemText += QStringLiteral(
+            "\n\n[REFERENCE IMAGE GUIDANCE]\n"
+            "An attached reference image is provided. Faithfully inspect and analyze the character design, "
+            "costume/outfit, hairstyle, color palette, lighting atmosphere, and key visual motifs in the reference image. "
+            "Reflect these visual traits accurately into the SceneSpec JSON object while honoring the user's prompt.");
+    }
 
     const QJsonObject userObj{
         {QStringLiteral("directive"), QStringLiteral("Return the SceneSpec JSON object for this request.")},
@@ -880,9 +889,32 @@ QJsonObject KisAiSceneSpecCodec::buildSceneSpecPayload(const QString &model,
     QJsonArray messages;
     messages.append(
         QJsonObject{{QStringLiteral("role"), QStringLiteral("system")}, {QStringLiteral("content"), systemText}});
-    messages.append(QJsonObject{
-        {QStringLiteral("role"), QStringLiteral("user")},
-        {QStringLiteral("content"), QString::fromUtf8(QJsonDocument(userObj).toJson(QJsonDocument::Compact))}});
+
+    QJsonObject userMsg;
+    userMsg.insert(QStringLiteral("role"), QStringLiteral("user"));
+    const QString userText = QString::fromUtf8(QJsonDocument(userObj).toJson(QJsonDocument::Compact));
+    if (hasReferenceImage) {
+        QJsonArray contentArray;
+        contentArray.append(QJsonObject{
+            {QStringLiteral("type"), QStringLiteral("text")},
+            {QStringLiteral("text"), userText}
+        });
+        QString imageUrl = referenceImageBase64.trimmed();
+        if (!imageUrl.startsWith(QLatin1String("data:image/"))) {
+            imageUrl = QStringLiteral("data:image/jpeg;base64,") + imageUrl;
+        }
+        contentArray.append(QJsonObject{
+            {QStringLiteral("type"), QStringLiteral("image_url")},
+            {QStringLiteral("image_url"), QJsonObject{
+                {QStringLiteral("url"), imageUrl},
+                {QStringLiteral("detail"), QStringLiteral("auto")}
+            }}
+        });
+        userMsg.insert(QStringLiteral("content"), contentArray);
+    } else {
+        userMsg.insert(QStringLiteral("content"), userText);
+    }
+    messages.append(userMsg);
     payload.insert(QStringLiteral("messages"), messages);
 
     if (enableStreaming) {

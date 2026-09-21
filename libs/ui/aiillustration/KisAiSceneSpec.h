@@ -247,7 +247,8 @@ public:
         qreal temperature = 0.5,
         qreal topP = 1.0,
         int maxTokensOverride = 0,
-        bool forceJsonObjectOnly = false
+        bool forceJsonObjectOnly = false,
+        const QString &referenceImageBase64 = QString()
     );
 
     /**

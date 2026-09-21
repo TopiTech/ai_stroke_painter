@@ -4456,6 +4456,143 @@ void KisAiStrokeProgramTest::testTypeCheckerBleedAndCrossingCoordinatesPreserved
     QCOMPARE(polyArr.at(4).toArray().at(1).toDouble(), 1.5);
 }
 
+void KisAiStrokeProgramTest::testReferenceImagePayloadMultimodal()
+{
+    const QString dummyBase64 = QStringLiteral("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
+    const QSize canvasSize(1024, 1024);
+
+    // 1. Test buildSceneSpecPayload with reference image
+    const QJsonObject scenePayload = KisAiSceneSpecCodec::buildSceneSpecPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("a cute girl in school uniform"),
+        canvasSize,
+        1, // anime_cel
+        QString(),
+        QString(),
+        false, // streaming
+        true,  // json
+        0.5,
+        1.0,
+        0,
+        false,
+        dummyBase64);
+
+    const QJsonArray sceneMessages = scenePayload.value(QStringLiteral("messages")).toArray();
+    QVERIFY(sceneMessages.size() >= 2);
+    const QString sceneSystem = sceneMessages.at(0).toObject().value(QStringLiteral("content")).toString();
+    QVERIFY2(sceneSystem.contains(QLatin1String("[REFERENCE IMAGE GUIDANCE]")), "SceneSpec system prompt must include reference guidance");
+
+    const QJsonValue sceneUserContent = sceneMessages.at(1).toObject().value(QStringLiteral("content"));
+    QVERIFY2(sceneUserContent.isArray(), "User message content must be multimodal array when reference image is attached");
+    const QJsonArray sceneContentArr = sceneUserContent.toArray();
+    QCOMPARE(sceneContentArr.size(), 2);
+    QCOMPARE(sceneContentArr.at(0).toObject().value(QStringLiteral("type")).toString(), QStringLiteral("text"));
+    QCOMPARE(sceneContentArr.at(1).toObject().value(QStringLiteral("type")).toString(), QStringLiteral("image_url"));
+    const QString sceneImgUrl = sceneContentArr.at(1).toObject().value(QStringLiteral("image_url")).toObject().value(QStringLiteral("url")).toString();
+    QVERIFY2(sceneImgUrl.startsWith(QLatin1String("data:image/jpeg;base64,")), "Image URL must have proper data URI scheme");
+
+    // 2. Test buildChatCompletionsPayload with reference image
+    const QJsonObject strokePayload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("a fantasy swordswoman"),
+        canvasSize,
+        500,
+        QString(),
+        QString(),
+        false,
+        false,
+        0.7,
+        1.0,
+        0,
+        1,
+        false,
+        dummyBase64);
+
+    const QJsonArray strokeMessages = strokePayload.value(QStringLiteral("messages")).toArray();
+    QVERIFY(strokeMessages.size() >= 2);
+    const QString strokeSystem = strokeMessages.at(0).toObject().value(QStringLiteral("content")).toString();
+    QVERIFY2(strokeSystem.contains(QLatin1String("[REFERENCE IMAGE GUIDANCE]")), "Stroke system prompt must include reference guidance");
+
+    const QJsonValue strokeUserContent = strokeMessages.at(1).toObject().value(QStringLiteral("content"));
+    QVERIFY2(strokeUserContent.isArray(), "User message content must be multimodal array in ChatCompletions when reference image is attached");
+    const QJsonArray strokeContentArr = strokeUserContent.toArray();
+    QCOMPARE(strokeContentArr.size(), 2);
+    QCOMPARE(strokeContentArr.at(1).toObject().value(QStringLiteral("type")).toString(), QStringLiteral("image_url"));
+}
+
+void KisAiStrokeProgramTest::testGoalModeAutonomousRefinementContinuation()
+{
+    const QSize canvasSize(1024, 1024);
+
+    // 1. Regular step (step 2 of 4)
+    const QJsonObject regularPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("mystic forest shrine"),
+        canvasSize,
+        2, // current step
+        4, // total steps
+        QString(),
+        QString(),
+        400,
+        QString(),
+        false,
+        false,
+        true,
+        0.5,
+        1.0,
+        0,
+        0,
+        nullptr,
+        QString(),
+        QStringLiteral("auto"),
+        false,
+        false, // isRefinementExtraStep
+        0.85);
+
+    const QJsonArray regMessages = regularPayload.value(QStringLiteral("messages")).toArray();
+    const QString regUserText = regMessages.at(1).toObject().value(QStringLiteral("content")).toString();
+    QJsonDocument regUserDoc = QJsonDocument::fromJson(regUserText.toUtf8());
+    QVERIFY(!regUserDoc.object().contains(QStringLiteral("is_refinement_mode")));
+    QCOMPARE(regUserDoc.object().value(QStringLiteral("current_step")).toInt(), 2);
+    QCOMPARE(regUserDoc.object().value(QStringLiteral("total_steps")).toInt(), 4);
+
+    // 2. Extra Refinement step (step 5 of 4)
+    const QJsonObject refinePayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("mystic forest shrine"),
+        canvasSize,
+        5, // current step (exceeded totalSteps)
+        4, // total steps
+        QString(),
+        QString(),
+        400,
+        QString(),
+        false,
+        false,
+        true,
+        0.5,
+        1.0,
+        0,
+        0,
+        nullptr,
+        QStringLiteral("facial lines are thin"),
+        QStringLiteral("auto"),
+        false,
+        true, // isRefinementExtraStep
+        0.90);
+
+    const QJsonArray refMessages = refinePayload.value(QStringLiteral("messages")).toArray();
+    const QString refUserText = refMessages.at(1).toObject().value(QStringLiteral("content")).toString();
+    QJsonDocument refUserDoc = QJsonDocument::fromJson(refUserText.toUtf8());
+    QVERIFY2(refUserDoc.object().value(QStringLiteral("is_refinement_mode")).toBool(), "Refinement mode flag must be true");
+    QCOMPARE(refUserDoc.object().value(QStringLiteral("target_readiness")).toDouble(), 0.90);
+    const QString phase = refUserDoc.object().value(QStringLiteral("step_phase")).toString();
+    QVERIFY2(phase.contains(QLatin1String("Refinement 1")), "Phase name must indicate refinement round 1");
+    const QString directive = refUserDoc.object().value(QStringLiteral("directive")).toString();
+    QVERIFY2(directive.contains(QLatin1String("surgical refinement")), "Directive must instruct surgical refinement");
+    QVERIFY2(directive.contains(QLatin1String("0.90")), "Directive must reflect target readiness 0.90");
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

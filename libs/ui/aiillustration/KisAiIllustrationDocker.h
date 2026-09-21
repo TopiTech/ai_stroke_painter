@@ -183,6 +183,8 @@ private:
     bool m_goalModeActive {false};
     int m_goalCurrentStep {1};
     int m_goalTotalSteps {4};
+    int m_goalMaxExtraSteps {4};
+    qreal m_goalTargetReadiness {0.85};
     int m_goalCurrentRetryCount {0};
     QString m_goalSelfCorrectionFeedback;
     QString m_goalPrompt;
@@ -192,6 +194,17 @@ private:
     bool m_lastGoalRequestHadImage {false};
     KisAiStrokeProgram m_goalAccumulatedProgram;
     QString m_lastGoalCritique;
+    bool isGoalQualitySatisfied(const KisAiStrokeProgram &program) const;
+
+    // Reference Image State
+    QImage m_referenceImage;
+    QString m_referenceImageBase64;
+    void setReferenceImage(const QImage &image);
+    void clearReferenceImage();
+    void selectReferenceImageFromFile();
+    void captureReferenceImageFromCanvas();
+    void pasteReferenceImageFromClipboard();
+    void updateReferenceImageUi();
 
     QComboBox *m_presetCombo {nullptr};
     QPlainTextEdit *m_promptEditor {nullptr};
@@ -232,10 +245,21 @@ private:
     QComboBox *m_reasoningEffortCombo {nullptr};
     QPlainTextEdit *m_customInstructionsEdit {nullptr};
 
+    // Reference Image UI Controls
+    QFrame *m_referenceImageCard {nullptr};
+    QLabel *m_refImageThumbLabel {nullptr};
+    QLabel *m_refImageInfoLabel {nullptr};
+    QPushButton *m_refImageSelectBtn {nullptr};
+    QPushButton *m_refImageFromCanvasBtn {nullptr};
+    QPushButton *m_refImagePasteBtn {nullptr};
+    QPushButton *m_refImageClearBtn {nullptr};
+
     // Goal Mode UI Controls
     QCheckBox *m_goalModeCheck {nullptr};
     QCheckBox *m_pausePerStepCheck {nullptr};
     QSpinBox *m_goalStepsSpin {nullptr};
+    QSpinBox *m_goalTargetReadinessSpin {nullptr};
+    QSpinBox *m_goalMaxExtraStepsSpin {nullptr};
     QComboBox *m_artStyleCombo {nullptr};
     QFrame *m_goalInspectorCard {nullptr};
     QLabel *m_goalPhaseLabel {nullptr};
