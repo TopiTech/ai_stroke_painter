@@ -160,6 +160,15 @@ void KisAiAbstractOntologyTest::testLoadCustomFromJsonArray()
     QCOMPARE(spec.light.timeOfDay, QStringLiteral("midnight"));
 }
 
+void KisAiAbstractOntologyTest::testLoadCustomRejectsUnsafePath()
+{
+    const int defaults = OntologyRuleset::defaultRules().rules.size();
+    QCOMPARE(OntologyRuleset::loadCustom(QString()).rules.size(), defaults);
+    QCOMPARE(OntologyRuleset::loadCustom(QStringLiteral("relative/path.json")).rules.size(), defaults);
+    QCOMPARE(OntologyRuleset::loadCustom(QStringLiteral("../outside.json")).rules.size(), defaults);
+    QCOMPARE(OntologyRuleset::loadCustom(QStringLiteral("C:/nonexistent-dir-xyz/rules.json")).rules.size(), defaults);
+}
+
 void KisAiAbstractOntologyTest::testAppliedDescriptionsOutParam()
 {
     KisAiSceneSpec spec;

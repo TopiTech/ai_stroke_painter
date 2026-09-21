@@ -5,6 +5,7 @@
 
 #include "KisAiStartPageWidget.h"
 #include "KisAiIllustrationDocker.h"
+#include "KisAiPromptAnalyzer.h"
 #include "KisMainWindow.h"
 #include "KisPart.h"
 #include "KisDocument.h"
@@ -208,11 +209,14 @@ QWidget *KisAiStartPageWidget::createPromptBarSection()
 
     auto *iconLabel = new QLabel(QStringLiteral("✨"), frame);
     iconLabel->setStyleSheet(QStringLiteral("font-size: 16px;"));
+    iconLabel->setAccessibleName(QString());
     layout->addWidget(iconLabel);
 
     m_promptInput = new QLineEdit(frame);
     m_promptInput->setObjectName(QStringLiteral("aiPromptOmnibarInput"));
     m_promptInput->setPlaceholderText(i18n("描きたいイラストの指示（プロンプト）を入力... (例: 月夜に佇む銀髪の魔法使いのアニメ調イラスト)"));
+    m_promptInput->setAccessibleName(i18n("イラストのプロンプト入力"));
+    m_promptInput->setAccessibleDescription(i18n("生成したいイラストの指示を入力します。Enter で生成を開始します。"));
     m_promptInput->installEventFilter(this);
     connect(m_promptInput, &QLineEdit::returnPressed, this, &KisAiStartPageWidget::slotQuickPromptGenerate);
     layout->addWidget(m_promptInput, 1);
@@ -457,7 +461,10 @@ QWidget *KisAiStartPageWidget::createRecentAndGuideSection()
     m_recentListView->setIconSize(QSize(36, 36));
     m_recentListView->setSpacing(4);
     m_recentListView->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_recentListView->setAccessibleName(i18n("最近開いた作品の一覧"));
+    m_recentListView->setAccessibleDescription(i18n("Enter キーでも作品を開けます。"));
     connect(m_recentListView, &QListView::clicked, this, &KisAiStartPageWidget::slotRecentDocumentClicked);
+    connect(m_recentListView, &QListView::activated, this, &KisAiStartPageWidget::slotRecentDocumentClicked);
     m_recentStack->addWidget(m_recentListView);
 
     recentLayout->addWidget(m_recentStack, 1);
@@ -616,7 +623,9 @@ void KisAiStartPageWidget::slotOpenFile()
 
 void KisAiStartPageWidget::slotPasteFromClipboard()
 {
-    if (!KisClipboard::instance()->hasImage()) {
+    KisClipboard *clipboard = KisClipboard::instance();
+    if (!clipboard || !clipboard->hasImage()) {
+        showCanvasNotification(i18n("クリップボードに画像がありません。"));
         return;
     }
     auto *dlg = new KisDlgCreateNewDocument(this);
@@ -633,19 +642,19 @@ void KisAiStartPageWidget::slotApplyPreset(int presetId)
     switch (presetId) {
     case 0: // Anime & Manga Lineart
         presetPrompt = i18n("アニメ調の繊細なキャラクター線画、高精細なペンタッチとセル着彩、ドラマチックなハイライト");
-        styleIndex = 0;
+        styleIndex = static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel);
         break;
     case 1: // Cyberpunk
         presetPrompt = i18n("雨に濡れた近未来のサイバーパンク都市、ネオンサインの反射、大気感のある光芒とシネマティックライティング");
-        styleIndex = 1;
+        styleIndex = static_cast<int>(KisAiPromptAnalyzer::ArtStyle::CyberNeon);
         break;
     case 2: // Watercolor & Atomic Ink
         presetPrompt = i18n("伝統的な透明水彩と物理滲みインク、柔らかいエッジと美しいグラデーションの自然風景イラスト");
-        styleIndex = 2;
+        styleIndex = static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor);
         break;
     case 3: // Vector Geometric Art
         presetPrompt = i18n("精密な幾何学的ストロークグラフ、美しい対称性を持つベクターエンブレム、ミニマルでモダンなデザイン");
-        styleIndex = 3;
+        styleIndex = static_cast<int>(KisAiPromptAnalyzer::ArtStyle::FineLineart);
         break;
     case 4: { // Surprise Me
         const QStringList randomThemes = {
@@ -657,7 +666,11 @@ void KisAiStartPageWidget::slotApplyPreset(int presetId)
         };
         const int pick = QRandomGenerator::global()->bounded(randomThemes.size());
         presetPrompt = randomThemes[pick];
-        styleIndex = pick % 4;
+        const int surpriseStyles[] = {static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor),
+                                      static_cast<int>(KisAiPromptAnalyzer::ArtStyle::FineLineart),
+                                      static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel),
+                                      static_cast<int>(KisAiPromptAnalyzer::ArtStyle::CyberNeon)};
+        styleIndex = surpriseStyles[pick % 4];
         break;
     }
     default:
@@ -688,16 +701,24 @@ void KisAiStartPageWidget::slotFocusAiDocker()
         docker->show();
         docker->raise();
         docker->focusPrompt();
+    } else {
+        showCanvasNotification(i18n("AI ドッカーが見つかりません。"));
     }
 }
 
 void KisAiStartPageWidget::slotRecentDocumentClicked(const QModelIndex &index)
 {
-    if (!m_mainWindow) return;
+    if (!m_mainWindow || !index.isValid())
+        return;
     const QString fileUrl = index.data(Qt::ToolTipRole).toString();
-    if (!fileUrl.isEmpty()) {
-        m_mainWindow->openDocument(fileUrl, KisMainWindow::None);
-    }
+    if (fileUrl.isEmpty())
+        return;
+    m_mainWindow->openDocument(fileUrl, KisMainWindow::None);
+}
+
+void KisAiStartPageWidget::showCanvasNotification(const QString &message)
+{
+    Q_UNUSED(message);
 }
 
 void KisAiStartPageWidget::slotClearRecentFiles()

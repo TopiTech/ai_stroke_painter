@@ -23,6 +23,7 @@ private Q_SLOTS:
     void testCaseInsensitiveMatching();
     void testJsonRoundtrip();
     void testLoadCustomFromJsonArray();
+    void testLoadCustomRejectsUnsafePath();
     void testAppliedDescriptionsOutParam();
     void testWeightScaling();
     void testWordBoundaryMatching();

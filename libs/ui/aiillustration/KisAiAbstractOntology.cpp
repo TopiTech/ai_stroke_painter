@@ -7,6 +7,7 @@
 
 #include <QColor>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -587,8 +588,14 @@ OntologyRuleset OntologyRuleset::loadCustom(const QString &path)
     OntologyRuleset r = defaultRules();
     if (path.isEmpty())
         return r;
-    QFile file(path);
-    if (!file.exists() || !file.open(QIODevice::ReadOnly))
+    const QFileInfo info(path);
+    if (info.isRelative() || !info.isFile() || !info.isReadable())
+        return r;
+    constexpr qint64 maxCustomBytes = 1024 * 1024;
+    if (info.size() <= 0 || info.size() > maxCustomBytes)
+        return r;
+    QFile file(info.absoluteFilePath());
+    if (!file.open(QIODevice::ReadOnly))
         return r;
     QJsonParseError perr;
     const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &perr);
@@ -596,8 +603,10 @@ OntologyRuleset OntologyRuleset::loadCustom(const QString &path)
     if (perr.error != QJsonParseError::NoError || !doc.isArray())
         return r;
     const OntologyRuleset custom = fromJson(doc.array());
+    constexpr int maxCustomRules = 512;
+    const int accepted = qMin(custom.rules.size(), maxCustomRules);
     // カスタムルールを末尾に append (デフォルトより優先したい場合は別途ロジック追加可能)
-    for (int i = 0; i < custom.rules.size(); ++i) {
+    for (int i = 0; i < accepted; ++i) {
         r.rules.append(custom.rules.at(i));
     }
     return r;

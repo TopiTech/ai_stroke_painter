@@ -1649,9 +1649,12 @@ void KisAiIllustrationDocker::setPromptText(const QString &prompt)
 
 void KisAiIllustrationDocker::applyStylePreset(int styleIndex)
 {
-    if (m_artStyleCombo && styleIndex >= 0 && styleIndex < m_artStyleCombo->count()) {
-        m_artStyleCombo->setCurrentIndex(styleIndex);
-        updateActiveStyleCards(styleIndex);
+    if (m_artStyleCombo) {
+        const int idx = m_artStyleCombo->findData(styleIndex);
+        if (idx >= 0) {
+            m_artStyleCombo->setCurrentIndex(idx);
+            updateActiveStyleCards(styleIndex);
+        }
     }
 }
 

@@ -27,6 +27,11 @@ QPolygonF ellipsePolygon(const QPointF &center, qreal rx, qreal ry, int segments
 
 QColor darkerWarm(const QColor &c, qreal factor = 0.82)
 {
+    if (c.hue() < 0)
+        return QColor(qBound(0, int(c.red() * factor), 255),
+                      qBound(0, int(c.green() * factor), 255),
+                      qBound(0, int(c.blue() * factor), 255),
+                      c.alpha());
     return QColor::fromHsv((c.hue() + 360) % 360,
                            qBound(0, int(c.saturation() * 1.05), 255),
                            qBound(0, int(c.value() * factor), 255),

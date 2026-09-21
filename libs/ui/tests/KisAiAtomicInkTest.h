@@ -31,6 +31,10 @@ private Q_SLOTS:
     void testTaperedTipVsRoundStart();
     void testNoBowtieOnSharpCorner();
     void testAtomicStrokeRatioAfterExpand();
+    void testSideTokenStrictness();
+    void testZeroDensityMangaLinesExpandsToNothing();
+    void testDegenerateHatchExpandsToNothing();
+    void testReviewPixelsRejectsMismatchedImages();
     void testPreviewCanvasParityPsnr();
     void testPhysicalPathUsesCommitter();
 };

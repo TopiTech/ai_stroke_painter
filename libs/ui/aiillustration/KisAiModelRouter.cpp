@@ -174,15 +174,6 @@ QStringList KisAiModelRouter::modelFallbackChain(Stage stage, const QString &pre
             chain.append(mid);
     }
 
-    switch (stage) {
-    case Stage::SceneSpec:
-    case Stage::VisionCritique:
-    case Stage::PatchProposal:
-    case Stage::GoalStep:
-    case Stage::PromptExpansion:
-        break;
-    }
-
     chain.append(QString());
     return chain;
 }

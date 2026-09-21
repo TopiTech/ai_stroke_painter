@@ -4,6 +4,7 @@
  */
 
 #include "KisAiStartPageTest.h"
+#include "aiillustration/KisAiPromptAnalyzer.h"
 #include "aiillustration/KisAiStartPageWidget.h"
 
 #include <QLineEdit>
@@ -51,26 +52,48 @@ void KisAiStartPageTest::testPresetPromptApplication()
     auto *promptInput = widget.findChild<QLineEdit *>(QStringLiteral("aiPromptOmnibarInput"));
     QVERIFY(promptInput != nullptr);
 
-    // Apply preset 0 (Anime)
+    // Preset text only (no canvas/docker side effects in unit tests).
     widget.slotApplyPreset(0);
     QVERIFY(!promptInput->text().isEmpty());
     QVERIFY(promptInput->text().contains(QStringLiteral("アニメ")));
 
-    // Apply preset 1 (Cyberpunk)
     widget.slotApplyPreset(1);
     QVERIFY(promptInput->text().contains(QStringLiteral("サイバーパンク")));
 
-    // Apply preset 2 (Watercolor)
     widget.slotApplyPreset(2);
     QVERIFY(promptInput->text().contains(QStringLiteral("水彩")));
 
-    // Apply preset 3 (Vector Geometry)
     widget.slotApplyPreset(3);
     QVERIFY(promptInput->text().contains(QStringLiteral("幾何学")));
 
-    // Apply preset 4 (Surprise Me)
     widget.slotApplyPreset(4);
     QVERIFY(!promptInput->text().isEmpty());
+}
+
+void KisAiStartPageTest::testPresetStyleMapping()
+{
+    QCOMPARE(static_cast<int>(KisAiPromptAnalyzer::ArtStyle::General), 0);
+    QVERIFY(static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel) >= 1);
+    QVERIFY(static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor) >= 1);
+    QVERIFY(static_cast<int>(KisAiPromptAnalyzer::ArtStyle::CyberNeon) >= 1);
+    QVERIFY(static_cast<int>(KisAiPromptAnalyzer::ArtStyle::FineLineart) >= 1);
+}
+
+void KisAiStartPageTest::testQuickPromptEmptyDoesNotCrash()
+{
+    KisAiStartPageWidget widget(nullptr);
+    auto *promptInput = widget.findChild<QLineEdit *>(QStringLiteral("aiPromptOmnibarInput"));
+    QVERIFY(promptInput != nullptr);
+    promptInput->clear();
+    widget.slotQuickPromptGenerate();
+    QVERIFY(promptInput->text().isEmpty());
+}
+
+void KisAiStartPageTest::testPasteEmptyClipboardDoesNotCrash()
+{
+    KisAiStartPageWidget widget(nullptr);
+    widget.slotPasteFromClipboard();
+    QVERIFY(true);
 }
 
 void KisAiStartPageTest::testActionCardLayout()

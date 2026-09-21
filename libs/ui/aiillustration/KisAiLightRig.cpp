@@ -32,6 +32,8 @@ QPointF normalizedDirection(const QPointF &d)
 
 qreal polygonAreaLocal(const QPolygonF &polygon)
 {
+    if (polygon.size() < 3)
+        return 0.0;
     qreal twiceArea = 0.0;
     for (int i = 0; i < polygon.size(); ++i) {
         const QPointF &a = polygon.at(i);
@@ -43,7 +45,13 @@ qreal polygonAreaLocal(const QPolygonF &polygon)
 
 QColor darkerWarmLocal(const QColor &c, qreal factor = 0.82)
 {
-    return QColor::fromHsv((c.hue() + 360) % 360,
+    const int hue = c.hue() < 0 ? -1 : (c.hue() + 360) % 360;
+    if (hue < 0)
+        return QColor(qBound(0, int(c.red() * factor), 255),
+                      qBound(0, int(c.green() * factor), 255),
+                      qBound(0, int(c.blue() * factor), 255),
+                      c.alpha());
+    return QColor::fromHsv(hue,
                            qBound(0, int(c.saturation() * 1.05), 255),
                            qBound(0, int(c.value() * factor), 255),
                            c.alpha());
@@ -94,7 +102,10 @@ QColor KisAiLightRig::shadowColor(const QColor &base, const KisAiLightSettings &
     // Hue-shifted shadow anchored on the rig fill tint; never dirty black.
     QColor shadow = KisAiStrokeQualityUtils::calculateHueShiftedShadow(base, rig.fillTint, 0.38);
     if (shadow.value() < 30) {
-        shadow = QColor::fromHsv((shadow.hue() + 360) % 360, qMax(40, shadow.saturation()), 42, shadow.alpha());
+        if (shadow.hue() < 0)
+            shadow = shadow.darker(100);
+        else
+            shadow = QColor::fromHsv((shadow.hue() + 360) % 360, qMax(40, shadow.saturation()), 42, shadow.alpha());
     }
     return shadow;
 }

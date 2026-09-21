@@ -52,10 +52,10 @@ QString pairKey(const QString &id)
 
 int sideRank(const QString &id)
 {
-    const QString k = id.toLower();
-    if (k.contains(QLatin1String("_l")) || k.contains(QLatin1String("left")))
+    const QStringList parts = id.toLower().split(QLatin1Char('_'), Qt::SkipEmptyParts);
+    if (parts.contains(QLatin1String("l")) || parts.contains(QLatin1String("left")))
         return 0;
-    if (k.contains(QLatin1String("_r")) || k.contains(QLatin1String("right")))
+    if (parts.contains(QLatin1String("r")) || parts.contains(QLatin1String("right")))
         return 1;
     return 2;
 }
@@ -138,17 +138,18 @@ QString KisAiStrokeGraph::inferGroupId(const KisAiStrokeOperation &op)
     if (!op.groupId.isEmpty())
         return op.groupId;
     const QString id = op.id.toLower();
+    const QStringList parts = id.split(QLatin1Char('_'), Qt::SkipEmptyParts);
     if (id.contains(QLatin1String("eye")) || id.contains(QLatin1String("lash")) || id.contains(QLatin1String("iris"))
         || id.contains(QLatin1String("pupil")) || id.contains(QLatin1String("lid"))
         || id.contains(QLatin1String("crease"))) {
-        if (id.contains(QLatin1String("_r")) || id.contains(QLatin1String("right")) || op.eyeIsRight)
+        if (parts.contains(QLatin1String("r")) || parts.contains(QLatin1String("right")) || op.eyeIsRight)
             return QStringLiteral("eye_r");
         return QStringLiteral("eye_l");
     }
     if (id.contains(QLatin1String("mouth")) || id.contains(QLatin1String("lip")))
         return QStringLiteral("mouth");
     if (id.contains(QLatin1String("brow"))) {
-        if (id.contains(QLatin1String("_r")) || id.contains(QLatin1String("right")))
+        if (parts.contains(QLatin1String("r")) || parts.contains(QLatin1String("right")))
             return QStringLiteral("brow_r");
         return QStringLiteral("brow_l");
     }

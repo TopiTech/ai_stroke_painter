@@ -16,6 +16,15 @@ namespace
 {
 constexpr qreal PI = 3.14159265358979323846;
 
+// Strict side detection: only full "_" separated tokens ("l"/"left",
+// "r"/"right") count. Substring matching misfires on ids like
+// "face_rim_light" ("_rim" contains "_r") or "eye_highlight".
+bool idHasSideToken(const QString &id, const QString &shortToken, const QString &longToken)
+{
+    const QStringList parts = id.toLower().split(QLatin1Char('_'), Qt::SkipEmptyParts);
+    return parts.contains(shortToken) || parts.contains(longToken);
+}
+
 QVector<KisAiStrokePoint>
 sampleQuad(const QPointF &a, const QPointF &ctrl, const QPointF &b, int steps, qreal p0, qreal p1)
 {
@@ -44,7 +53,7 @@ QPolygonF ellipsePoly(const QPointF &c, qreal rx, qreal ry, int steps = 16)
 
 QString sideTag(const KisAiStrokeOperation &op)
 {
-    if (op.eyeIsRight || op.id.contains(QLatin1String("_r"), Qt::CaseInsensitive) || op.id.endsWith(QLatin1String("r")))
+    if (op.eyeIsRight || idHasSideToken(op.id, QStringLiteral("r"), QStringLiteral("right")))
         return QStringLiteral("r");
     return QStringLiteral("l");
 }
@@ -477,8 +486,12 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandHatch(const KisAiStr
     QVector<KisAiStrokeOperation> out;
     if (op.polygon.size() < 3 || canvasSize.width() <= 0)
         return out;
+    if (op.spacing <= 0.0)
+        return out;
     const QString group = op.groupId.isEmpty() ? (op.id.isEmpty() ? QStringLiteral("hatch") : op.id) : op.groupId;
     const QRectF b = op.polygon.boundingRect();
+    if (b.width() <= 0.0 || b.height() <= 0.0)
+        return out;
     const qreal minDim = qMax<qreal>(1.0, qMin(canvasSize.width(), canvasSize.height()));
     const qreal spacing = qMax<qreal>(0.004, op.spacing);
     const qreal radius = std::hypot(b.width(), b.height()) * 0.55;
@@ -533,6 +546,8 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandMangaLines(const Kis
 {
     Q_UNUSED(canvasSize);
     QVector<KisAiStrokeOperation> out;
+    if (op.density <= 0)
+        return out;
     const QString group = op.groupId.isEmpty() ? (op.id.isEmpty() ? QStringLiteral("manga") : op.id) : op.groupId;
     const QPointF center = op.gradientCenter;
     const int count = qBound(4, op.density, 64);

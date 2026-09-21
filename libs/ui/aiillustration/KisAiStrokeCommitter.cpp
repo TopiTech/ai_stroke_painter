@@ -31,14 +31,29 @@ int opaqueDelta(const QImage &before, const QImage &after, const QRect &region)
 {
     if (before.isNull() || after.isNull() || region.isEmpty())
         return 0;
+    if (before.format() != after.format())
+        return 0;
     const QRect r = region.intersected(before.rect()).intersected(after.rect());
+    if (r.isEmpty())
+        return 0;
+    const QImage a = before.format() == QImage::Format_ARGB32_Premultiplied
+        ? before
+        : before.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    const QImage b = after.format() == QImage::Format_ARGB32_Premultiplied
+        ? after
+        : after.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     int gained = 0;
     for (int y = r.top(); y <= r.bottom(); ++y) {
+        const QRgb *rowA = reinterpret_cast<const QRgb *>(a.constScanLine(y));
+        const QRgb *rowB = reinterpret_cast<const QRgb *>(b.constScanLine(y));
         for (int x = r.left(); x <= r.right(); ++x) {
-            const int a0 = qAlpha(before.pixel(x, y));
-            const int a1 = qAlpha(after.pixel(x, y));
-            if (a1 > a0 + 8)
+            const int a0 = qAlpha(rowA[x]);
+            const int a1 = qAlpha(rowB[x]);
+            if (a1 > a0 + 8) {
                 ++gained;
+                if (gained >= 2000)
+                    return gained;
+            }
         }
     }
     return gained;
@@ -160,6 +175,11 @@ KisAiStrokeCommitter::reviewPixels(const QImage &before, const QImage &after, co
 {
     KisAiStrokeCommitReview rev;
     rev.dirtyRect = QRectF(dirtyPx);
+    if (dirtyPx.isEmpty() || before.size() != after.size() || before.format() != after.format()) {
+        rev.committed = false;
+        rev.notes << QStringLiteral("pixel-review-unavailable");
+        return rev;
+    }
     const int gained = opaqueDelta(before, after, dirtyPx);
     const qreal area = qMax(1, dirtyPx.width() * dirtyPx.height());
     rev.inkCoverage = qreal(gained) / area;

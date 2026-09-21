@@ -15,8 +15,11 @@ class KisAiStartPageTest : public QObject
 private Q_SLOTS:
     void testWidgetInstantiation();
     void testPresetPromptApplication();
+    void testPresetStyleMapping();
     void testActionCardLayout();
     void testRecentStackEmptyState();
+    void testQuickPromptEmptyDoesNotCrash();
+    void testPasteEmptyClipboardDoesNotCrash();
 };
 
 #endif // KIS_AI_START_PAGE_TEST_H
