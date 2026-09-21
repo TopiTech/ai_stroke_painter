@@ -76,6 +76,13 @@ void KisAiV5EngineTest::testModelRouterStagePlans()
                                                      QStringLiteral("gpt-5"));
     QVERIFY(!expansion.useStructuredOutput);
     QVERIFY(!expansion.useJsonFormat);
+    QVERIFY(!expansion.model.isEmpty());
+
+    // Empty model must resolve to a sendable flagship model instead of "".
+    const auto emptyExpansion = KisAiModelRouter::planFor(KisAiModelRouter::Stage::PromptExpansion, QString());
+    QVERIFY(!emptyExpansion.model.isEmpty());
+    const auto emptyGoal = KisAiModelRouter::planFor(KisAiModelRouter::Stage::GoalStep, QStringLiteral("  "));
+    QVERIFY(!emptyGoal.model.isEmpty());
 }
 
 void KisAiV5EngineTest::testModelRouterQualityModes()
@@ -528,6 +535,23 @@ void KisAiV5EngineTest::testCriticCropSelectionDeterministic()
 
     // Crop budget respected.
     QCOMPARE(KisAiVisionCritic::selectCrops(canvas, faceBox, prior, 2).size(), 2);
+
+    // Full-canvas critique images are downscaled before JPEG/base64 encoding so a
+    // 4k canvas does not become multi-MB per round.
+    QImage bigCanvas(2048, 1536, QImage::Format_ARGB32);
+    bigCanvas.fill(QColor(200, 210, 225));
+    const QJsonObject bigPayload = KisAiVisionCritic::buildCritiquePayload(
+        QStringLiteral("gpt-4o"), QStringLiteral("lake"), bigCanvas, {}, KisAiLightSettings());
+    const QJsonArray bigMessages = bigPayload.value(QStringLiteral("messages")).toArray();
+    QVERIFY(bigMessages.size() == 2);
+    const QJsonArray bigContent = bigMessages.at(1).toObject().value(QStringLiteral("content")).toArray();
+    QVERIFY(!bigContent.isEmpty());
+    const QString bigUrl = bigContent.at(1).toObject().value(QStringLiteral("image_url")).toObject().value(
+        QStringLiteral("url")).toString();
+    QVERIFY(bigUrl.startsWith(QLatin1String("data:image/jpeg;base64,")));
+    // 2048px wide at JPEG82 is ~100-300KB raw; allow generous headroom but fail
+    // if the encoder ever ships near-full-resolution megabytes again.
+    QVERIFY2(bigUrl.size() < 900000, qPrintable(QString::number(bigUrl.size())));
 
     // Safety regression tests: null canvas and non-32-bit image formats
     QVERIFY(KisAiVisionCritic::selectCrops(QImage(), faceBox, prior, 4).isEmpty());

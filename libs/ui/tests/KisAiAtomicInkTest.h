@@ -35,6 +35,7 @@ private Q_SLOTS:
     void testZeroDensityMangaLinesExpandsToNothing();
     void testDegenerateHatchExpandsToNothing();
     void testReviewPixelsRejectsMismatchedImages();
+    void testReviewPixelsMixedFormatsAndLargeRegion();
     void testPreviewCanvasParityPsnr();
     void testPhysicalPathUsesCommitter();
 };

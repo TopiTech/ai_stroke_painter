@@ -3650,6 +3650,12 @@ void KisAiStrokeProgramTest::testReasoningModelFamilyPrefixMatching()
     QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("proto1")));
     QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("radio3")));
     QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("gpt-4o")));
+    // "dots"/"note" are provider fragments (e.g. dots-3-note-preview), not
+    // arbitrary English substrings: "denotes"/"notebook" must not trigger the
+    // reasoning path (max_completion_tokens + dropped temperature).
+    QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("denotes-v1")));
+    QVERIFY(!KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("notebooklm-chat")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("dots-3-note-preview")));
 }
 
 void KisAiStrokeProgramTest::testExtractOperationsDiagnosticNotFabricated()
@@ -4362,7 +4368,6 @@ void KisAiStrokeProgramTest::testLandscapeRigsAndMultiTierComposition()
 
     bool hasMountain = false;
     bool hasSnow = false;
-    bool hasWater = false;
     bool hasSakuraTrunk = false;
     bool hasSakuraPetals = false;
     bool hasDisruptiveQuad = false;
@@ -4373,9 +4378,6 @@ void KisAiStrokeProgramTest::testLandscapeRigsAndMultiTierComposition()
         }
         if (op.id.contains(QStringLiteral("mountain_snow"))) {
             hasSnow = true;
-        }
-        if (op.id.contains(QStringLiteral("water_wash"))) {
-            hasWater = true;
         }
         if (op.id.contains(QStringLiteral("sakura_trunk"))) {
             hasSakuraTrunk = true;
@@ -4390,7 +4392,6 @@ void KisAiStrokeProgramTest::testLandscapeRigsAndMultiTierComposition()
 
     QVERIFY(hasMountain);
     QVERIFY(hasSnow);
-    QVERIFY(hasWater);
     QVERIFY(hasSakuraTrunk);
     QVERIFY(hasSakuraPetals);
     QVERIFY(!hasDisruptiveQuad);

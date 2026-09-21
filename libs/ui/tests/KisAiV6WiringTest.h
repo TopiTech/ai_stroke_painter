@@ -64,6 +64,8 @@ private Q_SLOTS:
     void testDraperyFoldIdsAreUnique();
     void testSamplingForClampsTopPAndMaxTokens();
     void testRigClampedCoversPoseFields();
+    void testLandscapeWaterMeadowSelection();
+    void testSceneSpecNarrativeTimeLengthCapped();
 };
 
 #endif // KIS_AI_V6_WIRING_TEST_H

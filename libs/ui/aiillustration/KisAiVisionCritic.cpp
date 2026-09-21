@@ -93,15 +93,20 @@ QImage cropAndUpscale(const QImage &canvas, const QRectF &region)
                           Qt::KeepAspectRatio, Qt::SmoothTransformation);
 }
 
-QString imageToDataUrl(const QImage &image)
+QString imageToDataUrl(const QImage &image, int maxDimension = 768)
 {
     QImage toSave = image;
-    if (image.hasAlphaChannel()) {
-        toSave = QImage(image.size(), QImage::Format_RGB32);
-        toSave.fill(Qt::white);
-        QPainter p(&toSave);
-        p.drawImage(0, 0, image);
+    if (maxDimension > 0
+        && (toSave.width() > maxDimension || toSave.height() > maxDimension)) {
+        toSave = toSave.scaled(maxDimension, maxDimension, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+    if (toSave.hasAlphaChannel()) {
+        QImage flattened(toSave.size(), QImage::Format_RGB32);
+        flattened.fill(Qt::white);
+        QPainter p(&flattened);
+        p.drawImage(0, 0, toSave);
         p.end();
+        toSave = flattened;
     }
     QBuffer buffer;
     buffer.open(QIODevice::WriteOnly);
@@ -281,8 +286,6 @@ QJsonObject KisAiVisionCritic::buildCritiquePayload(
         regionProps.insert(QStringLiteral("priority"), prio);
         regionItem.insert(QStringLiteral("properties"), regionProps);
         regionItem.insert(QStringLiteral("required"), QJsonArray{QStringLiteral("area"), QStringLiteral("issue"), QStringLiteral("action")});
-        QJsonArray items;
-        items.append(regionItem);
         regions.insert(QStringLiteral("items"), regionItem);
         props.insert(QStringLiteral("regions"), regions);
         schema.insert(QStringLiteral("properties"), props);

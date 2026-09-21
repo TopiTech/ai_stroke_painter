@@ -496,10 +496,25 @@ QImage KisAiPhysicalRenderer::renderProgramToPhysicalImage(const KisAiStrokeProg
     if (baseSize.width() < 64 || baseSize.height() < 64) {
         baseSize = QSize(1024, 1024);
     }
+    // renderProgramToImage() と同じ上限でモデル由来サイズを抑える。明示サイズは
+    // 呼び出し元所有のため尊重する。
+    if (!hasExplicitTarget) {
+        constexpr int MAX_DERIVED_RENDER_EDGE = 4096;
+        baseSize = baseSize.boundedTo(QSize(MAX_DERIVED_RENDER_EDGE, MAX_DERIVED_RENDER_EDGE));
+    }
 
     // スーパーサンプリング解像度 (2x または 4x)
-    const int ssFactor = qBound(1, superSampleFactor, 4);
-    const QSize renderSize = baseSize * ssFactor;
+    int ssFactor = qBound(1, superSampleFactor, 4);
+    QSize renderSize = baseSize * ssFactor;
+    // RGBA16F/FP32 の作業バッファが爆発しないよう作業辺を制限する。
+    // (例: 8k×4x は RGBA32FP で約16GBになる)
+    constexpr int MAX_PHYSICAL_RENDER_EDGE = 4096;
+    while ((renderSize.width() > MAX_PHYSICAL_RENDER_EDGE || renderSize.height() > MAX_PHYSICAL_RENDER_EDGE)
+        && ssFactor > 1) {
+        --ssFactor;
+        renderSize = baseSize * ssFactor;
+    }
+    renderSize = renderSize.boundedTo(QSize(MAX_PHYSICAL_RENDER_EDGE, MAX_PHYSICAL_RENDER_EDGE));
 
     // トラッピング処理
     const qreal minDim = qMin(renderSize.width(), renderSize.height());

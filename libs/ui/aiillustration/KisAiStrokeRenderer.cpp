@@ -655,11 +655,14 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
     // V3 Phase 3.1: Single Artboard enforcement.
     // When executing Goal Mode (totalSteps > 1) or iterative refinements, reuse existing
     // "🎨 AI Illustration" group layer instead of proliferating groups per step.
+    // Only the exact canonical name is reused: a prefix match could hijack a
+    // user-owned "🎨 AI ..." group and wipe it via paintDevice()->clear().
     KisGroupLayerSP group = nullptr;
     if (program.totalSteps > 1) {
         KisNodeSP candidate = root->firstChild();
         while (candidate) {
-            if (candidate->inherits("KisGroupLayer") && candidate->name().startsWith(QStringLiteral("🎨 AI"))) {
+            if (candidate->inherits("KisGroupLayer")
+                && candidate->name() == QStringLiteral("🎨 AI Illustration")) {
                 group = dynamic_cast<KisGroupLayer *>(candidate.data());
                 break;
             }

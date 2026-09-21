@@ -62,6 +62,8 @@ KisAiModelRouter::StagePlan KisAiModelRouter::planFor(Stage stage, const QString
     case Stage::PromptExpansion:
         plan.temperature = 0.8;
         plan.reasoningEffort = QStringLiteral("medium");
+        if (model.trimmed().isEmpty())
+            model = flagshipFallbackModel();
         break;
 
     case Stage::SceneSpec:
@@ -99,6 +101,8 @@ KisAiModelRouter::StagePlan KisAiModelRouter::planFor(Stage stage, const QString
         plan.includeVision = true;
         plan.visionDetail = QStringLiteral("auto");
         plan.reasoningEffort = flagship ? QStringLiteral("medium") : QString();
+        if (model.trimmed().isEmpty())
+            model = flagshipFallbackModel();
         break;
     }
 
@@ -158,6 +162,7 @@ QString KisAiModelRouter::structuredStrategy(const QString &model, const QString
 
 QStringList KisAiModelRouter::modelFallbackChain(Stage stage, const QString &preferredModel)
 {
+    Q_UNUSED(stage);
     QStringList chain;
     if (!preferredModel.trimmed().isEmpty())
         chain.append(preferredModel.trimmed());

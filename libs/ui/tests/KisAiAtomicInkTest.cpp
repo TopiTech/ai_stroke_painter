@@ -6,6 +6,7 @@
 #include "KisAiAtomicInkTest.h"
 
 #include <QImage>
+#include <QPainter>
 #ifndef AI_STROKE_STANDALONE
 #include <testui.h>
 #else
@@ -411,6 +412,27 @@ void KisAiAtomicInkTest::testReviewPixelsRejectsMismatchedImages()
     const KisAiStrokeCommitReview rev = KisAiStrokeCommitter::reviewPixels(before, after, QRect(0, 0, 8, 8));
     QVERIFY(!rev.committed);
     QVERIFY(rev.notes.contains(QStringLiteral("pixel-review-unavailable")));
+
+    const KisAiStrokeCommitReview emptyRev =
+        KisAiStrokeCommitter::reviewPixels(before, before, QRect());
+    QVERIFY(!emptyRev.committed);
+    QVERIFY(emptyRev.notes.contains(QStringLiteral("pixel-review-unavailable")));
+}
+
+void KisAiAtomicInkTest::testReviewPixelsMixedFormatsAndLargeRegion()
+{
+    QImage before(QSize(512, 512), QImage::Format_ARGB32);
+    before.fill(Qt::transparent);
+    QImage after = before.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    QPainter painter(&after);
+    painter.fillRect(100, 100, 300, 300, QColor(20, 20, 30, 255));
+    painter.end();
+    const KisAiStrokeCommitReview rev =
+        KisAiStrokeCommitter::reviewPixels(before, after, QRect(0, 0, 512, 512));
+    QVERIFY(rev.committed);
+    // opaqueDelta() early-exits at 2000 gained pixels, so coverage on a 512px
+    // region is a small positive ratio, not the true painted fraction.
+    QVERIFY2(rev.inkCoverage > 0.0, qPrintable(QString::number(rev.inkCoverage)));
 }
 
 void KisAiAtomicInkTest::testPreviewCanvasParityPsnr()

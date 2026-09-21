@@ -31,7 +31,9 @@
 #include "aiillustration/KisAiStrokeRenderer.h"
 #include "aiillustration/KisAiVisionCritic.h"
 
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 
 #include <cmath>
 
@@ -920,6 +922,42 @@ void KisAiV6WiringTest::testRigClampedCoversPoseFields()
     QCOMPARE(clamped.headTiltDeg, 15.0);
     QCOMPARE(clamped.shoulderSlope, 0.08);
     QCOMPARE(clamped.torsoTurn, -0.10);
+}
+
+void KisAiV6WiringTest::testLandscapeWaterMeadowSelection()
+{
+    KisAiSceneSpec lake;
+    lake.subject.type = QStringLiteral("landscape");
+    lake.prompt = QStringLiteral("mountain lake at dusk");
+    const KisAiStrokeProgram lakeProg = KisAiLayoutEngine::generateProgram(lake, QSize(256, 256));
+    QVERIFY(hasId(lakeProg.operations, QStringLiteral("rig_water")));
+
+    KisAiSceneSpec meadow;
+    meadow.subject.type = QStringLiteral("landscape");
+    meadow.prompt = QStringLiteral("sunset meadow landscape");
+    const KisAiStrokeProgram meadowProg = KisAiLayoutEngine::generateProgram(meadow, QSize(256, 256));
+    QVERIFY(hasId(meadowProg.operations, QStringLiteral("meadow")));
+    QVERIFY(!hasId(meadowProg.operations, QStringLiteral("rig_water")));
+
+    KisAiSceneSpec desert;
+    desert.subject.type = QStringLiteral("landscape");
+    desert.prompt = QStringLiteral("desert oasis with water pond");
+    const KisAiStrokeProgram desertProg = KisAiLayoutEngine::generateProgram(desert, QSize(256, 256));
+    QVERIFY(hasId(desertProg.operations, QStringLiteral("meadow")));
+    QVERIFY(!hasId(desertProg.operations, QStringLiteral("rig_water")));
+}
+
+void KisAiV6WiringTest::testSceneSpecNarrativeTimeLengthCapped()
+{
+    // parseSceneSpecObject() caps the free-form model string at 64 chars.
+    const QString huge(500, QLatin1Char('x'));
+    const QByteArray body = QJsonDocument(QJsonObject{
+        {QStringLiteral("narrative"), QJsonObject{{QStringLiteral("time"), huge}}}})
+                                .toJson(QJsonDocument::Compact);
+    KisAiSceneSpec spec;
+    QString error;
+    QVERIFY(KisAiSceneSpecCodec::parseSceneSpec(body, &spec, &error));
+    QVERIFY2(spec.narrative.time.size() <= 64, qPrintable(QString::number(spec.narrative.time.size())));
 }
 
 KISTEST_MAIN(KisAiV6WiringTest)

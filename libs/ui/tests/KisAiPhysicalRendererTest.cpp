@@ -371,4 +371,24 @@ void KisAiPhysicalRendererTest::testBlendPixelNanAndInfProtection()
     QVERIFY(std::isfinite(dstR) && std::isfinite(dstG) && std::isfinite(dstB) && std::isfinite(dstA));
 }
 
+void KisAiPhysicalRendererTest::testPhysicalRenderClampsDerivedOversizeCanvas()
+{
+    KisAiStrokeProgram prog;
+    prog.canvasSize = QSize(9000, 9000);
+    KisAiStrokeOperation op;
+    op.layer = QStringLiteral("Flats");
+    op.kind = KisAiStrokeOperation::Kind::Fill;
+    op.brush.color = QColor(220, 180, 140);
+    op.polygon = QPolygonF() << QPointF(0.2, 0.2) << QPointF(0.8, 0.2) << QPointF(0.8, 0.8)
+                             << QPointF(0.2, 0.8);
+    prog.operations.append(op);
+    const QImage rendered =
+        KisAiPhysicalRenderer::renderProgramToPhysicalImage(prog, QSize(), true, -1.0, 4);
+    QVERIFY(!rendered.isNull());
+    QVERIFY2(rendered.width() <= 4096 && rendered.height() <= 4096,
+             qPrintable(rendered.size().width() == 0 ? QStringLiteral("null")
+                                                     : QStringLiteral("%1x%2").arg(rendered.width()).arg(
+                                                           rendered.height())));
+}
+
 KISTEST_MAIN(KisAiPhysicalRendererTest)

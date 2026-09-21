@@ -697,8 +697,13 @@ bool KisAiSceneSpecCodec::parseSceneSpecObject(const QJsonObject &rootObj,
 
     const QJsonObject narObj = rootObj.value(QStringLiteral("narrative")).toObject();
     if (!narObj.isEmpty()) {
-        if (narObj.contains(QStringLiteral("time")))
-            spec.narrative.time = narObj.value(QStringLiteral("time")).toString().trimmed().toLower();
+        if (narObj.contains(QStringLiteral("time"))) {
+            QString rawTime = narObj.value(QStringLiteral("time")).toString().trimmed().toLower();
+            constexpr int kMaxNarrativeTimeChars = 64;
+            if (rawTime.size() > kMaxNarrativeTimeChars)
+                rawTime.truncate(kMaxNarrativeTimeChars);
+            spec.narrative.time = rawTime;
+        }
         spec.narrative.weather = normalizeEnum(
             narObj.value(QStringLiteral("weather")).toString(spec.narrative.weather),
             {QStringLiteral("clear"), QStringLiteral("cloudy"), QStringLiteral("rain"), QStringLiteral("snow")},
@@ -884,7 +889,7 @@ QJsonObject KisAiSceneSpecCodec::buildSceneSpecPayload(const QString &model,
 
     QJsonObject payload;
     payload.insert(QStringLiteral("model"), model.trimmed());
-    payload.insert(QStringLiteral("seed"), static_cast<int>(KisAiStrokeProgramCodec::stableSeed(prompt.simplified())));
+    payload.insert(QStringLiteral("seed"), static_cast<qint64>(KisAiStrokeProgramCodec::stableSeed(prompt.simplified())));
 
     QJsonArray messages;
     messages.append(

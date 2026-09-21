@@ -1537,7 +1537,12 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::landscapeProgram(const KisAiSce
         || lowerPrompt.contains(QStringLiteral("river")) || lowerPrompt.contains(QStringLiteral("湖"))
         || lowerPrompt.contains(QStringLiteral("水")) || lowerPrompt.contains(QStringLiteral("海"))
         || lowerPrompt.contains(QStringLiteral("川")) || lowerPrompt.contains(QStringLiteral("風景"))
-        || !lowerPrompt.contains(QStringLiteral("desert"));
+        || lowerPrompt.contains(QStringLiteral("pond")) || lowerPrompt.contains(QStringLiteral("pool"))
+        || lowerPrompt.contains(QStringLiteral("beach")) || lowerPrompt.contains(QStringLiteral("池"))
+        || lowerPrompt.contains(QStringLiteral("浜")) || lowerPrompt.contains(QStringLiteral("海岸"));
+    const bool isDesert = lowerPrompt.contains(QStringLiteral("desert")) || lowerPrompt.contains(QStringLiteral("砂漠"))
+        || lowerPrompt.contains(QStringLiteral("dune"));
+    const bool wantWater = hasWater && !isDesert;
 
     constexpr qreal horizonY = 0.62;
 
@@ -1547,7 +1552,7 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::landscapeProgram(const KisAiSce
     }
 
     // 2. Midground / Foreground Ground: Water Surface or Meadow
-    if (hasWater) {
+    if (wantWater) {
         ops.append(KisAiRigLibrary::waterSurfaceOps(spec, canvasSize, horizonY, 42));
     } else {
         QPolygonF meadow;

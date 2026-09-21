@@ -95,6 +95,8 @@ namespace
 constexpr qint64 MAX_REMOTE_RESPONSE_BYTES = 32LL * 1024 * 1024;
 constexpr qint64 MAX_REMOTE_IMAGE_BYTES = 24LL * 1024 * 1024;
 constexpr qint64 MAX_REMOTE_IMAGE_PIXELS = 24LL * 1024 * 1024;
+constexpr qint64 MAX_REFERENCE_IMAGE_PIXELS = 24LL * 1024 * 1024;
+constexpr int MAX_REFERENCE_IMAGE_EDGE = 16384;
 constexpr int ACTIVITY_TIMEOUT_MS = 60'000;
 constexpr int MAX_REQUEST_TIMEOUT_MS = 600'000;
 constexpr int REMOTE_IMAGE_TIMEOUT_MS = 180'000;
@@ -5576,13 +5578,21 @@ void KisAiIllustrationDocker::selectReferenceImageFromFile()
     }
     QImageReader reader(filePath);
     reader.setAutoTransform(true);
-    if (reader.size().isValid() && (reader.size().width() > 16384 || reader.size().height() > 16384)) {
-        setStatus(i18n("画像サイズが大きすぎます: %1×%2", reader.size().width(), reader.size().height()), true);
+    const QSize declaredSize = reader.size();
+    if (declaredSize.isValid()
+        && (declaredSize.width() > MAX_REFERENCE_IMAGE_EDGE || declaredSize.height() > MAX_REFERENCE_IMAGE_EDGE
+            || qint64(declaredSize.width()) * qint64(declaredSize.height()) > MAX_REFERENCE_IMAGE_PIXELS)) {
+        setStatus(i18n("画像サイズが大きすぎます: %1×%2", declaredSize.width(), declaredSize.height()), true);
         return;
     }
     const QImage loaded = reader.read();
     if (loaded.isNull()) {
         setStatus(i18n("画像ファイルの読み込みに失敗しました: %1", filePath), true);
+        return;
+    }
+    // メタ詐称の減圧爆弾に備え、実デコード後にも画素数で拒否する。
+    if (qint64(loaded.width()) * qint64(loaded.height()) > MAX_REFERENCE_IMAGE_PIXELS) {
+        setStatus(i18n("画像サイズが大きすぎます: %1×%2", loaded.width(), loaded.height()), true);
         return;
     }
     setReferenceImage(loaded);

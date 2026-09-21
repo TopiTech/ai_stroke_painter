@@ -35,6 +35,7 @@ private Q_SLOTS:
     void testRenderProgramToPhysicalImage();
     void testCompositeLayerMismatchedSize();
     void testBlendPixelNanAndInfProtection();
+    void testPhysicalRenderClampsDerivedOversizeCanvas();
 };
 
 #endif // KIS_AI_PHYSICAL_RENDERER_TEST_H

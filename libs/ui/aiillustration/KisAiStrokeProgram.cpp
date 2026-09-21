@@ -127,9 +127,9 @@ bool KisAiStrokeProgramCodec::isReasoningModel(const QString &model)
 {
     const QString lower = model.toLower().trimmed();
     // "o1"/"o3" must match as a family prefix (o1, o1-mini, o3-mini, ...) but
-    // not as an arbitrary substring (proto1, radio3). "note"/"dots" are
-    // intentionally broad: some providers encode reasoning capability in those
-    // fragments (e.g. dots-3-note-preview).
+    // not as an arbitrary substring (proto1, radio3). "dots"/"note" name a
+    // specific provider family (e.g. dots-3-note-preview), so they must match
+    // as hyphen-delimited tokens — not as substrings of "denotes"/"notebook".
     const auto matchesFamily = [&lower](const char *family) {
         const QString f = QLatin1String(family);
         if (lower == f || lower.startsWith(f + QLatin1Char('-')) || lower.startsWith(f + QLatin1Char('/'))) {
@@ -149,7 +149,7 @@ bool KisAiStrokeProgramCodec::isReasoningModel(const QString &model)
     return matchesFamily("o1") || matchesFamily("o3") || lower.contains(QLatin1String("deepseek-r1"))
         || lower.contains(QLatin1String("deepseek-reasoner")) || lower.contains(QLatin1String("thinking"))
         || lower.contains(QLatin1String("reasoner")) || lower.contains(QLatin1String("qwq"))
-        || lower.contains(QLatin1String("dots")) || lower.contains(QLatin1String("note"))
+        || matchesFamily("dots") || matchesFamily("note")
         || lower.contains(QLatin1String("r1-distill"));
 }
 
@@ -799,7 +799,7 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
     QJsonObject payload;
     payload[QStringLiteral("model")] = model.trimmed();
     payload[QStringLiteral("messages")] = messages;
-    payload[QStringLiteral("seed")] = static_cast<int>(stableSeed(prompt.simplified()));
+    payload[QStringLiteral("seed")] = static_cast<qint64>(stableSeed(prompt.simplified()));
 
     if (enableStreaming) {
         payload[QStringLiteral("stream")] = true;
@@ -5289,7 +5289,7 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
     QJsonObject payload;
     payload[QStringLiteral("model")] = model.trimmed();
     payload[QStringLiteral("messages")] = messages;
-    payload[QStringLiteral("seed")] = static_cast<int>(stableSeed(prompt.simplified()));
+    payload[QStringLiteral("seed")] = static_cast<qint64>(stableSeed(prompt.simplified()));
 
     if (enableStreaming) {
         payload[QStringLiteral("stream")] = true;
