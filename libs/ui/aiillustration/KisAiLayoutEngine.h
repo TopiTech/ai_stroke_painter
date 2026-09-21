@@ -35,6 +35,17 @@ public:
         const QSize &canvasSize
     );
 
+    /**
+     * V11 Pure Lineart & Inking Program:
+     * Generates pristine uncolored anime/manga lineart with hierarchical inking,
+     * delicate eye catchlights, hair flow splines, drapery tension lines,
+     * corner inking fillets, and subtle shading hatch marks on a clean white canvas.
+     */
+    static QVector<KisAiStrokeOperation> lineartProgram(
+        const KisAiSceneSpec &spec,
+        const QSize &canvasSize
+    );
+
     // Rig helpers (exposed for unit tests).
     static QPolygonF headOutlinePolygon(const QPointF &center, qreal width, qreal height);
     static QPair<QPointF, QPointF> eyePairCenters(const QPointF &headCenter, qreal headWidth, qreal headHeight, const QString &facing);

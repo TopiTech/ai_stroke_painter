@@ -205,9 +205,18 @@ KisAiPromptAnalyzer::SemanticSpec KisAiPromptAnalyzer::analyze(
     }
 
     // 5. Art Style Classification
-    // 部分文字列 contains() は "pink"/"link" の "ink" や "cancel" の "cel" を
-    // 誤検出するため、単語境界の containsWord() を使う (domain 分類と同一方針)。
-    if (containsWord(text, QStringLiteral("anime")) || containsWord(text, QStringLiteral("manga")) ||
+    const bool isExplicitLineart = text.contains(QStringLiteral("線画")) ||
+                                   text.contains(QStringLiteral("塗り絵")) ||
+                                   text.contains(QStringLiteral("ぬりえ")) ||
+                                   text.contains(QStringLiteral("lineart")) ||
+                                   text.contains(QStringLiteral("line art")) ||
+                                   text.contains(QStringLiteral("coloring book")) ||
+                                   text.contains(QStringLiteral("clean lineart")) ||
+                                   text.contains(QStringLiteral("inking"));
+
+    if (isExplicitLineart) {
+        spec.style = ArtStyle::PureLineart;
+    } else if (containsWord(text, QStringLiteral("anime")) || containsWord(text, QStringLiteral("manga")) ||
         containsWord(text, QStringLiteral("cel")) || text.contains(QStringLiteral("アニメ")) ||
         text.contains(QStringLiteral("セル画")) || text.contains(QStringLiteral("漫画"))) {
         spec.style = ArtStyle::AnimeCel;
@@ -225,8 +234,7 @@ KisAiPromptAnalyzer::SemanticSpec KisAiPromptAnalyzer::analyze(
                text.contains(QStringLiteral("極細")) || text.contains(QStringLiteral("ペン画"))) {
         spec.style = ArtStyle::FineLineart;
     } else if (containsWord(text, QStringLiteral("sketch")) || containsWord(text, QStringLiteral("ink")) ||
-               containsWord(text, QStringLiteral("hatching")) || text.contains(QStringLiteral("スケッチ")) ||
-               text.contains(QStringLiteral("線画"))) {
+               containsWord(text, QStringLiteral("hatching")) || text.contains(QStringLiteral("スケッチ"))) {
         spec.style = ArtStyle::InkSketch;
     } else if (containsWord(text, QStringLiteral("cyber")) || containsWord(text, QStringLiteral("neon")) ||
                containsWord(text, QStringLiteral("glowing")) || text.contains(QStringLiteral("ネオン")) ||
@@ -278,6 +286,33 @@ QString KisAiPromptAnalyzer::generateArtDirection(
 
     QString out;
     out += QStringLiteral("=== ART STYLE DIRECTIVE: %1 ===\n").arg(styleName(spec.style));
+
+    if (spec.style == ArtStyle::PureLineart) {
+        out += QStringLiteral(
+            "*** PURE LINE ART & MANGA INKING DIRECTIVES (ABSOLUTE PRIORITY) ***\n"
+            "- STRICT ZERO-TOLERANCE ON COLORED FILLS: Do NOT emit colored fills, skin flats, hair flats, or clothing color blocks in 'Flats' layer.\n"
+            "- PURE WHITE CANVAS: The background MUST remain pristine white (#ffffff). All strokes must be crisp dark ink (#111118 to #1a1a24).\n"
+            "- INK WEIGHT HIERARCHY (G-PEN vs MARU-PEN):\n"
+            "  * Structural Outlines: Bold, expressive silhouette contours (brush: 'gpen', size 3.5px-5.5px, opacity 1.0).\n"
+            "  * Internal Details: Fine delicate sub-strokes (brush: 'maru_pen' or 'fineliner', size 1.5px-2.5px, opacity 0.85-1.0).\n"
+            "  * Facial Features: Micro-precise inking with sharp entry/exit tapering (size 1.2px-2.2px).\n"
+            "- ANIME EYE INKING SPECIFICATION:\n"
+            "  * Upper lash line: Heavy, sharp arc with outward-flicking lash clusters.\n"
+            "  * Double eyelid: Delicate parallel arch above the lash.\n"
+            "  * Iris & Pupil: Draw the iris contour envelope, small pupil circle, and crescent catchlight boundary lines. Leave interiors uncolored for pristine coloring-book readiness!\n"
+            "  * Lower lash: Subtle discrete micro-ticks or delicate lower rim.\n"
+            "- HAIR INKING ARCHITECTURE:\n"
+            "  * Model hair in voluminous clump envelopes with sharp tapered tips.\n"
+            "  * Inscribe internal flow sub-splines inside clumps to express gravitational hair flow.\n"
+            "  * Add delicate stray flyaway hairs (ahoge) dancing off the silhouette.\n"
+            "- CLOTHING DRAPERY & TENSION LINES:\n"
+            "  * Radiate tension creases from stress points (shoulders, bust, waist) with smooth cubic curves.\n"
+            "- INKING CORNER FILLETS & HATCHING:\n"
+            "  * Deepen acute line junctions with ink pooling fillets for spatial weight.\n"
+            "  * Use delicate parallel hatch lines (size 1.0px) under chin and within deep crevices instead of color shading.\n\n"
+        );
+    }
+
     out += QStringLiteral("COLOR HARMONY: Key Light (%1) | Ambient Shadow (%2) | Accent (%3)\n\n")
         .arg(spec.harmony.keyLight.name())
         .arg(spec.harmony.ambientShadow.name())
@@ -454,6 +489,8 @@ QString KisAiPromptAnalyzer::styleName(ArtStyle style)
         return QStringLiteral("Manga Ink Sketch");
     case ArtStyle::FineLineart:
         return QStringLiteral("Fine Lineart & Delicate Pen");
+    case ArtStyle::PureLineart:
+        return QStringLiteral("Pure Line Art & Manga Inking");
     case ArtStyle::CyberNeon:
         return QStringLiteral("Cyberpunk Neon");
     case ArtStyle::General:
@@ -473,6 +510,73 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
         .arg(spec.harmony.keyLight.name())
         .arg(spec.harmony.ambientShadow.name())
         .arg(spec.harmony.accentColor.name());
+
+    if (spec.style == ArtStyle::PureLineart) {
+        if (totalSteps <= 2) {
+            if (phase == 1) {
+                out += QStringLiteral(
+                    "PHASE 1 MISSION: [CLEAN WHITE CANVAS & PRIMARY SILHOUETTES]\n"
+                    "- Target Layer: 'Lineart'. Pristine white background.\n"
+                    "- Form outer silhouettes, head contour, primary hair clumps, and torso gestures using bold G-pen strokes.\n"
+                    "- STRICT: Do NOT output colored fills or skin shading.\n"
+                );
+            } else {
+                out += QStringLiteral(
+                    "PHASE 2 MISSION: [INTRICATE INKING, FACIAL FEATURES & HATCHING (COMPLETION)]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Inscribe anime eye contours (lashes, pupil, catchlight rings), lips, hair flow sub-splines, and cloth folds.\n"
+                    "- Deepen acute corners with corner inking fillets and add delicate shading hatch lines.\n"
+                    "- Final Goal Check: Bring lineart to master inking quality.\n"
+                );
+            }
+            return out;
+        }
+
+        int effectivePhase = 3;
+        if (totalSteps == 3) {
+            effectivePhase = phase;
+        } else if (totalSteps == 4) {
+            effectivePhase = phase;
+        } else {
+            effectivePhase = (phase == 1) ? 1 : (phase == 2) ? 2 : (phase >= totalSteps) ? 4 : 3;
+        }
+
+        switch (effectivePhase) {
+        case 1:
+            out += QStringLiteral(
+                "PHASE 1 MISSION: [FOUNDATIONAL SILHOUETTE & ANCHORS]\n"
+                "- Target Layer: 'Lineart'. Pristine white background.\n"
+                "- Form the primary outer silhouette, head contour, and major torso landmarks using clean, bold inking lines.\n"
+                "- STRICT: ZERO colored fills or color shading.\n"
+            );
+            break;
+        case 2:
+            out += QStringLiteral(
+                "PHASE 2 MISSION: [HAIR CLUSTERS & GARMENT CONTOURS]\n"
+                "- Target Layer: 'Lineart'.\n"
+                "- Define flowing hair clump boundaries, bangs, side locks, collar, and outfit silhouette with smooth G-pen curves.\n"
+            );
+            break;
+        case 3:
+            out += QStringLiteral(
+                "PHASE 3 MISSION: [EYE INKING, LIPS, HAIR FLOW & CLOTH FOLDS]\n"
+                "- Target Layer: 'Lineart'.\n"
+                "- Inscribe master anime eyes (thick upper lash, double lid, iris outline, catchlight circles).\n"
+                "- Add detailed hair flow sub-splines and clothing tension lines.\n"
+            );
+            break;
+        case 4:
+        default:
+            out += QStringLiteral(
+                "PHASE 4 MISSION: [LINE WEIGHT MODULATION, CORNER FILLETS & HATCHING]\n"
+                "- Target Layer: 'Lineart'.\n"
+                "- Accentuate acute corners with corner inking fillets.\n"
+                "- Add delicate parallel hatch lines under chin and along shadow crevices for rich tone depth.\n"
+            );
+            break;
+        }
+        return out;
+    }
 
     if (totalSteps <= 2) {
         if (phase == 1) {

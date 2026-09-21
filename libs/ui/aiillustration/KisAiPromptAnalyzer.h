@@ -55,7 +55,8 @@ public:
         Impasto,     // Rich textured paint, heavy shading, dramatic contrast
         InkSketch,   // Hatching lines, manga ink, monochrome or subtle tint
         CyberNeon,   // High-contrast neon glows, dark backdrop, electric accents
-        FineLineart  // Delicate pen linework, cross-hatching, intricate hair & contours
+        FineLineart, // Delicate pen linework, cross-hatching, intricate hair & contours
+        PureLineart  // Pristine uncolored anime/manga lineart, high-density inking, coloring page
     };
 
     struct ColorHarmony {

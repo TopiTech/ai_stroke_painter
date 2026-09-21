@@ -173,6 +173,16 @@ if (AI_STROKE_STANDALONE_TESTS)
     target_link_libraries(KisAiV10QualityTest PRIVATE ai_stroke_core Qt6::Test)
     add_test(NAME KisAiV10QualityTest COMMAND KisAiV10QualityTest)
 
+    add_executable(KisAiLineartModeTest
+        libs/ui/tests/KisAiLineartModeTest.cpp
+    )
+    target_include_directories(KisAiLineartModeTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiLineartModeTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiLineartModeTest COMMAND KisAiLineartModeTest)
+
     set(AI_STROKE_ALL_TEST_TARGETS
         KisAiStrokeProgramTest
         KisAiStrokeRendererTest
@@ -187,6 +197,7 @@ if (AI_STROKE_STANDALONE_TESTS)
         KisAiQualityBenchGateTest
         KisAiAtomicInkTest
         KisAiV10QualityTest
+        KisAiLineartModeTest
     )
 
     set_tests_properties(

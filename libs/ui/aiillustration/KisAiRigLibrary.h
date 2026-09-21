@@ -147,6 +147,13 @@ public:
      */
     static QVector<KisAiStrokeOperation> eyePairOps(const KisAiRigParameterSet &params, quint32 seed = 42);
 
+    /**
+     * V11 Lineart Mode: Pristine inking-only eye pair assembly without solid colored fills.
+     * Generates upper lash with outer flick, double eyelid, uncolored iris contour,
+     * pupil core, circular catchlight boundaries, and lower lid accents for coloring book readiness.
+     */
+    static QVector<KisAiStrokeOperation> eyePairLineartOps(const KisAiRigParameterSet &params, quint32 seed = 42);
+
     /** Double-lid crease lines (Lineart) for both eyes, if enabled. */
     static QVector<KisAiStrokeOperation> doubleLidOps(const KisAiRigParameterSet &params);
 

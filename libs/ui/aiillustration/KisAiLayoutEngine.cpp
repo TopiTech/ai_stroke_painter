@@ -1022,6 +1022,284 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::clothingForSpec(const KisAiScen
     return ops;
 }
 
+QVector<KisAiStrokeOperation> KisAiLayoutEngine::lineartProgram(const KisAiSceneSpec &spec, const QSize &canvasSize)
+{
+    QVector<KisAiStrokeOperation> ops;
+    const QPointF hc = spec.composition.headCenter;
+    const qreal hh = spec.composition.headHeight;
+    const qreal hw = hh * 0.78;
+    const QColor inkColor(22, 20, 30);
+    const qreal baseLine = (spec.style.lineWeight == QLatin1String("bold")) ? 0.0055
+                         : (spec.style.lineWeight == QLatin1String("delicate")) ? 0.0032 : 0.0045;
+
+    // 1. Pristine solid white background (for crisp contrast and coloring book readiness)
+    QPolygonF canvasPoly;
+    canvasPoly << QPointF(0, 0) << QPointF(1, 0) << QPointF(1, 1) << QPointF(0, 1);
+    ops.append(makeFill(QStringLiteral("white_canvas"),
+                        QStringLiteral("Background"),
+                        canvasPoly,
+                        QColor(255, 255, 255),
+                        QStringLiteral("brush"),
+                        1.0,
+                        QStringLiteral("wash")));
+
+    // 2. Head contour (jaw and cheek outline)
+    const QPolygonF outline = headOutlinePolygon(hc, hw, hh);
+    QVector<KisAiStrokePoint> jaw;
+    for (int i = 0; i < outline.size(); ++i) {
+        const QPointF &pt = outline.at(i);
+        if (pt.y() > hc.y() - hh * 0.08) {
+            // Taper near top, bold at chin
+            const qreal t = (pt.y() - (hc.y() - hh * 0.08)) / (hh * 0.58);
+            const qreal p = 0.55 + 0.45 * std::sin(M_PI * qBound<qreal>(0.0, t, 1.0));
+            jaw.append(KisAiStrokePoint(pt.x(), pt.y(), p));
+        }
+    }
+    if (jaw.size() >= 2) {
+        KisAiStrokeOperation jawOp = makePath(QStringLiteral("lineart_jaw"),
+                                              QStringLiteral("Lineart"),
+                                              jaw,
+                                              inkColor,
+                                              QStringLiteral("gpen"),
+                                              baseLine * 1.15,
+                                              1.0);
+        jawOp.groupId = QStringLiteral("head");
+        jawOp.role = QStringLiteral("contour");
+        ops.append(jawOp);
+    }
+
+    // 3. Ears (outline lineart)
+    for (int side = -1; side <= 1; side += 2) {
+        const QString sName = (side < 0) ? QStringLiteral("ear_l") : QStringLiteral("ear_r");
+        const QPointF ec(hc.x() + side * hw * 0.50, hc.y() + hh * 0.10);
+        const qreal ew = hw * 0.055;
+        const qreal eh = hh * 0.075;
+        QVector<KisAiStrokePoint> earRim;
+        const int steps = 8;
+        for (int i = 0; i <= steps; ++i) {
+            const qreal t = qreal(i) / steps;
+            const qreal angle = (side < 0) ? (M_PI * (0.5 + 1.0 * t)) : (M_PI * (1.5 - 1.0 * t));
+            earRim.append(KisAiStrokePoint(ec.x() + std::cos(angle) * ew, ec.y() + std::sin(angle) * eh, 0.4 + 0.4 * std::sin(M_PI * t)));
+        }
+        ops.append(makePath(QStringLiteral("lineart_%1").arg(sName),
+                            QStringLiteral("Lineart"),
+                            earRim,
+                            inkColor,
+                            QStringLiteral("gpen"),
+                            baseLine * 0.85,
+                            0.95));
+    }
+
+    // 4. Rig Parameter Setup & Lineart Facial Features
+    KisAiRigParameterSet rigParams = KisAiRigLibrary::parametersFromSpec(spec);
+    KisAiRigLibrary::applyCameraAdjust(rigParams, spec.camera);
+    KisAiRigLibrary::applyDetailBudget(rigParams, spec.style.detailLevel);
+    rigParams = KisAiRigLibrary::clamped(rigParams);
+
+    // 5. Pure Lineart Facial Features
+    ops.append(KisAiRigLibrary::eyePairLineartOps(rigParams));
+    ops.append(KisAiRigLibrary::browOps(rigParams));
+
+    // Pure ink nose: crisp tapered nose tip line without color cast shadows
+    {
+        const qreal noseY = hc.y() + hh * 0.18;
+        const qreal noseX = hc.x();
+        const qreal s = hw * 0.012;
+        QVector<KisAiStrokePoint> pts;
+        pts.append(KisAiStrokePoint(noseX, noseY, 0.20));
+        pts.append(KisAiStrokePoint(noseX, noseY + s * 0.35, 0.85));
+        pts.append(KisAiStrokePoint(noseX + s * 0.75, noseY + s * 0.20, 0.30));
+        ops.append(makePath(QStringLiteral("lineart_nose_tip"),
+                            QStringLiteral("Lineart"),
+                            pts,
+                            inkColor,
+                            QStringLiteral("gpen"),
+                            baseLine * 0.75,
+                            1.0));
+    }
+
+    // Pure ink mouth: cupid's bow arch, smiling corners, and lower lip shadow tick (without colored fill)
+    {
+        const qreal mouthY = hc.y() + hh * 0.30;
+        const qreal mouthX = hc.x();
+        const qreal mw = hw * 0.11 * rigParams.mouth.widthScale;
+        const qreal mh = hw * 0.04;
+
+        // Upper lip cupid's bow line
+        QVector<KisAiStrokePoint> upperLip;
+        const int steps = 8;
+        for (int i = 0; i <= steps; ++i) {
+            const qreal t = qreal(i) / steps;
+            const qreal x = mouthX - mw * 0.5 + mw * t;
+            // Cupid's bow dip at center t = 0.5
+            const qreal dip = std::cos(2.0 * M_PI * t) * mh * 0.25;
+            const qreal y = mouthY + dip - std::sin(M_PI * t) * mh * 0.15;
+            const qreal p = 0.3 + 0.6 * std::sin(M_PI * t);
+            upperLip.append(KisAiStrokePoint(x, y, p));
+        }
+        ops.append(makePath(QStringLiteral("lineart_mouth_upper"),
+                            QStringLiteral("Lineart"),
+                            upperLip,
+                            inkColor,
+                            QStringLiteral("gpen"),
+                            baseLine * 0.85,
+                            1.0));
+
+        // Lower lip subtle center tick
+        QVector<KisAiStrokePoint> lowerLip;
+        lowerLip.append(KisAiStrokePoint(mouthX - mw * 0.15, mouthY + mh * 0.55, 0.2));
+        lowerLip.append(KisAiStrokePoint(mouthX, mouthY + mh * 0.60, 0.65));
+        lowerLip.append(KisAiStrokePoint(mouthX + mw * 0.15, mouthY + mh * 0.55, 0.2));
+        ops.append(makePath(QStringLiteral("lineart_mouth_lower"),
+                            QStringLiteral("Lineart"),
+                            lowerLip,
+                            inkColor,
+                            QStringLiteral("maru_pen"),
+                            baseLine * 0.70,
+                            0.85));
+    }
+
+    // 6. Hair Line Art: Back & Front mass lines and flow paths
+    const auto backOps = hairBackMassForStyle(spec, hc, hw, hh);
+    for (const auto &bop : backOps) {
+        if (bop.kind == KisAiStrokeOperation::Kind::Fill && bop.polygon.size() >= 3) {
+            QVector<KisAiStrokePoint> backPts;
+            for (int i = 0; i < bop.polygon.size(); ++i) {
+                const QPointF &pt = bop.polygon.at(i);
+                backPts.append(KisAiStrokePoint(pt.x(), pt.y(), 0.7));
+            }
+            KisAiStrokeOperation bhOp = makePath(QStringLiteral("lineart_%1").arg(bop.id),
+                                                 QStringLiteral("Lineart"),
+                                                 backPts,
+                                                 inkColor,
+                                                 QStringLiteral("gpen"),
+                                                 baseLine * 1.2,
+                                                 1.0);
+            bhOp.closed = true;
+            ops.append(bhOp);
+        } else if (bop.kind == KisAiStrokeOperation::Kind::Path) {
+            KisAiStrokeOperation pOp = bop;
+            pOp.layer = QStringLiteral("Lineart");
+            pOp.brush.color = inkColor;
+            pOp.brush.opacity = 1.0;
+            ops.append(pOp);
+        }
+    }
+
+    const auto frontOps = hairFrontMassForStyle(spec, hc, hw, hh);
+    for (const auto &fop : frontOps) {
+        if (fop.kind == KisAiStrokeOperation::Kind::Path) {
+            KisAiStrokeOperation pOp = fop;
+            pOp.layer = QStringLiteral("Lineart");
+            pOp.brush.color = inkColor;
+            pOp.brush.opacity = 1.0;
+            ops.append(pOp);
+        }
+    }
+
+    // 7. Hierarchical 3D Hair Clump Inking (Streamlines & Flow sub-splines)
+    const auto clumpOps = KisAiRigLibrary::hierarchicalHairClumpOps(rigParams, canvasSize, 42);
+    for (const auto &cop : clumpOps) {
+        if (cop.kind == KisAiStrokeOperation::Kind::Path) {
+            KisAiStrokeOperation pOp = cop;
+            pOp.layer = QStringLiteral("Lineart");
+            pOp.brush.color = inkColor;
+            pOp.brush.size = baseLine * 0.85;
+            pOp.brush.opacity = 0.95;
+            ops.append(pOp);
+        }
+    }
+
+    // 8. Neck, Shoulders & Clothing Lineart
+    {
+        const qreal neckTopY = hc.y() + hh * 0.38;
+        const qreal neckBottomY = hc.y() + hh * 0.58;
+        for (int side = -1; side <= 1; side += 2) {
+            QVector<KisAiStrokePoint> sternocleidomastoid;
+            sternocleidomastoid.append(KisAiStrokePoint(hc.x() + side * hw * 0.22, neckTopY, 0.3));
+            sternocleidomastoid.append(KisAiStrokePoint(hc.x() + side * hw * 0.14, neckTopY + (neckBottomY - neckTopY) * 0.5, 0.45));
+            sternocleidomastoid.append(KisAiStrokePoint(hc.x() + side * hw * 0.08, neckBottomY, 0.2));
+            ops.append(makePath(side < 0 ? QStringLiteral("lineart_neck_l") : QStringLiteral("lineart_neck_r"),
+                                QStringLiteral("Lineart"),
+                                sternocleidomastoid,
+                                inkColor,
+                                QStringLiteral("maru_pen"),
+                                baseLine * 0.65,
+                                0.75));
+        }
+        for (int side = -1; side <= 1; side += 2) {
+            QVector<KisAiStrokePoint> clavicle;
+            clavicle.append(KisAiStrokePoint(hc.x() + side * hw * 0.09, neckBottomY + 0.01, 0.3));
+            clavicle.append(KisAiStrokePoint(hc.x() + side * hw * 0.28, neckBottomY + 0.025, 0.5));
+            clavicle.append(KisAiStrokePoint(hc.x() + side * hw * 0.45, neckBottomY + 0.02, 0.25));
+            ops.append(makePath(side < 0 ? QStringLiteral("lineart_clavicle_l") : QStringLiteral("lineart_clavicle_r"),
+                                QStringLiteral("Lineart"),
+                                clavicle,
+                                inkColor,
+                                QStringLiteral("maru_pen"),
+                                baseLine * 0.70,
+                                0.80));
+        }
+    }
+
+    const auto clothOps = clothingForSpec(spec, hc, hw, hh, canvasSize);
+    for (const auto &cop : clothOps) {
+        if (cop.kind == KisAiStrokeOperation::Kind::Fill && cop.polygon.size() >= 3) {
+            if (cop.id != QLatin1String("neck") && cop.id != QLatin1String("neck_shadow")) {
+                QVector<KisAiStrokePoint> clothContour;
+                for (int i = 0; i < cop.polygon.size(); ++i) {
+                    const QPointF &pt = cop.polygon.at(i);
+                    clothContour.append(KisAiStrokePoint(pt.x(), pt.y(), 0.8));
+                }
+                KisAiStrokeOperation cOp = makePath(QStringLiteral("lineart_%1").arg(cop.id),
+                                                    QStringLiteral("Lineart"),
+                                                    clothContour,
+                                                    inkColor,
+                                                    QStringLiteral("gpen"),
+                                                    baseLine * 1.1,
+                                                    1.0);
+                cOp.closed = true;
+                ops.append(cOp);
+            }
+        } else if (cop.kind == KisAiStrokeOperation::Kind::Path) {
+            KisAiStrokeOperation pOp = cop;
+            pOp.layer = QStringLiteral("Lineart");
+            pOp.brush.color = inkColor;
+            pOp.brush.size = baseLine * 0.85;
+            pOp.brush.opacity = 0.95;
+            ops.append(pOp);
+        }
+    }
+
+    // 9. Delicate Shading Hatch Lines under Chin
+    {
+        const qreal chinY = hc.y() + hh * 0.40;
+        const int hatchCount = 6;
+        for (int i = 0; i < hatchCount; ++i) {
+            const qreal t = qreal(i) / qreal(hatchCount - 1);
+            const qreal xStart = hc.x() - hw * 0.12 + hw * 0.24 * t;
+            QVector<KisAiStrokePoint> hatch;
+            hatch.append(KisAiStrokePoint(xStart, chinY + 0.005, 0.2));
+            hatch.append(KisAiStrokePoint(xStart - 0.015, chinY + 0.045, 0.4));
+            ops.append(makePath(QStringLiteral("lineart_chin_hatch_%1").arg(i),
+                                QStringLiteral("Lineart"),
+                                hatch,
+                                inkColor,
+                                QStringLiteral("fineliner"),
+                                baseLine * 0.50,
+                                0.65));
+        }
+    }
+
+    // 10. Post-Processing: Lineart Hierarchy, Occlusion Line Weight & Corner Fillets
+    KisAiStrokeQualityUtils::applyLineartHierarchy(ops);
+    KisAiStrokeQualityUtils::applyOcclusionAndLightingLineWeight(ops, spec.light.direction);
+    const auto fillets = KisAiStrokeQualityUtils::applyCornerInkingFillets(ops, canvasSize);
+    ops.append(fillets);
+
+    return ops;
+}
+
 QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(const KisAiSceneSpec &spec, const QSize &canvasSize)
 {
     QVector<KisAiStrokeOperation> ops;
@@ -1327,8 +1605,22 @@ KisAiStrokeProgram KisAiLayoutEngine::generateProgram(const KisAiSceneSpec &spec
     program.canvasSize = canvasSize.isValid() ? canvasSize : QSize(1024, 1024);
     program.title = QStringLiteral("SceneSpec Composition");
 
+    const QString artId = resolved.style.artStyleId.trimmed().toLower();
+    const QString promptLower = spec.prompt.toLower();
+    const bool isLineartMode = (artId == QLatin1String("pure_lineart") ||
+                                artId == QLatin1String("lineart") ||
+                                artId == QLatin1String("fine_line") ||
+                                promptLower.contains(QStringLiteral("線画")) ||
+                                promptLower.contains(QStringLiteral("塗り絵")) ||
+                                promptLower.contains(QStringLiteral("ぬりえ")) ||
+                                promptLower.contains(QStringLiteral("lineart")) ||
+                                promptLower.contains(QStringLiteral("line art")) ||
+                                promptLower.contains(QStringLiteral("coloring book")));
+
     QVector<KisAiStrokeOperation> ops;
-    if (resolved.subject.type == QLatin1String("landscape")) {
+    if (isLineartMode && resolved.subject.type != QLatin1String("landscape")) {
+        ops = lineartProgram(resolved, program.canvasSize);
+    } else if (resolved.subject.type == QLatin1String("landscape")) {
         ops = landscapeProgram(resolved, program.canvasSize); // includes background
     } else {
         ops = backgroundForSpec(resolved, program.canvasSize);

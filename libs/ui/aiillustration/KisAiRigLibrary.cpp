@@ -397,6 +397,156 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::eyePairOps(const KisAiRigParamete
     return ops;
 }
 
+QVector<KisAiStrokeOperation> KisAiRigLibrary::eyePairLineartOps(const KisAiRigParameterSet &params, quint32 seed)
+{
+    Q_UNUSED(seed);
+    QVector<KisAiStrokeOperation> ops;
+    const auto anchors = eyeAnchors(params);
+    const QString expr = eyeExpressionFor(params);
+    const QColor inkColor(20, 18, 28);
+    const qreal baseSize = lineWeightBase(params.lineWeight);
+    const qreal lashSize = baseSize * 1.35;
+    const qreal irisSize = baseSize * 0.70;
+    const qreal detailSize = baseSize * 0.50;
+
+    const struct {
+        const EyeAnchor &anchor;
+        bool isRight;
+        const char *side;
+    } eyes[2] = {
+        {anchors.first, false, "l"},
+        {anchors.second, true, "r"},
+    };
+
+    for (const auto &eye : eyes) {
+        const QString side = QString::fromLatin1(eye.side);
+        const qreal dir = eye.isRight ? 1.0 : -1.0;
+        const QPointF c = eye.anchor.center;
+        const qreal ew = eye.anchor.width;
+        const qreal eh = eye.anchor.height;
+
+        if (expr == QLatin1String("closed")) {
+            // Closed eye: gentle curving arc with tapered lashes
+            QVector<KisAiStrokePoint> pts;
+            const int steps = 8;
+            for (int i = 0; i <= steps; ++i) {
+                const qreal t = qreal(i) / steps;
+                const qreal x = c.x() - dir * ew * 0.5 + dir * ew * t;
+                const qreal y = c.y() + std::sin(M_PI * t) * eh * 0.35;
+                pts.append(pt(x, y, 0.4 + 0.6 * std::sin(M_PI * t)));
+            }
+            ops.append(makePathOp(QStringLiteral("lineart_eye_%1_closed").arg(side), pts, inkColor, lashSize, 1.0));
+            continue;
+        }
+
+        // 1. Upper Lash Main Arch (bold hero line)
+        ops.append(makePathOp(QStringLiteral("lineart_eye_%1_lash").arg(side),
+                              lashPath(eye.anchor, eye.isRight),
+                              inkColor,
+                              lashSize,
+                              1.0));
+
+        // 2. Outer lash flick / wing (flutter at eye corner)
+        {
+            QVector<KisAiStrokePoint> wing;
+            const qreal startX = c.x() + dir * ew * 0.45;
+            const qreal startY = c.y() - eh * 0.38;
+            wing.append(pt(startX, startY, 0.9));
+            wing.append(pt(startX + dir * ew * 0.12, startY - eh * 0.15, 0.4));
+            wing.append(pt(startX + dir * ew * 0.18, startY - eh * 0.22, 0.15));
+            ops.append(makePathOp(QStringLiteral("lineart_eye_%1_wing").arg(side), wing, inkColor, lashSize * 0.9, 1.0));
+        }
+
+        // 3. Double eyelid crease line (delicate parallel arch)
+        if (eye.isRight ? params.eyeRight.doubleLid : params.eyeLeft.doubleLid) {
+            QVector<KisAiStrokePoint> lidPts;
+            const int steps = 6;
+            for (int i = 0; i <= steps; ++i) {
+                const qreal t = qreal(i) / steps;
+                const qreal x = c.x() - dir * ew * 0.38 + dir * ew * 0.76 * t;
+                const qreal y = c.y() - eh * 0.68 - std::sin(M_PI * t) * eh * 0.14;
+                lidPts.append(pt(x, y, 0.3 + 0.4 * std::sin(M_PI * t)));
+            }
+            ops.append(makePathOp(QStringLiteral("lineart_eye_%1_lid").arg(side), lidPts, inkColor, detailSize * 1.1, 0.85));
+        }
+
+        // 4. Iris Outer Contour Line (uncolored, beautiful open-top ellipse arc)
+        {
+            QVector<KisAiStrokePoint> irisPts;
+            const int steps = 14;
+            const qreal radX = ew * 0.32;
+            const qreal radY = eh * 0.44;
+            const QPointF irisC(c.x(), c.y() - eh * 0.02);
+            for (int i = 0; i <= steps; ++i) {
+                const qreal t = M_PI * (0.08 + 0.84 * qreal(i) / steps);
+                const qreal px = irisC.x() + std::cos(t) * radX;
+                const qreal py = irisC.y() + std::sin(t) * radY;
+                const qreal p = 0.5 + 0.5 * std::sin(M_PI * qreal(i) / steps);
+                irisPts.append(pt(px, py, p));
+            }
+            ops.append(makePathOp(QStringLiteral("lineart_eye_%1_iris_contour").arg(side), irisPts, inkColor, irisSize, 1.0));
+        }
+
+        // 5. Pupil (dark inking core circle)
+        {
+            QVector<KisAiStrokePoint> pupilPts;
+            const QPointF pupilC(c.x(), c.y() - eh * 0.10);
+            const qreal prX = ew * 0.09;
+            const qreal prY = eh * 0.13;
+            const int steps = 10;
+            for (int i = 0; i <= steps; ++i) {
+                const qreal angle = 2.0 * M_PI * qreal(i) / steps;
+                pupilPts.append(pt(pupilC.x() + std::cos(angle) * prX, pupilC.y() + std::sin(angle) * prY, 0.7));
+            }
+            KisAiStrokeOperation pupilOp = makePathOp(QStringLiteral("lineart_eye_%1_pupil").arg(side), pupilPts, inkColor, detailSize * 1.2, 1.0);
+            pupilOp.closed = true;
+            ops.append(pupilOp);
+        }
+
+        // 6. Catchlight Highlight Outline Ring (unfilled circular boundary - coloring book ready)
+        {
+            QVector<KisAiStrokePoint> catchPts;
+            const QPointF catchC(c.x() - dir * ew * 0.10, c.y() - eh * 0.15);
+            const qreal crX = ew * 0.06;
+            const qreal crY = eh * 0.07;
+            const int steps = 8;
+            for (int i = 0; i <= steps; ++i) {
+                const qreal angle = 2.0 * M_PI * qreal(i) / steps;
+                catchPts.append(pt(catchC.x() + std::cos(angle) * crX, catchC.y() + std::sin(angle) * crY, 0.5));
+            }
+            KisAiStrokeOperation catchOp = makePathOp(QStringLiteral("lineart_eye_%1_catch").arg(side), catchPts, inkColor, detailSize * 0.85, 0.9);
+            catchOp.closed = true;
+            ops.append(catchOp);
+        }
+
+        // 7. Iris hatching lines (manga inking striations under pupil)
+        {
+            const int striations = 4;
+            for (int i = 0; i < striations; ++i) {
+                const qreal t = qreal(i) / qreal(striations - 1);
+                const qreal x = c.x() - ew * 0.15 + ew * 0.30 * t;
+                QVector<KisAiStrokePoint> hatch;
+                hatch.append(pt(x, c.y() + eh * 0.05, 0.2));
+                hatch.append(pt(x, c.y() + eh * 0.28, 0.45));
+                ops.append(makePathOp(QStringLiteral("lineart_eye_%1_hatch_%2").arg(side).arg(i), hatch, inkColor, detailSize * 0.7, 0.65));
+            }
+        }
+
+        // 8. Lower lash rim / tick strokes
+        {
+            QVector<KisAiStrokePoint> lowerLash;
+            const qreal lx = c.x() + dir * ew * 0.15;
+            const qreal ly = c.y() + eh * 0.48;
+            lowerLash.append(pt(lx - ew * 0.15, ly, 0.2));
+            lowerLash.append(pt(lx, ly + eh * 0.02, 0.5));
+            lowerLash.append(pt(lx + ew * 0.15, ly - eh * 0.02, 0.2));
+            ops.append(makePathOp(QStringLiteral("lineart_eye_%1_lower").arg(side), lowerLash, inkColor, detailSize, 0.85));
+        }
+    }
+
+    return ops;
+}
+
 QVector<KisAiStrokeOperation> KisAiRigLibrary::doubleLidOps(const KisAiRigParameterSet &params)
 {
     QVector<KisAiStrokeOperation> ops;

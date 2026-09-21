@@ -367,11 +367,12 @@ QWidget *KisAiStartPageWidget::createPresetsSection()
     };
 
     const QList<PresetInfo> presets = {
-        {0, QStringLiteral("🌸"), i18n("Anime & Manga Lineart"), i18n("繊細なベクター線画とセルアニメ調着彩")},
-        {1, QStringLiteral("🌆"), i18n("Cyberpunk & Scifi"), i18n("ネオンライトと大気感のあるコンセプトアート")},
-        {2, QStringLiteral("🖌️"), i18n("Watercolor & Atomic Ink"), i18n("物理シミュレーションによる滲み・水彩タッチ")},
-        {3, QStringLiteral("📐"), i18n("Vector Geometric Art"), i18n("精密な幾何学パスとストロークグラフ描写")},
-        {4, QStringLiteral("🎲"), i18n("Surprise Me! (お題生成)"), i18n("ランダムなインスピレーションプロンプトで即開始")},
+        {0, QStringLiteral("🖋️"), i18n("Anime & Manga Line Art"), i18n("彩色なし・高精細ペンタッチの純粋なインク線画と塗り絵")},
+        {1, QStringLiteral("🌸"), i18n("Anime Cel-Shading"), i18n("繊細なベクター主線と鮮やかなセルアニメ調着彩")},
+        {2, QStringLiteral("🌆"), i18n("Cyberpunk & Scifi"), i18n("ネオンライトと大気感のあるコンセプトアート")},
+        {3, QStringLiteral("🖌️"), i18n("Watercolor & Atomic Ink"), i18n("物理シミュレーションによる滲み・水彩タッチ")},
+        {4, QStringLiteral("📐"), i18n("Vector Geometric Art"), i18n("精密な幾何学パスとストロークグラフ描写")},
+        {5, QStringLiteral("🎲"), i18n("Surprise Me! (お題生成)"), i18n("ランダムなインスピレーションプロンプトで即開始")},
     };
 
     for (int i = 0; i < presets.size(); ++i) {
@@ -407,12 +408,8 @@ QWidget *KisAiStartPageWidget::createPresetsSection()
             slotApplyPreset(presetId);
         });
 
-        // 2 items per row, 5th item spans full row if odd
-        if (i < 4) {
-            grid->addWidget(btn, i / 2, i % 2);
-        } else {
-            grid->addWidget(btn, 2, 0, 1, 2);
-        }
+        // 2 items per row
+        grid->addWidget(btn, i / 2, i % 2);
     }
 
     layout->addLayout(grid);
@@ -640,23 +637,27 @@ void KisAiStartPageWidget::slotApplyPreset(int presetId)
     int styleIndex = 0;
 
     switch (presetId) {
-    case 0: // Anime & Manga Lineart
-        presetPrompt = i18n("アニメ調の繊細なキャラクター線画、高精細なペンタッチとセル着彩、ドラマチックなハイライト");
+    case 0: // Anime & Manga Line Art
+        presetPrompt = i18n("美しいアニメ風美少女の繊細な線画、高精細な髪の毛と瞳のペン画、服のシワ、交点だまり、塗り絵");
+        styleIndex = static_cast<int>(KisAiPromptAnalyzer::ArtStyle::PureLineart);
+        break;
+    case 1: // Anime Cel-Shading
+        presetPrompt = i18n("アニメ調の繊細なキャラクターイラスト、高精細なペンタッチとセル着彩、ドラマチックなハイライト");
         styleIndex = static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel);
         break;
-    case 1: // Cyberpunk
+    case 2: // Cyberpunk
         presetPrompt = i18n("雨に濡れた近未来のサイバーパンク都市、ネオンサインの反射、大気感のある光芒とシネマティックライティング");
         styleIndex = static_cast<int>(KisAiPromptAnalyzer::ArtStyle::CyberNeon);
         break;
-    case 2: // Watercolor & Atomic Ink
+    case 3: // Watercolor & Atomic Ink
         presetPrompt = i18n("伝統的な透明水彩と物理滲みインク、柔らかいエッジと美しいグラデーションの自然風景イラスト");
         styleIndex = static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor);
         break;
-    case 3: // Vector Geometric Art
+    case 4: // Vector Geometric Art
         presetPrompt = i18n("精密な幾何学的ストロークグラフ、美しい対称性を持つベクターエンブレム、ミニマルでモダンなデザイン");
         styleIndex = static_cast<int>(KisAiPromptAnalyzer::ArtStyle::FineLineart);
         break;
-    case 4: { // Surprise Me
+    case 5: { // Surprise Me
         const QStringList randomThemes = {
             i18n("夜空を泳ぐ光る巨大なクジラと星屑の海、幻想的なファンタジーアート"),
             i18n("アンティークな懐中時計と機械仕掛けの蝶、緻密なスチームパンク構造図"),
@@ -667,7 +668,7 @@ void KisAiStartPageWidget::slotApplyPreset(int presetId)
         const int pick = QRandomGenerator::global()->bounded(randomThemes.size());
         presetPrompt = randomThemes[pick];
         const int surpriseStyles[] = {static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor),
-                                      static_cast<int>(KisAiPromptAnalyzer::ArtStyle::FineLineart),
+                                      static_cast<int>(KisAiPromptAnalyzer::ArtStyle::PureLineart),
                                       static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel),
                                       static_cast<int>(KisAiPromptAnalyzer::ArtStyle::CyberNeon)};
         styleIndex = surpriseStyles[pick % 4];

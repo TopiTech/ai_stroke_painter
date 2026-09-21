@@ -670,7 +670,7 @@ QString KisAiStrokeProgramCodec::buildSystemPrompt(const QSize &canvasSize,
                                                    int artStyle)
 {
     auto spec = KisAiPromptAnalyzer::analyze(prompt, canvasSize);
-    if (artStyle > 0 && artStyle <= 5) {
+    if (artStyle > 0 && artStyle <= 7) {
         spec.style = static_cast<KisAiPromptAnalyzer::ArtStyle>(artStyle);
     }
     const QString artDirection = KisAiPromptAnalyzer::generateArtDirection(spec, canvasSize);
@@ -5044,7 +5044,7 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
     const bool reasoning = isReasoningModel(model);
     const bool vision = includeVision && isVisionModel(model) && !imageBase64.trimmed().isEmpty();
     auto spec = KisAiPromptAnalyzer::analyze(prompt, canvasSize);
-    if (artStyle > 0 && artStyle <= 5) {
+    if (artStyle > 0 && artStyle <= 7) {
         spec.style = static_cast<KisAiPromptAnalyzer::ArtStyle>(artStyle);
     }
     const QString phaseGuidance = KisAiPromptAnalyzer::generateGoalPhaseGuidance(step, spec, canvasSize, totalSteps);

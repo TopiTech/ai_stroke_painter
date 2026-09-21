@@ -587,6 +587,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     styleGrid->setSpacing(4);
     styleGrid->setContentsMargins(0, 0, 0, 0);
     const QList<QPair<QString, int>> stylePresets = {
+        {i18n("🖋️ 純線画"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::PureLineart)},
         {i18n("🌸 アニメ"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel)},
         {i18n("💧 水彩"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Watercolor)},
         {i18n("🖌️ 厚塗り"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::Impasto)},
@@ -1078,6 +1079,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_artStyleCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_artStyleCombo->setMinimumContentsLength(10);
     m_artStyleCombo->addItem(i18n("🎨 おまかせ (Auto)"), static_cast<int>(KisAiPromptAnalyzer::ArtStyle::General));
+    m_artStyleCombo->addItem(i18n("🖋️ 純線画・インク (Pure Line Art)"),
+                             static_cast<int>(KisAiPromptAnalyzer::ArtStyle::PureLineart));
     m_artStyleCombo->addItem(i18n("✨ アニメセル画 (Anime Cel)"),
                              static_cast<int>(KisAiPromptAnalyzer::ArtStyle::AnimeCel));
     m_artStyleCombo->addItem(i18n("💧 透明水彩 (Watercolor)"),
