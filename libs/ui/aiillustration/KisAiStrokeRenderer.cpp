@@ -19,6 +19,7 @@
 #include "kis_image.h"
 #include "kis_node_commands_adapter.h"
 #include "kis_paint_layer.h"
+#include "kis_transaction.h"
 #include <KoCompositeOpRegistry.h>
 #include <QApplication>
 #include <QThread>
@@ -830,8 +831,10 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
         }
 
         if (layer) {
+            KisTransaction transaction(layer->paintDevice());
             layer->paintDevice()->clear();
             layer->paintDevice()->convertFromQImage(layerImage, nullptr);
+            adapter.addExtraCommand(transaction.endAndTake());
             layer->setDirty(bounds);
         } else {
             layer = new KisPaintLayer(image, layerTitle, OPACITY_OPAQUE_U8);
@@ -901,8 +904,10 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
                     exBloom = exBloom->nextSibling();
                 }
                 if (bloomLayer) {
+                    KisTransaction transaction(bloomLayer->paintDevice());
                     bloomLayer->paintDevice()->clear();
                     bloomLayer->paintDevice()->convertFromQImage(bloomGlow, nullptr);
+                    adapter.addExtraCommand(transaction.endAndTake());
                     bloomLayer->setDirty(bounds);
                 } else {
                     // 40% opacity Screen blending for soft atmospheric glow
@@ -938,8 +943,10 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
             exGrade = exGrade->nextSibling();
         }
         if (gradeLayer) {
+            KisTransaction transaction(gradeLayer->paintDevice());
             gradeLayer->paintDevice()->clear();
             gradeLayer->paintDevice()->convertFromQImage(gradeImg, nullptr);
+            adapter.addExtraCommand(transaction.endAndTake());
             gradeLayer->setDirty(bounds);
         } else {
             gradeLayer = new KisPaintLayer(image, QStringLiteral("🎨 AI: Grade"), qRound(0.50 * 255));
@@ -965,8 +972,10 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
                 exVig = exVig->nextSibling();
             }
             if (vigLayer) {
+                KisTransaction transaction(vigLayer->paintDevice());
                 vigLayer->paintDevice()->clear();
                 vigLayer->paintDevice()->convertFromQImage(vignetteImg, nullptr);
+                adapter.addExtraCommand(transaction.endAndTake());
                 vigLayer->setDirty(bounds);
             } else {
                 vigLayer = new KisPaintLayer(image, QStringLiteral("🎨 AI: Vignette"), qRound(0.70 * 255));
@@ -993,8 +1002,10 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
                 exGrain = exGrain->nextSibling();
             }
             if (grainLayer) {
+                KisTransaction transaction(grainLayer->paintDevice());
                 grainLayer->paintDevice()->clear();
                 grainLayer->paintDevice()->convertFromQImage(grainImg, nullptr);
+                adapter.addExtraCommand(transaction.endAndTake());
                 grainLayer->setDirty(bounds);
             } else {
                 grainLayer = new KisPaintLayer(image, QStringLiteral("🎨 AI: Film Grain"), qRound(0.60 * 255));

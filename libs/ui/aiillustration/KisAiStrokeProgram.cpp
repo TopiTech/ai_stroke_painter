@@ -1487,16 +1487,16 @@ QString KisAiStrokeProgramCodec::sanitizeAndExtractJson(const QString &rawText, 
 
     if (effectiveFirstBrace >= 0 && firstBracket >= 0) {
         if (effectiveFirstBrace <= firstBracket) {
-            startPos = firstBrace; // If firstBrace < 0, let repairJsonSyntax normalize full-width brace
-            closeChar = QLatin1Char('}');
+            startPos = effectiveFirstBrace;
+            closeChar = (effectiveFirstBrace == firstBrace) ? QLatin1Char('}') : QChar(0xFF5D);
         } else if (text.left(firstBracket).trimmed().isEmpty()) {
             startPos = firstBracket;
             closeChar = QLatin1Char(']');
         }
-    } else if (firstBrace >= 0) {
-        startPos = firstBrace;
-        closeChar = QLatin1Char('}');
-    } else if (firstBracket >= 0 && effectiveFirstBrace < 0) {
+    } else if (effectiveFirstBrace >= 0) {
+        startPos = effectiveFirstBrace;
+        closeChar = (effectiveFirstBrace == firstBrace) ? QLatin1Char('}') : QChar(0xFF5D);
+    } else if (firstBracket >= 0) {
         if (text.left(firstBracket).trimmed().isEmpty()) {
             startPos = firstBracket;
             closeChar = QLatin1Char(']');
@@ -1504,7 +1504,16 @@ QString KisAiStrokeProgramCodec::sanitizeAndExtractJson(const QString &rawText, 
     }
 
     if (startPos >= 0) {
-        const int lastPos = text.lastIndexOf(closeChar);
+        int lastPos = -1;
+        if (closeChar == QLatin1Char(']')) {
+            const int lastBracket = text.lastIndexOf(QLatin1Char(']'));
+            const int lastFullBracket = text.lastIndexOf(QChar(0xFF3D)); // 全角 ］
+            lastPos = std::max(lastBracket, lastFullBracket);
+        } else {
+            const int lastBrace = text.lastIndexOf(QLatin1Char('}'));
+            const int lastFullBrace = text.lastIndexOf(QChar(0xFF5D)); // 全角 ｝
+            lastPos = std::max(lastBrace, lastFullBrace);
+        }
         if (lastPos > startPos) {
             const QString candidate = text.mid(startPos, lastPos - startPos + 1).trimmed();
             QJsonParseError cErr;
@@ -5081,10 +5090,12 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
                                                           const QString &visionDetail,
                                                           bool forceJsonObjectOnly,
                                                           bool isRefinementExtraStep,
-                                                          qreal targetReadiness)
+                                                          qreal targetReadiness,
+                                                          const QString &referenceImageBase64)
 {
     const bool reasoning = isReasoningModel(model);
-    const bool vision = includeVision && isVisionModel(model) && !imageBase64.trimmed().isEmpty();
+    const bool vision = includeVision && isVisionModel(model)
+        && (!imageBase64.trimmed().isEmpty() || !referenceImageBase64.trimmed().isEmpty());
     auto spec = KisAiPromptAnalyzer::analyze(prompt, canvasSize);
     if (artStyle > 0 && artStyle <= 7) {
         spec.style = static_cast<KisAiPromptAnalyzer::ArtStyle>(artStyle);
@@ -5228,24 +5239,47 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
 
     QJsonObject userMsg;
     userMsg[QStringLiteral("role")] = QStringLiteral("user");
-    if (vision && !imageBase64.trimmed().isEmpty()) {
+    if (vision && (!imageBase64.trimmed().isEmpty() || !referenceImageBase64.trimmed().isEmpty())) {
         QJsonArray contentArray;
         contentArray.append(
             QJsonObject{{QStringLiteral("type"), QStringLiteral("text")}, {QStringLiteral("text"), userText}});
-        QString imageUrl = imageBase64.trimmed();
-        if (!imageUrl.startsWith(QLatin1String("data:image/"))) {
-            imageUrl = QStringLiteral("data:image/jpeg;base64,") + imageUrl;
+
+        if (!referenceImageBase64.trimmed().isEmpty()) {
+            QString refUrl = referenceImageBase64.trimmed();
+            if (!refUrl.startsWith(QLatin1String("data:image/"))) {
+                refUrl = QStringLiteral("data:image/jpeg;base64,") + refUrl;
+            }
+            contentArray.append(
+                QJsonObject{{QStringLiteral("type"), QStringLiteral("text")},
+                            {QStringLiteral("text"), QStringLiteral("[Reference Image / Target Style & Character]") }});
+            contentArray.append(
+                QJsonObject{{QStringLiteral("type"), QStringLiteral("image_url")},
+                            {QStringLiteral("image_url"),
+                             QJsonObject{{QStringLiteral("url"), refUrl}, {QStringLiteral("detail"), QStringLiteral("high")}}}});
         }
 
-        QString detail = visionDetail.trimmed().toLower();
-        if (detail.isEmpty() || detail == QLatin1String("auto")) {
-            detail = (step >= totalSteps) ? QStringLiteral("high") : QStringLiteral("low");
-        }
+        if (!imageBase64.trimmed().isEmpty()) {
+            QString imageUrl = imageBase64.trimmed();
+            if (!imageUrl.startsWith(QLatin1String("data:image/"))) {
+                imageUrl = QStringLiteral("data:image/jpeg;base64,") + imageUrl;
+            }
 
-        contentArray.append(
-            QJsonObject{{QStringLiteral("type"), QStringLiteral("image_url")},
-                        {QStringLiteral("image_url"),
-                         QJsonObject{{QStringLiteral("url"), imageUrl}, {QStringLiteral("detail"), detail}}}});
+            QString detail = visionDetail.trimmed().toLower();
+            if (detail.isEmpty() || detail == QLatin1String("auto")) {
+                detail = (step >= totalSteps) ? QStringLiteral("high") : QStringLiteral("low");
+            }
+
+            if (!referenceImageBase64.trimmed().isEmpty()) {
+                contentArray.append(
+                    QJsonObject{{QStringLiteral("type"), QStringLiteral("text")},
+                                {QStringLiteral("text"), QStringLiteral("[Current Canvas Screenshot / Painting Progress]") }});
+            }
+
+            contentArray.append(
+                QJsonObject{{QStringLiteral("type"), QStringLiteral("image_url")},
+                            {QStringLiteral("image_url"),
+                             QJsonObject{{QStringLiteral("url"), imageUrl}, {QStringLiteral("detail"), detail}}}});
+        }
         userMsg[QStringLiteral("content")] = contentArray;
     } else {
         userMsg[QStringLiteral("content")] = userText;

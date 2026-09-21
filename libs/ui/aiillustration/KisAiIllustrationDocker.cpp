@@ -1808,7 +1808,7 @@ void KisAiIllustrationDocker::createCanvas()
 
 void KisAiIllustrationDocker::generateIllustration()
 {
-    if (m_reply || m_goalModeActive) {
+    if (m_reply || m_goalModeActive || (m_retryTimer && m_retryTimer->isActive()) || m_retryInFlight) {
         return;
     }
 
@@ -1822,6 +1822,9 @@ void KisAiIllustrationDocker::generateIllustration()
     if (!ensureCanvas()) {
         return;
     }
+
+    KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
+    m_targetImage = view ? view->image() : nullptr;
 
     const QString effectivePrompt = buildEffectivePrompt(prompt);
 
@@ -2479,11 +2482,16 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         addHistorySnapshot(snapshot);
     }
 
-    KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
-    if (view && view->image()) {
+    KisImageWSP targetImage = m_targetImage;
+    m_targetImage = nullptr;
+    if (!targetImage && m_mainWindow && m_mainWindow->activeView()) {
+        targetImage = m_mainWindow->activeView()->image();
+    }
+
+    if (targetImage) {
         QString statusMsg;
-        if (KisAiStrokeRenderer::renderProgramToLayers(view->image(),
-                                                       m_mainWindow->viewManager(),
+        if (KisAiStrokeRenderer::renderProgramToLayers(targetImage,
+                                                       m_mainWindow ? m_mainWindow->viewManager() : nullptr,
                                                        program,
                                                        &statusMsg,
                                                        true,
@@ -2759,12 +2767,15 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
         snapshot.modeIndex = static_cast<int>(GenerationMode::RemoteImage);
         addHistorySnapshot(snapshot);
     }
+    m_targetImage = nullptr;
 }
 
 void KisAiIllustrationDocker::cancelRemoteRequest()
 {
     cancelRetry();
     stopAllRequestTimers();
+    m_targetImage = nullptr;
+    m_goalTargetImage = nullptr;
     m_waitingForCompositionPlan = false;
     m_compositionDirectives.clear();
     m_streamedContent.clear();
@@ -3098,13 +3109,16 @@ bool KisAiIllustrationDocker::addImageAsLayer(const QImage &sourceImage, const Q
         return false;
     }
 
+    KisImageWSP image = m_targetImage;
     KisView *view = m_mainWindow->activeView();
-    if (!view || !view->image()) {
+    if (!image && view) {
+        image = view->image();
+    }
+    if (!image) {
         setStatus(i18n("キャンバスが利用できないため、生成結果を追加できません。"), true);
         return false;
     }
 
-    KisImageWSP image = view->image();
     const QRect bounds = image->bounds();
     if (bounds.isEmpty()) {
         setStatus(i18n("キャンバスの大きさが無効です。"), true);
@@ -3124,7 +3138,7 @@ bool KisAiIllustrationDocker::addImageAsLayer(const QImage &sourceImage, const Q
     KisPaintLayerSP layer = new KisPaintLayer(image, layerName, OPACITY_OPAQUE_U8);
     layer->paintDevice()->convertFromQImage(canvasImage, nullptr);
 
-    KisNodeSP aboveNode = view->currentNode();
+    KisNodeSP aboveNode = (view && view->image() == image) ? view->currentNode() : nullptr;
     KisNodeSP parentNode = aboveNode ? aboveNode->parent() : image->root();
     if (!parentNode) {
         parentNode = image->root();
@@ -3133,7 +3147,9 @@ bool KisAiIllustrationDocker::addImageAsLayer(const QImage &sourceImage, const Q
 
     KisNodeCommandsAdapter adapter(m_mainWindow->viewManager());
     adapter.addNode(layer, parentNode, aboveNode);
-    view->setCurrentNode(layer);
+    if (view && view->image() == image) {
+        view->setCurrentNode(layer);
+    }
     return true;
 }
 
@@ -3249,6 +3265,10 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
     if (!ensureCanvas()) {
         return;
     }
+
+    KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
+    m_goalTargetImage = view ? view->image() : nullptr;
+    m_targetImage = m_goalTargetImage;
 
     m_goalModeActive = true;
     m_goalPrompt = prompt;
@@ -3492,20 +3512,28 @@ void KisAiIllustrationDocker::executeGoalStep()
         }
 
         QString imageBase64;
+        QString referenceImageBase64;
         if (!m_goalVisionFallbackActive) {
+            if (!m_referenceImageBase64.isEmpty()) {
+                referenceImageBase64 = m_referenceImageBase64;
+            }
             if (m_goalCurrentStep > 1) {
-                KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
-                if (view && view->image()) {
+                KisImageWSP targetImage = m_goalTargetImage;
+                if (!targetImage && m_mainWindow && m_mainWindow->activeView()) {
+                    targetImage = m_mainWindow->activeView()->image();
+                }
+                if (targetImage) {
 #ifndef AI_STROKE_STANDALONE
-                    imageBase64 = KisAiStrokeRenderer::captureCanvasBase64(view->image(), 768);
+                    imageBase64 = KisAiStrokeRenderer::captureCanvasBase64(targetImage, 768);
 #endif
                 }
             } else if (!m_referenceImageBase64.isEmpty()) {
                 imageBase64 = m_referenceImageBase64;
+                referenceImageBase64.clear();
             }
         }
 
-        m_lastGoalRequestHadImage = (!imageBase64.isEmpty() && !m_goalVisionFallbackActive);
+        m_lastGoalRequestHadImage = ((!imageBase64.isEmpty() || !referenceImageBase64.isEmpty()) && !m_goalVisionFallbackActive);
 
         bool enforceJson = false;
         bool forceJsonObjectOnly = false;
@@ -3577,7 +3605,8 @@ void KisAiIllustrationDocker::executeGoalStep()
             m_visionQualityCombo ? m_visionQualityCombo->currentData().toString() : QStringLiteral("auto"),
             forceJsonObjectOnly,
             isExtraRefine,
-            m_goalTargetReadiness);
+            m_goalTargetReadiness,
+            referenceImageBase64);
 
         logDebug(QStringLiteral("GOAL_REQ"),
                  QStringLiteral(
@@ -3923,11 +3952,14 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
             QPixmap::fromImage(preview).scaled(previewTargetSize, Qt::KeepAspectRatio, Qt::SmoothTransformation));
     }
 
-    KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
-    if (view && view->image()) {
+    KisImageWSP targetImage = m_goalTargetImage;
+    if (!targetImage && m_mainWindow && m_mainWindow->activeView()) {
+        targetImage = m_mainWindow->activeView()->image();
+    }
+    if (targetImage) {
         QString statusMsg;
-        if (KisAiStrokeRenderer::renderProgramToLayers(view->image(),
-                                                       m_mainWindow->viewManager(),
+        if (KisAiStrokeRenderer::renderProgramToLayers(targetImage,
+                                                       m_mainWindow ? m_mainWindow->viewManager() : nullptr,
                                                        m_goalAccumulatedProgram,
                                                        &statusMsg,
                                                        true,
@@ -4057,6 +4089,7 @@ void KisAiIllustrationDocker::finishGoalMode(bool success)
     m_lastGoalRequestHadImage = false;
     m_goalAccumulatedProgram = KisAiStrokeProgram();
     m_lastGoalCritique.clear();
+    m_goalTargetImage = nullptr;
 
     logDebug(QStringLiteral("GOAL_FINISH"),
              QStringLiteral("Goalモード終了 (success=%1, step=%2/%3)")
@@ -5477,10 +5510,20 @@ void KisAiIllustrationDocker::setReferenceImage(const QImage &image)
     }
     m_referenceImage = scaledImage;
 
+    // Composite transparent regions onto a solid white background so that
+    // alpha channels in sketches, PNG cutouts, or transparent layers do not
+    // convert to solid black in JPEG encoding.
+    QImage rgb(scaledImage.size(), QImage::Format_RGB32);
+    rgb.fill(Qt::white);
+    {
+        QPainter p(&rgb);
+        p.drawImage(0, 0, scaledImage);
+    }
+
     QByteArray bytes;
     QBuffer buffer(&bytes);
     buffer.open(QIODevice::WriteOnly);
-    scaledImage.save(&buffer, "JPEG", 85);
+    rgb.save(&buffer, "JPEG", 85);
     m_referenceImageBase64 = QString::fromLatin1(bytes.toBase64());
 
     updateReferenceImageUi();
@@ -5531,7 +5574,13 @@ void KisAiIllustrationDocker::selectReferenceImageFromFile()
     if (filePath.isEmpty()) {
         return;
     }
-    QImage loaded(filePath);
+    QImageReader reader(filePath);
+    reader.setAutoTransform(true);
+    if (reader.size().isValid() && (reader.size().width() > 16384 || reader.size().height() > 16384)) {
+        setStatus(i18n("画像サイズが大きすぎます: %1×%2", reader.size().width(), reader.size().height()), true);
+        return;
+    }
+    const QImage loaded = reader.read();
     if (loaded.isNull()) {
         setStatus(i18n("画像ファイルの読み込みに失敗しました: %1", filePath), true);
         return;

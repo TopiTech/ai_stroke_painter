@@ -7,6 +7,7 @@
 #define KIS_AI_ILLUSTRATION_DOCKER_H
 
 #include "KisAiStrokeProgram.h"
+#include <kis_types.h>
 #include <QByteArray>
 #include <QDockWidget>
 #include <QDateTime>
@@ -178,9 +179,11 @@ private:
     KisAiStrokeQualityReport m_lastQualityReport;
     bool m_isQualityCorrectionRetry {false};
     QString m_inFlightApiKey;
+    KisImageWSP m_targetImage;
 
     // Goal Mode State
     bool m_goalModeActive {false};
+    KisImageWSP m_goalTargetImage;
     int m_goalCurrentStep {1};
     int m_goalTotalSteps {4};
     int m_goalMaxExtraSteps {4};

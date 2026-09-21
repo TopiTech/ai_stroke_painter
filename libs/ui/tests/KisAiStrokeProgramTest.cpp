@@ -50,6 +50,10 @@ void KisAiStrokeProgramTest::testSanitizeAndExtractJson()
     // Test 4: conversational preamble and postamble without codeblock, with single-quote syntax repair
     const QString noisyWithPostamble = QStringLiteral("Here is the JSON:\n{'schema_version': 2, 'operations': []}\nHope you like it!");
     QCOMPARE(KisAiStrokeProgramCodec::sanitizeAndExtractJson(noisyWithPostamble), plain);
+
+    // Test 5: conversational preamble and postamble with full-width Japanese braces (｛ ｝) and without codeblock
+    const QString fullWidthNoisy = QStringLiteral("はい、生成されたJSONプログラムです：\n｛\"schema_version\": 2, \"operations\": []｝\nご確認ください。");
+    QCOMPARE(KisAiStrokeProgramCodec::sanitizeAndExtractJson(fullWidthNoisy), plain);
 }
 
 void KisAiStrokeProgramTest::testParseValidProgram()
@@ -918,6 +922,47 @@ void KisAiStrokeProgramTest::testGoalModePayloadAndVisionModelDetection()
     const QJsonArray msgsFallback = fallbackPayload.value(QStringLiteral("messages")).toArray();
     QCOMPARE(msgsFallback.size(), 2);
     QVERIFY(msgsFallback.at(1).toObject().value(QStringLiteral("content")).isString());
+
+    // 5. Dual-Image Payload: Both canvas image and reference image attached
+    const QString fakeRefB64 = QStringLiteral("iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAADklEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==");
+    const QJsonObject dualImagePayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("cyberpunk samurai"),
+        canvasSize,
+        2,
+        4,
+        fakeB64,
+        QStringLiteral("Refine armor highlights"),
+        400,
+        QString(),
+        true, // includeVision
+        true, // enableStreaming
+        false, // enforceJsonFormat
+        0.5,
+        1.0,
+        0,
+        0,
+        nullptr,
+        QString(),
+        QStringLiteral("auto"),
+        false,
+        false,
+        0.85,
+        fakeRefB64 // referenceImageBase64
+    );
+    const QJsonArray msgsDual = dualImagePayload.value(QStringLiteral("messages")).toArray();
+    QCOMPARE(msgsDual.size(), 2);
+    QVERIFY(msgsDual.at(1).toObject().value(QStringLiteral("content")).isArray());
+    const QJsonArray dualContentParts = msgsDual.at(1).toObject().value(QStringLiteral("content")).toArray();
+    int imageCount = 0;
+    for (const auto &item : dualContentParts) {
+        if (item.toObject().value(QStringLiteral("type")).toString() == QLatin1String("image_url")) {
+            ++imageCount;
+            const QString u = item.toObject().value(QStringLiteral("image_url")).toObject().value(QStringLiteral("url")).toString();
+            QVERIFY(u.startsWith(QStringLiteral("data:image/jpeg;base64,")));
+        }
+    }
+    QCOMPARE(imageCount, 2);
 }
 
 void KisAiStrokeProgramTest::testGoalModeProgramStepAndMerge()

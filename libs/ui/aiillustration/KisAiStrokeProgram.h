@@ -401,7 +401,8 @@ public:
                                             const QString &visionDetail = QStringLiteral("auto"),
                                             bool forceJsonObjectOnly = false,
                                             bool isRefinementExtraStep = false,
-                                            qreal targetReadiness = 0.85);
+                                            qreal targetReadiness = 0.85,
+                                            const QString &referenceImageBase64 = QString());
 
     /**
      * Parse SSE (Server-Sent Events) chunks into accumulated text content.

@@ -1209,6 +1209,20 @@ void KisAiStrokeRendererTest::testCaptureImageBase64RejectsInvalidArguments()
 
     // Out-of-range quality must not reach QImage::save() unchanged.
     QVERIFY(!KisAiStrokeRenderer::captureImageBase64(image, 768, 9999).isEmpty());
+
+    // Transparent RGBA image must be composited onto solid white, not black
+    QImage transparentImg(64, 64, QImage::Format_ARGB32);
+    transparentImg.fill(Qt::transparent);
+    const QString transDataUrl = KisAiStrokeRenderer::captureImageBase64(transparentImg, 64, 85);
+    QVERIFY(!transDataUrl.isEmpty());
+    const QByteArray transPayload =
+        QByteArray::fromBase64(transDataUrl.mid(QStringLiteral("data:image/jpeg;base64,").size()).toLatin1());
+    QImage decodedImg;
+    decodedImg.loadFromData(transPayload, "JPEG");
+    QVERIFY(!decodedImg.isNull());
+    const QRgb centerPixel = decodedImg.pixel(32, 32);
+    QVERIFY2(qRed(centerPixel) > 240 && qGreen(centerPixel) > 240 && qBlue(centerPixel) > 240,
+             "Transparent image was not composited onto white background; resulted in dark/black pixels");
 }
 
 void KisAiStrokeRendererTest::testPxBrushSizeSurvivesSupersampling()
