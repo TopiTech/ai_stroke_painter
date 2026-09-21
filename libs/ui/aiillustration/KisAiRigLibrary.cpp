@@ -477,28 +477,63 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::noseOps(const KisAiRigParameterSe
     const qreal s = params.headWidth * 0.012;
     const QColor shadowColor = mixColor(params.skinTone, QColor(150, 90, 80), params.nose.shadowStrength);
 
-    // Tiny point + short shadow; solid black noses stay impossible because the
-    // color derives from skin tone at clamped strength.
+    // 1. Delicate nasal bridge highlight
+    {
+        QPolygonF bridgePoly;
+        const qreal bhTop = noseY - s * 3.5;
+        const qreal bhBot = noseY - s * 0.8;
+        const qreal bhW = s * 0.55;
+        bridgePoly.append(QPointF(noseX - bhW * 0.5, bhTop));
+        bridgePoly.append(QPointF(noseX + bhW * 0.5, bhTop));
+        bridgePoly.append(QPointF(noseX + bhW * 0.8, bhBot));
+        bridgePoly.append(QPointF(noseX - bhW * 0.8, bhBot));
+        KisAiStrokeOperation hlOp;
+        hlOp.kind = KisAiStrokeOperation::Kind::Fill;
+        hlOp.id = QStringLiteral("rig_nose_bridge_highlight");
+        hlOp.groupId = QStringLiteral("nose");
+        hlOp.role = QStringLiteral("highlight");
+        hlOp.layer = QStringLiteral("Highlights");
+        hlOp.polygon = bridgePoly;
+        hlOp.brush.color = QColor(255, 255, 255);
+        hlOp.brush.opacity = 0.40;
+        hlOp.brush.profile = QStringLiteral("airbrush");
+        hlOp.fillStyle = QStringLiteral("wash");
+        hlOp.blendMode = QStringLiteral("screen");
+        ops.append(hlOp);
+    }
+
+    // 2. Soft warm tone cast shadow wash under nose tip
+    {
+        QPolygonF shadowPoly;
+        shadowPoly.append(QPointF(noseX, noseY));
+        shadowPoly.append(QPointF(noseX + s * 2.2, noseY + s * 0.6));
+        shadowPoly.append(QPointF(noseX + s * 1.5, noseY + s * 1.6));
+        shadowPoly.append(QPointF(noseX - s * 0.4, noseY + s * 0.8));
+        KisAiStrokeOperation shOp;
+        shOp.kind = KisAiStrokeOperation::Kind::Fill;
+        shOp.id = QStringLiteral("rig_nose_shadow");
+        shOp.groupId = QStringLiteral("nose");
+        shOp.role = QStringLiteral("shadow");
+        shOp.layer = QStringLiteral("Shading");
+        shOp.polygon = shadowPoly;
+        shOp.brush.color = shadowColor;
+        shOp.brush.opacity = qBound<qreal>(0.20, params.nose.shadowStrength * 0.45, 0.50);
+        shOp.brush.profile = QStringLiteral("watercolor");
+        shOp.fillStyle = QStringLiteral("wash");
+        ops.append(shOp);
+    }
+
+    // 3. Delicate pressure-tapered tip mark
     {
         QVector<KisAiStrokePoint> pts;
-        pts.append(pt(noseX, noseY - s, 0.5));
-        pts.append(pt(noseX, noseY, 0.9));
-        pts.append(pt(noseX, noseY + s, 0.5));
+        pts.append(pt(noseX - s * 0.35, noseY + s * 0.05, 0.30));
+        pts.append(pt(noseX, noseY + s * 0.35, 0.85));
+        pts.append(pt(noseX + s * 0.75, noseY + s * 0.20, 0.30));
         ops.append(makePathOp(QStringLiteral("rig_nose_point"),
                               pts,
-                              mixColor(params.skinTone, QColor(120, 70, 62), 0.45),
-                              lineWeightBase(params.lineWeight) * 0.9,
-                              0.8));
-    }
-    {
-        QVector<KisAiStrokePoint> pts;
-        pts.append(pt(noseX + s * 1.5, noseY + s * 0.4, 0.9));
-        pts.append(pt(noseX + s * 3.0, noseY + s * 1.2, 0.25));
-        ops.append(makePathOp(QStringLiteral("rig_nose_shadow"),
-                              pts,
-                              shadowColor,
-                              lineWeightBase(params.lineWeight) * 1.4,
-                              params.nose.shadowStrength));
+                              mixColor(params.skinTone, QColor(115, 60, 52), 0.50),
+                              lineWeightBase(params.lineWeight) * 0.75,
+                              0.85));
     }
     return ops;
 }
@@ -1185,6 +1220,12 @@ KisAiRigLibrary::hierarchicalHairClumpOps(const KisAiRigParameterSet &params, co
 
     QRandomGenerator rng(seed);
 
+    const auto evalCubic =
+        [](const QPointF &p0, const QPointF &p1, const QPointF &p2, const QPointF &p3, qreal t) -> QPointF {
+        const qreal it = 1.0 - t;
+        return it * it * it * p0 + 3.0 * it * it * t * p1 + 3.0 * it * t * t * p2 + t * t * t * p3;
+    };
+
     // Generate 5 main volumetric hair fringe clumps across the forehead
     constexpr int clumpCount = 5;
     for (int c = 0; c < clumpCount; ++c) {
@@ -1199,18 +1240,30 @@ KisAiRigLibrary::hierarchicalHairClumpOps(const KisAiRigParameterSet &params, co
         const qreal tipY = rootY + tipLen;
         const qreal clumpW = hw * (0.28 + rng.generateDouble() * 0.12);
 
-        // Build volumetric clump ribbon polygon: rootLeft -> tip -> rootRight
+        // Bezier control points for left and right ribbons
+        const QPointF pL0(rootX - clumpW * 0.5, rootY);
+        const QPointF pL1(rootX - clumpW * 0.55 + sBend * 0.3, rootY + tipLen * 0.35);
+        const QPointF pL2(tipX - clumpW * 0.18 + sBend * 0.7, rootY + tipLen * 0.75);
+        const QPointF pL3(tipX, tipY);
+
+        const QPointF pR0(tipX, tipY);
+        const QPointF pR1(tipX + clumpW * 0.18 + sBend * 0.7, rootY + tipLen * 0.75);
+        const QPointF pR2(rootX + clumpW * 0.55 + sBend * 0.3, rootY + tipLen * 0.35);
+        const QPointF pR3(rootX + clumpW * 0.5, rootY);
+
         QPolygonF clumpPoly;
-        clumpPoly.append(QPointF(rootX - clumpW * 0.5, rootY));
-        clumpPoly.append(QPointF(rootX - clumpW * 0.65, rootY + tipLen * 0.45));
-        clumpPoly.append(QPointF(tipX, tipY)); // Sharp tapered tip
-        clumpPoly.append(QPointF(rootX + clumpW * 0.65, rootY + tipLen * 0.45));
-        clumpPoly.append(QPointF(rootX + clumpW * 0.5, rootY));
+        constexpr int steps = 8;
+        for (int i = 0; i <= steps; ++i) {
+            clumpPoly.append(evalCubic(pL0, pL1, pL2, pL3, qreal(i) / steps));
+        }
+        for (int i = 1; i <= steps; ++i) {
+            clumpPoly.append(evalCubic(pR0, pR1, pR2, pR3, qreal(i) / steps));
+        }
 
         // 1. Clump Cast Shadow (slightly offset downward)
         QPolygonF shadowPoly;
         for (const auto &p : clumpPoly) {
-            shadowPoly.append(p + QPointF(0.003, 0.008));
+            shadowPoly.append(p + QPointF(0.002, 0.005));
         }
         const QString group = QStringLiteral("hair_clump_%1").arg(c);
         KisAiStrokeOperation shOp;
@@ -1221,7 +1274,7 @@ KisAiRigLibrary::hierarchicalHairClumpOps(const KisAiRigParameterSet &params, co
         shOp.layer = QStringLiteral("Shading");
         shOp.polygon = shadowPoly;
         shOp.brush.color = hairShadow;
-        shOp.brush.opacity = 0.45;
+        shOp.brush.opacity = 0.28;
         shOp.brush.profile = QStringLiteral("watercolor");
         shOp.fillStyle = QStringLiteral("wash");
         ops.append(shOp);
@@ -1240,12 +1293,14 @@ KisAiRigLibrary::hierarchicalHairClumpOps(const KisAiRigParameterSet &params, co
         bodyOp.fillStyle = QStringLiteral("contour");
         ops.append(bodyOp);
 
-        // 3. V9: left and right clump contours as separate strokes (入り抜き).
-
+        // 3. Left and right clump contours as smooth Bezier strokes (入り抜き)
         QVector<KisAiStrokePoint> leftPts;
-        leftPts.append(KisAiStrokePoint(rootX - clumpW * 0.5, rootY, 0.3));
-        leftPts.append(KisAiStrokePoint(rootX - clumpW * 0.65, rootY + tipLen * 0.45, 0.7));
-        leftPts.append(KisAiStrokePoint(tipX, tipY, 0.2));
+        for (int i = 0; i <= steps; ++i) {
+            const qreal t = qreal(i) / steps;
+            const QPointF pt = evalCubic(pL0, pL1, pL2, pL3, t);
+            const qreal pressure = (i == 0) ? 0.35 : (i == steps ? 0.20 : (0.45 + 0.35 * std::sin(t * M_PI)));
+            leftPts.append(KisAiStrokePoint(pt.x(), pt.y(), pressure));
+        }
         KisAiStrokeOperation leftOp;
         leftOp.kind = KisAiStrokeOperation::Kind::Path;
         leftOp.id = QStringLiteral("hair_clump_line_%1_l").arg(c);
@@ -1256,15 +1311,18 @@ KisAiRigLibrary::hierarchicalHairClumpOps(const KisAiRigParameterSet &params, co
         leftOp.points = leftPts;
         leftOp.smooth = true;
         leftOp.brush.color = hairLine;
-        leftOp.brush.size = 0.0035;
+        leftOp.brush.size = 0.0028;
         leftOp.brush.profile = QStringLiteral("gpen");
-        leftOp.brush.opacity = 0.90;
+        leftOp.brush.opacity = 0.85;
         ops.append(leftOp);
 
         QVector<KisAiStrokePoint> rightPts;
-        rightPts.append(KisAiStrokePoint(rootX + clumpW * 0.5, rootY, 0.3));
-        rightPts.append(KisAiStrokePoint(rootX + clumpW * 0.65, rootY + tipLen * 0.45, 0.7));
-        rightPts.append(KisAiStrokePoint(tipX, tipY, 0.2));
+        for (int i = 0; i <= steps; ++i) {
+            const qreal t = qreal(i) / steps;
+            const QPointF pt = evalCubic(pR0, pR1, pR2, pR3, t);
+            const qreal pressure = (i == 0) ? 0.20 : (i == steps ? 0.35 : (0.45 + 0.35 * std::sin(t * M_PI)));
+            rightPts.append(KisAiStrokePoint(pt.x(), pt.y(), pressure));
+        }
         KisAiStrokeOperation rightOp;
         rightOp.kind = KisAiStrokeOperation::Kind::Path;
         rightOp.id = QStringLiteral("hair_clump_line_%1_r").arg(c);
@@ -1275,10 +1333,37 @@ KisAiRigLibrary::hierarchicalHairClumpOps(const KisAiRigParameterSet &params, co
         rightOp.points = rightPts;
         rightOp.smooth = true;
         rightOp.brush.color = hairLine;
-        rightOp.brush.size = 0.0035;
+        rightOp.brush.size = 0.0028;
         rightOp.brush.profile = QStringLiteral("gpen");
-        rightOp.brush.opacity = 0.90;
+        rightOp.brush.opacity = 0.85;
         ops.append(rightOp);
+
+        // Volumetric inner strand gleam along center spine
+        QVector<KisAiStrokePoint> shinePts;
+        const QPointF pS0(rootX, rootY);
+        const QPointF pS1(rootX + sBend * 0.2, rootY + tipLen * 0.30);
+        const QPointF pS2(tipX + sBend * 0.5, rootY + tipLen * 0.65);
+        const QPointF pS3(tipX, tipY - tipLen * 0.12);
+        for (int i = 0; i <= 6; ++i) {
+            const qreal t = qreal(i) / 6;
+            const QPointF pt = evalCubic(pS0, pS1, pS2, pS3, t);
+            shinePts.append(KisAiStrokePoint(pt.x(), pt.y(), 0.35 + 0.35 * std::sin(t * M_PI)));
+        }
+        KisAiStrokeOperation shineOp;
+        shineOp.kind = KisAiStrokeOperation::Kind::Path;
+        shineOp.id = QStringLiteral("hair_clump_shine_%1").arg(c);
+        shineOp.groupId = group;
+        shineOp.parentId = bodyOp.id;
+        shineOp.role = QStringLiteral("highlight");
+        shineOp.layer = QStringLiteral("Highlights");
+        shineOp.points = shinePts;
+        shineOp.smooth = true;
+        shineOp.brush.color = QColor(255, 255, 255);
+        shineOp.brush.size = 0.0022;
+        shineOp.brush.profile = QStringLiteral("airbrush");
+        shineOp.brush.opacity = 0.40;
+        shineOp.blendMode = QStringLiteral("screen");
+        ops.append(shineOp);
     }
 
     // Delicate flyaway wisps (loose strands adding organic liveliness)
@@ -1323,17 +1408,28 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::draperyFoldOps(const QPointF &ori
     if (dist < 1e-4)
         return ops;
 
-    const QPointF mid = (origin + target) * 0.5;
     // Perpendicular sag vector for catenary drape curve
     const QPointF normal(-delta.y() / dist, delta.x() / dist);
-    const qreal sag = dist * 0.18;
-    const QPointF sagPoint = mid + normal * sag;
+    const qreal sag = dist * 0.16;
 
-    // 1. Tension fold lineart
+    const auto evalCubic =
+        [](const QPointF &p0, const QPointF &p1, const QPointF &p2, const QPointF &p3, qreal t) -> QPointF {
+        const qreal it = 1.0 - t;
+        return it * it * it * p0 + 3.0 * it * it * t * p1 + 3.0 * it * t * t * p2 + t * t * t * p3;
+    };
+
+    const QPointF c1 = origin + delta * 0.32 + normal * (sag * 0.85);
+    const QPointF c2 = origin + delta * 0.68 + normal * (sag * 0.95);
+
+    // 1. Tension fold lineart (smooth cubic Bezier)
     QVector<KisAiStrokePoint> foldLine;
-    foldLine.append(KisAiStrokePoint(origin.x(), origin.y(), 0.3));
-    foldLine.append(KisAiStrokePoint(sagPoint.x(), sagPoint.y(), 0.75));
-    foldLine.append(KisAiStrokePoint(target.x(), target.y(), 0.3));
+    constexpr int foldSteps = 8;
+    for (int i = 0; i <= foldSteps; ++i) {
+        const qreal t = qreal(i) / foldSteps;
+        const QPointF pt = evalCubic(origin, c1, c2, target, t);
+        const qreal pressure = (i == 0 || i == foldSteps) ? 0.25 : (0.45 + 0.35 * std::sin(t * M_PI));
+        foldLine.append(KisAiStrokePoint(pt.x(), pt.y(), pressure));
+    }
 
     KisAiStrokeOperation lineOp;
     lineOp.kind = KisAiStrokeOperation::Kind::Path;
@@ -1343,17 +1439,21 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::draperyFoldOps(const QPointF &ori
     lineOp.points = foldLine;
     lineOp.smooth = true;
     lineOp.brush.color = shadowColor.darker(120);
-    lineOp.brush.size = 0.0030;
+    lineOp.brush.size = 0.0026;
     lineOp.brush.profile = QStringLiteral("gpen");
-    lineOp.brush.opacity = 0.80;
+    lineOp.brush.opacity = 0.75;
     ops.append(lineOp);
 
-    // 2. Soft under-fold shadow
+    // 2. Soft under-fold shadow (smooth ribbon polygon)
     QPolygonF foldShade;
-    foldShade.append(origin);
-    foldShade.append(sagPoint);
-    foldShade.append(target);
-    foldShade.append(sagPoint + normal * (sag * 0.65));
+    for (int i = 0; i <= foldSteps; ++i) {
+        foldShade.append(evalCubic(origin, c1, c2, target, qreal(i) / foldSteps));
+    }
+    const QPointF sc2 = c2 + normal * (sag * 0.55);
+    const QPointF sc1 = c1 + normal * (sag * 0.50);
+    for (int i = foldSteps; i >= 0; --i) {
+        foldShade.append(evalCubic(origin, sc1, sc2, target, qreal(i) / foldSteps));
+    }
 
     KisAiStrokeOperation shOp;
     shOp.kind = KisAiStrokeOperation::Kind::Fill;
@@ -1362,7 +1462,7 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::draperyFoldOps(const QPointF &ori
     shOp.layer = QStringLiteral("Shading");
     shOp.polygon = foldShade;
     shOp.brush.color = shadowColor;
-    shOp.brush.opacity = 0.40;
+    shOp.brush.opacity = 0.32;
     shOp.brush.profile = QStringLiteral("watercolor");
     shOp.fillStyle = QStringLiteral("wash");
     ops.append(shOp);

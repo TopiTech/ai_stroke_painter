@@ -388,6 +388,20 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandMouth(const KisAiStr
                             QStringLiteral("mass")));
     }
 
+    // Soft lip blush tint (subtle translucent wash)
+    QPolygonF lipBlush;
+    lipBlush.append(QPointF(c.x() - halfW * 0.65, c.y() + (isSmile ? -h * 0.05 : 0.0)));
+    lipBlush.append(QPointF(c.x(), c.y() - h * 0.15));
+    lipBlush.append(QPointF(c.x() + halfW * 0.65, c.y() + (isSmile ? -h * 0.05 : 0.0)));
+    lipBlush.append(QPointF(c.x(), c.y() + h * 0.55));
+    out.append(makeFill(QStringLiteral("%1_tint").arg(group),
+                        group,
+                        QStringLiteral("Flats"),
+                        lipBlush,
+                        lip,
+                        0.28,
+                        QStringLiteral("wash")));
+
     QVector<KisAiStrokePoint> upper;
     if (isCat) {
         upper = sampleQuad(QPointF(c.x() - halfW, c.y()),
@@ -406,9 +420,15 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandMouth(const KisAiStr
         const qreal arch = isSmile ? -h * 0.35 : (isOpen ? -h * 0.15 : 0.0);
         const QPointF left(c.x() - halfW, c.y() + (isSmile ? -h * 0.1 : 0.0));
         const QPointF right(c.x() + halfW, c.y() + (isSmile ? -h * 0.1 : 0.0));
-        upper = sampleQuad(left, QPointF(c.x(), c.y() + arch), right, 10, 0.35, 0.35);
-        if (!upper.isEmpty())
-            upper[upper.size() / 2].pressure = 0.9;
+        const QPointF peakL(c.x() - halfW * 0.25, c.y() + arch - h * 0.10);
+        const QPointF centerDip(c.x(), c.y() + arch);
+        const QPointF peakR(c.x() + halfW * 0.25, c.y() + arch - h * 0.10);
+
+        upper = sampleQuad(left, peakL, centerDip, 6, 0.30, 0.85);
+        QVector<KisAiStrokePoint> rightHalf = sampleQuad(centerDip, peakR, right, 6, 0.85, 0.30);
+        for (int i = 1; i < rightHalf.size(); ++i) {
+            upper.append(rightHalf.at(i));
+        }
     }
     const QString upperId = QStringLiteral("%1_upper_lip").arg(group);
     out.append(makePath(upperId,
@@ -423,7 +443,8 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandMouth(const KisAiStr
 
     if (!upper.isEmpty()) {
         QVector<KisAiStrokePoint> cornerL;
-        cornerL.append(KisAiStrokePoint(upper.first().pos.x(), upper.first().pos.y(), 1.0));
+        cornerL.append(KisAiStrokePoint(upper.first().pos.x() - halfW * 0.06, upper.first().pos.y() - h * 0.12, 0.25));
+        cornerL.append(KisAiStrokePoint(upper.first().pos.x(), upper.first().pos.y(), 0.90));
         out.append(makePath(QStringLiteral("%1_corner_l").arg(group),
                             group,
                             QStringLiteral("Lineart"),
@@ -435,7 +456,8 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandMouth(const KisAiStr
                             QStringLiteral("accent"),
                             upperId));
         QVector<KisAiStrokePoint> cornerR;
-        cornerR.append(KisAiStrokePoint(upper.last().pos.x(), upper.last().pos.y(), 1.0));
+        cornerR.append(KisAiStrokePoint(upper.last().pos.x(), upper.last().pos.y(), 0.90));
+        cornerR.append(KisAiStrokePoint(upper.last().pos.x() + halfW * 0.06, upper.last().pos.y() - h * 0.12, 0.25));
         out.append(makePath(QStringLiteral("%1_corner_r").arg(group),
                             group,
                             QStringLiteral("Lineart"),
@@ -465,6 +487,19 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandMouth(const KisAiStr
                             0.70,
                             QStringLiteral("contour"),
                             upperId));
+
+        // Soft under-lower-lip shadow wedge
+        QPolygonF lowerShade;
+        lowerShade.append(QPointF(c.x() - halfW * 0.22, c.y() + h * 0.58));
+        lowerShade.append(QPointF(c.x() + halfW * 0.22, c.y() + h * 0.58));
+        lowerShade.append(QPointF(c.x(), c.y() + h * 0.85));
+        out.append(makeFill(QStringLiteral("%1_shadow").arg(group),
+                            group,
+                            QStringLiteral("Shading"),
+                            lowerShade,
+                            lip.darker(160),
+                            0.25,
+                            QStringLiteral("wash")));
     }
 
     if (op.mouthHasHighlight) {

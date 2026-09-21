@@ -432,6 +432,19 @@ public:
     );
 
     /**
+     * Luminous Floating Angel Halo Ring (Sacred Torus).
+     * Generates a pristine, concentric elliptical luminous torus floating above
+     * the crown with outer soft aura, radiant gold core, and specular rim glints.
+     */
+    static QVector<KisAiStrokeOperation> generateFloatingAngelHalo(
+        const QPointF &headCenter,
+        qreal headWidth,
+        qreal headHeight,
+        const QColor &haloColor = QColor(255, 225, 120),
+        const QSize &canvasSize = QSize(1024, 1024)
+    );
+
+    /**
      * V10 Multi-Layered Anime Eye Generator with Cornea Refraction & Multi-Catchlights.
      * Generates anatomical sclera, iris with caustics, soft pupil drop-shadow,
      * iris striations, and primary/secondary catchlights.

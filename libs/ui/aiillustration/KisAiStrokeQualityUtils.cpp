@@ -77,7 +77,7 @@ qreal effectiveWidthPx(const KisAiStrokeBrush &brush, qreal pressure, const QSiz
     return sz;
 }
 
-QPointF catmullRomPoint(const QPointF &p0, const QPointF &p1, const QPointF &p2, const QPointF &p3, qreal t)
+[[maybe_unused]] QPointF catmullRomPoint(const QPointF &p0, const QPointF &p1, const QPointF &p2, const QPointF &p3, qreal t)
 {
     const qreal t2 = t * t;
     const qreal t3 = t2 * t;
@@ -269,9 +269,31 @@ QPolygonF KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(const QPolygonF
         }
     }
 
-    const int steps = qBound(2, subdivisions, 12);
     QPolygonF smoothed;
-    smoothed.reserve(n * steps);
+    smoothed.reserve(n * qMax(subdivisions, 16));
+
+    // Centripetal Catmull-Rom evaluator preventing overshoot & self-intersections
+    auto evalCentripetal = [](const QPointF &p0, const QPointF &p1, const QPointF &p2, const QPointF &p3, qreal t) -> QPointF {
+        constexpr qreal alpha = 0.5;
+        auto getT = [](qreal tCurr, const QPointF &pA, const QPointF &pB, qreal a) -> qreal {
+            const qreal d = std::hypot(pB.x() - pA.x(), pB.y() - pA.y());
+            return tCurr + std::pow(d, a);
+        };
+        const qreal t0 = 0.0;
+        const qreal t1 = getT(t0, p0, p1, alpha);
+        const qreal t2 = getT(t1, p1, p2, alpha);
+        const qreal t3 = getT(t2, p2, p3, alpha);
+        if (t2 - t1 < 1e-6) {
+            return p1 + (p2 - p1) * t;
+        }
+        const qreal u = t1 + t * (t2 - t1);
+        const QPointF a1 = (t1 - t0 > 1e-6) ? (p0 * ((t1 - u) / (t1 - t0)) + p1 * ((u - t0) / (t1 - t0))) : p1;
+        const QPointF a2 = (t2 - t1 > 1e-6) ? (p1 * ((t2 - u) / (t2 - t1)) + p2 * ((u - t1) / (t2 - t1))) : p1;
+        const QPointF a3 = (t3 - t2 > 1e-6) ? (p2 * ((t3 - u) / (t3 - t2)) + p3 * ((u - t2) / (t3 - t2))) : p2;
+        const QPointF b1 = (t2 - t0 > 1e-6) ? (a1 * ((t2 - u) / (t2 - t0)) + a2 * ((u - t0) / (t2 - t0))) : a2;
+        const QPointF b2 = (t3 - t1 > 1e-6) ? (a2 * ((t3 - u) / (t3 - t1)) + a3 * ((u - t1) / (t3 - t1))) : a2;
+        return (t2 - t1 > 1e-6) ? (b1 * ((t2 - u) / (t2 - t1)) + b2 * ((u - t1) / (t2 - t1))) : p1;
+    };
 
     for (int i = 0; i < n; ++i) {
         const int idx0 = (i - 1 + n) % n;
@@ -291,13 +313,16 @@ QPolygonF KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(const QPolygonF
         const QPointF &p0 = isCorner.at(idx1) ? p1 : polygon.at(idx0);
         const QPointF &p3 = isCorner.at(idx2) ? p2 : polygon.at(idx3);
 
-        for (int step = 0; step < steps; ++step) {
-            const qreal t = qreal(step) / steps;
-            smoothed.append(catmullRomPoint(p0, p1, p2, p3, t));
+        const qreal segDist = std::hypot(p2.x() - p1.x(), p2.y() - p1.y());
+        // Adaptive step calculation based on span length in on-canvas pixels or normalized coords
+        const int adaptiveSteps = (segDist > 2.0)
+            ? qBound(subdivisions, qCeil(segDist / 5.0), 36)
+            : qBound(subdivisions, qCeil(segDist * 1024.0 / 6.0), 32);
+
+        for (int step = 0; step < adaptiveSteps; ++step) {
+            const qreal t = qreal(step) / adaptiveSteps;
+            smoothed.append(evalCentripetal(p0, p1, p2, p3, t));
         }
-        // Include t = 1 (== p2) so each span reaches its end knot; the next
-        // span starts at p1 == this p2, so the polygon stays connected without
-        // per-span gaps.
         smoothed.append(p2);
     }
 
@@ -1895,14 +1920,23 @@ QPolygonF KisAiStrokeQualityUtils::generateCornerInkingPolygon(const QPointF &pP
 
     // Sharp corners (between ~40 and 130 degrees) get ink fillet
     if (dot > -0.70 && dot < 0.85) {
-        const qreal filletLen = qBound<qreal>(1.0, strokeWidthPx * 0.65, 8.0);
-        const QPointF ptA = pCurr + u1 * qMin(l1 * 0.4, filletLen);
-        const QPointF ptB = pCurr + u2 * qMin(l2 * 0.4, filletLen);
-        const QPointF bisector = (u1 + u2) * 0.5;
-        const qreal bLen = std::hypot(bisector.x(), bisector.y());
-        if (bLen > 1e-4) {
-            const QPointF midFillet = pCurr + (bisector / bLen) * (filletLen * 0.45);
-            fillet << ptA << midFillet << ptB << pCurr;
+        // Coordinate-space aware: scale limit to segment length so normalized
+        // coordinates ([0,1]) never project miles across the artboard.
+        const bool isNormalized = (l1 <= 1.5 && l2 <= 1.5);
+        const qreal maxArm = qMin(l1, l2) * 0.35;
+        const qreal effFilletLen = isNormalized
+            ? qMin(maxArm, qMax<qreal>(0.001, (strokeWidthPx / 1024.0) * 0.65))
+            : qMin(maxArm, qBound<qreal>(1.0, strokeWidthPx * 0.65, 8.0));
+
+        if (effFilletLen > 1e-5) {
+            const QPointF ptA = pCurr + u1 * effFilletLen;
+            const QPointF ptB = pCurr + u2 * effFilletLen;
+            const QPointF bisector = (u1 + u2) * 0.5;
+            const qreal bLen = std::hypot(bisector.x(), bisector.y());
+            if (bLen > 1e-4) {
+                const QPointF midFillet = pCurr + (bisector / bLen) * (effFilletLen * 0.60);
+                fillet << ptA << midFillet << ptB << pCurr;
+            }
         }
     }
     return fillet;
@@ -2097,6 +2131,115 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateJaggedHairHalo(
     return result;
 }
 
+QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateFloatingAngelHalo(
+    const QPointF &headCenter,
+    qreal headWidth,
+    qreal headHeight,
+    const QColor &haloColor,
+    const QSize &canvasSize)
+{
+    Q_UNUSED(canvasSize);
+    QVector<KisAiStrokeOperation> result;
+
+    const QPointF center(headCenter.x(), headCenter.y() - headHeight * 0.62);
+    const qreal rx = headWidth * 0.44;
+    const qreal ry = headHeight * 0.11;
+    constexpr int steps = 36;
+
+    const QColor gold = haloColor.isValid() ? haloColor : QColor(255, 225, 120);
+    const QColor warmWhite(255, 252, 240);
+
+    // 1. Soft Luminous Aura (Broad outer glow)
+    {
+        QPolygonF auraPoly;
+        const qreal rOutX = rx * 1.25;
+        const qreal rOutY = ry * 1.35;
+        const qreal rInX = rx * 0.72;
+        const qreal rInY = ry * 0.65;
+        for (int i = 0; i <= steps; ++i) {
+            const qreal th = 2.0 * M_PI * i / steps;
+            auraPoly.append(QPointF(center.x() + std::cos(th) * rOutX, center.y() + std::sin(th) * rOutY));
+        }
+        for (int i = steps; i >= 0; --i) {
+            const qreal th = 2.0 * M_PI * i / steps;
+            auraPoly.append(QPointF(center.x() + std::cos(th) * rInX, center.y() + std::sin(th) * rInY));
+        }
+        KisAiStrokeOperation auraOp;
+        auraOp.kind = KisAiStrokeOperation::Kind::Fill;
+        auraOp.id = QStringLiteral("angel_halo_aura");
+        auraOp.layer = QStringLiteral("Highlights");
+        auraOp.polygon = auraPoly;
+        auraOp.brush.color = gold;
+        auraOp.brush.profile = QStringLiteral("airbrush");
+        auraOp.brush.opacity = 0.32;
+        auraOp.fillStyle = QStringLiteral("wash");
+        auraOp.blendMode = QStringLiteral("screen");
+        auraOp.groupId = QStringLiteral("angel_halo");
+        auraOp.role = QStringLiteral("accent");
+        result.append(auraOp);
+    }
+
+    // 2. Solid Golden Ring Core (Sharp pristine torus)
+    {
+        QPolygonF corePoly;
+        const qreal rOutX = rx * 1.05;
+        const qreal rOutY = ry * 1.08;
+        const qreal rInX = rx * 0.88;
+        const qreal rInY = ry * 0.84;
+        for (int i = 0; i <= steps; ++i) {
+            const qreal th = 2.0 * M_PI * i / steps;
+            corePoly.append(QPointF(center.x() + std::cos(th) * rOutX, center.y() + std::sin(th) * rOutY));
+        }
+        for (int i = steps; i >= 0; --i) {
+            const qreal th = 2.0 * M_PI * i / steps;
+            corePoly.append(QPointF(center.x() + std::cos(th) * rInX, center.y() + std::sin(th) * rInY));
+        }
+        KisAiStrokeOperation coreOp;
+        coreOp.kind = KisAiStrokeOperation::Kind::Fill;
+        coreOp.id = QStringLiteral("angel_halo_core");
+        coreOp.layer = QStringLiteral("Highlights");
+        coreOp.polygon = corePoly;
+        coreOp.brush.color = gold;
+        coreOp.brush.profile = QStringLiteral("brush");
+        coreOp.brush.opacity = 0.88;
+        coreOp.fillStyle = QStringLiteral("wash");
+        coreOp.blendMode = QStringLiteral("screen");
+        coreOp.groupId = QStringLiteral("angel_halo");
+        coreOp.role = QStringLiteral("accent");
+        result.append(coreOp);
+    }
+
+    // 3. Specular Platinum Highlight Arc (Front edge brilliance)
+    {
+        QVector<KisAiStrokePoint> specularArc;
+        for (int i = 0; i <= 24; ++i) {
+            // Front lower arc from left to right (theta from ~PI to 2*PI)
+            const qreal t = qreal(i) / 24.0;
+            const qreal th = M_PI * (0.95 + 1.10 * t);
+            const qreal px = center.x() + std::cos(th) * (rx * 0.97);
+            const qreal py = center.y() + std::sin(th) * (ry * 0.96);
+            const qreal p = 0.3 + 0.7 * std::sin(M_PI * t);
+            specularArc.append(KisAiStrokePoint(px, py, p));
+        }
+        KisAiStrokeOperation specOp;
+        specOp.kind = KisAiStrokeOperation::Kind::Path;
+        specOp.id = QStringLiteral("angel_halo_specular");
+        specOp.layer = QStringLiteral("Highlights");
+        specOp.points = specularArc;
+        specOp.brush.color = warmWhite;
+        specOp.brush.profile = QStringLiteral("fineliner");
+        specOp.brush.size = 0.0032;
+        specOp.brush.opacity = 0.95;
+        specOp.smooth = true;
+        specOp.blendMode = QStringLiteral("screen");
+        specOp.groupId = QStringLiteral("angel_halo");
+        specOp.role = QStringLiteral("accent");
+        result.append(specOp);
+    }
+
+    return result;
+}
+
 QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateDetailedAnimeEyeOps(
     const QPointF &eyeCenter,
     const QSizeF &eyeSize,
@@ -2110,6 +2253,8 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateDetailedAnimeEyeO
 {
     QVector<KisAiStrokeOperation> ops;
     Q_UNUSED(canvasSize);
+    Q_UNUSED(style);
+    Q_UNUSED(expression);
     QRandomGenerator rng(seed);
 
     const QString prefix = isRight ? QStringLiteral("eye_r") : QStringLiteral("eye_l");
@@ -2393,6 +2538,7 @@ QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::applyCornerInkingFillets(
 {
     QVector<KisAiStrokeOperation> fillets;
     const qreal thresholdDot = std::cos(maxAngleDeg * DEG2RAD);
+    Q_UNUSED(thresholdDot);
     const qreal baseDim = qMin(canvasSize.width(), canvasSize.height());
 
     int filletIdx = 0;

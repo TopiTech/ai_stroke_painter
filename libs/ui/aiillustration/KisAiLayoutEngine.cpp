@@ -73,6 +73,16 @@ bool decorationPolicyForDetail(qreal detailLevel)
 {
     return qBound<qreal>(0.0, detailLevel, 1.0) >= 0.45;
 }
+
+void sampleCubicBezier(const QPointF &p0, const QPointF &p1, const QPointF &p2, const QPointF &p3, int steps, QPolygonF *poly)
+{
+    for (int i = 0; i <= steps; ++i) {
+        const qreal t = qreal(i) / steps;
+        const qreal it = 1.0 - t;
+        const QPointF pt = it * it * it * p0 + 3.0 * it * it * t * p1 + 3.0 * it * t * t * p2 + t * t * t * p3;
+        poly->append(pt);
+    }
+}
 } // namespace
 
 KisAiStrokeOperation KisAiLayoutEngine::makeFill(const QString &id,
@@ -168,21 +178,27 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::hairBackMassForStyle(const KisA
     else if (style == QLatin1String("braided"))
         backLength = headHeight * 1.20;
 
-    // 1. Back mass (inner shade behind head)
+    // 1. Back mass (inner shade behind head): Smooth cranial dome & soft taper
     {
         QPolygonF innerBack;
-        const int topSteps = 10;
+        const int topSteps = 24;
         for (int i = 0; i <= topSteps; ++i) {
             const qreal t = M_PI * (1.0 - (qreal)i / topSteps);
             const qreal bx = headCenter.x() + std::cos(t) * (headWidth * 0.62);
             const qreal by = headCenter.y() - std::sin(t) * (headHeight * 0.58);
             innerBack.append(QPointF(bx, by));
         }
-        innerBack.append(QPointF(headCenter.x() + headWidth * 0.65, chinY + backLength * 0.60));
-        innerBack.append(QPointF(headCenter.x() + headWidth * 0.35, chinY + backLength * 0.85));
-        innerBack.append(QPointF(headCenter.x(), chinY + backLength * 0.72));
-        innerBack.append(QPointF(headCenter.x() - headWidth * 0.35, chinY + backLength * 0.85));
-        innerBack.append(QPointF(headCenter.x() - headWidth * 0.65, chinY + backLength * 0.60));
+        // Smooth Bezier contours down each flank
+        sampleCubicBezier(QPointF(headCenter.x() + headWidth * 0.62, headCenter.y()),
+                          QPointF(headCenter.x() + headWidth * 0.66, chinY + backLength * 0.35),
+                          QPointF(headCenter.x() + headWidth * 0.48, chinY + backLength * 0.70),
+                          QPointF(headCenter.x(), chinY + backLength * 0.72),
+                          16, &innerBack);
+        sampleCubicBezier(QPointF(headCenter.x(), chinY + backLength * 0.72),
+                          QPointF(headCenter.x() - headWidth * 0.48, chinY + backLength * 0.70),
+                          QPointF(headCenter.x() - headWidth * 0.66, chinY + backLength * 0.35),
+                          QPointF(headCenter.x() - headWidth * 0.62, headCenter.y()),
+                          16, &innerBack);
         ops.append(makeFill(QStringLiteral("hair_inner_shade"),
                             QStringLiteral("Flats"),
                             innerBack,
@@ -192,41 +208,60 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::hairBackMassForStyle(const KisA
                             QStringLiteral("contour")));
     }
 
-    // 2. Back mass (main volume behind the face)
+    // 2. Back mass (main volume behind the face): Full organic flow
     {
         QPolygonF back;
         // Smooth cranial top dome from left temple over crown to right temple
-        const int topSteps = 12;
+        const int topSteps = 28;
         for (int i = 0; i <= topSteps; ++i) {
             const qreal t = M_PI * (1.0 - (qreal)i / topSteps);
-            const qreal bx = headCenter.x() + std::cos(t) * (headWidth * 0.66);
-            const qreal by = headCenter.y() - std::sin(t) * (headHeight * 0.62);
+            const qreal bx = headCenter.x() + std::cos(t) * (headWidth * 0.68);
+            const qreal by = headCenter.y() - std::sin(t) * (headHeight * 0.64);
             back.append(QPointF(bx, by));
         }
 
+        const QPointF rTemple(headCenter.x() + headWidth * 0.68, headCenter.y());
+        const QPointF lTemple(headCenter.x() - headWidth * 0.68, headCenter.y());
+
         if (style == QLatin1String("bob")) {
-            back.append(QPointF(headCenter.x() + headWidth * 0.68, headCenter.y() + headHeight * 0.20));
-            back.append(QPointF(headCenter.x() + headWidth * 0.50, chinY + backLength * 0.35));
-            back.append(QPointF(headCenter.x(), chinY + backLength * 0.28));
-            back.append(QPointF(headCenter.x() - headWidth * 0.50, chinY + backLength * 0.35));
-            back.append(QPointF(headCenter.x() - headWidth * 0.68, headCenter.y() + headHeight * 0.20));
-        } else if (style == QLatin1String("short_messy")) {
-            back.append(QPointF(headCenter.x() + headWidth * 0.62, headCenter.y() + headHeight * 0.15));
-            back.append(QPointF(headCenter.x() + headWidth * 0.45, chinY + backLength * 0.20));
-            back.append(QPointF(headCenter.x() + headWidth * 0.20, chinY + backLength * 0.35));
-            back.append(QPointF(headCenter.x(), chinY + backLength * 0.25));
-            back.append(QPointF(headCenter.x() - headWidth * 0.20, chinY + backLength * 0.35));
-            back.append(QPointF(headCenter.x() - headWidth * 0.45, chinY + backLength * 0.20));
-            back.append(QPointF(headCenter.x() - headWidth * 0.62, headCenter.y() + headHeight * 0.15));
+            sampleCubicBezier(rTemple,
+                              QPointF(headCenter.x() + headWidth * 0.70, headCenter.y() + headHeight * 0.22),
+                              QPointF(headCenter.x() + headWidth * 0.52, chinY + backLength * 0.32),
+                              QPointF(headCenter.x(), chinY + backLength * 0.28),
+                              16, &back);
+            sampleCubicBezier(QPointF(headCenter.x(), chinY + backLength * 0.28),
+                              QPointF(headCenter.x() - headWidth * 0.52, chinY + backLength * 0.32),
+                              QPointF(headCenter.x() - headWidth * 0.70, headCenter.y() + headHeight * 0.22),
+                              lTemple,
+                              16, &back);
+        } else if (style == QLatin1String("short_messy") || style == QLatin1String("short_straight")) {
+            sampleCubicBezier(rTemple,
+                              QPointF(headCenter.x() + headWidth * 0.64, headCenter.y() + headHeight * 0.15),
+                              QPointF(headCenter.x() + headWidth * 0.38, chinY + backLength * 0.28),
+                              QPointF(headCenter.x(), chinY + backLength * 0.24),
+                              16, &back);
+            sampleCubicBezier(QPointF(headCenter.x(), chinY + backLength * 0.24),
+                              QPointF(headCenter.x() - headWidth * 0.38, chinY + backLength * 0.28),
+                              QPointF(headCenter.x() - headWidth * 0.64, headCenter.y() + headHeight * 0.15),
+                              lTemple,
+                              16, &back);
         } else {
-            // long_hime / long_wavy default
-            back.append(QPointF(headCenter.x() + headWidth * 0.66, headCenter.y() + headHeight * 0.25));
-            back.append(QPointF(headCenter.x() + headWidth * 0.58, chinY + backLength * 0.55));
-            back.append(QPointF(headCenter.x() + headWidth * 0.32, chinY + backLength * 0.78));
-            back.append(QPointF(headCenter.x(), chinY + backLength * 0.65));
-            back.append(QPointF(headCenter.x() - headWidth * 0.32, chinY + backLength * 0.78));
-            back.append(QPointF(headCenter.x() - headWidth * 0.58, chinY + backLength * 0.55));
-            back.append(QPointF(headCenter.x() - headWidth * 0.66, headCenter.y() + headHeight * 0.25));
+            // long_hime / long_wavy default: flowing S-curve down shoulders with natural tips
+            sampleCubicBezier(rTemple,
+                              QPointF(headCenter.x() + headWidth * 0.72, headCenter.y() + headHeight * 0.26),
+                              QPointF(headCenter.x() + headWidth * 0.60, chinY + backLength * 0.55),
+                              QPointF(headCenter.x() + headWidth * 0.30, chinY + backLength * 0.76),
+                              18, &back);
+            sampleCubicBezier(QPointF(headCenter.x() + headWidth * 0.30, chinY + backLength * 0.76),
+                              QPointF(headCenter.x() + headWidth * 0.12, chinY + backLength * 0.70),
+                              QPointF(headCenter.x() - headWidth * 0.12, chinY + backLength * 0.70),
+                              QPointF(headCenter.x() - headWidth * 0.30, chinY + backLength * 0.76),
+                              14, &back);
+            sampleCubicBezier(QPointF(headCenter.x() - headWidth * 0.30, chinY + backLength * 0.76),
+                              QPointF(headCenter.x() - headWidth * 0.60, chinY + backLength * 0.55),
+                              QPointF(headCenter.x() - headWidth * 0.72, headCenter.y() + headHeight * 0.26),
+                              lTemple,
+                              18, &back);
         }
         ops.append(makeFill(QStringLiteral("hair_back_mass"),
                             QStringLiteral("Flats"),
@@ -346,32 +381,46 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::hairFrontMassForStyle(const Kis
                 fringeLine.append(KisAiStrokePoint(px, py, 0.8));
             }
         } else {
-            // Classic Anime M-Fringe: 13 points forming 5 distinct, tapered clumps
-            // Valleys cut up toward forehead, Tips taper down over eyes and eyebrows
-            struct ClumpPoint {
-                qreal xRatio;
-                qreal dipRatio;
+            // Classic Anime M-Fringe with smooth flowing clumps (Valley -> Clump Tip -> Valley)
+            // Each clump is shaped by smooth Bezier arcs rather than raw coarse linear segments.
+            struct ClumpSpec {
+                qreal leftValleyX, leftValleyY;
+                qreal tipX, tipY;
+                qreal rightValleyX, rightValleyY;
             };
-            const ClumpPoint clumps[] = {
-                {0.54, 0.70}, // Right temple lock tip
-                {0.46, 0.48}, // Valley
-                {0.36, 0.60}, // Right outer clump tip
-                {0.26, 0.45}, // Valley
-                {0.16, 0.58}, // Right center clump tip (touches right eye)
-                {0.07, 0.44}, // Right-center valley
-                {0.00, 0.41}, // Center M slit (reveals eyebrow center)
-                {-0.07, 0.44}, // Left-center valley
-                {-0.16, 0.58}, // Left center clump tip (touches left eye)
-                {-0.26, 0.45}, // Valley
-                {-0.36, 0.60}, // Left outer clump tip
-                {-0.46, 0.48}, // Valley
-                {-0.54, 0.70}, // Left temple lock tip
+            const ClumpSpec clumps[] = {
+                {-0.54, 0.70, -0.50, 0.68, -0.46, 0.48}, // Left temple lock
+                {-0.46, 0.48, -0.36, 0.62, -0.26, 0.45}, // Left outer clump
+                {-0.26, 0.45, -0.16, 0.59, -0.07, 0.43}, // Left center clump (over eye)
+                {-0.07, 0.43,  0.00, 0.41,  0.07, 0.43}, // Center M slit
+                { 0.07, 0.43,  0.16, 0.59,  0.26, 0.45}, // Right center clump (over eye)
+                { 0.26, 0.45,  0.36, 0.62,  0.46, 0.48}, // Right outer clump
+                { 0.46, 0.48,  0.50, 0.68,  0.54, 0.70}, // Right temple lock
             };
-            for (const auto &cl : clumps) {
-                const qreal px = headCenter.x() + cl.xRatio * headWidth;
-                const qreal py = topY + cl.dipRatio * headHeight;
-                fringe.append(QPointF(px, py));
-                fringeLine.append(KisAiStrokePoint(px, py, 0.8));
+
+            for (const auto &cs : clumps) {
+                const QPointF p0(headCenter.x() + cs.leftValleyX * headWidth, topY + cs.leftValleyY * headHeight);
+                const QPointF pTip(headCenter.x() + cs.tipX * headWidth, topY + cs.tipY * headHeight);
+                const QPointF p1(headCenter.x() + cs.rightValleyX * headWidth, topY + cs.rightValleyY * headHeight);
+
+                // Sample down to tip
+                for (int s = 0; s <= 6; ++s) {
+                    const qreal t = qreal(s) / 6.0;
+                    const qreal it = 1.0 - t;
+                    const QPointF ctrl(p0.x() + (pTip.x() - p0.x()) * 0.6, p0.y() + (pTip.y() - p0.y()) * 0.85);
+                    const QPointF pt = it * it * p0 + 2.0 * it * t * ctrl + t * t * pTip;
+                    fringe.append(pt);
+                    fringeLine.append(KisAiStrokePoint(pt.x(), pt.y(), 0.5 + 0.45 * t));
+                }
+                // Sample back up to valley
+                for (int s = 1; s <= 6; ++s) {
+                    const qreal t = qreal(s) / 6.0;
+                    const qreal it = 1.0 - t;
+                    const QPointF ctrl(pTip.x() + (p1.x() - pTip.x()) * 0.4, p1.y() + (pTip.y() - p1.y()) * 0.85);
+                    const QPointF pt = it * it * pTip + 2.0 * it * t * ctrl + t * t * p1;
+                    fringe.append(pt);
+                    fringeLine.append(KisAiStrokePoint(pt.x(), pt.y(), 0.95 - 0.45 * t));
+                }
             }
         }
 
@@ -390,20 +439,20 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::hairFrontMassForStyle(const Kis
         if (fringeLine.size() >= 2) {
             int clumpIdx = 0;
             QVector<KisAiStrokePoint> current;
-            current.reserve(6);
+            current.reserve(16);
             for (int i = 0; i < fringeLine.size(); ++i) {
                 current.append(fringeLine.at(i));
                 const bool isValley =
                     (i > 0 && i + 1 < fringeLine.size() && fringeLine.at(i).pos.y() < fringeLine.at(i - 1).pos.y()
                      && fringeLine.at(i).pos.y() < fringeLine.at(i + 1).pos.y());
                 const bool isEnd = (i == fringeLine.size() - 1);
-                if ((isValley || isEnd) && current.size() >= 2) {
+                if ((isValley || isEnd) && current.size() >= 3) {
                     KisAiStrokeOperation clump = makePath(QStringLiteral("hair_fringe_clump_%1").arg(clumpIdx),
                                                           QStringLiteral("Lineart"),
                                                           current,
                                                           darkerWarm(hair, 0.65),
                                                           QStringLiteral("gpen"),
-                                                          0.0035,
+                                                          0.0032,
                                                           0.95);
                     clump.groupId = QStringLiteral("hair_fringe_%1").arg(clumpIdx);
                     clump.parentId = QStringLiteral("hair_fringe");
@@ -417,21 +466,25 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::hairFrontMassForStyle(const Kis
             }
         }
 
-        // D3-3: Internal Hair Flow Strands (細密毛流れ線) - flowing from crown towards clump tips
-        const qreal strandOffsets[] = {-0.34, -0.15, 0.0, 0.15, 0.34};
+        // Smooth flowing hair strands (no cross-hatch/wireframe lattice)
+        const qreal strandOffsets[] = {-0.32, -0.14, 0.0, 0.14, 0.32};
         for (int s = 0; s < 5; ++s) {
             const qreal offX = strandOffsets[s] * headWidth;
             QVector<KisAiStrokePoint> strand;
-            strand.append(KisAiStrokePoint(headCenter.x() + offX * 0.40, topY + headHeight * 0.08, 0.30));
-            strand.append(KisAiStrokePoint(headCenter.x() + offX * 0.75, topY + headHeight * 0.28, 0.70));
-            strand.append(KisAiStrokePoint(headCenter.x() + offX * 1.05, topY + headHeight * 0.48, 0.25));
+            for (int i = 0; i <= 8; ++i) {
+                const qreal t = qreal(i) / 8.0;
+                const qreal px = headCenter.x() + offX * (0.35 + 0.65 * t) + std::sin(t * M_PI * 1.2) * (headWidth * 0.02);
+                const qreal py = topY + headHeight * (0.08 + 0.40 * t);
+                const qreal pressure = 0.2 + 0.65 * std::sin(M_PI * t);
+                strand.append(KisAiStrokePoint(px, py, pressure));
+            }
             ops.append(makePath(QStringLiteral("hair_strand_%1").arg(s),
                                 QStringLiteral("Lineart"),
                                 strand,
                                 darkerWarm(hair, 0.72),
                                 QStringLiteral("fineliner"),
                                 0.0016,
-                                0.85));
+                                0.75));
         }
 
         // D3-3: Bangs Skin Bleed (前髪の肌透け) - gentle soft wash at clump tips so eyebrows/eyes peek through
@@ -706,13 +759,18 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::clothingForSpec(const KisAiScen
                         1.0,
                         QStringLiteral("contour")));
 
-    // Neck cast shadow (under chin shadow)
+    // Neck cast shadow (under chin shadow): smooth parabolic curve following jaw
     QPolygonF neckShadow;
-    neckShadow.append(QPointF(hc.x() - neckW * 0.45, neckTopY));
-    neckShadow.append(QPointF(hc.x() + neckW * 0.45, neckTopY));
-    neckShadow.append(QPointF(hc.x() + neckW * 0.35, neckTopY + hh * 0.12));
-    neckShadow.append(QPointF(hc.x(), neckTopY + hh * 0.16));
-    neckShadow.append(QPointF(hc.x() - neckW * 0.35, neckTopY + hh * 0.12));
+    const QPointF chinLeft(hc.x() - neckW * 0.48, neckTopY);
+    const QPointF chinRight(hc.x() + neckW * 0.48, neckTopY);
+    sampleCubicBezier(chinLeft,
+                      QPointF(hc.x() - neckW * 0.25, neckTopY + hh * 0.015),
+                      QPointF(hc.x() + neckW * 0.25, neckTopY + hh * 0.015),
+                      chinRight, 8, &neckShadow);
+    sampleCubicBezier(chinRight,
+                      QPointF(hc.x() + neckW * 0.32, neckTopY + hh * 0.13),
+                      QPointF(hc.x() - neckW * 0.32, neckTopY + hh * 0.13),
+                      chinLeft, 12, &neckShadow);
     ops.append(makeFill(QStringLiteral("neck_shadow"),
                         QStringLiteral("Shading"),
                         neckShadow,
@@ -766,15 +824,26 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::clothingForSpec(const KisAiScen
                         1.0,
                         QStringLiteral("contour")));
 
-    // V7: Procedural Drapery Folds (Tension folds from shoulders toward chest center)
+    // V7: Procedural Drapery Folds (Tension folds; route away from open chest on dress)
     const QColor clothShadow = darkerWarm(mainCloth, 0.72);
-    const QPointF leftShoulder(hc.x() - shoulderW * 0.40, shoulderY + hh * 0.15);
-    const QPointF rightShoulder(hc.x() + shoulderW * 0.40, shoulderY + hh * 0.15);
-    const QPointF chestCenter(hc.x(), shoulderY + hh * 0.35);
-    ops.append(
-        KisAiRigLibrary::draperyFoldOps(leftShoulder, chestCenter, 2.0, mainCloth, clothShadow, QStringLiteral("l")));
-    ops.append(
-        KisAiRigLibrary::draperyFoldOps(rightShoulder, chestCenter, 2.0, mainCloth, clothShadow, QStringLiteral("r")));
+    if (style != QLatin1String("dress")) {
+        const QPointF leftShoulder(hc.x() - shoulderW * 0.40, shoulderY + hh * 0.15);
+        const QPointF rightShoulder(hc.x() + shoulderW * 0.40, shoulderY + hh * 0.15);
+        const QPointF chestCenter(hc.x(), shoulderY + hh * 0.35);
+        ops.append(
+            KisAiRigLibrary::draperyFoldOps(leftShoulder, chestCenter, 2.0, mainCloth, clothShadow, QStringLiteral("l")));
+        ops.append(
+            KisAiRigLibrary::draperyFoldOps(rightShoulder, chestCenter, 2.0, mainCloth, clothShadow, QStringLiteral("r")));
+    } else {
+        const QPointF leftShoulder(hc.x() - shoulderW * 0.42, shoulderY + hh * 0.16);
+        const QPointF leftBustSide(hc.x() - shoulderW * 0.25, shoulderY + hh * 0.38);
+        const QPointF rightShoulder(hc.x() + shoulderW * 0.42, shoulderY + hh * 0.16);
+        const QPointF rightBustSide(hc.x() + shoulderW * 0.25, shoulderY + hh * 0.38);
+        ops.append(
+            KisAiRigLibrary::draperyFoldOps(leftShoulder, leftBustSide, 1.5, mainCloth, clothShadow, QStringLiteral("dress_l")));
+        ops.append(
+            KisAiRigLibrary::draperyFoldOps(rightShoulder, rightBustSide, 1.5, mainCloth, clothShadow, QStringLiteral("dress_r")));
+    }
 
     // 4. Style-Specific Costume Details
     if (style == QLatin1String("school_uniform") || style == QLatin1String("sailor")) {
@@ -1142,6 +1211,19 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(const KisAiSce
     ops.append(KisAiStrokeQualityUtils::generateJaggedHairHalo(
         hc, hw * 2.0, hh, spec.head.hairColor, canvasSize, -0.10,
         spec.rig.hairHighlightBands > 0 ? spec.rig.hairHighlightBands : 1, 42));
+
+    // V10: Floating angel halo torus above crown when prompt requests angel or halo
+    const QString lowerPrompt = spec.prompt.toLower();
+    const bool hasFloatingHalo = lowerPrompt.contains(QStringLiteral("angel"))
+        || lowerPrompt.contains(QStringLiteral("halo"))
+        || lowerPrompt.contains(QStringLiteral("天使"))
+        || lowerPrompt.contains(QStringLiteral("輪"));
+    if (hasFloatingHalo) {
+        const QColor haloCol = spec.clothing.accentColor.isValid() && spec.clothing.accentColor.alpha() > 0
+            ? spec.clothing.accentColor
+            : QColor(255, 225, 120);
+        ops.append(KisAiStrokeQualityUtils::generateFloatingAngelHalo(hc, hw, hh, haloCol, canvasSize));
+    }
 
     // Opt-in lineart hierarchy (outer contours heavier than details).
     KisAiStrokeQualityUtils::applyLineartHierarchy(ops);

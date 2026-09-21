@@ -1846,9 +1846,9 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
 
     // Smooth jagged polygon vertices to eliminate raw low-poly faceting
     if (poly.size() >= 3) {
-        const qreal angleThreshold = isShading ? 150.0 : 135.0;
-        const int iterations = isShading ? 6 : 4;
-        poly = KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(poly, angleThreshold, iterations);
+        const qreal angleThreshold = isShading ? 145.0 : 130.0;
+        const int subdivisions = isShading ? 12 : (isHair ? 16 : 10);
+        poly = KisAiStrokeQualityUtils::smoothPolygonCornerPreserving(poly, angleThreshold, subdivisions);
     }
 
     QColor color = op.brush.color;

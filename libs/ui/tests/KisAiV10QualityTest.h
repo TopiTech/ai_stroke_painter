@@ -32,6 +32,8 @@ private Q_SLOTS:
     void testDiffusionBloomAndAtmosphericFinish();
     void testSceneSpecV3SchemaAndParsing();
     void testPromptAnalyzerV10Heuristics();
+    void testFloatingAngelHaloTorus();
+    void testSmoothCubicHairClumpsAndDrapery();
 };
 
 #endif // KIS_AI_V10_QUALITY_TEST_H

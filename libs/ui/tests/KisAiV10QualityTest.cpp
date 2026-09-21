@@ -185,6 +185,13 @@ void KisAiV10QualityTest::testCornerInkingFillets()
     QCOMPARE(fillets.at(0).layer, QStringLiteral("Lineart"));
     QCOMPARE(fillets.at(0).kind, KisAiStrokeOperation::Kind::Fill);
     QVERIFY(fillets.at(0).polygon.size() >= 3);
+
+    // Sanity check: verify all fillet points are tightly bounded around the junction point (0.50, 0.50)
+    // and do NOT fly across the canvas due to normalized coordinate scale mismatch.
+    for (const QPointF &pt : fillets.at(0).polygon) {
+        const qreal dist = std::hypot(pt.x() - 0.50, pt.y() - 0.50);
+        QVERIFY2(dist < 0.05, "Corner inking fillet must remain localized near junction point");
+    }
 }
 
 void KisAiV10QualityTest::testDiffusionBloomAndAtmosphericFinish()
@@ -279,6 +286,104 @@ void KisAiV10QualityTest::testPromptAnalyzerV10Heuristics()
     QCOMPARE(spec.head.expression, QStringLiteral("wink_left"));
     QCOMPARE(spec.light.lightingStyle, QStringLiteral("dramatic_backlight"));
     QVERIFY(spec.light.rimIntensity >= 0.70);
+}
+
+void KisAiV10QualityTest::testFloatingAngelHaloTorus()
+{
+    const QPointF headCenter(0.5, 0.4);
+    const qreal headWidth = 0.35;
+    const qreal headHeight = 0.45;
+    const QColor haloColor(255, 230, 120);
+
+    const auto ops = KisAiStrokeQualityUtils::generateFloatingAngelHalo(
+        headCenter, headWidth, headHeight, haloColor, QSize(1024, 1024));
+
+    QCOMPARE(ops.size(), 3);
+
+    bool hasAura = false;
+    bool hasCore = false;
+    bool hasGleam = false;
+
+    for (const auto &op : ops) {
+        if (op.id == QLatin1String("angel_halo_aura")) {
+            hasAura = true;
+            QCOMPARE(op.layer, QStringLiteral("Highlights"));
+            QCOMPARE(op.blendMode, QStringLiteral("screen"));
+            QCOMPARE(op.kind, KisAiStrokeOperation::Kind::Fill);
+            QVERIFY(op.polygon.size() >= 36);
+        } else if (op.id == QLatin1String("angel_halo_core")) {
+            hasCore = true;
+            QCOMPARE(op.layer, QStringLiteral("Highlights"));
+            QCOMPARE(op.blendMode, QStringLiteral("screen"));
+            QCOMPARE(op.kind, KisAiStrokeOperation::Kind::Fill);
+            QVERIFY(op.polygon.size() >= 36);
+        } else if (op.id == QLatin1String("angel_halo_specular")) {
+            hasGleam = true;
+            QCOMPARE(op.layer, QStringLiteral("Highlights"));
+            QCOMPARE(op.kind, KisAiStrokeOperation::Kind::Path);
+            QVERIFY(!op.points.isEmpty());
+        }
+
+        // Must float above crown of head (y < headCenter.y())
+        if (op.kind == KisAiStrokeOperation::Kind::Fill) {
+            for (const auto &pt : op.polygon) {
+                QVERIFY2(pt.y() < headCenter.y(), "Angel halo must float above crown of head");
+            }
+        }
+    }
+
+    QVERIFY2(hasAura, "Floating angel halo must have outer aura");
+    QVERIFY2(hasCore, "Floating angel halo must have solid core");
+    QVERIFY2(hasGleam, "Floating angel halo must have specular gleam");
+}
+
+void KisAiV10QualityTest::testSmoothCubicHairClumpsAndDrapery()
+{
+    KisAiRigParameterSet params;
+    params.headCenter = QPointF(0.5, 0.38);
+    params.headWidth = 0.32;
+    params.headHeight = 0.44;
+    params.hairColor = QColor(220, 225, 235);
+    params.lineColor = QColor(30, 28, 40);
+
+    const auto clumpOps = KisAiRigLibrary::hierarchicalHairClumpOps(params, QSize(1024, 1024), 42);
+    QVERIFY(!clumpOps.isEmpty());
+
+    bool foundBody = false;
+    bool foundShine = false;
+
+    for (const auto &op : clumpOps) {
+        if (op.id.contains(QLatin1String("hair_clump_body_"))) {
+            foundBody = true;
+            QCOMPARE(op.kind, KisAiStrokeOperation::Kind::Fill);
+            // Smooth Bezier ribbons have >= 16 points, not rigid 5-point diamonds
+            QVERIFY2(op.polygon.size() >= 16, "Hair clump must be high-continuity Bezier ribbon");
+        } else if (op.id.contains(QLatin1String("hair_clump_line_"))) {
+            QCOMPARE(op.kind, KisAiStrokeOperation::Kind::Path);
+            QVERIFY2(op.points.size() >= 8, "Hair clump contour line must be smooth curve");
+        } else if (op.id.contains(QLatin1String("hair_clump_shine_"))) {
+            foundShine = true;
+            QCOMPARE(op.layer, QStringLiteral("Highlights"));
+        }
+    }
+
+    QVERIFY2(foundBody, "Hair clumps must emit body fills");
+    QVERIFY2(foundShine, "Hair clumps must emit center spine gleam highlights");
+
+    // Test drapery folds
+    const QPointF origin(0.35, 0.45);
+    const QPointF target(0.50, 0.65);
+    const auto foldOps = KisAiRigLibrary::draperyFoldOps(
+        origin, target, 2.0, QColor(100, 100, 150), QColor(50, 50, 80), QStringLiteral("test"));
+
+    QCOMPARE(foldOps.size(), 2);
+    for (const auto &op : foldOps) {
+        if (op.kind == KisAiStrokeOperation::Kind::Path) {
+            QVERIFY2(op.points.size() >= 8, "Drapery fold line must be smooth cubic curve");
+        } else if (op.kind == KisAiStrokeOperation::Kind::Fill) {
+            QVERIFY2(op.polygon.size() >= 16, "Drapery fold shade must be smooth ribbon polygon");
+        }
+    }
 }
 
 KISTEST_MAIN(KisAiV10QualityTest)
