@@ -1907,3 +1907,650 @@ QPolygonF KisAiStrokeQualityUtils::generateCornerInkingPolygon(const QPointF &pP
     }
     return fillet;
 }
+
+// =============================================================================
+// 9. V10 Masterwork Rendering Quality & Post-Processing Implementations
+// =============================================================================
+
+QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateHierarchicalHairStrands(
+    const KisAiStrokeOperation &baseClumpOp,
+    const QPointF &headCenter,
+    const QSize &canvasSize,
+    quint32 seed)
+{
+    QVector<KisAiStrokeOperation> result;
+    Q_UNUSED(headCenter);
+    Q_UNUSED(canvasSize);
+
+    // Extract spine from points or polygon
+    QVector<QPointF> spinePts;
+    if (!baseClumpOp.points.isEmpty()) {
+        for (const auto &p : baseClumpOp.points) spinePts.append(p.pos);
+    } else if (baseClumpOp.polygon.size() >= 3) {
+        // Approximate spine along bounding length
+        const int sz = baseClumpOp.polygon.size();
+        for (int i = 0; i < qMin(sz, 6); ++i) {
+            spinePts.append(baseClumpOp.polygon.at(i));
+        }
+    }
+
+    if (spinePts.size() < 2) {
+        return result;
+    }
+
+    QRandomGenerator rng(seed);
+    const QColor baseColor = baseClumpOp.brush.color;
+    const QColor shadowColor = calculateHueShiftedShadow(baseColor, QColor(30, 35, 60), 0.35);
+    const QColor deepLineColor = QColor(25, 20, 35);
+
+    // 1. Medium Flow Strands (S-curve Bezier polylines)
+    const int numFlowStrands = 2 + rng.bounded(2);
+    for (int s = 0; s < numFlowStrands; ++s) {
+        const qreal lateralOffset = (s - (numFlowStrands - 1) * 0.5) * 0.015;
+        QVector<KisAiStrokePoint> strandPts;
+        const int count = spinePts.size();
+        for (int i = 0; i < count; ++i) {
+            const qreal t = static_cast<qreal>(i) / qMax(1, count - 1);
+            // Non-linear S-curve wave
+            const qreal wave = std::sin(t * PI * 1.5) * lateralOffset;
+            const QPointF basePt = spinePts.at(i);
+            // Sharp taper: root 0.6 -> mid 0.85 -> tip 0.15
+            const qreal pressure = (1.0 - t * t) * (0.45 + 0.40 * std::sin(t * PI));
+            strandPts.append(KisAiStrokePoint(basePt.x() + wave, basePt.y(), qMax<qreal>(0.1, pressure)));
+        }
+
+        KisAiStrokeOperation strandOp;
+        strandOp.kind = KisAiStrokeOperation::Kind::Path;
+        strandOp.id = QStringLiteral("hair_flow_%1_%2").arg(baseClumpOp.id).arg(s);
+        strandOp.layer = QStringLiteral("Lineart");
+        strandOp.points = strandPts;
+        strandOp.brush.profile = QStringLiteral("gpen");
+        strandOp.brush.color = deepLineColor;
+        strandOp.brush.size = 0.0035;
+        strandOp.brush.opacity = 0.85;
+        strandOp.groupId = QStringLiteral("hair");
+        strandOp.role = QStringLiteral("internal");
+        result.append(strandOp);
+    }
+
+    // 2. Micro Flyaway Strands (Delicate, sharp wisps leaping off the contour)
+    const int numFlyaways = 1 + rng.bounded(2);
+    for (int f = 0; f < numFlyaways; ++f) {
+        const qreal dir = (f % 2 == 0) ? 1.0 : -1.0;
+        QVector<KisAiStrokePoint> flyawayPts;
+        const int count = spinePts.size();
+        for (int i = count / 3; i < count; ++i) {
+            const qreal t = static_cast<qreal>(i - count / 3) / qMax(1, count - count / 3 - 1);
+            const qreal curl = t * t * 0.022 * dir;
+            const QPointF basePt = spinePts.at(i);
+            const qreal pressure = qMax<qreal>(0.05, (1.0 - t) * 0.5);
+            flyawayPts.append(KisAiStrokePoint(basePt.x() + curl, basePt.y() + t * 0.005, pressure));
+        }
+
+        if (flyawayPts.size() >= 2) {
+            KisAiStrokeOperation flyawayOp;
+            flyawayOp.kind = KisAiStrokeOperation::Kind::Path;
+            flyawayOp.id = QStringLiteral("hair_flyaway_%1_%2").arg(baseClumpOp.id).arg(f);
+            flyawayOp.layer = QStringLiteral("Lineart");
+            flyawayOp.points = flyawayPts;
+            flyawayOp.brush.profile = QStringLiteral("fineliner");
+            flyawayOp.brush.color = deepLineColor;
+            flyawayOp.brush.size = 0.0018;
+            flyawayOp.brush.opacity = 0.65;
+            flyawayOp.groupId = QStringLiteral("hair");
+            flyawayOp.role = QStringLiteral("accent");
+            result.append(flyawayOp);
+        }
+    }
+
+    // 3. Ambient Occlusion (Valley Crevice Shadow)
+    if (spinePts.size() >= 3) {
+        QPolygonF aoPolygon;
+        const QPointF root = spinePts.first();
+        const QPointF mid = spinePts.at(spinePts.size() / 2);
+        aoPolygon << root << QPointF(root.x() - 0.01, root.y() + 0.015)
+                  << QPointF(mid.x() - 0.005, mid.y()) << root;
+
+        KisAiStrokeOperation aoOp;
+        aoOp.kind = KisAiStrokeOperation::Kind::Fill;
+        aoOp.id = QStringLiteral("hair_ao_%1").arg(baseClumpOp.id);
+        aoOp.layer = QStringLiteral("Shading");
+        aoOp.polygon = aoPolygon;
+        aoOp.brush.color = shadowColor;
+        aoOp.brush.opacity = 0.35;
+        aoOp.fillStyle = QStringLiteral("wash");
+        aoOp.groupId = QStringLiteral("hair");
+        aoOp.role = QStringLiteral("mass");
+        result.append(aoOp);
+    }
+
+    return result;
+}
+
+QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateJaggedHairHalo(
+    const QPointF &headCenter,
+    qreal headWidth,
+    qreal headHeight,
+    const QColor &hairColor,
+    const QSize &canvasSize,
+    qreal yOffsetRatio,
+    int bandCount,
+    quint32 seed)
+{
+    QVector<KisAiStrokeOperation> result;
+    Q_UNUSED(canvasSize);
+    QRandomGenerator rng(seed);
+
+    const qreal haloY = headCenter.y() + headHeight * yOffsetRatio;
+    const qreal rx = headWidth * 0.52;
+    const qreal ry = headHeight * 0.12;
+
+    const int numSegments = 14;
+    const qreal angleStart = 190.0 * DEG2RAD;
+    const qreal angleEnd = 350.0 * DEG2RAD;
+
+    // Harmonious highlight color: tinted specular wash
+    const QColor haloColor = calculateHueShiftedHighlight(hairColor, QColor(255, 252, 245), 0.70);
+
+    for (int b = 0; b < qBound(1, bandCount, 3); ++b) {
+        const qreal bandYOffset = (b - (bandCount - 1) * 0.5) * headHeight * 0.035;
+        const qreal bandWidthMod = 1.0 - b * 0.25;
+
+        QPolygonF haloPoly;
+        // Upper edge with jagged notches
+        for (int i = 0; i <= numSegments; ++i) {
+            const qreal t = static_cast<qreal>(i) / numSegments;
+            const qreal theta = angleStart + t * (angleEnd - angleStart);
+            const qreal jitterY = ((i % 2 == 0) ? -0.008 : 0.006) * bandWidthMod;
+            const qreal px = headCenter.x() + rx * std::cos(theta);
+            const qreal py = haloY + bandYOffset + ry * std::sin(theta) + jitterY;
+            haloPoly.append(QPointF(px, py));
+        }
+
+        // Lower edge returning
+        for (int i = numSegments; i >= 0; --i) {
+            const qreal t = static_cast<qreal>(i) / numSegments;
+            const qreal theta = angleStart + t * (angleEnd - angleStart);
+            const qreal notch = ((i % 3 == 1) ? 0.012 : 0.004) * bandWidthMod;
+            const qreal px = headCenter.x() + rx * std::cos(theta);
+            const qreal py = haloY + bandYOffset + ry * std::sin(theta) + notch;
+            haloPoly.append(QPointF(px, py));
+        }
+
+        if (haloPoly.size() >= 6) {
+            KisAiStrokeOperation haloOp;
+            haloOp.kind = KisAiStrokeOperation::Kind::Fill;
+            haloOp.id = QStringLiteral("jagged_halo_band_%1").arg(b);
+            haloOp.layer = QStringLiteral("Highlights");
+            haloOp.polygon = haloPoly;
+            haloOp.brush.color = haloColor;
+            haloOp.brush.profile = QStringLiteral("brush");
+            haloOp.brush.opacity = qBound<qreal>(0.35, 0.65 - b * 0.15, 0.85);
+            haloOp.fillStyle = QStringLiteral("wash");
+            haloOp.blendMode = QStringLiteral("screen");
+            haloOp.groupId = QStringLiteral("hair");
+            haloOp.role = QStringLiteral("accent");
+            result.append(haloOp);
+        }
+    }
+
+    return result;
+}
+
+QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::generateDetailedAnimeEyeOps(
+    const QPointF &eyeCenter,
+    const QSizeF &eyeSize,
+    const QColor &irisColor,
+    const QString &style,
+    bool isRight,
+    const QString &expression,
+    const QSize &canvasSize,
+    const KisAiStrokeBrush &lineBrush,
+    quint32 seed)
+{
+    QVector<KisAiStrokeOperation> ops;
+    Q_UNUSED(canvasSize);
+    QRandomGenerator rng(seed);
+
+    const QString prefix = isRight ? QStringLiteral("eye_r") : QStringLiteral("eye_l");
+    const qreal ew = eyeSize.width();
+    const qreal eh = eyeSize.height();
+    const qreal ecx = eyeCenter.x();
+    const qreal ecy = eyeCenter.y();
+    const qreal facingDir = isRight ? -1.0 : 1.0;
+
+    // 1. Sclera (White of the eye)
+    QPolygonF scleraPoly;
+    const int segs = 16;
+    for (int i = 0; i < segs; ++i) {
+        const qreal theta = 2.0 * PI * i / segs;
+        scleraPoly.append(QPointF(ecx + (ew * 0.48) * std::cos(theta),
+                                  ecy + (eh * 0.48) * std::sin(theta)));
+    }
+    KisAiStrokeOperation scleraOp;
+    scleraOp.kind = KisAiStrokeOperation::Kind::Fill;
+    scleraOp.id = prefix + QStringLiteral("_sclera");
+    scleraOp.layer = QStringLiteral("Flats");
+    scleraOp.polygon = scleraPoly;
+    scleraOp.brush.color = QColor(252, 252, 255);
+    scleraOp.brush.opacity = 1.0;
+    scleraOp.groupId = prefix;
+    scleraOp.role = QStringLiteral("mass");
+    ops.append(scleraOp);
+
+    // Sclera top shadow (Drop shadow from upper lid)
+    QPolygonF scleraShade;
+    scleraShade << QPointF(ecx - ew * 0.46, ecy - eh * 0.15)
+                << QPointF(ecx + ew * 0.46, ecy - eh * 0.15)
+                << QPointF(ecx + ew * 0.38, ecy + eh * 0.05)
+                << QPointF(ecx - ew * 0.38, ecy + eh * 0.05);
+    KisAiStrokeOperation scleraShadeOp;
+    scleraShadeOp.kind = KisAiStrokeOperation::Kind::Fill;
+    scleraShadeOp.id = prefix + QStringLiteral("_sclera_shade");
+    scleraShadeOp.layer = QStringLiteral("Shading");
+    scleraShadeOp.polygon = scleraShade;
+    scleraShadeOp.brush.color = QColor(190, 195, 220);
+    scleraShadeOp.brush.opacity = 0.40;
+    scleraShadeOp.groupId = prefix;
+    scleraShadeOp.role = QStringLiteral("mass");
+    ops.append(scleraShadeOp);
+
+    // 2. Iris (Volumetric dual-gradient)
+    const qreal irisW = ew * 0.65;
+    const qreal irisH = eh * 0.82;
+    QPolygonF irisPoly;
+    for (int i = 0; i < segs; ++i) {
+        const qreal theta = 2.0 * PI * i / segs;
+        irisPoly.append(QPointF(ecx + (irisW * 0.5) * std::cos(theta),
+                                ecy + (irisH * 0.5) * std::sin(theta)));
+    }
+    KisAiStrokeOperation irisOp;
+    irisOp.kind = KisAiStrokeOperation::Kind::Fill;
+    irisOp.id = prefix + QStringLiteral("_iris_base");
+    irisOp.layer = QStringLiteral("Flats");
+    irisOp.polygon = irisPoly;
+    irisOp.brush.color = irisColor;
+    irisOp.brush.opacity = 1.0;
+    irisOp.groupId = prefix;
+    irisOp.role = QStringLiteral("mass");
+    ops.append(irisOp);
+
+    // Iris upper deep shade
+    QPolygonF irisShade;
+    irisShade << QPointF(ecx - irisW * 0.48, ecy - irisH * 0.45)
+              << QPointF(ecx + irisW * 0.48, ecy - irisH * 0.45)
+              << QPointF(ecx + irisW * 0.45, ecy + irisH * 0.05)
+              << QPointF(ecx - irisW * 0.45, ecy + irisH * 0.05);
+    KisAiStrokeOperation irisShadeOp;
+    irisShadeOp.kind = KisAiStrokeOperation::Kind::Fill;
+    irisShadeOp.id = prefix + QStringLiteral("_iris_shade");
+    irisShadeOp.layer = QStringLiteral("Shading");
+    irisShadeOp.polygon = irisShade;
+    irisShadeOp.brush.color = irisColor.darker(175);
+    irisShadeOp.brush.opacity = 0.65;
+    irisShadeOp.groupId = prefix;
+    irisShadeOp.role = QStringLiteral("mass");
+    ops.append(irisShadeOp);
+
+    // Iris lower caustics crescent
+    QPolygonF caustics;
+    caustics << QPointF(ecx - irisW * 0.38, ecy + irisH * 0.15)
+             << QPointF(ecx + irisW * 0.38, ecy + irisH * 0.15)
+             << QPointF(ecx + irisW * 0.32, ecy + irisH * 0.42)
+             << QPointF(ecx, ecy + irisH * 0.46)
+             << QPointF(ecx - irisW * 0.32, ecy + irisH * 0.42);
+    KisAiStrokeOperation causticsOp;
+    causticsOp.kind = KisAiStrokeOperation::Kind::Fill;
+    causticsOp.id = prefix + QStringLiteral("_caustics");
+    causticsOp.layer = QStringLiteral("Highlights");
+    causticsOp.polygon = caustics;
+    causticsOp.brush.color = calculateHueShiftedHighlight(irisColor, QColor(255, 255, 240), 0.65);
+    causticsOp.brush.opacity = 0.55;
+    causticsOp.blendMode = QStringLiteral("screen");
+    causticsOp.groupId = prefix;
+    causticsOp.role = QStringLiteral("accent");
+    ops.append(causticsOp);
+
+    // 3. Pupil
+    const qreal pupilW = irisW * 0.38;
+    const qreal pupilH = irisH * 0.44;
+    QPolygonF pupilPoly;
+    for (int i = 0; i < segs; ++i) {
+        const qreal theta = 2.0 * PI * i / segs;
+        pupilPoly.append(QPointF(ecx + (pupilW * 0.5) * std::cos(theta),
+                                ecy - eh * 0.02 + (pupilH * 0.5) * std::sin(theta)));
+    }
+    KisAiStrokeOperation pupilOp;
+    pupilOp.kind = KisAiStrokeOperation::Kind::Fill;
+    pupilOp.id = prefix + QStringLiteral("_pupil");
+    pupilOp.layer = QStringLiteral("Shading");
+    pupilOp.polygon = pupilPoly;
+    pupilOp.brush.color = QColor(15, 12, 22);
+    pupilOp.brush.opacity = 0.95;
+    pupilOp.groupId = prefix;
+    pupilOp.role = QStringLiteral("mass");
+    ops.append(pupilOp);
+
+    // 4. Primary and Secondary Catchlights
+    // Main catchlight (Sun/Key light)
+    const QPointF mainCatchPos(ecx - facingDir * irisW * 0.22, ecy - eh * 0.14);
+    QPolygonF mainCatch;
+    for (int i = 0; i < 8; ++i) {
+        const qreal th = 2.0 * PI * i / 8;
+        mainCatch.append(QPointF(mainCatchPos.x() + ew * 0.08 * std::cos(th),
+                                mainCatchPos.y() + eh * 0.10 * std::sin(th)));
+    }
+    KisAiStrokeOperation catchMainOp;
+    catchMainOp.kind = KisAiStrokeOperation::Kind::Fill;
+    catchMainOp.id = prefix + QStringLiteral("_catch_main");
+    catchMainOp.layer = QStringLiteral("Highlights");
+    catchMainOp.polygon = mainCatch;
+    catchMainOp.brush.color = QColor(255, 255, 255);
+    catchMainOp.brush.opacity = 0.95;
+    catchMainOp.groupId = prefix;
+    catchMainOp.role = QStringLiteral("accent");
+    ops.append(catchMainOp);
+
+    // Secondary sub-catchlight (Sky reflection)
+    const QPointF subCatchPos(ecx + facingDir * irisW * 0.24, ecy + eh * 0.18);
+    QPolygonF subCatch;
+    for (int i = 0; i < 6; ++i) {
+        const qreal th = 2.0 * PI * i / 6;
+        subCatch.append(QPointF(subCatchPos.x() + ew * 0.045 * std::cos(th),
+                               subCatchPos.y() + eh * 0.045 * std::sin(th)));
+    }
+    KisAiStrokeOperation catchSubOp;
+    catchSubOp.kind = KisAiStrokeOperation::Kind::Fill;
+    catchSubOp.id = prefix + QStringLiteral("_catch_sub");
+    catchSubOp.layer = QStringLiteral("Highlights");
+    catchSubOp.polygon = subCatch;
+    catchSubOp.brush.color = QColor(215, 240, 255);
+    catchSubOp.brush.opacity = 0.80;
+    catchSubOp.groupId = prefix;
+    catchSubOp.role = QStringLiteral("accent");
+    ops.append(catchSubOp);
+
+    // 5. Upper Eyelid & Winged Lash
+    QVector<KisAiStrokePoint> upperLash;
+    upperLash.append(KisAiStrokePoint(ecx - ew * 0.48, ecy - eh * 0.05, 0.35));
+    upperLash.append(KisAiStrokePoint(ecx - ew * 0.20, ecy - eh * 0.32, 0.90));
+    upperLash.append(KisAiStrokePoint(ecx + ew * 0.20, ecy - eh * 0.30, 1.00));
+    upperLash.append(KisAiStrokePoint(ecx + ew * 0.52, ecy - eh * 0.08, 0.85));
+    // Winged flick
+    upperLash.append(KisAiStrokePoint(ecx + ew * 0.60, ecy - eh * 0.16, 0.20));
+
+    KisAiStrokeOperation lashOp;
+    lashOp.kind = KisAiStrokeOperation::Kind::Path;
+    lashOp.id = prefix + QStringLiteral("_lash_upper");
+    lashOp.layer = QStringLiteral("Lineart");
+    lashOp.points = upperLash;
+    lashOp.brush = lineBrush;
+    lashOp.brush.profile = QStringLiteral("gpen");
+    lashOp.brush.size = 0.0065;
+    lashOp.brush.color = QColor(22, 18, 30);
+    lashOp.groupId = prefix;
+    lashOp.role = QStringLiteral("contour");
+    ops.append(lashOp);
+
+    // 6. Eyelid crease (Double-lid)
+    QVector<KisAiStrokePoint> crease;
+    crease.append(KisAiStrokePoint(ecx - ew * 0.35, ecy - eh * 0.42, 0.20));
+    crease.append(KisAiStrokePoint(ecx, ecy - eh * 0.48, 0.55));
+    crease.append(KisAiStrokePoint(ecx + ew * 0.38, ecy - eh * 0.40, 0.15));
+
+    KisAiStrokeOperation creaseOp;
+    creaseOp.kind = KisAiStrokeOperation::Kind::Path;
+    creaseOp.id = prefix + QStringLiteral("_crease");
+    creaseOp.layer = QStringLiteral("Lineart");
+    creaseOp.points = crease;
+    creaseOp.brush = lineBrush;
+    creaseOp.brush.size = 0.0028;
+    creaseOp.brush.color = QColor(60, 45, 65);
+    creaseOp.brush.opacity = 0.75;
+    creaseOp.groupId = prefix;
+    creaseOp.role = QStringLiteral("internal");
+    ops.append(creaseOp);
+
+    // 7. Lower lash line
+    QVector<KisAiStrokePoint> lowerLash;
+    lowerLash.append(KisAiStrokePoint(ecx - ew * 0.25, ecy + eh * 0.38, 0.15));
+    lowerLash.append(KisAiStrokePoint(ecx + ew * 0.10, ecy + eh * 0.40, 0.40));
+    lowerLash.append(KisAiStrokePoint(ecx + ew * 0.35, ecy + eh * 0.32, 0.25));
+
+    KisAiStrokeOperation lowerLashOp;
+    lowerLashOp.kind = KisAiStrokeOperation::Kind::Path;
+    lowerLashOp.id = prefix + QStringLiteral("_lash_lower");
+    lowerLashOp.layer = QStringLiteral("Lineart");
+    lowerLashOp.points = lowerLash;
+    lowerLashOp.brush = lineBrush;
+    lowerLashOp.brush.size = 0.0024;
+    lowerLashOp.brush.color = QColor(45, 35, 55);
+    lowerLashOp.brush.opacity = 0.70;
+    lowerLashOp.groupId = prefix;
+    lowerLashOp.role = QStringLiteral("contour");
+    ops.append(lowerLashOp);
+
+    return ops;
+}
+
+void KisAiStrokeQualityUtils::applyOcclusionAndLightingLineWeight(
+    QVector<KisAiStrokeOperation> &operations,
+    const QPointF &lightDir,
+    qreal minWeightRatio,
+    qreal maxWeightRatio)
+{
+    const QPointF normLight = normalizeVector(lightDir);
+
+    for (KisAiStrokeOperation &op : operations) {
+        if (op.kind != KisAiStrokeOperation::Kind::Path ||
+            KisAiStrokeProgramCodec::normalizeLayerName(op.layer) != QLatin1String("Lineart")) {
+            continue;
+        }
+
+        if (op.points.size() < 2) continue;
+
+        for (int i = 0; i < op.points.size(); ++i) {
+            // Estimate local tangent
+            QPointF tangent;
+            if (i == 0) {
+                tangent = op.points.at(1).pos - op.points.at(0).pos;
+            } else if (i == op.points.size() - 1) {
+                tangent = op.points.at(i).pos - op.points.at(i - 1).pos;
+            } else {
+                tangent = op.points.at(i + 1).pos - op.points.at(i - 1).pos;
+            }
+
+            const qreal tLen = std::hypot(tangent.x(), tangent.y());
+            if (tLen < 1e-5) continue;
+
+            // Normal vector in screen space (pointing outward/left: (dx, dy) -> (dy, -dx))
+            const QPointF norm(tangent.y() / tLen, -tangent.x() / tLen);
+
+            // Dot product with light: positive = facing light, negative = facing away
+            const qreal dot = norm.x() * normLight.x() + norm.y() * normLight.y();
+
+            // Downward gravitation modulation (y positive in screen coords)
+            const qreal downward = qMax<qreal>(0.0, tangent.y() / tLen);
+
+            qreal mod = 1.0;
+            if (dot > 0.25) {
+                // Sunlit side: refine / taper down
+                mod = qMax(minWeightRatio, 1.0 - (dot - 0.25) * 0.65);
+            } else if (dot < -0.15) {
+                // Shadow / crevice side: boost thickness
+                mod = qMin(maxWeightRatio, 1.0 + (-dot - 0.15) * 0.70 + downward * 0.20);
+            }
+
+            op.points[i].pressure = qBound<qreal>(0.05, op.points[i].pressure * mod, 1.0);
+        }
+    }
+}
+
+QVector<KisAiStrokeOperation> KisAiStrokeQualityUtils::applyCornerInkingFillets(
+    const QVector<KisAiStrokeOperation> &operations,
+    const QSize &canvasSize,
+    qreal maxAngleDeg)
+{
+    QVector<KisAiStrokeOperation> fillets;
+    const qreal thresholdDot = std::cos(maxAngleDeg * DEG2RAD);
+    const qreal baseDim = qMin(canvasSize.width(), canvasSize.height());
+
+    int filletIdx = 0;
+    for (const KisAiStrokeOperation &op : operations) {
+        if (op.kind != KisAiStrokeOperation::Kind::Path ||
+            KisAiStrokeProgramCodec::normalizeLayerName(op.layer) != QLatin1String("Lineart") ||
+            op.points.size() < 3) {
+            continue;
+        }
+
+        const qreal strokeWidthPx = (op.brush.sizeMode == QLatin1String("px"))
+            ? op.brush.size : (op.brush.size * baseDim);
+
+        for (int i = 1; i < op.points.size() - 1; ++i) {
+            const QPointF p0 = op.points.at(i - 1).pos;
+            const QPointF p1 = op.points.at(i).pos;
+            const QPointF p2 = op.points.at(i + 1).pos;
+
+            const QPolygonF fPoly = generateCornerInkingPolygon(p0, p1, p2, strokeWidthPx);
+            if (!fPoly.isEmpty()) {
+                KisAiStrokeOperation filletOp;
+                filletOp.kind = KisAiStrokeOperation::Kind::Fill;
+                filletOp.id = QStringLiteral("fillet_%1").arg(filletIdx++);
+                filletOp.layer = QStringLiteral("Lineart");
+                filletOp.polygon = fPoly;
+                filletOp.brush.color = op.brush.color;
+                filletOp.brush.opacity = op.brush.opacity * 0.90;
+                filletOp.fillStyle = QStringLiteral("wash");
+                filletOp.groupId = op.groupId;
+                filletOp.role = QStringLiteral("accent");
+                fillets.append(filletOp);
+            }
+        }
+    }
+
+    return fillets;
+}
+
+void KisAiStrokeQualityUtils::applyDiffusionBloom(
+    QImage &image,
+    qreal threshold,
+    qreal strength,
+    int blurRadius)
+{
+    if (image.isNull() || image.width() <= 0 || image.height() <= 0) return;
+
+    const int w = image.width();
+    const int h = image.height();
+
+    // 1. Extract high-luminance pixels into a downscaled buffer
+    const int dsW = qMax(16, w / 2);
+    const int dsH = qMax(16, h / 2);
+    QImage bright(dsW, dsH, QImage::Format_ARGB32_Premultiplied);
+    bright.fill(Qt::transparent);
+
+    for (int y = 0; y < dsH; ++y) {
+        const int srcY = (y * h) / dsH;
+        const QRgb *srcLine = reinterpret_cast<const QRgb*>(image.constScanLine(srcY));
+        QRgb *dstLine = reinterpret_cast<QRgb*>(bright.scanLine(y));
+        for (int x = 0; x < dsW; ++x) {
+            const int srcX = (x * w) / dsW;
+            const QRgb px = srcLine[srcX];
+            const qreal lum = (0.299 * qRed(px) + 0.587 * qGreen(px) + 0.114 * qBlue(px)) / 255.0;
+            if (lum > threshold) {
+                const qreal ramp = (lum - threshold) / qMax<qreal>(0.01, 1.0 - threshold);
+                dstLine[x] = qRgba(qRound(qRed(px) * ramp),
+                                   qRound(qGreen(px) * ramp),
+                                   qRound(qBlue(px) * ramp),
+                                   qRound(qAlpha(px) * ramp));
+            } else {
+                dstLine[x] = 0;
+            }
+        }
+    }
+
+    // 2. Horizontal box blur pass
+    const int r = qMax(2, blurRadius / 2);
+    QImage blurredH = bright;
+    for (int y = 0; y < dsH; ++y) {
+        QRgb *scan = reinterpret_cast<QRgb*>(blurredH.scanLine(y));
+        for (int x = 0; x < dsW; ++x) {
+            int accR = 0, accG = 0, accB = 0, accA = 0, count = 0;
+            for (int k = -r; k <= r; ++k) {
+                const int nx = qBound(0, x + k, dsW - 1);
+                const QRgb p = reinterpret_cast<const QRgb*>(bright.constScanLine(y))[nx];
+                accR += qRed(p); accG += qGreen(p); accB += qBlue(p); accA += qAlpha(p);
+                ++count;
+            }
+            scan[x] = qRgba(accR / count, accG / count, accB / count, accA / count);
+        }
+    }
+
+    // 3. Vertical box blur pass
+    QImage blurredV = blurredH;
+    for (int y = 0; y < dsH; ++y) {
+        QRgb *scan = reinterpret_cast<QRgb*>(blurredV.scanLine(y));
+        for (int x = 0; x < dsW; ++x) {
+            int accR = 0, accG = 0, accB = 0, accA = 0, count = 0;
+            for (int k = -r; k <= r; ++k) {
+                const int ny = qBound(0, y + k, dsH - 1);
+                const QRgb p = reinterpret_cast<const QRgb*>(blurredH.constScanLine(ny))[x];
+                accR += qRed(p); accG += qGreen(p); accB += qBlue(p); accA += qAlpha(p);
+                ++count;
+            }
+            scan[x] = qRgba(accR / count, accG / count, accB / count, accA / count);
+        }
+    }
+
+    // 4. Additive blend bloom back to source image
+    QImage bloomUpscaled = blurredV.scaled(w, h, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+    for (int y = 0; y < h; ++y) {
+        QRgb *srcLine = reinterpret_cast<QRgb*>(image.scanLine(y));
+        const QRgb *bloomLine = reinterpret_cast<const QRgb*>(bloomUpscaled.constScanLine(y));
+        for (int x = 0; x < w; ++x) {
+            const QRgb orig = srcLine[x];
+            const QRgb bl = bloomLine[x];
+            const int r = qBound(0, qRed(orig) + qRound(qRed(bl) * strength), 255);
+            const int g = qBound(0, qGreen(orig) + qRound(qGreen(bl) * strength), 255);
+            const int b = qBound(0, qBlue(orig) + qRound(qBlue(bl) * strength), 255);
+            srcLine[x] = qRgba(r, g, b, qAlpha(orig));
+        }
+    }
+}
+
+QImage KisAiStrokeQualityUtils::applyAtmosphericFinish(
+    const QImage &image,
+    qreal bloomStrength,
+    qreal vignetteStrength,
+    qreal grainIntensity,
+    quint32 seed)
+{
+    if (image.isNull()) return image;
+
+    QImage result = image.copy();
+
+    // Step 1: Optical Bloom
+    if (bloomStrength > 0.01) {
+        applyDiffusionBloom(result, 0.70, bloomStrength, 14);
+    }
+
+    // Step 2: Cinematic Vignette
+    if (vignetteStrength > 0.01) {
+        const QImage vignette = generateVignetteImage(result.size(), vignetteStrength);
+        QPainter p(&result);
+        p.setCompositionMode(QPainter::CompositionMode_Multiply);
+        p.drawImage(0, 0, vignette);
+        p.end();
+    }
+
+    // Step 3: Paper/Film Grain
+    if (grainIntensity > 0.005) {
+        const QImage grain = generateFilmGrain(result.size(), grainIntensity, seed);
+        QPainter p(&result);
+        p.setCompositionMode(QPainter::CompositionMode_SoftLight);
+        p.drawImage(0, 0, grain);
+        p.end();
+    }
+
+    return result;
+}
+

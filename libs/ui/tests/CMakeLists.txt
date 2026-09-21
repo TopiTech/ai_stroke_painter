@@ -38,6 +38,9 @@ if (NOT AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
     kis_add_test(KisAiAtomicInkTest.cpp
         TEST_NAME KisAiAtomicInkTest
         LINK_LIBRARIES kritaui kritatestsdk)
+    kis_add_test(KisAiV10QualityTest.cpp
+        TEST_NAME KisAiV10QualityTest
+        LINK_LIBRARIES kritaui kritatestsdk)
     set_tests_properties(
         libs-ui-KisAiStrokeProgramTest
         libs-ui-KisAiStrokeRendererTest
@@ -51,6 +54,7 @@ if (NOT AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
         libs-ui-KisAiAbstractOntologyTest
         libs-ui-KisAiQualityBenchGateTest
         libs-ui-KisAiAtomicInkTest
+        libs-ui-KisAiV10QualityTest
         PROPERTIES
             LABELS "AIStroke"
             TIMEOUT 120)

@@ -398,6 +398,102 @@ public:
         const QPointF &pNext,
         qreal strokeWidthPx
     );
+
+    // =========================================================================
+    // 9. V10 Masterwork Rendering Quality & Post-Processing
+    // =========================================================================
+
+    /**
+     * V10 Hierarchical 3D Hair Clump Generator.
+     * Decomposes a macro hair clump into flow clumps (S-curves), sharp tapered micro-strands,
+     * delicate flyaways, and ambient occlusion valley crevices.
+     */
+    static QVector<KisAiStrokeOperation> generateHierarchicalHairStrands(
+        const KisAiStrokeOperation &baseClumpOp,
+        const QPointF &headCenter,
+        const QSize &canvasSize,
+        quint32 seed = 42
+    );
+
+    /**
+     * V10 Curvature-Following Jagged Angel Halo Highlight.
+     * Generates a dynamic, broken/jagged specular halo across hair clumps
+     * instead of a plain unbroken oval ribbon.
+     */
+    static QVector<KisAiStrokeOperation> generateJaggedHairHalo(
+        const QPointF &headCenter,
+        qreal headWidth,
+        qreal headHeight,
+        const QColor &hairColor,
+        const QSize &canvasSize,
+        qreal yOffsetRatio = -0.10,
+        int bandCount = 1,
+        quint32 seed = 42
+    );
+
+    /**
+     * V10 Multi-Layered Anime Eye Generator with Cornea Refraction & Multi-Catchlights.
+     * Generates anatomical sclera, iris with caustics, soft pupil drop-shadow,
+     * iris striations, and primary/secondary catchlights.
+     */
+    static QVector<KisAiStrokeOperation> generateDetailedAnimeEyeOps(
+        const QPointF &eyeCenter,
+        const QSizeF &eyeSize,
+        const QColor &irisColor,
+        const QString &style,
+        bool isRight,
+        const QString &expression,
+        const QSize &canvasSize,
+        const KisAiStrokeBrush &lineBrush,
+        quint32 seed = 42
+    );
+
+    /**
+     * V10 Light-Direction & Occlusion-Aware Line Weight Modulation.
+     * Tapers lines facing key lights (sunlit edge) to delicate whispers,
+     * while thickening lines in shadow crevices and downward gravitational edges.
+     */
+    static void applyOcclusionAndLightingLineWeight(
+        QVector<KisAiStrokeOperation> &operations,
+        const QPointF &lightDir = QPointF(-0.5, -0.7),
+        qreal minWeightRatio = 0.40,
+        qreal maxWeightRatio = 1.65
+    );
+
+    /**
+     * V10 Automatic Corner Inking Pooling.
+     * Injects small organic inking fillets at sharp acute line junctions
+     * across all Lineart operations.
+     */
+    static QVector<KisAiStrokeOperation> applyCornerInkingFillets(
+        const QVector<KisAiStrokeOperation> &operations,
+        const QSize &canvasSize,
+        qreal maxAngleDeg = 120.0
+    );
+
+    /**
+     * V10 Optical Diffusion Bloom.
+     * Extracts high-luminance areas (specular highlights, rim lights, skin bloom)
+     * and adds a soft atmospheric glow in linear space.
+     */
+    static void applyDiffusionBloom(
+        QImage &image,
+        qreal threshold = 0.75,
+        qreal strength = 0.25,
+        int blurRadius = 12
+    );
+
+    /**
+     * V10 Integrated Masterwork Finish Stage.
+     * Executes optical bloom, cinematic vignette, and paper/film grain sequentially.
+     */
+    static QImage applyAtmosphericFinish(
+        const QImage &image,
+        qreal bloomStrength = 0.20,
+        qreal vignetteStrength = 0.15,
+        qreal grainIntensity = 0.05,
+        quint32 seed = 1337
+    );
 };
 
 #endif // KIS_AI_STROKE_QUALITY_UTILS_H

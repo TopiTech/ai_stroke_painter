@@ -111,7 +111,11 @@ QJsonObject KisAiSceneSpecCodec::sceneSpecJsonSchema()
                               QStringLiteral("smile_closed"),
                               QStringLiteral("neutral"),
                               QStringLiteral("half"),
-                              QStringLiteral("closed")}));
+                              QStringLiteral("closed"),
+                              QStringLiteral("wink_left"),
+                              QStringLiteral("wink_right"),
+                              QStringLiteral("blush_shy"),
+                              QStringLiteral("confident_smug")}));
     headProps.insert(
         QStringLiteral("gaze"),
         strEnum({QStringLiteral("front"), QStringLiteral("left"), QStringLiteral("right"), QStringLiteral("up")}));
@@ -121,15 +125,36 @@ QJsonObject KisAiSceneSpecCodec::sceneSpecJsonSchema()
                               QStringLiteral("bob"),
                               QStringLiteral("twin_tails"),
                               QStringLiteral("short_messy"),
-                              QStringLiteral("short_straight")}));
+                              QStringLiteral("short_straight"),
+                              QStringLiteral("pony_tail"),
+                              QStringLiteral("half_up"),
+                              QStringLiteral("wolf_cut"),
+                              QStringLiteral("braided")}));
     headProps.insert(QStringLiteral("hair_bangs"),
                      strEnum({QStringLiteral("m_fringe"),
                               QStringLiteral("straight_cut"),
                               QStringLiteral("swept_left"),
-                              QStringLiteral("swept_right")}));
+                              QStringLiteral("swept_right"),
+                              QStringLiteral("see_through"),
+                              QStringLiteral("blunt_bangs"),
+                              QStringLiteral("center_part")}));
     headProps.insert(QStringLiteral("hair_color"), color());
     headProps.insert(QStringLiteral("eye_color"), color());
     headProps.insert(QStringLiteral("skin_tone"), color());
+    {
+        QJsonObject num01;
+        num01.insert(QStringLiteral("type"), QStringLiteral("number"));
+        num01.insert(QStringLiteral("minimum"), 0.0);
+        num01.insert(QStringLiteral("maximum"), 1.0);
+        headProps.insert(QStringLiteral("hair_volume"), num01);
+        headProps.insert(QStringLiteral("hair_flyaway"), num01);
+        headProps.insert(QStringLiteral("blush_intensity"), num01);
+    }
+    headProps.insert(QStringLiteral("eye_highlight_style"),
+                     strEnum({QStringLiteral("twin_dot"),
+                              QStringLiteral("radiant_sparkle"),
+                              QStringLiteral("soft_diffuse"),
+                              QStringLiteral("crescent")}));
     head.insert(QStringLiteral("properties"), headProps);
     head.insert(QStringLiteral("additionalProperties"), false);
     props.insert(QStringLiteral("head"), head);
@@ -184,9 +209,45 @@ QJsonObject KisAiSceneSpecCodec::sceneSpecJsonSchema()
         QStringLiteral("warmth"),
         strEnum(
             {QStringLiteral("warm_key_cool_fill"), QStringLiteral("cool_key_warm_fill"), QStringLiteral("neutral")}));
+    {
+        QJsonObject num01;
+        num01.insert(QStringLiteral("type"), QStringLiteral("number"));
+        num01.insert(QStringLiteral("minimum"), 0.0);
+        num01.insert(QStringLiteral("maximum"), 1.0);
+        lightProps.insert(QStringLiteral("rim_intensity"), num01);
+        lightProps.insert(QStringLiteral("sss_strength"), num01);
+    }
+    lightProps.insert(QStringLiteral("lighting_style"),
+                      strEnum({QStringLiteral("soft_studio"),
+                               QStringLiteral("dramatic_backlight"),
+                               QStringLiteral("komorebi_dappled"),
+                               QStringLiteral("sunset_golden"),
+                               QStringLiteral("neon_rim")}));
     light.insert(QStringLiteral("properties"), lightProps);
     light.insert(QStringLiteral("additionalProperties"), false);
     props.insert(QStringLiteral("light"), light);
+
+    // V10: finish block
+    QJsonObject finish;
+    finish.insert(QStringLiteral("type"), QStringLiteral("object"));
+    QJsonObject finishProps;
+    {
+        QJsonObject num01;
+        num01.insert(QStringLiteral("type"), QStringLiteral("number"));
+        num01.insert(QStringLiteral("minimum"), 0.0);
+        num01.insert(QStringLiteral("maximum"), 1.0);
+        finishProps.insert(QStringLiteral("bloom_strength"), num01);
+        finishProps.insert(QStringLiteral("grain_intensity"), num01);
+        finishProps.insert(QStringLiteral("vignette_strength"), num01);
+    }
+    finishProps.insert(QStringLiteral("tone_mood"),
+                       strEnum({QStringLiteral("anime_vibrant"),
+                                QStringLiteral("cinematic_warm"),
+                                QStringLiteral("pastel_dreamy"),
+                                QStringLiteral("dark_noir")}));
+    finish.insert(QStringLiteral("properties"), finishProps);
+    finish.insert(QStringLiteral("additionalProperties"), false);
+    props.insert(QStringLiteral("finish"), finish);
 
     QJsonObject negative;
     negative.insert(QStringLiteral("type"), QStringLiteral("object"));
@@ -388,13 +449,18 @@ bool KisAiSceneSpecCodec::parseSceneSpecObject(const QJsonObject &rootObj,
 
     const QJsonObject head = rootObj.value(QStringLiteral("head")).toObject();
     if (!head.isEmpty()) {
-        spec.head.expression = normalizeEnum(head.value(QStringLiteral("expression")).toString(spec.head.expression),
-                                             {QStringLiteral("smile_open"),
-                                              QStringLiteral("smile_closed"),
-                                              QStringLiteral("neutral"),
-                                              QStringLiteral("half"),
-                                              QStringLiteral("closed")},
-                                             QStringLiteral("smile_open"));
+        spec.head.expression =
+            normalizeEnum(head.value(QStringLiteral("expression")).toString(spec.head.expression),
+                          {QStringLiteral("smile_open"),
+                           QStringLiteral("smile_closed"),
+                           QStringLiteral("neutral"),
+                           QStringLiteral("half"),
+                           QStringLiteral("closed"),
+                           QStringLiteral("wink_left"),
+                           QStringLiteral("wink_right"),
+                           QStringLiteral("blush_shy"),
+                           QStringLiteral("confident_smug")},
+                          QStringLiteral("smile_open"));
         spec.head.gaze = normalizeEnum(
             head.value(QStringLiteral("gaze")).toString(spec.head.gaze),
             {QStringLiteral("front"), QStringLiteral("left"), QStringLiteral("right"), QStringLiteral("up")},
@@ -405,17 +471,39 @@ bool KisAiSceneSpecCodec::parseSceneSpecObject(const QJsonObject &rootObj,
                                              QStringLiteral("bob"),
                                              QStringLiteral("twin_tails"),
                                              QStringLiteral("short_messy"),
-                                             QStringLiteral("short_straight")},
+                                             QStringLiteral("short_straight"),
+                                             QStringLiteral("pony_tail"),
+                                             QStringLiteral("half_up"),
+                                             QStringLiteral("wolf_cut"),
+                                             QStringLiteral("braided")},
                                             QStringLiteral("long_hime"));
         spec.head.hairBangs = normalizeEnum(head.value(QStringLiteral("hair_bangs")).toString(spec.head.hairBangs),
                                             {QStringLiteral("m_fringe"),
                                              QStringLiteral("straight_cut"),
                                              QStringLiteral("swept_left"),
-                                             QStringLiteral("swept_right")},
+                                             QStringLiteral("swept_right"),
+                                             QStringLiteral("see_through"),
+                                             QStringLiteral("blunt_bangs"),
+                                             QStringLiteral("center_part")},
                                             QStringLiteral("m_fringe"));
         spec.head.hairColor = parseColorField(head, QStringLiteral("hair_color"), spec.head.hairColor);
         spec.head.eyeColor = parseColorField(head, QStringLiteral("eye_color"), spec.head.eyeColor);
         spec.head.skinTone = parseColorField(head, QStringLiteral("skin_tone"), spec.head.skinTone);
+        if (head.contains(QStringLiteral("hair_volume"))) {
+            spec.head.hairVolume = qBound<qreal>(0.0, head.value(QStringLiteral("hair_volume")).toDouble(spec.head.hairVolume), 1.0);
+        }
+        if (head.contains(QStringLiteral("hair_flyaway"))) {
+            spec.head.hairFlyaway = qBound<qreal>(0.0, head.value(QStringLiteral("hair_flyaway")).toDouble(spec.head.hairFlyaway), 1.0);
+        }
+        if (head.contains(QStringLiteral("blush_intensity"))) {
+            spec.head.blushIntensity = qBound<qreal>(0.0, head.value(QStringLiteral("blush_intensity")).toDouble(spec.head.blushIntensity), 1.0);
+        }
+        spec.head.eyeHighlightStyle = normalizeEnum(head.value(QStringLiteral("eye_highlight_style")).toString(spec.head.eyeHighlightStyle),
+                                                   {QStringLiteral("twin_dot"),
+                                                    QStringLiteral("radiant_sparkle"),
+                                                    QStringLiteral("soft_diffuse"),
+                                                    QStringLiteral("crescent")},
+                                                   QStringLiteral("twin_dot"));
     } else if (spec.isCharacter()) {
         localWarnings.append(QStringLiteral("head block missing; canonical anime head defaults applied."));
     }
@@ -484,6 +572,40 @@ bool KisAiSceneSpecCodec::parseSceneSpecObject(const QJsonObject &rootObj,
         spec.light.timeOfDay = normalizeEnum(light.value(QStringLiteral("time")).toString(spec.light.timeOfDay),
                                              {QStringLiteral("day"), QStringLiteral("sunset"), QStringLiteral("night")},
                                              QStringLiteral("day"));
+        if (light.contains(QStringLiteral("rim_intensity"))) {
+            spec.light.rimIntensity = qBound<qreal>(0.0, light.value(QStringLiteral("rim_intensity")).toDouble(spec.light.rimIntensity), 1.0);
+        }
+        if (light.contains(QStringLiteral("sss_strength"))) {
+            spec.light.sssStrength = qBound<qreal>(0.0, light.value(QStringLiteral("sss_strength")).toDouble(spec.light.sssStrength), 1.0);
+        }
+        spec.light.lightingStyle = normalizeEnum(
+            light.value(QStringLiteral("lighting_style")).toString(spec.light.lightingStyle),
+            {QStringLiteral("soft_studio"),
+             QStringLiteral("dramatic_backlight"),
+             QStringLiteral("komorebi_dappled"),
+             QStringLiteral("sunset_golden"),
+             QStringLiteral("neon_rim")},
+            QStringLiteral("soft_studio"));
+    }
+
+    const QJsonObject finishObj = rootObj.value(QStringLiteral("finish")).toObject();
+    if (!finishObj.isEmpty()) {
+        if (finishObj.contains(QStringLiteral("bloom_strength"))) {
+            spec.finish.bloomStrength = qBound<qreal>(0.0, finishObj.value(QStringLiteral("bloom_strength")).toDouble(spec.finish.bloomStrength), 1.0);
+        }
+        if (finishObj.contains(QStringLiteral("grain_intensity"))) {
+            spec.finish.grainIntensity = qBound<qreal>(0.0, finishObj.value(QStringLiteral("grain_intensity")).toDouble(spec.finish.grainIntensity), 1.0);
+        }
+        if (finishObj.contains(QStringLiteral("vignette_strength"))) {
+            spec.finish.vignetteStrength = qBound<qreal>(0.0, finishObj.value(QStringLiteral("vignette_strength")).toDouble(spec.finish.vignetteStrength), 1.0);
+        }
+        spec.finish.toneMood = normalizeEnum(
+            finishObj.value(QStringLiteral("tone_mood")).toString(spec.finish.toneMood),
+            {QStringLiteral("anime_vibrant"),
+             QStringLiteral("cinematic_warm"),
+             QStringLiteral("pastel_dreamy"),
+             QStringLiteral("dark_noir")},
+            QStringLiteral("anime_vibrant"));
     }
 
     const QJsonObject bg = rootObj.value(QStringLiteral("background")).toObject();
@@ -845,10 +967,49 @@ KisAiSceneSpec KisAiSceneSpecCodec::defaultSpecForPrompt(const QString &prompt, 
     }
     if (lower.contains(QStringLiteral("twin")) || lower.contains(QStringLiteral("twintail"))) {
         spec.head.hairStyle = QStringLiteral("twin_tails");
+    } else if (lower.contains(QStringLiteral("pony")) || lower.contains(QStringLiteral("ponytail"))) {
+        spec.head.hairStyle = QStringLiteral("pony_tail");
+    } else if (lower.contains(QStringLiteral("half up")) || lower.contains(QStringLiteral("half-up"))) {
+        spec.head.hairStyle = QStringLiteral("half_up");
+    } else if (lower.contains(QStringLiteral("wolf"))) {
+        spec.head.hairStyle = QStringLiteral("wolf_cut");
+    } else if (lower.contains(QStringLiteral("braid")) || lower.contains(QStringLiteral("braided"))) {
+        spec.head.hairStyle = QStringLiteral("braided");
     } else if (lower.contains(QStringLiteral("bob"))) {
         spec.head.hairStyle = QStringLiteral("bob");
     } else if (lower.contains(QStringLiteral("short")) && lower.contains(QStringLiteral("hair"))) {
         spec.head.hairStyle = QStringLiteral("short_messy");
+    }
+
+    if (lower.contains(QStringLiteral("see through")) || lower.contains(QStringLiteral("see_through"))
+        || lower.contains(QStringLiteral("see-through"))) {
+        spec.head.hairBangs = QStringLiteral("see_through");
+    } else if (lower.contains(QStringLiteral("blunt")) || lower.contains(QStringLiteral("straight cut"))) {
+        spec.head.hairBangs = QStringLiteral("blunt_bangs");
+    }
+
+    if (lower.contains(QStringLiteral("wink"))) {
+        spec.head.expression = QStringLiteral("wink_left");
+    } else if (lower.contains(QStringLiteral("blush")) || lower.contains(QStringLiteral("shy"))) {
+        spec.head.expression = QStringLiteral("blush_shy");
+        spec.head.blushIntensity = 0.85;
+    } else if (lower.contains(QStringLiteral("smug")) || lower.contains(QStringLiteral("confident"))) {
+        spec.head.expression = QStringLiteral("confident_smug");
+    }
+
+    if (lower.contains(QStringLiteral("backlight")) || lower.contains(QStringLiteral("rim"))) {
+        spec.light.lightingStyle = QStringLiteral("dramatic_backlight");
+        spec.light.rimIntensity = 0.75;
+    } else if (lower.contains(QStringLiteral("komorebi")) || lower.contains(QStringLiteral("dappled"))) {
+        spec.light.lightingStyle = QStringLiteral("komorebi_dappled");
+    }
+
+    if (lower.contains(QStringLiteral("sparkle")) || lower.contains(QStringLiteral("radiant"))) {
+        spec.head.eyeHighlightStyle = QStringLiteral("radiant_sparkle");
+        spec.rig.eyeHighlight = QStringLiteral("radiant_sparkle");
+    } else if (lower.contains(QStringLiteral("crescent"))) {
+        spec.head.eyeHighlightStyle = QStringLiteral("crescent");
+        spec.rig.eyeHighlight = QStringLiteral("crescent");
     }
     if (lower.contains(QStringLiteral("green")) && lower.contains(QStringLiteral("eye"))) {
         spec.head.eyeColor = QColor(34, 197, 94);

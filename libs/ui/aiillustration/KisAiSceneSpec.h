@@ -29,13 +29,18 @@ struct KRITAUI_EXPORT KisAiSceneSubject
 
 struct KRITAUI_EXPORT KisAiSceneHead
 {
-    QString expression {QStringLiteral("smile_open")}; // smile_open, smile_closed, neutral, half, closed
+    QString expression {QStringLiteral("smile_open")}; // smile_open, smile_closed, neutral, half, closed, wink_left, wink_right, blush_shy, confident_smug
     QString gaze {QStringLiteral("front")}; // front, left, right, up
-    QString hairStyle {QStringLiteral("long_hime")}; // long_hime, long_wavy, bob, twin_tails, short_messy, short_straight
-    QString hairBangs {QStringLiteral("m_fringe")}; // m_fringe, straight_cut, swept_left, swept_right
+    QString hairStyle {QStringLiteral("long_hime")}; // long_hime, long_wavy, bob, twin_tails, short_messy, short_straight, pony_tail, half_up, wolf_cut, braided
+    QString hairBangs {QStringLiteral("m_fringe")}; // m_fringe, straight_cut, swept_left, swept_right, see_through, blunt_bangs, center_part
     QColor hairColor {QColor(43, 58, 103)};
     QColor eyeColor {QColor(59, 130, 246)};
     QColor skinTone {QColor(255, 224, 192)};
+    // V10 Fine-Grained Anatomy Handles
+    qreal hairVolume {0.60}; // [0.0, 1.0]
+    qreal hairFlyaway {0.35}; // [0.0, 1.0]
+    qreal blushIntensity {0.50}; // [0.0, 1.0]
+    QString eyeHighlightStyle {QStringLiteral("twin_dot")}; // twin_dot, radiant_sparkle, soft_diffuse, crescent
 };
 
 struct KRITAUI_EXPORT KisAiSceneClothing
@@ -66,6 +71,10 @@ struct KRITAUI_EXPORT KisAiSceneLight
     QPointF direction {-0.5, -0.7}; // normalized-ish key-light vector (points toward the light)
     QString warmth {QStringLiteral("warm_key_cool_fill")};
     QString timeOfDay {QStringLiteral("day")}; // day, sunset, night
+    // V10 Lighting Direction Handles
+    qreal rimIntensity {0.40}; // [0.0, 1.0]
+    qreal sssStrength {0.50}; // [0.0, 1.0]
+    QString lightingStyle {QStringLiteral("soft_studio")}; // soft_studio, dramatic_backlight, komorebi_dappled, sunset_golden, neon_rim
 };
 
 struct KRITAUI_EXPORT KisAiSceneBackground
@@ -80,6 +89,17 @@ struct KRITAUI_EXPORT KisAiSceneNegative
     bool noParticlesOnFace {true};
     bool noText {true};
     bool noExtraLimbs {true};
+};
+
+/**
+ * V10 Post-Processing Finish Directives.
+ */
+struct KRITAUI_EXPORT KisAiSceneFinishV3
+{
+    qreal bloomStrength {0.20}; // [0.0, 1.0]
+    qreal grainIntensity {0.05}; // [0.0, 1.0]
+    qreal vignetteStrength {0.15}; // [0.0, 1.0]
+    QString toneMood {QStringLiteral("anime_vibrant")}; // anime_vibrant, cinematic_warm, pastel_dreamy, dark_noir
 };
 
 /**
@@ -125,7 +145,7 @@ struct KRITAUI_EXPORT KisAiSceneRigOverrides
 {
     qreal eyeAperture {0.85};        // [0,1] 0 = closed, 1 = wide
     qreal irisRatio {0.62};          // [0.35,0.85] iris / eye height
-    QString eyeHighlight {QString()}; // twin_dot, streak, soft (empty = rig default)
+    QString eyeHighlight {QString()}; // twin_dot, streak, soft, radiant_sparkle, crescent
     bool doubleLid {true};
     qreal hairStrandDensity {0.55};  // [0,1]
     qreal hairFlyaway {0.35};        // [0,1]
@@ -170,6 +190,9 @@ struct KRITAUI_EXPORT KisAiSceneSpec
     KisAiSceneColorScriptV2 colorScript;
     KisAiSceneNarrativeV2 narrative;
     KisAiSceneRigOverrides rig;
+
+    // V10 additions
+    KisAiSceneFinishV3 finish;
 
     bool isCharacter() const { return subject.type == QLatin1String("character"); }
 };

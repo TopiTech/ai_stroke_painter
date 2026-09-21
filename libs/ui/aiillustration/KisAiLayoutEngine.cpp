@@ -154,6 +154,14 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::hairBackMassForStyle(const KisA
         backLength = headHeight * 1.35;
     else if (style == QLatin1String("long_wavy"))
         backLength = headHeight * 1.30;
+    else if (style == QLatin1String("pony_tail"))
+        backLength = headHeight * 0.45;
+    else if (style == QLatin1String("half_up"))
+        backLength = headHeight * 1.15;
+    else if (style == QLatin1String("wolf_cut"))
+        backLength = headHeight * 0.85;
+    else if (style == QLatin1String("braided"))
+        backLength = headHeight * 1.20;
 
     // 1. Back mass (inner shade behind head)
     {
@@ -1122,12 +1130,24 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(const KisAiSce
     ops.append(KisAiLightRig::synthesizeShading(flatsOnly, rig, canvasSize, &anchor));
     ops.append(KisAiLightRig::synthesizeFormShading(flatsOnly, rig, canvasSize));
     ops.append(KisAiLightRig::synthesizeBounceLight(flatsOnly, rig, canvasSize));
-    // V7: Volumetric Half-Lambert shading + Material optics (SSS fringe & Anisotropic hair sheen)
     ops.append(KisAiLightRig::synthesizeVolumetricShading(flatsOnly, rig, canvasSize, &anchor));
     ops.append(KisAiLightRig::synthesizeMaterialOptics(flatsOnly, rig, canvasSize, &anchor));
 
+    // V10: Curvature-following jagged angel halo highlight for hair
+    ops.append(KisAiStrokeQualityUtils::generateJaggedHairHalo(
+        hc, hw * 2.0, hh, spec.head.hairColor, canvasSize, -0.10,
+        spec.rig.hairHighlightBands > 0 ? spec.rig.hairHighlightBands : 1, 42));
+
     // Opt-in lineart hierarchy (outer contours heavier than details).
     KisAiStrokeQualityUtils::applyLineartHierarchy(ops);
+
+    // V10: Light direction and occlusion-aware line weight modulation
+    KisAiStrokeQualityUtils::applyOcclusionAndLightingLineWeight(ops, rig.direction);
+
+    // V10: Automatic corner inking fillets at acute junctions
+    const auto fillets = KisAiStrokeQualityUtils::applyCornerInkingFillets(ops, canvasSize);
+    ops.append(fillets);
+
     return ops;
 }
 
