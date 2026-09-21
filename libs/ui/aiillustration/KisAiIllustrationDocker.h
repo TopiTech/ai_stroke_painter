@@ -61,6 +61,10 @@ public:
     ~KisAiIllustrationDocker() override;
 
     void focusPrompt();
+    void setPromptText(const QString &prompt);
+    void applyStylePreset(int styleIndex);
+    void createQuickCanvas(int width = 1024, int height = 1024);
+    void triggerGeneration(const QString &prompt = QString(), int styleIndex = -1);
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;

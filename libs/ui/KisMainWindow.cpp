@@ -163,6 +163,7 @@
 #include "KisWidgetConnectionUtils.h"
 #include "KisToolBarStateModel.h"
 #include "aiillustration/KisAiIllustrationDocker.h"
+#include "aiillustration/KisAiStartPageWidget.h"
 #include <config-qmdiarea-always-show-subwindow-title.h>
 #include <config-qt-patches-present.h>
 
@@ -215,74 +216,15 @@ public:
         if (id.isNull()) this->id = QUuid::createUuid();
 
 #if defined(AI_STROKE_PAINTER_APP)
-        auto *startPage = new QWidget(parent);
-        startPage->setObjectName(QStringLiteral("aiIllustrationStartPage"));
-        startPage->setAccessibleName(i18n("AI illustration start page"));
-        startPage->setStyleSheet(QStringLiteral(
-            "QWidget#aiIllustrationStartPage { background: #141923; color: #edf3ff; }"
-            "QLabel#aiStartTitle { color: #f3f7ff; font-size: 32px; font-weight: 700; }"
-            "QLabel#aiStartBody { color: #b7c7de; font-size: 15px; }"
-            "QPushButton#aiStartPrimaryBtn { background: #4a88f7; color: #ffffff; border: none; border-radius: 6px; font-size: 14px; font-weight: 600; padding: 10px 22px; }"
-            "QPushButton#aiStartPrimaryBtn:hover { background: #629aff; }"
-            "QPushButton#aiStartPrimaryBtn:pressed { background: #3572df; }"
-            "QPushButton#aiStartSecondaryBtn { background: #1e2636; color: #cddcf0; border: 1px solid #3d4f6d; border-radius: 6px; font-size: 14px; font-weight: 500; padding: 10px 20px; }"
-            "QPushButton#aiStartSecondaryBtn:hover { background: #2a354b; color: #ffffff; border-color: #556c94; }"
-            "QPushButton#aiStartSecondaryBtn:pressed { background: #171f2d; }"));
+        welcomeScroller = new QScrollArea();
+        welcomeScroller->setObjectName(QStringLiteral("aiWelcomeScroller"));
+        welcomeScroller->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        welcomeScroller->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        welcomeScroller->setWidgetResizable(true);
 
-        auto *startLayout = new QVBoxLayout(startPage);
-        startLayout->setContentsMargins(56, 48, 56, 48);
-        startLayout->setSpacing(20);
-        startLayout->addStretch(1);
-
-        auto *title = new QLabel(i18n("AI Stroke Painter"), startPage);
-        title->setObjectName(QStringLiteral("aiStartTitle"));
-        title->setAlignment(Qt::AlignHCenter);
-        startLayout->addWidget(title);
-
-        auto *body = new QLabel(i18n("右側の AI ワークスペースにイラストの指示を入力すると、\n生成結果を編集可能なレイヤーとしてキャンバスへ追加します。"), startPage);
-        body->setObjectName(QStringLiteral("aiStartBody"));
-        body->setAlignment(Qt::AlignHCenter);
-        body->setWordWrap(true);
-        startLayout->addWidget(body);
-
-        auto *btnRow = new QHBoxLayout();
-        btnRow->setAlignment(Qt::AlignHCenter);
-        btnRow->setSpacing(14);
-
-        auto *focusPromptBtn = new QPushButton(i18n("作画指示を入力"), startPage);
-        focusPromptBtn->setObjectName(QStringLiteral("aiStartPrimaryBtn"));
-        focusPromptBtn->setCursor(Qt::PointingHandCursor);
-        focusPromptBtn->setToolTip(i18n("右側の AI ワークスペースの指示入力欄にフォーカスします (Ctrl+Alt+A)"));
-        btnRow->addWidget(focusPromptBtn);
-
-        auto *newCanvasBtn = new QPushButton(i18n("新しいキャンバス"), startPage);
-        newCanvasBtn->setObjectName(QStringLiteral("aiStartSecondaryBtn"));
-        newCanvasBtn->setCursor(Qt::PointingHandCursor);
-        newCanvasBtn->setToolTip(i18n("手動で新しい画像キャンバスを作成します (Ctrl+N)"));
-        btnRow->addWidget(newCanvasBtn);
-
-        auto *openFileBtn = new QPushButton(i18n("画像を開く"), startPage);
-        openFileBtn->setObjectName(QStringLiteral("aiStartSecondaryBtn"));
-        openFileBtn->setCursor(Qt::PointingHandCursor);
-        openFileBtn->setToolTip(i18n("既存の画像ファイルを開きます (Ctrl+O)"));
-        btnRow->addWidget(openFileBtn);
-
-        startLayout->addLayout(btnRow);
-        startLayout->addStretch(1);
-
-        QObject::connect(focusPromptBtn, &QPushButton::clicked, parent, [parent] {
-            if (QDockWidget *docker = parent->findChild<QDockWidget *>(QStringLiteral("AiIllustrationDocker"))) {
-                docker->show();
-                docker->raise();
-                if (auto *aiDocker = dynamic_cast<KisAiIllustrationDocker *>(docker)) {
-                    aiDocker->focusPrompt();
-                }
-            }
-        });
-        QObject::connect(newCanvasBtn, &QPushButton::clicked, parent, &KisMainWindow::slotFileNew);
-        QObject::connect(openFileBtn, &QPushButton::clicked, parent, [parent] { parent->slotFileOpen(); });
-
-        widgetStack->addWidget(startPage);
+        auto *startPage = new KisAiStartPageWidget(parent, welcomeScroller);
+        welcomeScroller->setWidget(startPage);
+        widgetStack->addWidget(welcomeScroller);
 #else
         welcomeScroller = new QScrollArea();
         welcomeScroller->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);

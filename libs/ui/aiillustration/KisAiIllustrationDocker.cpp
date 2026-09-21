@@ -81,9 +81,12 @@
 #include <algorithm>
 
 #if defined(Q_OS_WIN)
-#include <wincrypt.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
-
+#include <wincrypt.h>
+#include <dpapi.h>
 #endif
 
 namespace
@@ -1632,6 +1635,49 @@ void KisAiIllustrationDocker::focusPrompt()
     if (m_promptEditor) {
         m_promptEditor->setFocus();
     }
+}
+
+void KisAiIllustrationDocker::setPromptText(const QString &prompt)
+{
+    if (m_promptEditor) {
+        m_promptEditor->setPlainText(prompt);
+        QTextCursor cursor = m_promptEditor->textCursor();
+        cursor.movePosition(QTextCursor::End);
+        m_promptEditor->setTextCursor(cursor);
+    }
+}
+
+void KisAiIllustrationDocker::applyStylePreset(int styleIndex)
+{
+    if (m_artStyleCombo && styleIndex >= 0 && styleIndex < m_artStyleCombo->count()) {
+        m_artStyleCombo->setCurrentIndex(styleIndex);
+        updateActiveStyleCards(styleIndex);
+    }
+}
+
+void KisAiIllustrationDocker::createQuickCanvas(int width, int height)
+{
+    if (m_widthSpin) {
+        m_widthSpin->setValue(width);
+    }
+    if (m_heightSpin) {
+        m_heightSpin->setValue(height);
+    }
+    createCanvas();
+}
+
+void KisAiIllustrationDocker::triggerGeneration(const QString &prompt, int styleIndex)
+{
+    if (styleIndex >= 0) {
+        applyStylePreset(styleIndex);
+    }
+    if (!prompt.isEmpty()) {
+        setPromptText(prompt);
+    }
+    show();
+    raise();
+    focusPrompt();
+    generateIllustration();
 }
 
 void KisAiIllustrationDocker::createCanvas()
