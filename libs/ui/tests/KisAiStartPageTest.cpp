@@ -53,20 +53,29 @@ void KisAiStartPageTest::testPresetPromptApplication()
     QVERIFY(promptInput != nullptr);
 
     // Preset text only (no canvas/docker side effects in unit tests).
+    // Preset 0: Anime & Manga Line Art
     widget.slotApplyPreset(0);
     QVERIFY(!promptInput->text().isEmpty());
+    QVERIFY(promptInput->text().contains(QStringLiteral("線画")));
+
+    // Preset 1: Anime Cel-Shading
+    widget.slotApplyPreset(1);
     QVERIFY(promptInput->text().contains(QStringLiteral("アニメ")));
 
-    widget.slotApplyPreset(1);
+    // Preset 2: Cyberpunk & Scifi
+    widget.slotApplyPreset(2);
     QVERIFY(promptInput->text().contains(QStringLiteral("サイバーパンク")));
 
-    widget.slotApplyPreset(2);
+    // Preset 3: Watercolor & Atomic Ink
+    widget.slotApplyPreset(3);
     QVERIFY(promptInput->text().contains(QStringLiteral("水彩")));
 
-    widget.slotApplyPreset(3);
+    // Preset 4: Vector Geometric Art
+    widget.slotApplyPreset(4);
     QVERIFY(promptInput->text().contains(QStringLiteral("幾何学")));
 
-    widget.slotApplyPreset(4);
+    // Preset 5: Surprise Me!
+    widget.slotApplyPreset(5);
     QVERIFY(!promptInput->text().isEmpty());
 }
 
@@ -110,13 +119,24 @@ void KisAiStartPageTest::testActionCardLayout()
     bool foundClipboard = false;
 
     for (QPushButton *btn : cardButtons) {
-        const QString text = btn->text();
         const auto labels = btn->findChildren<QLabel *>();
         for (QLabel *lbl : labels) {
-            if (lbl->text().contains(QStringLiteral("新しいキャンバス"))) foundNewCanvas = true;
-            if (lbl->text().contains(QStringLiteral("AI クイックキャンバス"))) foundQuickCanvas = true;
-            if (lbl->text().contains(QStringLiteral("画像・作品を開く"))) foundOpenImage = true;
-            if (lbl->text().contains(QStringLiteral("クリップボードから"))) foundClipboard = true;
+            if (lbl->text().contains(QStringLiteral("新しいキャンバス"))) {
+                foundNewCanvas = true;
+                QVERIFY(!btn->accessibleName().isEmpty());
+            }
+            if (lbl->text().contains(QStringLiteral("AI クイックキャンバス"))) {
+                foundQuickCanvas = true;
+                QVERIFY(!btn->accessibleName().isEmpty());
+            }
+            if (lbl->text().contains(QStringLiteral("画像・作品を開く"))) {
+                foundOpenImage = true;
+                QVERIFY(!btn->accessibleName().isEmpty());
+            }
+            if (lbl->text().contains(QStringLiteral("クリップボードから"))) {
+                foundClipboard = true;
+                QVERIFY(!btn->accessibleName().isEmpty());
+            }
         }
     }
 

@@ -183,6 +183,8 @@ QWidget *KisAiStartPageWidget::createHeroSection()
     // Quick focus button
     auto *focusDockerBtn = new QPushButton(i18n("AI ワークスペースを表示"), container);
     focusDockerBtn->setCursor(Qt::PointingHandCursor);
+    focusDockerBtn->setAccessibleName(i18n("AI ワークスペースを表示"));
+    focusDockerBtn->setToolTip(i18n("AIイラスト生成パネル（ドッカー）を表示・フォーカスします"));
     focusDockerBtn->setStyleSheet(QStringLiteral(
         "QPushButton { background: rgba(30, 41, 59, 0.8); color: #cbd5e1; border: 1px solid rgba(71, 85, 105, 0.5); border-radius: 6px; font-size: 12px; font-weight: 500; padding: 6px 14px; }"
         "QPushButton:hover { background: rgba(51, 65, 85, 0.9); color: #f8fafc; border-color: #64748b; }"));
@@ -224,6 +226,7 @@ QWidget *KisAiStartPageWidget::createPromptBarSection()
     m_promptSubmitBtn = new QPushButton(i18n("⚡ 生成して開く"), frame);
     m_promptSubmitBtn->setObjectName(QStringLiteral("aiPromptGenerateBtn"));
     m_promptSubmitBtn->setCursor(Qt::PointingHandCursor);
+    m_promptSubmitBtn->setAccessibleName(i18n("生成して開く"));
     m_promptSubmitBtn->setToolTip(i18n("キャンバスを作成し、プロンプトを流し込んでAI生成を開始します (Enter)"));
     connect(m_promptSubmitBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotQuickPromptGenerate);
     layout->addWidget(m_promptSubmitBtn);
@@ -249,6 +252,9 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     auto *newBtn = new QPushButton(container);
     newBtn->setProperty("class", "aiCardButton");
     newBtn->setCursor(Qt::PointingHandCursor);
+    newBtn->setAccessibleName(i18n("新しいキャンバス (Ctrl+N)"));
+    newBtn->setAccessibleDescription(i18n("サイズや色空間を指定して新規キャンバスを作成します。"));
+    newBtn->setToolTip(i18n("サイズや色空間を指定して新規キャンバスを作成 (Ctrl+N)"));
     auto *newLayout = new QVBoxLayout(newBtn);
     newLayout->setSpacing(4);
     auto *newTop = new QHBoxLayout();
@@ -273,6 +279,9 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     auto *quickBtn = new QPushButton(container);
     quickBtn->setProperty("class", "aiCardButton");
     quickBtn->setCursor(Qt::PointingHandCursor);
+    quickBtn->setAccessibleName(i18n("AI クイックキャンバス (1024x1024)"));
+    quickBtn->setAccessibleDescription(i18n("最適解像度 1024x1024 で即座にキャンバスを作成します。"));
+    quickBtn->setToolTip(i18n("最適解像度 1024x1024 で即座にキャンバスを展開"));
     auto *quickLayout = new QVBoxLayout(quickBtn);
     quickLayout->setSpacing(4);
     auto *quickTop = new QHBoxLayout();
@@ -297,6 +306,9 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     auto *openBtn = new QPushButton(container);
     openBtn->setProperty("class", "aiCardButton");
     openBtn->setCursor(Qt::PointingHandCursor);
+    openBtn->setAccessibleName(i18n("画像・作品を開く (Ctrl+O)"));
+    openBtn->setAccessibleDescription(i18n("既存の KRA、PNG、PSD などのファイルを開きます。"));
+    openBtn->setToolTip(i18n("既存の作品ファイルを開く (Ctrl+O)"));
     auto *openLayout = new QVBoxLayout(openBtn);
     openLayout->setSpacing(4);
     auto *openTop = new QHBoxLayout();
@@ -321,6 +333,9 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     auto *pasteBtn = new QPushButton(container);
     pasteBtn->setProperty("class", "aiCardButton");
     pasteBtn->setCursor(Qt::PointingHandCursor);
+    pasteBtn->setAccessibleName(i18n("クリップボードから (Ctrl+V)"));
+    pasteBtn->setAccessibleDescription(i18n("クリップボードにコピーした画像を新規キャンバスとして展開します。"));
+    pasteBtn->setToolTip(i18n("クリップボードの画像からキャンバスを作成 (Ctrl+V)"));
     auto *pasteLayout = new QVBoxLayout(pasteBtn);
     pasteLayout->setSpacing(4);
     auto *pasteTop = new QHBoxLayout();
@@ -380,6 +395,9 @@ QWidget *KisAiStartPageWidget::createPresetsSection()
         auto *btn = new QPushButton(container);
         btn->setProperty("class", "aiPresetBtn");
         btn->setCursor(Qt::PointingHandCursor);
+        btn->setAccessibleName(p.title);
+        btn->setAccessibleDescription(p.desc);
+        btn->setToolTip(QStringLiteral("%1 - %2").arg(p.title, p.desc));
 
         auto *bLayout = new QHBoxLayout(btn);
         bLayout->setContentsMargins(12, 10, 12, 10);
@@ -439,6 +457,8 @@ QWidget *KisAiStartPageWidget::createRecentAndGuideSection()
     m_clearRecentBtn = new QPushButton(i18n("履歴をクリア"), recentPanel);
     m_clearRecentBtn->setObjectName(QStringLiteral("aiClearRecentBtn"));
     m_clearRecentBtn->setCursor(Qt::PointingHandCursor);
+    m_clearRecentBtn->setAccessibleName(i18n("最近開いた作品の履歴をクリア"));
+    m_clearRecentBtn->setToolTip(i18n("最近開いた作品の履歴リストをクリアします"));
     connect(m_clearRecentBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotClearRecentFiles);
     recentHeader->addWidget(m_clearRecentBtn);
     recentLayout->addLayout(recentHeader);

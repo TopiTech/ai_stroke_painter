@@ -204,10 +204,25 @@ void KisAiIllustrationRendererTest::testPromptExpansionPayloadAndParsing()
     QVERIFY(!doc.isNull() && doc.isObject());
     const QJsonObject obj = doc.object();
     QCOMPARE(obj.value(QStringLiteral("model")).toString(), QStringLiteral("gpt-4o"));
+    QCOMPARE(obj.value(QStringLiteral("temperature")).toDouble(), 0.7);
+    QCOMPARE(obj.value(QStringLiteral("max_tokens")).toInt(), 300);
     const QJsonArray messages = obj.value(QStringLiteral("messages")).toArray();
     QCOMPARE(messages.size(), 2);
     QVERIFY(messages[0].toObject().value(QStringLiteral("content")).toString().contains(QStringLiteral("Anime Cel")));
     QCOMPARE(messages[1].toObject().value(QStringLiteral("content")).toString(), shortPrompt);
+
+    // Test payload generation for reasoning models (e.g. o3-mini)
+    const QByteArray reasoningPayload = KisAiPromptAnalyzer::buildPromptExpansionPayload(
+        shortPrompt, QStringLiteral("o3-mini"), KisAiPromptAnalyzer::ArtStyle::AnimeCel);
+    QVERIFY(!reasoningPayload.isEmpty());
+    QJsonDocument docReasoning = QJsonDocument::fromJson(reasoningPayload);
+    QVERIFY(!docReasoning.isNull() && docReasoning.isObject());
+    const QJsonObject objReasoning = docReasoning.object();
+    QCOMPARE(objReasoning.value(QStringLiteral("model")).toString(), QStringLiteral("o3-mini"));
+    QVERIFY(!objReasoning.contains(QStringLiteral("temperature")));
+    QVERIFY(!objReasoning.contains(QStringLiteral("max_tokens")));
+    QVERIFY(objReasoning.contains(QStringLiteral("max_completion_tokens")));
+    QVERIFY(objReasoning.value(QStringLiteral("max_completion_tokens")).toInt() >= 600);
 
     // Test parse response with JSON
     const QByteArray mockResponse = R"({

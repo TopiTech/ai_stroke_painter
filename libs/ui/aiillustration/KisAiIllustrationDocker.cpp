@@ -1574,6 +1574,10 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         }
         chainTab(m_presetCombo);
         chainTab(m_promptEditor);
+        chainTab(m_refImageSelectBtn);
+        chainTab(m_refImageFromCanvasBtn);
+        chainTab(m_refImagePasteBtn);
+        chainTab(m_refImageClearBtn);
 
         // Visual Style, Composition & Lighting Cards
         for (auto *btn : m_styleCardButtons) {
@@ -1627,6 +1631,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         // Goal Mode controls
         chainTab(m_goalModeCheck);
         chainTab(m_goalStepsSpin);
+        chainTab(m_goalTargetReadinessSpin);
+        chainTab(m_goalMaxExtraStepsSpin);
         chainTab(m_artStyleCombo);
         chainTab(m_pausePerStepCheck);
 
@@ -1634,6 +1640,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         chainTab(m_debugModeCheck);
         chainTab(m_copyLogButton);
         chainTab(m_clearLogButton);
+        chainTab(m_debugLogText);
 
         // Primary action buttons
         chainTab(m_generateButton);

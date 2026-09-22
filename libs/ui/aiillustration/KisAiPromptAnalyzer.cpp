@@ -4,6 +4,7 @@
  */
 
 #include "KisAiPromptAnalyzer.h"
+#include "KisAiStrokeProgram.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -730,11 +731,18 @@ QByteArray KisAiPromptAnalyzer::buildPromptExpansionPayload(const QString &short
     messages.append(systemMessage);
     messages.append(userMessage);
 
+    const QString effectiveModel = model.isEmpty() ? QStringLiteral("gpt-4o") : model;
+    const bool reasoning = KisAiStrokeProgramCodec::isReasoningModel(effectiveModel);
+
     QJsonObject payload;
-    payload[QStringLiteral("model")] = model.isEmpty() ? QStringLiteral("gpt-4o") : model;
+    payload[QStringLiteral("model")] = effectiveModel;
     payload[QStringLiteral("messages")] = messages;
-    payload[QStringLiteral("temperature")] = 0.7;
-    payload[QStringLiteral("max_tokens")] = 300;
+    if (reasoning) {
+        payload[QStringLiteral("max_completion_tokens")] = 1000;
+    } else {
+        payload[QStringLiteral("temperature")] = 0.7;
+        payload[QStringLiteral("max_tokens")] = 300;
+    }
 
     return QJsonDocument(payload).toJson(QJsonDocument::Compact);
 }
