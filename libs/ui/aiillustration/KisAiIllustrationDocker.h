@@ -245,6 +245,7 @@ private:
     QPushButton *m_submitFeedbackButton {nullptr};
     QCheckBox *m_compositionPlanCheck {nullptr};
     QCheckBox *m_suppressParticlesCheck {nullptr};
+    QCheckBox *m_forceAdvancedStrokeLogicCheck {nullptr};
     QComboBox *m_reasoningEffortCombo {nullptr};
     QPlainTextEdit *m_customInstructionsEdit {nullptr};
 

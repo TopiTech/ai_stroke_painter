@@ -48,6 +48,11 @@ private Q_SLOTS:
     void testTimeOfDayLutConsistency();
     void testFormAndBounceLayers();
     void testInkDynamicsPoolingAndFade();
+
+    // Flagship LLM & Advanced Stroke Logic
+    void testAdvancedStrokeLogicActivation();
+    void testFlagshipStrokeSmoothingAndCornerPreservation();
+    void testFlagshipInkDynamicsCurvatureModulation();
 };
 
 #endif // KIS_AI_V5_ENGINE_TEST_H

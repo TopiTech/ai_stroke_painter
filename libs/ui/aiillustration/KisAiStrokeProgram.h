@@ -219,7 +219,14 @@ public:
     static QString buildSystemPrompt(const QSize &canvasSize,
                                      const QString &prompt,
                                      const QString &customInstructions = QString(),
-                                     int artStyle = 0);
+                                     int artStyle = 0,
+                                     bool enableAdvancedDirectives = true);
+
+    /**
+     * Advanced flagship & universal high-precision stroke guidance (4-tier shading,
+     * SSS warm terminators, Catmull-Rom curvature, and hair clump architecture).
+     */
+    static QString buildFlagshipDirectives();
 
     /**
      * JSON schema for OpenAI Structured Outputs (response_format: json_schema).

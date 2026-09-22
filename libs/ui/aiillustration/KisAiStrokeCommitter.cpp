@@ -6,6 +6,7 @@
 #include "KisAiStrokeCommitter.h"
 
 #include "KisAiDeliberateStroke.h"
+#include "KisAiModelRouter.h"
 #include "KisAiPrimitiveExpander.h"
 #include "KisAiStrokeGraph.h"
 #include "KisAiStrokeQualityUtils.h"
@@ -92,13 +93,23 @@ QVector<KisAiStrokeOperation> KisAiStrokeCommitter::prepareAtomicOps(const QVect
 KisAiStrokeOperation KisAiStrokeCommitter::stabilizeOperation(const KisAiStrokeOperation &op, const QSize &canvasSize)
 {
     KisAiStrokeOperation out = op;
+    const bool advanced = KisAiModelRouter::shouldUseAdvancedStrokeLogic();
     if (op.kind == KisAiStrokeOperation::Kind::Path && op.points.size() >= 3) {
-        out.points = KisAiDeliberateStroke::applyInkDynamics(
-            KisAiDeliberateStroke::stabilizeStroke(op.points,
-                                                   canvasSize,
-                                                   op.closed,
-                                                   KisAiStrokeProgramCodec::stableSeed(op.id)),
-            canvasSize);
+        if (advanced) {
+            out.points = KisAiDeliberateStroke::applyFlagshipInkDynamics(
+                KisAiDeliberateStroke::smoothFlagshipStroke(op.points,
+                                                            canvasSize,
+                                                            op.closed,
+                                                            KisAiStrokeProgramCodec::stableSeed(op.id)),
+                canvasSize);
+        } else {
+            out.points = KisAiDeliberateStroke::applyInkDynamics(
+                KisAiDeliberateStroke::stabilizeStroke(op.points,
+                                                       canvasSize,
+                                                       op.closed,
+                                                       KisAiStrokeProgramCodec::stableSeed(op.id)),
+                canvasSize);
+        }
     } else if (op.kind == KisAiStrokeOperation::Kind::Ribbon) {
         QVector<KisAiStrokePoint> spinePts;
         QVector<QPointF> raw = op.spine;
@@ -111,10 +122,15 @@ KisAiStrokeOperation KisAiStrokeCommitter::stabilizeOperation(const KisAiStrokeO
         for (const QPointF &p : raw)
             spinePts.append(KisAiStrokePoint(p.x(), p.y(), 0.8));
         const QVector<KisAiStrokePoint> stable =
-            KisAiDeliberateStroke::stabilizeStroke(spinePts,
-                                                   canvasSize,
-                                                   false,
-                                                   KisAiStrokeProgramCodec::stableSeed(op.id));
+            advanced
+            ? KisAiDeliberateStroke::smoothFlagshipStroke(spinePts,
+                                                          canvasSize,
+                                                          false,
+                                                          KisAiStrokeProgramCodec::stableSeed(op.id))
+            : KisAiDeliberateStroke::stabilizeStroke(spinePts,
+                                                    canvasSize,
+                                                    false,
+                                                    KisAiStrokeProgramCodec::stableSeed(op.id));
         out.spine.clear();
         out.points.clear();
         for (const KisAiStrokePoint &p : stable) {

@@ -846,7 +846,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_endpointEditor->setAccessibleDescription(
         i18n("接続先LLMのエンドポイントURL。ローカル接続 (localhost/127.0.0.1) の場合はAPIキーを省略できます。"));
     m_modelEditor = new QLineEdit(m_detailsContainer);
-    m_modelEditor->setPlaceholderText(i18n("モデル名 (例: gpt-4o, o3-mini, deepseek-chat)"));
+    m_modelEditor->setPlaceholderText(i18n("モデル名 (例: gpt-5, claude-3-7-sonnet, gemini-3.8-flash, o3-mini, deepseek-v4-pro)"));
     m_modelEditor->setAccessibleName(i18n("LLM model name"));
     m_modelEditor->setAccessibleDescription(i18n("使用するLLMまたは画像生成モデルの名前。"));
     m_apiKeyEditor = new QLineEdit(m_detailsContainer);
@@ -977,6 +977,17 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         i18n("顔や画面全体を覆う点描ノイズ・吹雪状パーティクルの生成と多重蓄積を抑止します。星空・雪・花びら等が必要な"
              "場合のみOFFにしてください。"));
 
+    // 高度ストロークロジック強制トグル (既定ON: 4層立体シェーディング・角保持スプライン・インク物理)
+    m_forceAdvancedStrokeLogicCheck = new QCheckBox(i18n("🚀 高度ストロークロジックを常に適用 (推奨)"), m_detailsContainer);
+    m_forceAdvancedStrokeLogicCheck->setChecked(KisAiModelRouter::forceAdvancedStrokeLogic());
+    m_forceAdvancedStrokeLogicCheck->setAccessibleName(i18n("Always force advanced stroke logic"));
+    m_forceAdvancedStrokeLogicCheck->setToolTip(
+        i18n("4層立体シェーディング、SSS温色明暗境界線、角保持スプライン平滑化、速度・曲率連動インク物理を作動させます。\n"
+             "プリセット外のローカルモデルや未知のカスタムモデル利用時も含め、すべてのモデルで作動します。"));
+    connect(m_forceAdvancedStrokeLogicCheck, &QCheckBox::toggled, this, [](bool checked) {
+        KisAiModelRouter::setForceAdvancedStrokeLogic(checked);
+    });
+
     m_reasoningEffortCombo = new QComboBox(m_detailsContainer);
     m_reasoningEffortCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     m_reasoningEffortCombo->setMinimumContentsLength(10);
@@ -1057,6 +1068,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     remoteForm->addRow(i18n("作画プロトコル"), m_strokeProtocolCombo);
     remoteForm->addRow(QString(), m_compositionPlanCheck);
     remoteForm->addRow(QString(), m_suppressParticlesCheck);
+    remoteForm->addRow(QString(), m_forceAdvancedStrokeLogicCheck);
     remoteForm->addRow(i18n("推論エフォート"), m_reasoningEffortCombo);
     remoteForm->addRow(i18n("追加指示"), m_customInstructionsEdit);
     detailsLayout->addLayout(remoteForm);
@@ -2918,7 +2930,7 @@ void KisAiIllustrationDocker::updateModeUi()
             i18n("OpenAI 互換の Chat Completions エンドポイント (/v1/chat/completions) "
                  "を指定します。Vision対応モデルを推奨します（画像非対応時はテキストに自動フォールバック）。"));
         m_endpointEditor->setPlaceholderText(QStringLiteral("https://api.openai.com/v1/chat/completions"));
-        m_modelEditor->setPlaceholderText(i18n("モデル名 (例: gpt-4o, o3-mini, deepseek-chat)"));
+        m_modelEditor->setPlaceholderText(i18n("モデル名 (例: gpt-5, claude-3-7-sonnet, gemini-3.8-flash, o3-mini, deepseek-v4-pro)"));
 
         const QString savedEndpoint = readSafeStoredEndpoint(settings,
                                                              QStringLiteral("AIIllustration/llmEndpoint"),
@@ -2976,6 +2988,7 @@ void KisAiIllustrationDocker::updateModeUi()
         setFormRowVisible(m_remoteForm, m_strokeProtocolCombo, isLlm);
         setFormRowVisible(m_remoteForm, m_compositionPlanCheck, isLlm);
         setFormRowVisible(m_remoteForm, m_suppressParticlesCheck, isStrokeMode);
+        setFormRowVisible(m_remoteForm, m_forceAdvancedStrokeLogicCheck, isStrokeMode);
         setFormRowVisible(m_remoteForm, m_reasoningEffortCombo, isLlm);
         setFormRowVisible(m_remoteForm, m_customInstructionsEdit, isLlm);
     }
@@ -4561,6 +4574,17 @@ void KisAiIllustrationDocker::loadSettings()
         }
     }
 
+    // 最新フラッグシップ・高度ストロークロジックの強制適用 (既定ON: プリセット外モデルでも有効)
+    {
+        const bool forceAdv = settings.value(QStringLiteral("AIIllustration/forceAdvancedStrokeLogic"), true).toBool();
+        KisAiModelRouter::setForceAdvancedStrokeLogic(forceAdv);
+        if (m_forceAdvancedStrokeLogicCheck) {
+            const QSignalBlocker blocker(m_forceAdvancedStrokeLogicCheck);
+            m_forceAdvancedStrokeLogicCheck->setChecked(forceAdv);
+        }
+    }
+
+
     // Vision 画質
     if (m_visionQualityCombo) {
         const QString vq =
@@ -4768,6 +4792,10 @@ void KisAiIllustrationDocker::saveSettings()
     if (m_suppressParticlesCheck) {
         settings.setValue(QStringLiteral("AIIllustration/suppressParticles"), m_suppressParticlesCheck->isChecked());
         KisAiStrokeProgramCodec::setParticleSuppressionEnabled(m_suppressParticlesCheck->isChecked());
+    }
+    if (m_forceAdvancedStrokeLogicCheck) {
+        settings.setValue(QStringLiteral("AIIllustration/forceAdvancedStrokeLogic"), m_forceAdvancedStrokeLogicCheck->isChecked());
+        KisAiModelRouter::setForceAdvancedStrokeLogic(m_forceAdvancedStrokeLogicCheck->isChecked());
     }
     if (m_visionQualityCombo)
         settings.setValue(QStringLiteral("AIIllustration/visionQuality"),

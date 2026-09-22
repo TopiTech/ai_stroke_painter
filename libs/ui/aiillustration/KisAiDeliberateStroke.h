@@ -76,6 +76,29 @@ public:
         qreal fadeFloor = 0.55);
 
     /**
+     * Flagship Advanced Stroke Stabilization:
+     * Adaptive corner-preserving spline smoothing for rich flagship coordinate outputs.
+     * Preserves sharp anatomical keypoint corners (< 115 deg) while applying
+     * high-order Centripetal Catmull-Rom sub-pixel smoothing along organic curves.
+     */
+    static QVector<KisAiStrokePoint> smoothFlagshipStroke(
+        const QVector<KisAiStrokePoint> &points,
+        const QSize &canvasSize,
+        bool closed,
+        quint32 seed = 42);
+
+    /**
+     * Flagship Advanced Pen Dynamics:
+     * Joint curvature and velocity modulation. Slow pace + high curvature = rich ink
+     * pooling (up to +25%), fast sweeps = natural feather taper with micro-jitter suppression.
+     */
+    static QVector<KisAiStrokePoint> applyFlagshipInkDynamics(
+        const QVector<KisAiStrokePoint> &points,
+        const QSize &canvasSize,
+        qreal poolingBoost = 0.20,
+        qreal fadeFloor = 0.50);
+
+    /**
      * Inspect one operation before any ink is committed.
      * Never paints; only classifies drop / repair / keep.
      */

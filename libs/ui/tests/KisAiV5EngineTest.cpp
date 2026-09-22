@@ -736,4 +736,165 @@ void KisAiV5EngineTest::testInkDynamicsPoolingAndFade()
     QCOMPARE(KisAiDeliberateStroke::applyInkDynamics(single, canvas).size(), 1);
 }
 
+void KisAiV5EngineTest::testAdvancedStrokeLogicActivation()
+{
+    // 1. isKnownFlagship detection across 2025/2026 flagship architectures
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("gpt-5")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("gpt-5.6-turbo")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("gpt-6")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("o1")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("o1-mini")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("o3")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("o3-mini")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("o4")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("o4-preview")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("claude-3-7-sonnet")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("claude-3-7-sonnet-20250219")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("claude-5-opus")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("gemini-2.5-pro")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("gemini-2.5-flash")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("gemini-3.0-pro")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("deepseek-v3")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("deepseek-v4")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("deepseek-r1")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("qwen-3-max")));
+    QVERIFY(KisAiModelRouter::isKnownFlagship(QStringLiteral("qwen3-max")));
+
+    // Non-flagship / legacy / unlisted
+    QVERIFY(!KisAiModelRouter::isKnownFlagship(QStringLiteral("gpt-3.5-turbo")));
+    QVERIFY(!KisAiModelRouter::isKnownFlagship(QStringLiteral("llama-3-8b")));
+    QVERIFY(!KisAiModelRouter::isKnownFlagship(QStringLiteral("my-custom-unlisted-local-model")));
+
+    // 2. shouldUseAdvancedStrokeLogic with forceAdvancedStrokeLogic enabled (default is true)
+    const bool prevForce = KisAiModelRouter::forceAdvancedStrokeLogic();
+    KisAiModelRouter::setForceAdvancedStrokeLogic(true);
+    QVERIFY(KisAiModelRouter::forceAdvancedStrokeLogic());
+
+    // Even an unlisted or custom local model must trigger advanced stroke logic!
+    QVERIFY(KisAiModelRouter::shouldUseAdvancedStrokeLogic(
+        QStringLiteral("my-custom-unlisted-local-model"), KisAiModelRouter::QualityMode::Fast));
+    QVERIFY(KisAiModelRouter::shouldUseAdvancedStrokeLogic(
+        QStringLiteral("ollama/qwen2.5:7b"), KisAiModelRouter::QualityMode::Fast));
+    QVERIFY(KisAiModelRouter::shouldUseAdvancedStrokeLogic(
+        QString(), KisAiModelRouter::QualityMode::Fast));
+
+    // 3. When forceAdvancedStrokeLogic is false, quality mode or flagship name controls activation
+    KisAiModelRouter::setForceAdvancedStrokeLogic(false);
+    QVERIFY(!KisAiModelRouter::forceAdvancedStrokeLogic());
+
+    // In Fast mode, unlisted models do not trigger advanced logic
+    QVERIFY(!KisAiModelRouter::shouldUseAdvancedStrokeLogic(
+        QStringLiteral("my-custom-unlisted-local-model"), KisAiModelRouter::QualityMode::Fast));
+    // But in Quality and Max modes, unlisted models DO trigger advanced logic!
+    QVERIFY(KisAiModelRouter::shouldUseAdvancedStrokeLogic(
+        QStringLiteral("my-custom-unlisted-local-model"), KisAiModelRouter::QualityMode::Quality));
+    QVERIFY(KisAiModelRouter::shouldUseAdvancedStrokeLogic(
+        QStringLiteral("my-custom-unlisted-local-model"), KisAiModelRouter::QualityMode::Max));
+
+    // Recognized flagship models trigger advanced logic even in Fast mode
+    QVERIFY(KisAiModelRouter::shouldUseAdvancedStrokeLogic(
+        QStringLiteral("gpt-5"), KisAiModelRouter::QualityMode::Fast));
+    QVERIFY(KisAiModelRouter::shouldUseAdvancedStrokeLogic(
+        QStringLiteral("claude-3-7-sonnet"), KisAiModelRouter::QualityMode::Fast));
+    QVERIFY(KisAiModelRouter::shouldUseAdvancedStrokeLogic(
+        QStringLiteral("deepseek-v4"), KisAiModelRouter::QualityMode::Fast));
+
+    // Restore original state
+    KisAiModelRouter::setForceAdvancedStrokeLogic(prevForce);
+}
+
+void KisAiV5EngineTest::testFlagshipStrokeSmoothingAndCornerPreservation()
+{
+    const QSize canvas(1000, 1000);
+
+    // 1. Degenerate / small stroke passes through unmodified
+    QVector<KisAiStrokePoint> smallPts;
+    smallPts.append(KisAiStrokePoint(0.1, 0.1, 0.8));
+    smallPts.append(KisAiStrokePoint(0.2, 0.2, 0.8));
+    QCOMPARE(KisAiDeliberateStroke::smoothFlagshipStroke(smallPts, canvas, false).size(), 2);
+
+    // 2. Sharp corner stroke: (0.1, 0.1) -> (0.5, 0.1) -> (0.5, 0.5)
+    // 90-degree corner at (0.5, 0.1). High-precision flagship smoothing must
+    // preserve this corner vertex rather than rounding it away.
+    QVector<KisAiStrokePoint> cornerPts;
+    cornerPts.append(KisAiStrokePoint(0.1, 0.1, 0.8));
+    cornerPts.append(KisAiStrokePoint(0.5, 0.1, 0.8));
+    cornerPts.append(KisAiStrokePoint(0.5, 0.5, 0.8));
+
+    const QVector<KisAiStrokePoint> smoothCorner =
+        KisAiDeliberateStroke::smoothFlagshipStroke(cornerPts, canvas, false);
+    QVERIFY(smoothCorner.size() >= 3);
+
+    // Check all points are finite
+    for (const KisAiStrokePoint &p : smoothCorner) {
+        QVERIFY(std::isfinite(p.pos.x()));
+        QVERIFY(std::isfinite(p.pos.y()));
+        QVERIFY(std::isfinite(p.pressure));
+    }
+
+    // Verify the corner vertex (0.5, 0.1) is closely preserved
+    bool foundCorner = false;
+    for (const KisAiStrokePoint &p : smoothCorner) {
+        if (qAbs(p.pos.x() - 0.5) < 0.015 && qAbs(p.pos.y() - 0.1) < 0.015) {
+            foundCorner = true;
+            break;
+        }
+    }
+    QVERIFY2(foundCorner, "Sharp corner vertex (0.5, 0.1) must be preserved in flagship stroke");
+
+    // 3. Fine micro-stroke linting test
+    KisAiStrokeOperation microOp;
+    microOp.kind = KisAiStrokeOperation::Kind::Path;
+    microOp.id = QStringLiteral("specular_eyelash_glint");
+    microOp.layer = QStringLiteral("Lineart");
+    microOp.brush.color = QColor(20, 20, 20);
+    microOp.brush.size = 1.0;
+    // Micro stroke with length ~0.5px (0.0005 in normalized 1000px canvas)
+    microOp.points.append(KisAiStrokePoint(0.5, 0.5, 0.8));
+    microOp.points.append(KisAiStrokePoint(0.5005, 0.5005, 0.8));
+
+    const bool prevForce = KisAiModelRouter::forceAdvancedStrokeLogic();
+    KisAiModelRouter::setForceAdvancedStrokeLogic(true);
+    const KisAiStrokeLintReport rep = KisAiDeliberateStroke::lintStroke(microOp, canvas);
+    // Under advanced stroke logic, micro-paths (glints/eyelashes >= 0.45px) are preserved
+    QVERIFY(!rep.drop);
+    KisAiModelRouter::setForceAdvancedStrokeLogic(prevForce);
+}
+
+void KisAiV5EngineTest::testFlagshipInkDynamicsCurvatureModulation()
+{
+    const QSize canvas(1000, 1000);
+
+    // 1. Straight path with uniform spacing
+    QVector<KisAiStrokePoint> straight;
+    for (int i = 0; i <= 20; ++i) {
+        straight.append(KisAiStrokePoint(0.1 + 0.02 * i, 0.5, 0.7));
+    }
+    const QVector<KisAiStrokePoint> straightDyn =
+        KisAiDeliberateStroke::applyFlagshipInkDynamics(straight, canvas);
+    QCOMPARE(straightDyn.size(), straight.size());
+
+    // 2. Sharp hairpin turn path: (0.2, 0.5) -> (0.4, 0.5) -> (0.2, 0.502)
+    // Curvature at the apex is very high, so nib ink pooling must boost pressure.
+    QVector<KisAiStrokePoint> hairpin;
+    hairpin.append(KisAiStrokePoint(0.2, 0.5, 0.6));
+    hairpin.append(KisAiStrokePoint(0.3, 0.5, 0.6));
+    hairpin.append(KisAiStrokePoint(0.4, 0.5, 0.6)); // Apex
+    hairpin.append(KisAiStrokePoint(0.3, 0.502, 0.6));
+    hairpin.append(KisAiStrokePoint(0.2, 0.502, 0.6));
+
+    const QVector<KisAiStrokePoint> hairpinDyn =
+        KisAiDeliberateStroke::applyFlagshipInkDynamics(hairpin, canvas);
+    QCOMPARE(hairpinDyn.size(), hairpin.size());
+
+    // The apex turning point (index 2) must receive a curvature-induced pressure boost
+    QVERIFY(hairpinDyn.at(2).pressure > 0.6);
+
+    // All pressure values remain well within [0.0, 1.0] and are finite
+    for (const KisAiStrokePoint &p : hairpinDyn) {
+        QVERIFY(std::isfinite(p.pressure));
+        QVERIFY(p.pressure >= 0.0 && p.pressure <= 1.0);
+    }
+}
+
 QTEST_MAIN(KisAiV5EngineTest)

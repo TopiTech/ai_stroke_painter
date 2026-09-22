@@ -129,6 +129,7 @@ private Q_SLOTS:
     void testTypeCheckerBleedAndCrossingCoordinatesPreserved();
     void testReferenceImagePayloadMultimodal();
     void testGoalModeAutonomousRefinementContinuation();
+    void testFlagshipDirectivesAndTokenScaling();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

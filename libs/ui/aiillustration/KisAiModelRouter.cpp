@@ -12,20 +12,7 @@
 namespace
 {
 std::atomic<KisAiModelRouter::QualityMode> s_qualityMode{KisAiModelRouter::QualityMode::Quality};
-
-bool isKnownFlagship(const QString &model)
-{
-    // Best-effort classification of current-generation flagship families.
-    // Unknown models keep the user's explicit selection unchanged.
-    const QString modelLower = model.toLower();
-    if (modelLower.isEmpty())
-        return false;
-    return modelLower.startsWith(QLatin1String("gpt-5"))
-        || modelLower.startsWith(QLatin1String("o3")) || modelLower.startsWith(QLatin1String("o4"))
-        || modelLower.contains(QLatin1String("opus")) || modelLower.contains(QLatin1String("sonnet"))
-        || modelLower.contains(QLatin1String("gemini-2.5")) || modelLower.contains(QLatin1String("gemini-3"))
-        || modelLower.contains(QLatin1String("deepseek-v3")) || modelLower.contains(QLatin1String("qwen3-max"));
-}
+std::atomic<bool> s_forceAdvancedStrokeLogic{true}; // Enabled by default for all models
 
 QString flagshipFallbackModel()
 {
@@ -38,6 +25,59 @@ QString midTierModel()
     return QStringLiteral("gpt-4.1-mini");
 }
 } // namespace
+
+bool KisAiModelRouter::isKnownFlagship(const QString &model)
+{
+    // Comprehensive classification of current and frontier flagship families (2025-2026+).
+    const QString modelLower = model.trimmed().toLower();
+    if (modelLower.isEmpty())
+        return false;
+    return modelLower.startsWith(QLatin1String("gpt-5"))
+        || modelLower.startsWith(QLatin1String("gpt-6"))
+        || modelLower.contains(QLatin1String("gpt-4.5"))
+        || modelLower.contains(QLatin1String("gpt-4o"))
+        || modelLower.startsWith(QLatin1String("o1"))
+        || modelLower.startsWith(QLatin1String("o3"))
+        || modelLower.startsWith(QLatin1String("o4"))
+        || modelLower.contains(QLatin1String("opus"))
+        || modelLower.contains(QLatin1String("sonnet"))
+        || modelLower.contains(QLatin1String("claude-3-7"))
+        || modelLower.contains(QLatin1String("claude-3.7"))
+        || modelLower.contains(QLatin1String("claude-5"))
+        || modelLower.contains(QLatin1String("fable"))
+        || modelLower.contains(QLatin1String("gemini-2.0-pro"))
+        || modelLower.contains(QLatin1String("gemini-2.5"))
+        || modelLower.contains(QLatin1String("gemini-3"))
+        || modelLower.contains(QLatin1String("deepseek-v3"))
+        || modelLower.contains(QLatin1String("deepseek-v4"))
+        || modelLower.contains(QLatin1String("deepseek-r1"))
+        || modelLower.contains(QLatin1String("qwen-3"))
+        || modelLower.contains(QLatin1String("qwen3"))
+        || modelLower.contains(QLatin1String("qwen2.5-coder"));
+}
+
+bool KisAiModelRouter::shouldUseAdvancedStrokeLogic(const QString &model, QualityMode mode)
+{
+    // Operates for ANY model (even custom or local fine-tunes) when forced or in Quality/Max mode,
+    // or when the model is recognized as a flagship.
+    if (s_forceAdvancedStrokeLogic.load(std::memory_order_relaxed)) {
+        return true;
+    }
+    if (mode == QualityMode::Quality || mode == QualityMode::Max) {
+        return true;
+    }
+    return isKnownFlagship(model);
+}
+
+void KisAiModelRouter::setForceAdvancedStrokeLogic(bool force)
+{
+    s_forceAdvancedStrokeLogic.store(force, std::memory_order_relaxed);
+}
+
+bool KisAiModelRouter::forceAdvancedStrokeLogic()
+{
+    return s_forceAdvancedStrokeLogic.load(std::memory_order_relaxed);
+}
 
 void KisAiModelRouter::setQualityMode(QualityMode mode)
 {

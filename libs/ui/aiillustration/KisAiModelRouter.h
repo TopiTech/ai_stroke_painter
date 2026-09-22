@@ -91,6 +91,22 @@ public:
     /** True when the stage should attach canvas imagery to the request. */
     static bool stageUsesVision(Stage stage);
 
+    /** Flagship model classification (OpenAI GPT-5/o-series, Claude 3.7/5, Gemini 2.5/3, DeepSeek V4/R1, etc.) */
+    static bool isKnownFlagship(const QString &model);
+
+    /**
+     * Determines whether advanced stroke logic (4-tier volumetric shading directives,
+     * adaptive corner-preserving splines, curvature/velocity inking dynamics, etc.)
+     * should operate for the given model under the active quality mode.
+     * Operates for ANY model (even unlisted/custom models) when quality mode is Quality/Max
+     * or when forceAdvancedStrokeLogic is true.
+     */
+    static bool shouldUseAdvancedStrokeLogic(const QString &model = QString(), QualityMode mode = QualityMode::Quality);
+
+    /** Global force toggle for advanced stroke logic (allows forcing even on Fast mode). */
+    static void setForceAdvancedStrokeLogic(bool force);
+    static bool forceAdvancedStrokeLogic();
+
     /** Human-readable stage name for logs (no user data). */
     static QString stageName(Stage stage);
 };

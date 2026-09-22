@@ -5,6 +5,7 @@
 
 #include "KisAiStrokeRenderer.h"
 #include "KisAiDeliberateStroke.h"
+#include "KisAiModelRouter.h"
 #include "KisAiPhysicalRenderer.h"
 #include "KisAiPrimitiveExpander.h"
 #include "KisAiStrokeCommitter.h"
@@ -1325,12 +1326,20 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter,
 
     // V9: the committer already stabilized + linted. Re-stabilize is
     // idempotent and cheap; lint uses the same geometry that will be inked.
-    const QVector<KisAiStrokePoint> stablePoints = KisAiDeliberateStroke::applyInkDynamics(
-        KisAiDeliberateStroke::stabilizeStroke(op.points,
-                                               canvasSize,
-                                               op.closed,
-                                               KisAiStrokeProgramCodec::stableSeed(op.id)),
-        canvasSize);
+    const bool advanced = KisAiModelRouter::shouldUseAdvancedStrokeLogic();
+    const QVector<KisAiStrokePoint> stablePoints = advanced
+        ? KisAiDeliberateStroke::applyFlagshipInkDynamics(
+            KisAiDeliberateStroke::smoothFlagshipStroke(op.points,
+                                                        canvasSize,
+                                                        op.closed,
+                                                        KisAiStrokeProgramCodec::stableSeed(op.id)),
+            canvasSize)
+        : KisAiDeliberateStroke::applyInkDynamics(
+            KisAiDeliberateStroke::stabilizeStroke(op.points,
+                                                   canvasSize,
+                                                   op.closed,
+                                                   KisAiStrokeProgramCodec::stableSeed(op.id)),
+            canvasSize);
     KisAiStrokeOperation lintOp = op;
     lintOp.points = stablePoints;
     const KisAiStrokeLintReport lint = KisAiDeliberateStroke::lintStroke(lintOp, canvasSize);

@@ -19,6 +19,7 @@
 #endif
 
 #include "aiillustration/KisAiStrokeProgram.h"
+#include "aiillustration/KisAiModelRouter.h"
 #include "aiillustration/KisAiDeliberateStroke.h"
 #include "aiillustration/KisAiPromptAnalyzer.h"
 #include "aiillustration/KisAiStrokeTypeChecker.h"
@@ -1243,6 +1244,12 @@ void KisAiStrokeProgramTest::testIsReasoningModel()
     QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("o1-preview")));
     QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("o1-mini")));
     QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("o3-mini")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("o3")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("o4-preview")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("gpt-5")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("claude-3-7-sonnet")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("claude-5")));
+    QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("deepseek-v4")));
     QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("deepseek-reasoner")));
     QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("deepseek-r1")));
     QVERIFY(KisAiStrokeProgramCodec::isReasoningModel(QStringLiteral("deepseek-r1-distill-qwen-32b")));
@@ -2589,6 +2596,12 @@ void KisAiStrokeProgramTest::testStrictStructuredOutputsAndJsonSchema()
     QVERIFY(KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("gpt-4o")));
     QVERIFY(KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("gpt-4o-mini")));
     QVERIFY(KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("gpt-4.5-preview")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("gpt-5")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("gpt-6")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("o1")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("o3")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("o4")));
+    QVERIFY(KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("deepseek-v4")));
     QVERIFY(!KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("deepseek/deepseek-chat")));
     QVERIFY(!KisAiStrokeProgramCodec::supportsJsonSchema(QStringLiteral("anthropic/claude-3.7-sonnet")));
 
@@ -4637,6 +4650,58 @@ void KisAiStrokeProgramTest::testGoalModeAutonomousRefinementContinuation()
     const QString directive = refUserDoc.object().value(QStringLiteral("directive")).toString();
     QVERIFY2(directive.contains(QLatin1String("surgical refinement")), "Directive must instruct surgical refinement");
     QVERIFY2(directive.contains(QLatin1String("0.90")), "Directive must reflect target readiness 0.90");
+}
+
+void KisAiStrokeProgramTest::testFlagshipDirectivesAndTokenScaling()
+{
+    // 1. Verify buildFlagshipDirectives contents
+    const QString flagshipDirectives = KisAiStrokeProgramCodec::buildFlagshipDirectives();
+    QVERIFY(flagshipDirectives.contains(QStringLiteral("4-Tier Volumetric Shading Architecture")));
+    QVERIFY(flagshipDirectives.contains(QStringLiteral("Subsurface Scattering (SSS) & Terminator Warmth")));
+    QVERIFY(flagshipDirectives.contains(QStringLiteral("Master Deliberate Inking & Catmull-Rom Curvature")));
+    QVERIFY(flagshipDirectives.contains(QStringLiteral("Hair Clump Architecture")));
+    QVERIFY(flagshipDirectives.contains(QStringLiteral("clip_to_id")));
+
+    // 2. Verify system prompt includes flagship directives when enabled (default is true)
+    const QString sysPrompt = KisAiStrokeProgramCodec::buildSystemPrompt(QSize(1024, 1024), QStringLiteral("Anime girl"));
+    QVERIFY(sysPrompt.contains(QStringLiteral("ADVANCED FLAGSHIP & DELIBERATE ART DIRECTION")));
+
+    const QString sysPromptDisabled = KisAiStrokeProgramCodec::buildSystemPrompt(
+        QSize(1024, 1024), QStringLiteral("Anime girl"), QString(), 0, false);
+    QVERIFY(!sysPromptDisabled.contains(QStringLiteral("ADVANCED FLAGSHIP & DELIBERATE ART DIRECTION")));
+
+    // 3. Verify Chat Completions payload token scaling with flagship/advanced logic active
+    const bool prevForce = KisAiModelRouter::forceAdvancedStrokeLogic();
+    KisAiModelRouter::setForceAdvancedStrokeLogic(true);
+
+    const QJsonObject payload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
+        QStringLiteral("gpt-5"),
+        QStringLiteral("Landscape with trees"),
+        QSize(1024, 1024),
+        150 // small target requested
+    );
+
+    // Advanced logic scales tokens up to 16,384 for chat completions
+    const int maxCompletionTokens = payload.value(QStringLiteral("max_completion_tokens")).toInt();
+    QVERIFY(maxCompletionTokens >= 16384);
+
+    // 4. Verify Goal Step payload token and op scaling
+    const QJsonObject goalPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-5"),
+        QStringLiteral("Landscape with trees"),
+        QSize(1024, 1024),
+        1,
+        4,
+        QString(),
+        QString(),
+        0 // default maxTokensOverride (allows automatic budget calculation)
+    );
+
+    const int goalCompletionTokens = goalPayload.value(QStringLiteral("max_completion_tokens")).toInt();
+    QVERIFY(goalCompletionTokens >= 16384);
+
+    // Restore forceAdvancedStrokeLogic
+    KisAiModelRouter::setForceAdvancedStrokeLogic(prevForce);
 }
 
 KISTEST_MAIN(KisAiStrokeProgramTest)

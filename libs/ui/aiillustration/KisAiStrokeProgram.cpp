@@ -5,6 +5,7 @@
 
 #include "KisAiStrokeProgram.h"
 #include "KisAiLayoutEngine.h"
+#include "KisAiModelRouter.h"
 #include "KisAiPromptAnalyzer.h"
 #include "KisAiSceneSpec.h"
 #include "KisAiStrokeTypeChecker.h"
@@ -126,7 +127,7 @@ void removeAdjacentDuplicates(int count, PointAccessor pointAt, QVector<int> *ke
 bool KisAiStrokeProgramCodec::isReasoningModel(const QString &model)
 {
     const QString lower = model.toLower().trimmed();
-    // "o1"/"o3" must match as a family prefix (o1, o1-mini, o3-mini, ...) but
+    // "o1"/"o3"/"o4" must match as a family prefix (o1, o1-mini, o3-mini, ...) but
     // not as an arbitrary substring (proto1, radio3). "dots"/"note" name a
     // specific provider family (e.g. dots-3-note-preview), so they must match
     // as hyphen-delimited tokens — not as substrings of "denotes"/"notebook".
@@ -146,9 +147,17 @@ bool KisAiStrokeProgramCodec::isReasoningModel(const QString &model)
         }
         return false;
     };
-    return matchesFamily("o1") || matchesFamily("o3") || lower.contains(QLatin1String("deepseek-r1"))
-        || lower.contains(QLatin1String("deepseek-reasoner")) || lower.contains(QLatin1String("thinking"))
-        || lower.contains(QLatin1String("reasoner")) || lower.contains(QLatin1String("qwq"))
+    return matchesFamily("o1") || matchesFamily("o3") || matchesFamily("o4")
+        || matchesFamily("gpt-5")
+        || lower.contains(QLatin1String("claude-3-7"))
+        || lower.contains(QLatin1String("claude-3.7"))
+        || lower.contains(QLatin1String("claude-5"))
+        || lower.contains(QLatin1String("deepseek-r1"))
+        || lower.contains(QLatin1String("deepseek-reasoner"))
+        || lower.contains(QLatin1String("deepseek-v4"))
+        || lower.contains(QLatin1String("thinking"))
+        || lower.contains(QLatin1String("reasoner"))
+        || lower.contains(QLatin1String("qwq"))
         || matchesFamily("dots") || matchesFamily("note")
         || lower.contains(QLatin1String("r1-distill"));
 }
@@ -664,10 +673,34 @@ QString KisAiStrokeProgramCodec::buildOutputSchemaExampleSection()
         "}");
 }
 
+QString KisAiStrokeProgramCodec::buildFlagshipDirectives()
+{
+    return QStringLiteral(
+        "=== ADVANCED FLAGSHIP & DELIBERATE ART DIRECTION ===\n"
+        "You are operating in High-Precision Flagship Mode. Maximize geometric nuance and painterly depth:\n"
+        "1. 4-Tier Volumetric Shading Architecture:\n"
+        "   - Ambient Environment Wash: Background & broad tone washes setting light atmosphere.\n"
+        "   - Tier 1 Form Shading: Smoothly rounded curvature on cheeks, neck, arms, and drapery folds (style: wash/directional).\n"
+        "   - Tier 2 Occlusion Cast Shadows: Crisp shadow edges under bangs, nose, jawline, and collar folds (style: contour with clip_to_id).\n"
+        "   - Tier 3 Ambient Occlusion (AO): Deep crevices where geometric forms contact, anchor, or overlap.\n"
+        "2. Subsurface Scattering (SSS) & Terminator Warmth:\n"
+        "   - Along the terminator between light and shadow on skin and warm organic surfaces, introduce warm transition accents (coral, peach, or rose).\n"
+        "   - Avoid dead neutral gray or muddy black shading.\n"
+        "3. Master Deliberate Inking & Catmull-Rom Curvature:\n"
+        "   - Supply smooth, multi-point coordinate sequences (6 to 12 points) for primary contours rather than coarse zigzags.\n"
+        "   - Vary pressure continuously: flick entries (0.15-0.25), grounded crests (0.7-0.95), and delicate tapered exits (0.1-0.2).\n"
+        "   - Use micro-detail strokes for eye corners, eyelashes, double eyelids, iris limbal rings, and lips.\n"
+        "4. Hair Clump Architecture:\n"
+        "   - Foundation mass on 'Flats' -> underside occlusion shading on 'Shading' -> ribbon spine clumps ('ribbon' with width_start/mid/end) -> delicate flyaways on 'Lineart'.\n"
+        "5. Accurate Silhouette Anchoring:\n"
+        "   - Consistently specify 'clip_to_id' referencing base silhouette operations so shadows and highlights never bleed outside the target subject.");
+}
+
 QString KisAiStrokeProgramCodec::buildSystemPrompt(const QSize &canvasSize,
                                                    const QString &prompt,
                                                    const QString &customInstructions,
-                                                   int artStyle)
+                                                   int artStyle,
+                                                   bool enableAdvancedDirectives)
 {
     auto spec = KisAiPromptAnalyzer::analyze(prompt, canvasSize);
     if (artStyle > 0 && artStyle <= 7) {
@@ -699,6 +732,9 @@ QString KisAiStrokeProgramCodec::buildSystemPrompt(const QSize &canvasSize,
     systemText += buildArtisticGuidelinesSection() + QStringLiteral("\n\n");
     systemText += buildOperationKindsSection() + QStringLiteral("\n\n");
     systemText += artDirection + QStringLiteral("\n\n");
+    if (enableAdvancedDirectives) {
+        systemText += buildFlagshipDirectives() + QStringLiteral("\n\n");
+    }
     systemText += buildOutputSchemaExampleSection();
 
     if (!customInstructions.trimmed().isEmpty()) {
@@ -724,6 +760,7 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
                                                                   const QString &referenceImageBase64)
 {
     const bool reasoning = isReasoningModel(model);
+    const bool advancedStroke = KisAiModelRouter::shouldUseAdvancedStrokeLogic(model, KisAiModelRouter::qualityMode());
     QString effectiveInstructions = customInstructions;
     const bool hasReferenceImage = !referenceImageBase64.trimmed().isEmpty();
     if (hasReferenceImage) {
@@ -736,7 +773,7 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
             "costume/outfit, hairstyle, color palette, lighting atmosphere, and key visual motifs in the reference image. "
             "Reflect these visual traits accurately into the generated strokes while honoring the user prompt.");
     }
-    const QString systemText = buildSystemPrompt(canvasSize, prompt, effectiveInstructions, artStyle);
+    const QString systemText = buildSystemPrompt(canvasSize, prompt, effectiveInstructions, artStyle, advancedStroke);
 
     QJsonObject userObj;
     userObj[QStringLiteral("prompt")] = prompt;
@@ -744,9 +781,9 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
     userObj[QStringLiteral("canvas_height")] = canvasSize.height();
     const int geometryBudget = qBound(20, strokeBudget, 4000);
     // Backwards-compatible for test budgets (300 -> 20), but scales up to 250 operations for rich inking and volumetric
-    // shading
+    const int maxOpLimit = advancedStroke ? 300 : 250;
     const int operationTarget =
-        (geometryBudget <= 300) ? qBound(16, geometryBudget / 15, 60) : qBound(20, geometryBudget / 12, 250);
+        (geometryBudget <= 300) ? qBound(16, geometryBudget / 15, 60) : qBound(20, geometryBudget / 12, maxOpLimit);
     userObj[QStringLiteral("geometry_budget")] = geometryBudget;
     userObj[QStringLiteral("operation_target")] = operationTarget;
     userObj[QStringLiteral("budget_allocation")] =
@@ -827,6 +864,9 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
     int calculatedTokens = maxTokensOverride > 0
         ? maxTokensOverride
         : qBound(4096, operationTarget * 180 + (reasoning ? 16384 : 4096), reasoning ? 32768 : 16384);
+    if (advancedStroke && maxTokensOverride <= 0 && calculatedTokens < 12288) {
+        calculatedTokens = qBound(12288, operationTarget * 200 + 4096, 32768);
+    }
 
     if (reasoning) {
         payload[QStringLiteral("max_completion_tokens")] = calculatedTokens;
@@ -1819,8 +1859,14 @@ bool KisAiStrokeProgramCodec::supportsJsonFormat(const QString &endpoint)
 bool KisAiStrokeProgramCodec::supportsJsonSchema(const QString &model)
 {
     const QString m = model.trimmed().toLower();
-    return (m.contains(QLatin1String("gpt-4o")) || m.contains(QLatin1String("gpt-4.5")))
-        && !m.contains(QLatin1String("vision-preview"));
+    if (m.isEmpty() || m.contains(QLatin1String("vision-preview")) || m.contains(QLatin1String("anthropic"))
+        || m.contains(QLatin1String("claude")) || m.contains(QLatin1String("deepseek-chat"))) {
+        return false;
+    }
+    return m.contains(QLatin1String("gpt-4o")) || m.contains(QLatin1String("gpt-4.5"))
+        || m.startsWith(QLatin1String("gpt-5")) || m.startsWith(QLatin1String("gpt-6"))
+        || m.startsWith(QLatin1String("o1")) || m.startsWith(QLatin1String("o3"))
+        || m.startsWith(QLatin1String("o4")) || m.contains(QLatin1String("deepseek-v4"));
 }
 
 QColor KisAiStrokeProgramCodec::calculateHueShiftedShadow(const QColor &baseColor, bool warmLight)
@@ -5112,7 +5158,8 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
         }
     }
 
-    const QString systemText = buildSystemPrompt(canvasSize, prompt, combinedInstructions, artStyle);
+    const bool advancedStroke = KisAiModelRouter::shouldUseAdvancedStrokeLogic(model, KisAiModelRouter::qualityMode());
+    const QString systemText = buildSystemPrompt(canvasSize, prompt, combinedInstructions, artStyle, advancedStroke);
 
     const int geometryBudget = qBound(50, strokeBudget, 3000);
     const int baseStepTarget = geometryBudget / (totalSteps > 0 ? qMax(1, totalSteps) : 4);
@@ -5313,9 +5360,12 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
         }
     }
 
-    const int calculatedTokens = maxTokensOverride > 0
+    int calculatedTokens = maxTokensOverride > 0
         ? maxTokensOverride
         : qBound(4096, operationTarget * 160 + (reasoning ? 12288 : 2560), reasoning ? 32768 : 16384);
+    if (advancedStroke && maxTokensOverride <= 0) {
+        calculatedTokens = qMax(calculatedTokens, reasoning ? 16384 : 8192);
+    }
     if (reasoning) {
         payload[QStringLiteral("max_completion_tokens")] = calculatedTokens;
         if (!reasoningEffort.isEmpty() && reasoningEffort.toLower() != QLatin1String("none")) {

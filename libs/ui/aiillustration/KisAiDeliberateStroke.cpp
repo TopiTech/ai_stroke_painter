@@ -4,6 +4,7 @@
  */
 
 #include "KisAiDeliberateStroke.h"
+#include "KisAiModelRouter.h"
 #include "KisAiStrokeQualityUtils.h"
 
 #include <QLineF>
@@ -322,7 +323,6 @@ KisAiStrokeLintReport KisAiDeliberateStroke::lintStroke(
             return rep;
         }
         // Adaptive micro-path threshold: fine linework, stippling, facial details,
-        // eyelashes, double eyelids, and hair strands tolerate delicate lengths down to 0.45px.
         const QString prof = op.brush.profile.toLower();
         const bool isFine = prof == QLatin1String("fineliner") || prof == QLatin1String("maru_pen")
             || prof == QLatin1String("feathering") || prof == QLatin1String("stipple")
@@ -331,7 +331,12 @@ KisAiStrokeLintReport KisAiDeliberateStroke::lintStroke(
             || op.id.contains(QLatin1String("hatch")) || op.id.contains(QLatin1String("wrinkle"))
             || op.id.contains(QLatin1String("trim")) || op.id.contains(QLatin1String("eyelash"))
             || op.id.contains(QLatin1String("lash")) || op.id.contains(QLatin1String("lid"))
-            || op.id.contains(QLatin1String("catchlight")) || op.id.contains(QLatin1String("pupil"));
+            || op.id.contains(QLatin1String("catchlight")) || op.id.contains(QLatin1String("pupil"))
+            || op.id.contains(QLatin1String("glint")) || op.id.contains(QLatin1String("specular"))
+            || op.id.contains(QLatin1String("rim")) || op.id.contains(QLatin1String("accent"))
+            || op.id.contains(QLatin1String("ao")) || op.id.contains(QLatin1String("crease"))
+            || (KisAiModelRouter::shouldUseAdvancedStrokeLogic()
+                && (op.layer == QLatin1String("Highlights") || op.layer == QLatin1String("Details")));
         const qreal minLen = isFine ? 0.45 : 1.2;
         if (rep.lengthPx < minLen) {
             rep.drop = true;
@@ -610,6 +615,104 @@ QVector<KisAiStrokePoint> KisAiDeliberateStroke::applyInkDynamics(
         }
         out[i].pressure = qBound<qreal>(0.0, pressure, 1.0);
     }
+    return out;
+}
+
+QVector<KisAiStrokePoint> KisAiDeliberateStroke::smoothFlagshipStroke(
+    const QVector<KisAiStrokePoint> &points,
+    const QSize &canvasSize,
+    bool closed,
+    quint32 seed)
+{
+    Q_UNUSED(seed);
+    if (points.size() < 3)
+        return points;
+
+    const qreal minDim = qMax<qreal>(64.0, qMin(canvasSize.width(), canvasSize.height()));
+    const qreal rawLenPx = pathLengthPx(points, canvasSize, closed);
+
+    // Adaptive step & epsilon: preserve flagship model micro-subtleties
+    // while smoothing discrete quantization noise.
+    qreal stepPx = 2.0;
+    qreal epsPx = 0.6;
+    if (rawLenPx < 15.0) {
+        stepPx = qBound<qreal>(0.5, rawLenPx / 10.0, 1.0);
+        epsPx = 0.25;
+    } else if (rawLenPx < 45.0) {
+        stepPx = 1.2;
+        epsPx = 0.45;
+    }
+
+    // 1. RDP simplification with fine sub-pixel epsilon
+    QVector<QPointF> positions;
+    positions.reserve(points.size());
+    for (const KisAiStrokePoint &p : points)
+        positions.append(p.pos);
+    const qreal epsNorm = epsPx / minDim;
+    QVector<QPointF> simplified = KisAiStrokeQualityUtils::simplifyRDP(positions, epsNorm);
+    if (simplified.size() < 2)
+        return points;
+
+    // Reattach pressures by nearest original vertex
+    QVector<KisAiStrokePoint> kept;
+    kept.reserve(simplified.size());
+    for (const QPointF &sp : simplified) {
+        int best = 0;
+        qreal bestD = 1e18;
+        for (int i = 0; i < points.size(); ++i) {
+            const QPointF d = points.at(i).pos - sp;
+            const qreal dist = d.x() * d.x() + d.y() * d.y();
+            if (dist < bestD) {
+                bestD = dist;
+                best = i;
+            }
+        }
+        const KisAiStrokePoint &src = points.at(best);
+        kept.append(KisAiStrokePoint(sp.x(), sp.y(), src.pressure, src.timeMs));
+    }
+    if (kept.size() < 2)
+        return kept;
+
+    // 2. Equidistant resampling
+    const qreal stepNorm = stepPx / minDim;
+    QVector<KisAiStrokePoint> resampled =
+        KisAiStrokeQualityUtils::resampleEquidistant(kept, stepNorm, closed);
+    if (resampled.size() < 2)
+        return kept;
+
+    return resampled;
+}
+
+QVector<KisAiStrokePoint> KisAiDeliberateStroke::applyFlagshipInkDynamics(
+    const QVector<KisAiStrokePoint> &points,
+    const QSize &canvasSize,
+    qreal poolingBoost,
+    qreal fadeFloor)
+{
+    if (points.size() < 3)
+        return points;
+
+    QVector<KisAiStrokePoint> out = applyInkDynamics(points, canvasSize, poolingBoost, fadeFloor);
+
+    // Flagship Curvature Modulation:
+    // When turning tightly (< 120 deg), simulate ink pooling in pen nib (+5% to +15% pressure).
+    const int n = out.size();
+    for (int i = 1; i + 1 < n; ++i) {
+        const QPointF v1 = out[i].pos - out[i - 1].pos;
+        const QPointF v2 = out[i + 1].pos - out[i].pos;
+        const qreal len1 = std::hypot(v1.x(), v1.y());
+        const qreal len2 = std::hypot(v2.x(), v2.y());
+        if (len1 > 1e-6 && len2 > 1e-6) {
+            const qreal dot = (v1.x() * v2.x() + v1.y() * v2.y()) / (len1 * len2);
+            const qreal clampedDot = qBound<qreal>(-1.0, dot, 1.0);
+            const qreal turnFactor = (1.0 - clampedDot) * 0.5; // [0.0, 1.0]
+            if (turnFactor > 0.25) {
+                const qreal boost = (turnFactor - 0.25) * 0.15;
+                out[i].pressure = qMin<qreal>(1.0, out[i].pressure + boost);
+            }
+        }
+    }
+
     return out;
 }
 
