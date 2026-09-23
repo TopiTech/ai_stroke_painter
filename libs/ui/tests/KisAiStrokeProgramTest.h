@@ -139,6 +139,7 @@ private Q_SLOTS:
     void testParseResponseToolCallsFunctionArguments();
     void testParseCompositionPlanArrayFormContent();
     void testParseSseStreamChunkArrayFormDelta();
+    void testDeterministicStepBoundsAreMonotonic();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

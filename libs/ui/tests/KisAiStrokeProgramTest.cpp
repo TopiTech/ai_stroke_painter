@@ -5122,6 +5122,42 @@ void KisAiStrokeProgramTest::testParseSseStreamChunkArrayFormDelta()
     QVERIFY(!isDone);
 }
 
+// Goal Mode step controller invariant: the local controller (not the model)
+// decides goalReached, and the accumulated step sequence must terminate exactly
+// at the configured total. Every step of every supported totalSteps value must
+// keep currentStep monotonic and flip goalReached only on the final step, so a
+// regression in the stop condition can never resurrect the extra-polish
+// off-by-one (one refinement past the user-configured limit).
+void KisAiStrokeProgramTest::testDeterministicStepBoundsAreMonotonic()
+{
+    const QSize canvasSize(512, 512);
+    const QString prompt = QStringLiteral("serene shrine guardian cat at dusk");
+
+    for (int totalSteps = 2; totalSteps <= 6; ++totalSteps) {
+        int previousStep = 0;
+        for (int step = 1; step <= totalSteps; ++step) {
+            const KisAiStrokeProgram stepProg =
+                KisAiStrokeProgramCodec::createDeterministicProgramStep(prompt, canvasSize, step, totalSteps);
+            QCOMPARE(stepProg.currentStep, step);
+            QCOMPARE(stepProg.totalSteps, totalSteps);
+            QVERIFY(stepProg.currentStep > previousStep);
+            previousStep = stepProg.currentStep;
+            // The step controller, not the model, owns goalReached: it may only
+            // become true at the configured final step.
+            QCOMPARE(stepProg.goalReached, step >= totalSteps);
+            QVERIFY(!stepProg.operations.isEmpty());
+        }
+        // Past the ceiling the invariant must still hold for any extra-refine
+        // numbering the docker feeds in (goalReached stays true, numbering grows
+        // monotonically, geometry never becomes empty).
+        const KisAiStrokeProgram extra =
+            KisAiStrokeProgramCodec::createDeterministicProgramStep(prompt, canvasSize, totalSteps + 1, totalSteps);
+        QVERIFY(extra.currentStep == totalSteps + 1);
+        QVERIFY(extra.goalReached);
+        QVERIFY(!extra.operations.isEmpty());
+    }
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

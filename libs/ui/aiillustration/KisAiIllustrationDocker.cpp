@@ -4222,7 +4222,12 @@ void KisAiIllustrationDocker::advanceGoalStep()
     m_goalCurrentRetryCount = 0;
     m_goalSelfCorrectionFeedback.clear();
     m_goalCurrentStep++;
-    if (m_goalCurrentStep > m_goalTotalSteps + m_goalMaxExtraSteps) {
+    // Same safety ceiling as finishGoalStepRequest()'s reachedSafetyMax check:
+    // the last allowed step is m_goalTotalSteps + m_goalMaxExtraSteps, so the
+    // boundary must be >= here too. The previous strict > let one extra
+    // refinement run past the user-configured "追加ブラッシュアップ上限".
+    if (m_goalCurrentStep >= m_goalTotalSteps + m_goalMaxExtraSteps
+        && m_goalCurrentStep > m_goalTotalSteps) {
         finishGoalMode(true);
         return;
     }
@@ -4231,6 +4236,13 @@ void KisAiIllustrationDocker::advanceGoalStep()
 
 void KisAiIllustrationDocker::finishGoalMode(bool success)
 {
+    // Re-entrancy guard: 🏁 completion, a late/failed request callback and the
+    // safety-max path can all fire within the same event-loop turn. Running the
+    // teardown twice zeroed the readiness bar and duplicated history snapshots,
+    // so only the first invocation does the work.
+    if (!m_goalModeActive) {
+        return;
+    }
     // 進行中の自動再試行タイマーを止めないと、Goal 終了後にタイマーが発火して
     // ユーザーの意図しない生成が勝手に始まる (m_lastFailedPrompt も消去される)。
     cancelRetry();
