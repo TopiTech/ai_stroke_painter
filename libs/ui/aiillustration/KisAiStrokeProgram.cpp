@@ -124,6 +124,56 @@ void removeAdjacentDuplicates(int count, PointAccessor pointAt, QVector<int> *ke
         }
     }
 }
+QString extractContentStringFromMessage(const QJsonObject &messageObj, const QJsonObject &choiceObj = QJsonObject())
+{
+    const QJsonValue contentVal = messageObj.value(QStringLiteral("content"));
+    if (contentVal.isString()) {
+        const QString s = contentVal.toString();
+        if (!s.trimmed().isEmpty()) {
+            return s;
+        }
+    } else if (contentVal.isArray()) {
+        QString combined;
+        const QJsonArray arr = contentVal.toArray();
+        for (const QJsonValue &item : arr) {
+            if (item.isObject()) {
+                const QJsonObject obj = item.toObject();
+                const QString type = obj.value(QStringLiteral("type")).toString();
+                if (type == QLatin1String("text") || type.isEmpty()) {
+                    combined.append(obj.value(QStringLiteral("text")).toString());
+                }
+            } else if (item.isString()) {
+                combined.append(item.toString());
+            }
+        }
+        if (!combined.trimmed().isEmpty()) {
+            return combined;
+        }
+    }
+
+    // Tool calls fallback (e.g. function calling responses where model outputs the json payload as arguments)
+    if (messageObj.contains(QStringLiteral("tool_calls"))) {
+        const QJsonArray toolCalls = messageObj.value(QStringLiteral("tool_calls")).toArray();
+        for (const QJsonValue &tcVal : toolCalls) {
+            const QJsonObject tc = tcVal.toObject();
+            const QJsonObject fn = tc.value(QStringLiteral("function")).toObject();
+            const QString args = fn.value(QStringLiteral("arguments")).toString().trimmed();
+            if (!args.isEmpty()) {
+                return args;
+            }
+        }
+    }
+
+    // Legacy completions text field fallback
+    if (choiceObj.contains(QStringLiteral("text"))) {
+        const QString text = choiceObj.value(QStringLiteral("text")).toString().trimmed();
+        if (!text.isEmpty()) {
+            return text;
+        }
+    }
+
+    return QString();
+}
 } // namespace
 
 bool KisAiStrokeProgramCodec::isReasoningModel(const QString &model)
@@ -1891,18 +1941,10 @@ bool KisAiStrokeProgramCodec::parseSseStreamChunk(const QByteArray &chunk,
             if (!choices.isEmpty()) {
                 const QJsonObject choice0 = choices.at(0).toObject();
                 const QJsonObject delta = choice0.value(QStringLiteral("delta")).toObject();
-                if (delta.contains(QStringLiteral("content"))) {
-                    const QString deltaContent = delta.value(QStringLiteral("content")).toString();
-                    if (!deltaContent.isEmpty()) {
-                        accumulatedContent->append(deltaContent);
-                        anyDeltaExtracted = true;
-                    }
-                } else if (choice0.contains(QStringLiteral("text"))) {
-                    const QString textChunk = choice0.value(QStringLiteral("text")).toString();
-                    if (!textChunk.isEmpty()) {
-                        accumulatedContent->append(textChunk);
-                        anyDeltaExtracted = true;
-                    }
+                const QString deltaText = extractContentStringFromMessage(delta, choice0);
+                if (!deltaText.isEmpty()) {
+                    accumulatedContent->append(deltaText);
+                    anyDeltaExtracted = true;
                 }
             }
         }
@@ -2408,7 +2450,7 @@ bool KisAiStrokeProgramCodec::parseCompositionPlan(const QByteArray &responseByt
         if (!choices.isEmpty()) {
             const QJsonObject firstChoice = choices.at(0).toObject();
             const QString content =
-                firstChoice.value(QStringLiteral("message")).toObject().value(QStringLiteral("content")).toString();
+                extractContentStringFromMessage(firstChoice.value(QStringLiteral("message")).toObject(), firstChoice);
             if (!content.isEmpty()) {
                 const QString innerJson = sanitizeAndExtractJson(content);
                 QJsonParseError innerErr;
@@ -2599,7 +2641,7 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
         if (!choices.isEmpty()) {
             const QJsonObject firstChoice = choices.at(0).toObject();
             const QJsonObject messageObj = firstChoice.value(QStringLiteral("message")).toObject();
-            const QString content = messageObj.value(QStringLiteral("content")).toString();
+            const QString content = extractContentStringFromMessage(messageObj, firstChoice);
 
             if (!content.isEmpty()) {
                 const QString cleanJson = sanitizeAndExtractJson(content, diagnostic);
@@ -2659,12 +2701,9 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
         // If choices present in extracted JSON
         const QJsonArray choices = root.value(QStringLiteral("choices")).toArray();
         if (!choices.isEmpty()) {
-            const QString content = choices.at(0)
-                                        .toObject()
-                                        .value(QStringLiteral("message"))
-                                        .toObject()
-                                        .value(QStringLiteral("content"))
-                                        .toString();
+            const QJsonObject firstChoice = choices.at(0).toObject();
+            const QString content = extractContentStringFromMessage(
+                firstChoice.value(QStringLiteral("message")).toObject(), firstChoice);
             if (!content.isEmpty()) {
                 const QString cleanContent = sanitizeAndExtractJson(content, diagnostic);
                 const QJsonDocument cDoc = QJsonDocument::fromJson(cleanContent.toUtf8());

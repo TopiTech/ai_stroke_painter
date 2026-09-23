@@ -4035,7 +4035,7 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
                  .arg(m_goalCurrentStep)
                  .arg(httpStatus)
                  .arg(response.size())
-                 .arg(QString::fromUtf8(response.left(1000))));
+                 .arg(redactCredentialText(QString::fromUtf8(response.left(1000)))));
 
     KisAiStrokeProgram program;
     program.canvasSize = effectiveCanvasSize();
@@ -5177,7 +5177,7 @@ void KisAiIllustrationDocker::logDebug(const QString &category, const QString &m
         return;
     }
     const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm:ss.zzz"));
-    const QString formatted = QStringLiteral("[%1] [%2] %3").arg(timestamp, category, message);
+    const QString formatted = QStringLiteral("[%1] [%2] %3").arg(timestamp, category, redactCredentialText(message));
     m_debugLogText->appendPlainText(formatted);
     // Bound the log so a long debug session cannot grow the widget (and every
     // clipboard copy of it) without limit.

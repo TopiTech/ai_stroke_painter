@@ -135,6 +135,10 @@ private Q_SLOTS:
     void testPixelCoordinatesNormalizeThroughFullPipeline();
     void testSceneSpecArtStyleEnumMapping();
     void testMacroPrimitivesExpansion();
+    void testParseResponseArrayFormContent();
+    void testParseResponseToolCallsFunctionArguments();
+    void testParseCompositionPlanArrayFormContent();
+    void testParseSseStreamChunkArrayFormDelta();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

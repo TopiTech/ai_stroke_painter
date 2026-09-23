@@ -4976,6 +4976,152 @@ void KisAiStrokeProgramTest::testMacroPrimitivesExpansion()
     QVERIFY(hasDynamicPose);
 }
 
+void KisAiStrokeProgramTest::testParseResponseArrayFormContent()
+{
+    const QString sampleProgram = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"id\": \"eye_line\",\n"
+        "      \"layer\": \"Lineart\",\n"
+        "      \"points\": [[0.3, 0.4, 0.8], [0.5, 0.4, 0.9], [0.7, 0.4, 0.7]],\n"
+        "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#222233\", \"size\": 0.005}\n"
+        "    }\n"
+        "  ]\n"
+        "}\n");
+
+    const QString contentText = QStringLiteral("Here is your drawing:\n```json\n") + sampleProgram + QStringLiteral("```");
+    const QJsonObject textPart{
+        {QStringLiteral("type"), QStringLiteral("text")},
+        {QStringLiteral("text"), contentText}
+    };
+    const QJsonObject messageObj{
+        {QStringLiteral("role"), QStringLiteral("assistant")},
+        {QStringLiteral("content"), QJsonArray{textPart}}
+    };
+    const QJsonObject choiceObj{
+        {QStringLiteral("index"), 0},
+        {QStringLiteral("message"), messageObj},
+        {QStringLiteral("finish_reason"), QStringLiteral("stop")}
+    };
+    const QJsonObject responseObj{
+        {QStringLiteral("id"), QStringLiteral("chatcmpl-test")},
+        {QStringLiteral("object"), QStringLiteral("chat.completion")},
+        {QStringLiteral("choices"), QJsonArray{choiceObj}}
+    };
+
+    const QByteArray responseBytes = QJsonDocument(responseObj).toJson();
+    KisAiStrokeProgram program;
+    QString errorMessage;
+    KisAiJsonDiagnostic diag;
+    const bool ok = KisAiStrokeProgramCodec::parseResponse(responseBytes, &program, &errorMessage, &diag);
+    QVERIFY2(ok, qPrintable(errorMessage));
+    QVERIFY(!program.operations.isEmpty());
+    QCOMPARE(program.operations.at(0).layer, QStringLiteral("Lineart"));
+}
+
+void KisAiStrokeProgramTest::testParseResponseToolCallsFunctionArguments()
+{
+    const QString sampleProgram = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"id\": \"tool_line\",\n"
+        "      \"layer\": \"Lineart\",\n"
+        "      \"points\": [[0.2, 0.3, 0.8], [0.6, 0.7, 0.9]],\n"
+        "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#112233\", \"size\": 0.004}\n"
+        "    }\n"
+        "  ]\n"
+        "}\n");
+
+    const QJsonObject functionObj{
+        {QStringLiteral("name"), QStringLiteral("draw_strokes")},
+        {QStringLiteral("arguments"), sampleProgram}
+    };
+    const QJsonObject toolCallObj{
+        {QStringLiteral("id"), QStringLiteral("call_123")},
+        {QStringLiteral("type"), QStringLiteral("function")},
+        {QStringLiteral("function"), functionObj}
+    };
+    const QJsonObject messageObj{
+        {QStringLiteral("role"), QStringLiteral("assistant")},
+        {QStringLiteral("content"), QJsonValue::Null},
+        {QStringLiteral("tool_calls"), QJsonArray{toolCallObj}}
+    };
+    const QJsonObject choiceObj{
+        {QStringLiteral("index"), 0},
+        {QStringLiteral("message"), messageObj},
+        {QStringLiteral("finish_reason"), QStringLiteral("tool_calls")}
+    };
+    const QJsonObject responseObj{
+        {QStringLiteral("id"), QStringLiteral("chatcmpl-tool-test")},
+        {QStringLiteral("object"), QStringLiteral("chat.completion")},
+        {QStringLiteral("choices"), QJsonArray{choiceObj}}
+    };
+
+    const QByteArray responseBytes = QJsonDocument(responseObj).toJson();
+    KisAiStrokeProgram program;
+    QString errorMessage;
+    KisAiJsonDiagnostic diag;
+    const bool ok = KisAiStrokeProgramCodec::parseResponse(responseBytes, &program, &errorMessage, &diag);
+    QVERIFY2(ok, qPrintable(errorMessage));
+    QVERIFY(!program.operations.isEmpty());
+    QCOMPARE(program.operations.at(0).id, QStringLiteral("tool_line"));
+}
+
+void KisAiStrokeProgramTest::testParseCompositionPlanArrayFormContent()
+{
+    const QString planJson = QStringLiteral(
+        "{\n"
+        "  \"artistic_directives\": \"Dramatic backlight with dynamic silhouette\",\n"
+        "  \"composition_type\": \"rule_of_thirds\",\n"
+        "  \"focal_point\": {\"x\": 0.65, \"y\": 0.35}\n"
+        "}\n");
+
+    const QJsonObject textPart{
+        {QStringLiteral("type"), QStringLiteral("text")},
+        {QStringLiteral("text"), planJson}
+    };
+    const QJsonObject messageObj{
+        {QStringLiteral("role"), QStringLiteral("assistant")},
+        {QStringLiteral("content"), QJsonArray{textPart}}
+    };
+    const QJsonObject choiceObj{
+        {QStringLiteral("index"), 0},
+        {QStringLiteral("message"), messageObj}
+    };
+    const QJsonObject responseObj{
+        {QStringLiteral("choices"), QJsonArray{choiceObj}}
+    };
+
+    const QByteArray responseBytes = QJsonDocument(responseObj).toJson();
+    QString directives;
+    QString errorMessage;
+    const bool ok = KisAiStrokeProgramCodec::parseCompositionPlan(responseBytes, &directives, &errorMessage);
+    QVERIFY2(ok, qPrintable(errorMessage));
+    QVERIFY(directives.contains(QStringLiteral("Dramatic backlight")));
+    QVERIFY(directives.contains(QStringLiteral("rule_of_thirds")));
+}
+
+void KisAiStrokeProgramTest::testParseSseStreamChunkArrayFormDelta()
+{
+    QByteArray buffer;
+    QString accumulated;
+    bool isDone = false;
+
+    const QByteArray sseLine =
+        "data: {\"choices\": [{\"index\": 0, \"delta\": {\"content\": [{\"type\": \"text\", \"text\": \"{\\\"test\\\": 1}\"}]}}]}\n\n";
+
+    const bool extracted = KisAiStrokeProgramCodec::parseSseStreamChunk(sseLine, &buffer, &accumulated, &isDone);
+    QVERIFY(extracted);
+    QCOMPARE(accumulated, QStringLiteral("{\"test\": 1}"));
+    QVERIFY(!isDone);
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 
