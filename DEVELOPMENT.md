@@ -69,8 +69,10 @@ API リクエストは次の形式です。
 }
 ```
 
-応答全体は32 MiB、デコード後の画像は24 MiB、総画素数は24メガピクセル、待機時間は
-120秒が上限です。リダイレクトは手動扱いで、画像データを返さない応答や不正な画像は
+応答全体は32 MiB、デコード後の画像は24 MiB、総画素数は24メガピクセルが上限です。
+待機時間は無通信で自動中断され、初回応答は画像モデル180秒・その他はタイムアウト設定
+(既定90秒、上限600秒)、受信開始後は無通信60秒 (全体で最大600秒) が上限です。
+リダイレクトは手動扱いで、画像データを返さない応答や不正な画像は
 レイヤーへ追加しません。
 
 ## 4. リソース初期化と起動警告
@@ -118,14 +120,15 @@ cmake -S . -B build-ai -G Ninja `
 
 # アプリケーション本体と AI Stroke Painter の検証テストを並列ビルド
 # 実行ファイル名は ai-stroke-painter だが、CMake のアプリケーションターゲット名は krita。
-cmake --build build-ai --target krita KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest --parallel
+# テストターゲット一覧は build-ai-stroke-painter.ps1 と同梱 (全16本)。
+cmake --build build-ai --target krita KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest KisAiV5EngineTest KisAiV6WiringTest KisAiV7QualityTest KisAiQualityVectorTest KisAiPerceptualRepairerTest KisAiPhysicalRendererTest KisAiAbstractOntologyTest KisAiQualityBenchGateTest KisAiAtomicInkTest KisAiV10QualityTest KisAiStartPageTest KisAiLineartModeTest KisAiCoverageRasterTest --parallel
 cmake --install build-ai --prefix "$craftRoot\ai-stroke-painter"
 ```
 
 ### 単体テストの実行（CI / ローカル）
 
 AI ストロークのパース・スキーマ生成・品質補正・Centripetal スプライン・筆圧テーパー・スーパーサンプリング・クリッピングマスク・代表作品の画素品質指標を回帰テストします。
-通常のAIビルドでは、プロジェクトの対象範囲に含まれないKrita上流テストを登録せず、次の3つのQt Test実行ファイル（多数のテストケースを含む）だけを検証します。
+通常のAIビルドでは、プロジェクトの対象範囲に含まれないKrita上流テストの大半は登録せず、AI Stroke Painter の16本 (ラベル `AIStroke`) と、libs/image のコア画像テスト (ラベル `KritaCore`) のみを登録します。無指定の `ctest` はこの両方を実行し、`-L AIStroke` で AI 分だけに絞れます。
 
 ```powershell
 # AI Stroke Painterの対象機能を全件実行（BUILD_TESTING=ONのbuild-ai）

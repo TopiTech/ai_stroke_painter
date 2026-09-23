@@ -2249,8 +2249,12 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
         QJsonObject mutableRoot = programObject;
         KisAiStrokeTypeCheckReport typeReport;
         KisAiStrokeTypeChecker::checkAndCoerceProgram(&mutableRoot, &typeReport);
-        if (diagnostic && !typeReport.warnings.isEmpty()) {
+        // 検証落ちした op は validatedOps から外されて黙って消えるため、
+        // エラーが1件でもあれば診断に必ず残す (warnings のみでは拾えない)。
+        if (diagnostic && (typeReport.typeErrors > 0 || !typeReport.warnings.isEmpty())) {
             diagnostic->appliedRepairs.append(typeReport.summary());
+            diagnostic->appliedRepairs.append(typeReport.errorMessages);
+            diagnostic->appliedRepairs.append(typeReport.warnings);
         }
 
         if (!KisAiStrokeProgramCodec::parseProgramJson(mutableRoot, outProgram, errorMessage)) {
@@ -2341,7 +2345,9 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
             }
             if (diagnostic) {
                 diagnostic->hasError = true;
-                diagnostic->errorMessage = *errorMessage;
+                // errorMessage は任意引数なので nullptr でも成立させる。
+                diagnostic->errorMessage =
+                    errorMessage ? *errorMessage : (err.isEmpty() ? QStringLiteral("不明なエラー") : err);
             }
             return false;
         }

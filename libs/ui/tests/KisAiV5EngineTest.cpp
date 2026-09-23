@@ -5,13 +5,14 @@
 
 #include "KisAiV5EngineTest.h"
 
+#include "aiillustration/KisAiDeliberateStroke.h"
+#include "aiillustration/KisAiLightRig.h"
 #include "aiillustration/KisAiModelRouter.h"
 #include "aiillustration/KisAiProgramPatch.h"
+#include "aiillustration/KisAiRefinementLoop.h"
 #include "aiillustration/KisAiRigLibrary.h"
 #include "aiillustration/KisAiSceneSpec.h"
 #include "aiillustration/KisAiVisionCritic.h"
-#include "aiillustration/KisAiDeliberateStroke.h"
-#include "aiillustration/KisAiLightRig.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -505,6 +506,67 @@ void KisAiV5EngineTest::testPatchDecorativeAddRemove()
 // ========================================================================
 // F3b: Vision Critic
 // ========================================================================
+
+void KisAiV5EngineTest::testRigPatchOutOfRangeNumberIsClamped()
+{
+    // 回帰: 範囲外 double → int の直接変換は UB (1e300 で INT_MIN 飽和等) だった。
+    const QByteArray body = QByteArrayLiteral(
+        "["
+        "{\"op\": \"replace\", \"path\": \"/rig/hair_highlight_bands\", \"value\": 1e300},"
+        "{\"op\": \"replace\", \"path\": \"/rig/hair_highlight_bands\", \"value\": -50}"
+        "]");
+    QVector<KisAiProgramPatch> patches;
+    QString err;
+    QVERIFY(KisAiProgramPatchCodec::parsePatches(body, &patches, nullptr, &err));
+    QCOMPARE(patches.size(), 2);
+
+    KisAiStrokeProgram program;
+
+    QVector<KisAiProgramPatch> high;
+    high.append(patches.at(0));
+    KisAiSceneRigOverrides deltaHigh;
+    QStringList rejected;
+    KisAiProgramPatchCodec::applyPatches(program, high, &deltaHigh, &rejected);
+    QVERIFY(rejected.isEmpty());
+    QCOMPARE(deltaHigh.hairHighlightBands, 3);
+
+    QVector<KisAiProgramPatch> low;
+    low.append(patches.at(1));
+    KisAiSceneRigOverrides deltaLow;
+    KisAiProgramPatchCodec::applyPatches(program, low, &deltaLow, nullptr);
+    QCOMPARE(deltaLow.hairHighlightBands, 0);
+}
+
+void KisAiV5EngineTest::testRejectedRigPatchKeepsBaseSpecRig()
+{
+    // 回帰: 拒否された rig パッチでも relayout 側が raw パッチを辿り、delta の
+    // 構造体既定値で baseSpec の調線値を上書き + 不要な再レイアウトが走っていた。
+    KisAiStrokeProgram base;
+    KisAiStrokeOperation op;
+    op.kind = KisAiStrokeOperation::Kind::Path;
+    op.id = QStringLiteral("line_1");
+    op.layer = QStringLiteral("Lineart");
+    base.operations.append(op);
+
+    KisAiSceneSpec spec;
+    spec.rig.eyeAperture = 0.42;
+
+    KisAiProgramPatch bad;
+    bad.op = KisAiProgramPatch::Op::Remove; // /rig/ は replace のみ許可 → 拒否
+    bad.path = QStringLiteral("/rig/eye_aperture");
+    bad.value = 0.9;
+    const QVector<KisAiProgramPatch> patches{bad};
+
+    KisAiSceneRigOverrides outRig;
+    QStringList rejected;
+    const KisAiStrokeProgram out =
+        KisAiRefinementLoop::applyRigPatchesAndRelayout(base, spec, QSize(256, 256), patches, &outRig, &rejected);
+
+    QVERIFY(!rejected.isEmpty());
+    // 拒否 = 変更なし: baseSpec の値がそのまま残り、構造体既定値に潰されない。
+    QCOMPARE(outRig.eyeAperture, spec.rig.eyeAperture);
+    QCOMPARE(out.operations.size(), base.operations.size());
+}
 
 void KisAiV5EngineTest::testCriticCropSelectionDeterministic()
 {

@@ -31,6 +31,7 @@
 #include <QRandomGenerator>
 #include <QScrollArea>
 #include <QStackedWidget>
+#include <QStatusBar>
 #include <QToolButton>
 #include <QUrl>
 #include <QVBoxLayout>
@@ -333,9 +334,9 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     auto *pasteBtn = new QPushButton(container);
     pasteBtn->setProperty("class", "aiCardButton");
     pasteBtn->setCursor(Qt::PointingHandCursor);
-    pasteBtn->setAccessibleName(i18n("クリップボードから (Ctrl+V)"));
+    pasteBtn->setAccessibleName(i18n("クリップボードから"));
     pasteBtn->setAccessibleDescription(i18n("クリップボードにコピーした画像を新規キャンバスとして展開します。"));
-    pasteBtn->setToolTip(i18n("クリップボードの画像からキャンバスを作成 (Ctrl+V)"));
+    pasteBtn->setToolTip(i18n("クリップボードの画像からキャンバスを作成"));
     auto *pasteLayout = new QVBoxLayout(pasteBtn);
     pasteLayout->setSpacing(4);
     auto *pasteTop = new QHBoxLayout();
@@ -346,9 +347,8 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     pasteTop->addWidget(pasteIcon);
     pasteTop->addWidget(pasteTitle);
     pasteTop->addStretch(1);
-    auto *pasteShortcut = new QLabel(QStringLiteral("Ctrl+V"), pasteBtn);
-    pasteShortcut->setObjectName(QStringLiteral("aiCardShortcut"));
-    pasteTop->addWidget(pasteShortcut);
+    // 実際には slotPasteFromClipboard 専用の Ctrl+V バインディングが無く (窓の
+    // edit_paste とは別アクション)、宣伝のみのバッジは嘘になるため表示しない。
     pasteLayout->addLayout(pasteTop);
     auto *pasteDesc = new QLabel(i18n("コピーした画像を新規キャンバス化"), pasteBtn);
     pasteDesc->setObjectName(QStringLiteral("aiCardDesc"));
@@ -739,7 +739,11 @@ void KisAiStartPageWidget::slotRecentDocumentClicked(const QModelIndex &index)
 
 void KisAiStartPageWidget::showCanvasNotification(const QString &message)
 {
-    Q_UNUSED(message);
+    // 空実装だと「クリップボードに画像がありません」等が完全に消え、カードが
+    // 動いたように見えない。メインウィンドウのステータスバーへ表示する。
+    if (m_mainWindow) {
+        m_mainWindow->statusBar()->showMessage(message, 5000);
+    }
 }
 
 void KisAiStartPageWidget::slotClearRecentFiles()

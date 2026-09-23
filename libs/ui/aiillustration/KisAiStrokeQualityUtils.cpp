@@ -1418,9 +1418,16 @@ KisAiStrokeQualityUtils::generateCornerInkingDots(const QVector<KisAiStrokeOpera
 
     const qreal minDistSq = 0.015 * 0.015;
     QVector<QPointF> dotCenters;
+    // 32 個到達で二重ループを即脱出する。上限は「追記しない」だけでは守れず、
+    // 4000 セグメントなら約 800 万ペア × 4 hypot を最後まで回し続ける。
+    constexpr int MAX_CORNER_DOTS = 32;
 
     for (int i = 0; i < segments.size(); ++i) {
+        if (dotCenters.size() >= MAX_CORNER_DOTS)
+            break;
         for (int j = i + 1; j < segments.size(); ++j) {
+            if (dotCenters.size() >= MAX_CORNER_DOTS)
+                break;
             const auto &s1 = segments.at(i);
             const auto &s2 = segments.at(j);
 
@@ -1455,7 +1462,7 @@ KisAiStrokeQualityUtils::generateCornerInkingDots(const QVector<KisAiStrokeOpera
                         break;
                     }
                 }
-                if (!tooClose && dotCenters.size() < 32) {
+                if (!tooClose && dotCenters.size() < MAX_CORNER_DOTS) {
                     dotCenters.append(candidate);
                     KisAiStrokeOperation dotOp;
                     dotOp.kind = KisAiStrokeOperation::Kind::Path;

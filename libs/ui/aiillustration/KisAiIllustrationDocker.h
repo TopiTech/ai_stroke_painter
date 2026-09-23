@@ -124,6 +124,10 @@ private:
     QByteArray takeTestReplyData(QNetworkReply *reply);
     void updateModeUi();
     void setBusy(bool busy);
+    // 生成ボタンの文言は Simple/Pro 切替・Goal チェック・モード切替のどれからでも
+    // 同じ判定で更新する (テキストと実挙動の非同期を防ぐ)。
+    bool isGoalModeRequested() const;
+    void refreshGenerateButtonLabel();
     bool ensureCanvas();
     QSize effectiveCanvasSize() const;
     bool addImageAsLayer(const QImage &image, const QString &layerName);
@@ -153,6 +157,9 @@ private:
 
     // Composition Plan (2-step generation) state
     bool m_waitingForCompositionPlan {false};
+    // 1回のユーザー生成に対して構図計画は1回だけ試す。失敗時のフォールバック再入で
+    // 無限に計画POSTを繰り返すのを防ぐフラグ (generateIllustration() でリセット)。
+    bool m_compositionPlanAttempted{false};
     QString m_compositionDirectives;
 
     // Connection test state

@@ -154,6 +154,39 @@ void KisAiAtomicInkTest::testZeroCoverageSkipped()
     QVERIFY(log.committed >= 1);
 }
 
+void KisAiAtomicInkTest::testSinglePointDabFollowsCatchlightPolicy()
+{
+    // 単一ダブのポリシー (refineForRendering の意図的ダブ判定と一致):
+    // - キャッチライト等のキーワード/Highlights レイヤの1点 → 不透明度で生存
+    // - それ以外の1点 (corner_ink ドット等) → zero-coverage-skip (V10 受け入れ基準)
+    KisAiStrokeOperation dab;
+    dab.kind = KisAiStrokeOperation::Kind::Path;
+    dab.layer = QStringLiteral("Highlights");
+    dab.points = {KisAiStrokePoint(0.5, 0.5, 1.0)};
+    dab.brush.size = 0.005;
+    dab.brush.color = QColor(255, 255, 255);
+
+    dab.id = QStringLiteral("eye_catchlight");
+    dab.brush.opacity = 0.85;
+    const KisAiStrokeCommitReview kept = KisAiDeliberateStroke::reviewStroke(dab, QSize(512, 512));
+    QVERIFY(kept.committed);
+    QVERIFY(kept.inkCoverage > 1.0e-7);
+    QVERIFY(!kept.dirtyRect.isEmpty());
+
+    // 完全透明のキャッチライトは落ちる。
+    dab.brush.opacity = 0.0;
+    const KisAiStrokeCommitReview transparent = KisAiDeliberateStroke::reviewStroke(dab, QSize(512, 512));
+    QVERIFY(!transparent.committed);
+
+    // 生成された corner_ink ドット (非キーワード id・Lineart) は従来どおり落ちる:
+    // これが無いと半透明プローブへの α 合成超過で V10 ゲート5本が破れる。
+    dab.id = QStringLiteral("corner_ink_1");
+    dab.layer = QStringLiteral("Lineart");
+    dab.brush.opacity = 0.85;
+    const KisAiStrokeCommitReview dot = KisAiDeliberateStroke::reviewStroke(dab, QSize(512, 512));
+    QVERIFY(!dot.committed);
+}
+
 void KisAiAtomicInkTest::testNeedsRepairSelfIntersectionFixed()
 {
     KisAiStrokeOperation loop;

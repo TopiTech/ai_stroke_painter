@@ -33,6 +33,7 @@
 #include <KoColor.h>
 #include <KoColorSpaceRegistry.h>
 
+#include <QAction>
 #include <QBuffer>
 #include <QCheckBox>
 #include <QClipboard>
@@ -51,6 +52,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QLabel>
 #include <QLineEdit>
 #include <QNetworkAccessManager>
@@ -157,6 +159,22 @@ static QByteArray formatBearerAuthHeader(const QString &apiKey)
     return QByteArrayLiteral("Bearer ") + trimmed.toUtf8();
 }
 
+// 自前キーはもともとログに書かないが、敵対的/設定ミスのサーバーが認証情報を
+// エコーしてきた場合はそのままログ・ステータスラベルへ流出する。
+// Bearer トークンと sk- 系キーをマスクしてから表示/記録する防御層。
+QString redactCredentialText(const QString &text)
+{
+    if (text.isEmpty()) {
+        return text;
+    }
+    static const QRegularExpression bearerRe(QStringLiteral(R"((Bearer\s+)[A-Za-z0-9\-._~+/=]+)"));
+    QString out = text;
+    out.replace(bearerRe, QStringLiteral("\\1***"));
+    static const QRegularExpression skRe(QStringLiteral(R"(sk-[A-Za-z0-9_\-]{6,})"));
+    out.replace(skRe, QStringLiteral("sk-***"));
+    return out;
+}
+
 bool protectApiKeyForCurrentUser(const QString &apiKey, QString *protectedValue)
 {
 #if defined(Q_OS_WIN)
@@ -221,10 +239,12 @@ bool unprotectApiKeyForCurrentUser(const QString &protectedValue, QString *apiKe
         return false;
     }
 
-    const QByteArray plainBytes(reinterpret_cast<const char *>(plainText.pbData), static_cast<int>(plainText.cbData));
+    QByteArray plainBytes(reinterpret_cast<const char *>(plainText.pbData), static_cast<int>(plainText.cbData));
     SecureZeroMemory(plainText.pbData, plainText.cbData);
     LocalFree(plainText.pbData);
     *apiKey = QString::fromUtf8(plainBytes);
+    // 暗号化側と対に: ヒープ上の平文複製も使い終えたら消去する。
+    SecureZeroMemory(plainBytes.data(), plainBytes.size());
     return !apiKey->isEmpty();
 #else
     Q_UNUSED(protectedValue);
@@ -580,38 +600,39 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     refLayout->setContentsMargins(6, 4, 6, 4);
     refLayout->setSpacing(4);
 
-    auto *refButtonsLayout = new QHBoxLayout();
-    refButtonsLayout->setContentsMargins(0, 0, 0, 0);
-    refButtonsLayout->setSpacing(4);
-
+    // 単一 HBoxLayout は自身の最小幅以下に縮めず、親スクロールは水平バー無効のため、
+    // ドック最小 360px で参照画像ボタン群が切り取られる (スタイル行と同種の問題)。
+    // 2列グリッドにして折り返せるようにする。
     auto *refTitle = new QLabel(i18n("🖼️ 参照画像:"), m_referenceImageCard);
     refTitle->setStyleSheet(QStringLiteral("font-weight: 600; font-size: 11px;"));
-    refButtonsLayout->addWidget(refTitle);
+    refLayout->addWidget(refTitle);
+
+    auto *refButtonsGrid = new QGridLayout();
+    refButtonsGrid->setSpacing(4);
+    refButtonsGrid->setContentsMargins(0, 0, 0, 0);
 
     m_refImageSelectBtn = new QPushButton(i18n("ファイル選択..."), m_referenceImageCard);
     m_refImageSelectBtn->setToolTip(i18n("ローカル画像ファイル(PNG, JPG, WebP)を参照画像として設定します。"));
     m_refImageSelectBtn->setCursor(Qt::PointingHandCursor);
-    refButtonsLayout->addWidget(m_refImageSelectBtn);
+    refButtonsGrid->addWidget(m_refImageSelectBtn, 0, 0);
 
     m_refImageFromCanvasBtn = new QPushButton(i18n("キャンバスから取得"), m_referenceImageCard);
     m_refImageFromCanvasBtn->setToolTip(i18n("現在開いているキャンバスの描画内容を参照画像として取り込みます。"));
     m_refImageFromCanvasBtn->setCursor(Qt::PointingHandCursor);
-    refButtonsLayout->addWidget(m_refImageFromCanvasBtn);
+    refButtonsGrid->addWidget(m_refImageFromCanvasBtn, 0, 1);
 
     m_refImagePasteBtn = new QPushButton(i18n("📋 貼り付け"), m_referenceImageCard);
     m_refImagePasteBtn->setToolTip(i18n("クリップボードにコピーされている画像を参照画像として設定します。"));
     m_refImagePasteBtn->setCursor(Qt::PointingHandCursor);
-    refButtonsLayout->addWidget(m_refImagePasteBtn);
-
-    refButtonsLayout->addStretch();
+    refButtonsGrid->addWidget(m_refImagePasteBtn, 1, 0);
 
     m_refImageClearBtn = new QPushButton(i18n("✕ 解除"), m_referenceImageCard);
     m_refImageClearBtn->setToolTip(i18n("参照画像を解除します。"));
     m_refImageClearBtn->setCursor(Qt::PointingHandCursor);
     m_refImageClearBtn->setVisible(false);
-    refButtonsLayout->addWidget(m_refImageClearBtn);
+    refButtonsGrid->addWidget(m_refImageClearBtn, 1, 1);
 
-    refLayout->addLayout(refButtonsLayout);
+    refLayout->addLayout(refButtonsGrid);
 
     // Thumbnail and status row (initially hidden)
     auto *refPreviewLayout = new QHBoxLayout();
@@ -855,9 +876,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_apiKeyEditor->setAccessibleName(i18n("API key"));
     m_apiKeyEditor->setAccessibleDescription(
         i18n("API認証用の秘密鍵。ローカルエンドポイントでは未入力でも利用可能です。"));
-    connect(m_endpointEditor, &QLineEdit::returnPressed, this, &KisAiIllustrationDocker::generateIllustration);
-    connect(m_modelEditor, &QLineEdit::returnPressed, this, &KisAiIllustrationDocker::generateIllustration);
-    connect(m_apiKeyEditor, &QLineEdit::returnPressed, this, &KisAiIllustrationDocker::generateIllustration);
+    // Enter だけで生成が走ると、API キー入力後に誤って有償リクエストが飛ぶ。
+    // README 記載の生成ショートカットは Ctrl+Enter のみ (プロンプト欄のキーフィルタ)。
 
     m_saveApiKeyCheck = new QCheckBox(i18n("🔑 API キーをこの端末に保存する"), m_detailsContainer);
     m_saveApiKeyCheck->setChecked(false);
@@ -1073,13 +1093,14 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     remoteForm->addRow(i18n("追加指示"), m_customInstructionsEdit);
     detailsLayout->addLayout(remoteForm);
 
-    auto *settingsBtnRow = new QHBoxLayout();
-    settingsBtnRow->setSpacing(6);
+    // 参照画像行と同様、単一 HBox はドック最小幅で右半分が切り取れるので 2列グリッド化。
+    auto *settingsBtnGrid = new QGridLayout();
+    settingsBtnGrid->setSpacing(6);
     m_submitFeedbackButton = new QPushButton(i18n("⭐ 評価フィードバック"), m_detailsContainer);
     m_submitFeedbackButton->setObjectName(QStringLiteral("aiSecondaryButton"));
     m_submitFeedbackButton->setAccessibleName(i18n("Submit quality feedback"));
     m_submitFeedbackButton->setToolTip(i18n("現在の生成結果と品質ベクトルをベンチ履歴に記録します。"));
-    settingsBtnRow->addWidget(m_submitFeedbackButton);
+    settingsBtnGrid->addWidget(m_submitFeedbackButton, 0, 0);
     m_testConnectionButton = new QPushButton(i18n("🔌 接続テスト"), m_detailsContainer);
     m_testConnectionButton->setObjectName(QStringLiteral("aiSecondaryButton"));
     m_testConnectionButton->setFocusPolicy(Qt::StrongFocus);
@@ -1098,9 +1119,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_saveSettingsButton->setCursor(Qt::PointingHandCursor);
     m_saveSettingsButton->setToolTip(i18n("現在のエンドポイント、モデル名、APIキー、各生成設定を保存します。"));
 
-    settingsBtnRow->addWidget(m_testConnectionButton);
-    settingsBtnRow->addWidget(m_saveSettingsButton);
-    detailsLayout->addLayout(settingsBtnRow);
+    settingsBtnGrid->addWidget(m_testConnectionButton, 0, 1);
+    settingsBtnGrid->addWidget(m_saveSettingsButton, 1, 0);
+    detailsLayout->addLayout(settingsBtnGrid);
 
     m_testConnectionStatusLabel = new QLabel(m_detailsContainer);
     m_testConnectionStatusLabel->setObjectName(QStringLiteral("aiTestStatus"));
@@ -1285,9 +1306,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     connect(m_goalModeCheck, &QCheckBox::toggled, this, [this, goalOptionsWidget](bool checked) {
         goalOptionsWidget->setVisible(checked);
-        if (m_generateButton) {
-            m_generateButton->setText(checked ? i18n("🎯 Goal作画を開始") : i18n("🎨 生成してレイヤーに追加"));
-        }
+        refreshGenerateButtonLabel();
     });
     connect(m_nextStepButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::advanceGoalStep);
     connect(m_finishGoalButton, &QPushButton::clicked, this, [this] {
@@ -1318,6 +1337,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_progressBar->setTextVisible(false);
     m_progressBar->setFixedHeight(6);
     m_progressBar->setVisible(false);
+    // 高さ6pxの見た目だけでは支援技術に進捗ゲージとして認識されない。
+    m_progressBar->setAccessibleName(i18n("Generation progress"));
     actionCard.layout->addWidget(m_progressBar);
 
     m_statusLabel =
@@ -1606,8 +1627,15 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         chainTab(m_apiKeyEditor);
         chainTab(m_saveApiKeyCheck);
 
-        // Generation parameters & advanced details
+        // Generation parameters & advanced details.
+        // remoteForm の実際の行順 (1051-1073) に合わせる: 以前は qualityMode /
+        // forceAdvanced の2つが抜けており、順序も视觉的順と食い違って Tab が
+        // 前後往復し、2コントロールにはフォーカスが届かなかった。
         chainTab(m_strokeBudgetSpin);
+        chainTab(m_qualityModeCombo);
+        chainTab(m_qualityProfileCombo);
+        chainTab(m_physicalRenderCheck);
+        chainTab(m_perceptualRepairCheck);
         chainTab(m_temperatureSpin);
         chainTab(m_topPSpin);
         chainTab(m_trappingPxSpin);
@@ -1617,16 +1645,16 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         chainTab(m_jsonModeCombo);
         chainTab(m_visionQualityCombo);
         chainTab(m_strokeProtocolCombo);
-        chainTab(m_reasoningEffortCombo);
-        chainTab(m_qualityProfileCombo);
-        chainTab(m_physicalRenderCheck);
-        chainTab(m_perceptualRepairCheck);
         chainTab(m_compositionPlanCheck);
         chainTab(m_suppressParticlesCheck);
+        chainTab(m_forceAdvancedStrokeLogicCheck);
+        chainTab(m_reasoningEffortCombo);
         chainTab(m_customInstructionsEdit);
         chainTab(m_submitFeedbackButton);
         chainTab(m_testConnectionButton);
         chainTab(m_saveSettingsButton);
+        // デバッグモード切替は engineCard 内で details コンテナ直下に配置されている。
+        chainTab(m_debugModeCheck);
 
         // Goal Mode controls
         chainTab(m_goalModeCheck);
@@ -1636,17 +1664,36 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         chainTab(m_artStyleCombo);
         chainTab(m_pausePerStepCheck);
 
-        // Debug Mode controls
-        chainTab(m_debugModeCheck);
+        // Goal inspector card (アクションカードの上) → アクションカード。
+        // 履歴サムネは updateHistoryUi() で cancel → copyLog の間に挿入する。
+        chainTab(m_nextStepButton);
+        chainTab(m_finishGoalButton);
+        chainTab(m_generateButton);
+        chainTab(m_cancelButton);
+
+        // Debug log card (履歴ギャラリーの下)
         chainTab(m_copyLogButton);
         chainTab(m_clearLogButton);
         chainTab(m_debugLogText);
+    }
 
-        // Primary action buttons
-        chainTab(m_generateButton);
-        chainTab(m_cancelButton);
-        chainTab(m_nextStepButton);
-        chainTab(m_finishGoalButton);
+    // README 記載の Ctrl+Enter はプロンプト欄/カスタム指示欄のイベントフィルタと
+    // ドック自体の keyPressEvent にしか掛かっておらず、キャンバス描画中などの
+    // フォーカス位置では発火しなかった。任意のフォーカス位置から生成/次ステップ
+    // 進行できるようアプリケーションスコープのショートカットとして登録する。
+    {
+        auto *generateAction = new QAction(this);
+        generateAction->setObjectName(QStringLiteral("aiGenerateShortcut"));
+        generateAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return));
+        generateAction->setShortcutContext(Qt::ApplicationShortcut);
+        connect(generateAction, &QAction::triggered, this, [this] {
+            if (m_goalModeActive && m_waitingForUserStepAdvance) {
+                advanceGoalStep();
+            } else {
+                generateIllustration();
+            }
+        });
+        addAction(generateAction);
     }
 
     updateModeUi();
@@ -1833,6 +1880,9 @@ void KisAiIllustrationDocker::generateIllustration()
         return;
     }
 
+    // 新しいユーザー生成の始点: 構図計画はここで1回だけ再挑戦を許可する。
+    m_compositionPlanAttempted = false;
+
     const QString prompt = KisAiIllustrationRenderer::normalizedPrompt(m_promptEditor->toPlainText());
     if (prompt.isEmpty()) {
         setStatus(i18n("まず、描きたいイラストの指示を入力してください。"), true);
@@ -1850,8 +1900,7 @@ void KisAiIllustrationDocker::generateIllustration()
     const QString effectivePrompt = buildEffectivePrompt(prompt);
 
     const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
-    if (m_goalModeCheck && m_goalModeCheck->isChecked()
-        && (mode == GenerationMode::LlmStrokes || mode == GenerationMode::LocalStrokes)) {
+    if (isGoalModeRequested()) {
         startGoalMode(effectivePrompt);
         return;
     }
@@ -1947,6 +1996,10 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
             m_endpointEditor->setFocus();
         }
         setStatus(errorMessage, true);
+        // executeRetry() からの再入時は setBusy(true) のまま返ると生成ボタンが
+        // 永久に無効化される。予約済みリトライもここで破棄し、キーも消去する。
+        clearInFlightApiKey();
+        setBusy(false);
         return;
     }
     if (model.isEmpty()) {
@@ -1961,6 +2014,8 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
             m_modelEditor->setFocus();
         }
         setStatus(i18n("LLM モデル名を入力してください。"), true);
+        clearInFlightApiKey();
+        setBusy(false);
         return;
     }
     const bool isLoopback = KisAiIllustrationRenderer::isLoopbackEndpoint(endpoint);
@@ -1976,6 +2031,8 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
             m_apiKeyEditor->setFocus();
         }
         setStatus(i18n("このリクエストに使う API キーを入力してください。"), true);
+        clearInFlightApiKey();
+        setBusy(false);
         return;
     }
 
@@ -2061,13 +2118,17 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     const int strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
     const QSize canvasSize = effectiveCanvasSize();
 
-    // If Composition Plan is enabled and not yet fetched, do Step 1 first
+    // If Composition Plan is enabled and not yet fetched, do Step 1 first.
+    // m_compositionPlanAttempted で1生成につき1回に限定する: フォールバック後の
+    // 再入で条件が再び成立し続けると、計画POSTが無限ループする (HTTPエラー/タイム
+    // アウト時、エラー処理より先に plan 分岐が走るためリトライ予算も発動しない)。
     const bool useCompositionPlan = m_compositionPlanCheck && m_compositionPlanCheck->isChecked()
         && !m_isSelfCorrectionRetry && !m_retryInFlight && m_compositionDirectives.isEmpty()
-        && !m_waitingForCompositionPlan;
+        && !m_waitingForCompositionPlan && !m_compositionPlanAttempted;
 
     if (useCompositionPlan) {
         m_waitingForCompositionPlan = true;
+        m_compositionPlanAttempted = true;
         m_lastFailedPrompt = effectivePrompt;
         const QJsonObject planPayload =
             KisAiStrokeProgramCodec::buildCompositionPlanPayload(model, effectivePrompt, canvasSize, artStyle);
@@ -2344,10 +2405,11 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         if (detail.isEmpty()) {
             detail = replyErrorString;
         }
+        detail = redactCredentialText(detail);
         logDebug(QStringLiteral("LLM_ERROR"),
                  QStringLiteral("HTTP %1: %2\nRaw: %3")
                      .arg(httpStatus)
-                     .arg(detail, QString::fromUtf8(rawResponse.left(500))));
+                     .arg(detail, redactCredentialText(QString::fromUtf8(rawResponse.left(500)))));
 
         const bool isRetryableHttp = (httpStatus == 429 || (httpStatus >= 500 && httpStatus <= 504));
         const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
@@ -2394,7 +2456,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
              QStringLiteral("HTTP %1 (%2 bytes) 受信完了\nRaw: %3")
                  .arg(httpStatus)
                  .arg(response.size())
-                 .arg(QString::fromUtf8(response.left(1000))));
+                 .arg(redactCredentialText(QString::fromUtf8(response.left(1000)))));
 
     KisAiStrokeProgram program;
     program.canvasSize = effectiveCanvasSize();
@@ -2745,9 +2807,11 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
         if (detail.isEmpty()) {
             detail = replyErrorString;
         }
-        logDebug(
-            QStringLiteral("IMG_ERROR"),
-            QStringLiteral("HTTP %1: %2\nRaw: %3").arg(httpStatus).arg(detail, QString::fromUtf8(response.left(500))));
+        detail = redactCredentialText(detail);
+        logDebug(QStringLiteral("IMG_ERROR"),
+                 QStringLiteral("HTTP %1: %2\nRaw: %3")
+                     .arg(httpStatus)
+                     .arg(detail, redactCredentialText(QString::fromUtf8(response.left(500)))));
         if (!detail.isEmpty()) {
             setStatus(i18n("画像モデルへの接続または応答に失敗しました (HTTP %1): %2", httpStatus, detail), true);
         } else {
@@ -2812,7 +2876,7 @@ void KisAiIllustrationDocker::cancelRemoteRequest()
     m_testResponseTooLarge = false;
     if (m_testConnectionButton) {
         m_testConnectionButton->setEnabled(true);
-        m_testConnectionButton->setText(i18n("接続テスト"));
+        m_testConnectionButton->setText(i18n("🔌 接続テスト"));
     }
     if (m_expandPromptReply) {
         m_expandPromptReply->disconnect(this);
@@ -3016,6 +3080,35 @@ void KisAiIllustrationDocker::updateModeUi()
     }
 }
 
+bool KisAiIllustrationDocker::isGoalModeRequested() const
+{
+    // Simple モードでは Goal カードが隠れ、ユーザーは ON/OFF を確認・解除できない。
+    // README の Simple チュートリアル (ワンクリック生成) と矛盾しないよう、
+    // Goal は Pro モードでチェックされているときだけ有効とし、対、対応モードのみ対象。
+    if (m_uiMode != UiMode::Pro || !m_goalModeCheck || !m_goalModeCheck->isChecked()) {
+        return false;
+    }
+    const auto mode = static_cast<GenerationMode>(m_modeCombo ? m_modeCombo->currentData().toInt() : 0);
+    return mode == GenerationMode::LlmStrokes || mode == GenerationMode::LocalStrokes;
+}
+
+void KisAiIllustrationDocker::refreshGenerateButtonLabel()
+{
+    if (!m_generateButton) {
+        return;
+    }
+    // 同期処理 (ローカル生成) 中はイベントループが回らないため、ここで見える busy
+    // 判定は「非同期リトライ待ち/通信中」だけで足りる。
+    const bool busy = !m_reply.isNull() || (m_retryTimer && m_retryTimer->isActive());
+    if (m_goalModeActive) {
+        m_generateButton->setText(busy ? i18n("⏳ Goal作画中…") : i18n("🎯 Goal作画進行中"));
+    } else if (isGoalModeRequested()) {
+        m_generateButton->setText(busy ? i18n("⏳ 生成中…") : i18n("🎯 Goal作画を開始"));
+    } else {
+        m_generateButton->setText(busy ? i18n("⏳ 生成中…") : i18n("🎨 生成してレイヤーに追加"));
+    }
+}
+
 void KisAiIllustrationDocker::setBusy(bool busy)
 {
     const bool allowGeneralInput = !busy && !m_goalModeActive;
@@ -3038,13 +3131,7 @@ void KisAiIllustrationDocker::setBusy(bool busy)
     if (m_saveSettingsButton) {
         m_saveSettingsButton->setEnabled(allowGeneralInput);
     }
-    if (m_goalModeActive) {
-        m_generateButton->setText(busy ? i18n("⏳ Goal作画中…") : i18n("🎯 Goal作画進行中"));
-    } else if (m_goalModeCheck && m_goalModeCheck->isChecked()) {
-        m_generateButton->setText(busy ? i18n("⏳ 作画中…") : i18n("🎯 Goal作画を開始"));
-    } else {
-        m_generateButton->setText(busy ? i18n("⏳ 生成中…") : i18n("🎨 生成してレイヤーに追加"));
-    }
+    refreshGenerateButtonLabel();
     m_modeCombo->setEnabled(allowGeneralInput);
     if (m_goalModeCheck) {
         // Goal mode only drives stroke-generation modes; keep the checkbox
@@ -3093,6 +3180,16 @@ void KisAiIllustrationDocker::setBusy(bool busy)
     const bool retryPending = (m_retryTimer && m_retryTimer->isActive());
     m_cancelButton->setVisible((busy && (!m_reply.isNull() || retryPending)) || m_goalModeActive);
     m_progressBar->setVisible(busy);
+    if (m_finishGoalButton) {
+        // POST 中は 🏁 が押せたまま完了処理と競合する (二重 finish / 重複履歴) ので、
+        // 一時停止中 (busy=false) と同様に「Goal 稼働中かつ非通信時」だけ有効化する。
+        m_finishGoalButton->setEnabled(!busy && m_goalModeActive);
+    }
+    if (m_historyCard) {
+        // 生成中の履歴サムネ復元は、進行中のリクエストの設定 (キャンバス寸法・モード) を
+        // 静かに書き換えるので、ビジー中は操作不可にする。
+        m_historyCard->setEnabled(allowGeneralInput);
+    }
 }
 
 bool KisAiIllustrationDocker::ensureCanvas()
@@ -3738,6 +3835,17 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     m_requestTimedOut = false;
     setBusy(false);
 
+    if (!m_goalModeActive) {
+        // Goal が先に終了した (🏁/キャンセル等) 後に届いた遅延レスポンスは、
+        // ゴースト描画・二重ヒストリー追加を招くので破棄する。
+        m_responseBuffer.clear();
+        m_streamedContent.clear();
+        m_sseBuffer.clear();
+        clearInFlightApiKey();
+        logDebug(QStringLiteral("GOAL_LATE_REPLY"), QStringLiteral("Goal終了後の遅延応答を破棄しました。"));
+        return;
+    }
+
     if (!reply) {
         m_responseBuffer.clear();
         m_streamedContent.clear();
@@ -3827,12 +3935,13 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         if (detail.isEmpty()) {
             detail = replyErrorString;
         }
+        detail = redactCredentialText(detail);
 
         logDebug(QStringLiteral("GOAL_ERROR"),
                  QStringLiteral("Step %1 HTTP %2: %3\nRaw: %4")
                      .arg(m_goalCurrentStep)
                      .arg(httpStatus)
-                     .arg(detail, QString::fromUtf8(rawResponse.left(500))));
+                     .arg(detail, redactCredentialText(QString::fromUtf8(rawResponse.left(500)))));
 
         m_streamedContent.clear();
         m_sseBuffer.clear();
@@ -4099,6 +4208,9 @@ void KisAiIllustrationDocker::advanceGoalStep()
 
 void KisAiIllustrationDocker::finishGoalMode(bool success)
 {
+    // 進行中の自動再試行タイマーを止めないと、Goal 終了後にタイマーが発火して
+    // ユーザーの意図しない生成が勝手に始まる (m_lastFailedPrompt も消去される)。
+    cancelRetry();
     m_goalModeActive = false;
     m_waitingForUserStepAdvance = false;
     m_goalCurrentRetryCount = 0;
@@ -4927,6 +5039,10 @@ void KisAiIllustrationDocker::testLlmConnection()
     m_testResponseTooLarge = false;
     m_testReply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
     m_testReply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
+    // 保存OFF時のキーはリクエスト後に入力欄に残さない (DEVELOPMENT.md §7.4)。
+    if (m_saveApiKeyCheck && !m_saveApiKeyCheck->isChecked() && m_apiKeyEditor) {
+        m_apiKeyEditor->clear();
+    }
 
     connect(m_testReply.data(), &QNetworkReply::readyRead, this, [this] {
         appendTestReplyData(m_testReply.data());
@@ -5016,6 +5132,7 @@ void KisAiIllustrationDocker::finishTestConnectionRequest()
         if (errorDetail.isEmpty()) {
             errorDetail = replyErrorString;
         }
+        errorDetail = redactCredentialText(errorDetail);
 
         const QString failMsg = i18n("❌ 接続失敗 (HTTP %1, %2ms): %3", httpStatus, elapsedMs, errorDetail);
         if (m_testConnectionStatusLabel) {
@@ -5027,7 +5144,7 @@ void KisAiIllustrationDocker::finishTestConnectionRequest()
                  QStringLiteral("HTTP %1 (%2ms): %3\nRaw: %4")
                      .arg(httpStatus)
                      .arg(elapsedMs)
-                     .arg(errorDetail, QString::fromUtf8(response.left(500))));
+                     .arg(errorDetail, redactCredentialText(QString::fromUtf8(response.left(500)))));
     }
 }
 
@@ -5093,6 +5210,9 @@ void KisAiIllustrationDocker::setUiMode(UiMode mode)
     if (m_debugCard) {
         m_debugCard->setVisible(isPro && m_debugModeCheck && m_debugModeCheck->isChecked());
     }
+    // Simple に切り替えると Goal チェックが隠れるので、文言も実挙動 (Pro のみ有効) と
+    // 同期を取らないと「🎯 Goal作画を開始」が解除不能なまま残る。
+    refreshGenerateButtonLabel();
 }
 
 QString KisAiIllustrationDocker::buildEffectivePrompt(const QString &basePrompt) const
@@ -5309,6 +5429,10 @@ void KisAiIllustrationDocker::expandPromptWithAi()
 
     m_expandPromptReply = m_networkManager->post(request, payload);
     m_expandPromptReply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
+    // 保存OFF時のキーはリクエスト後に入力欄に残さない (DEVELOPMENT.md §7.4)。
+    if (m_saveApiKeyCheck && !m_saveApiKeyCheck->isChecked() && m_apiKeyEditor) {
+        m_apiKeyEditor->clear();
+    }
     if (m_expandPromptButton) {
         m_expandPromptButton->setEnabled(false);
         m_expandPromptButton->setText(i18n("推敲中…"));
@@ -5336,8 +5460,11 @@ void KisAiIllustrationDocker::expandPromptWithAi()
     // Stalled-server guard: the finished handler below re-enables the button,
     // and this timeout guarantees it also happens when no finished signal ever
     // arrives. finishExpandPromptRequest() is a no-op on a null reply.
-    QTimer::singleShot(REMOTE_IMAGE_TIMEOUT_MS, this, [this] {
-        if (m_expandPromptReply) {
+    // 自分の reply だけを中断する: 参照無しで見ると、旧リクエストの監視タイマーが
+    // 次の推敲リクエストを誤って中断してしまう。
+    const QPointer<QNetworkReply> pendingExpandReply = m_expandPromptReply;
+    QTimer::singleShot(REMOTE_IMAGE_TIMEOUT_MS, this, [this, pendingExpandReply] {
+        if (m_expandPromptReply && m_expandPromptReply.data() == pendingExpandReply.data()) {
             logDebug(QStringLiteral("PROMPT_EXPAND_TIMEOUT"),
                      QStringLiteral("プロンプト推敲リクエストがタイムアウトしたため中止します。"));
             m_expandPromptReply->abort();
@@ -5460,6 +5587,7 @@ void KisAiIllustrationDocker::updateHistoryUi()
     }
 
     QWidget *prevThumb = nullptr;
+    QWidget *firstThumb = nullptr;
     for (int i = 0; i < m_historySnapshots.size(); ++i) {
         const auto &snap = m_historySnapshots.at(i);
         auto *thumbBtn = new QPushButton(m_historyCard);
@@ -5484,8 +5612,19 @@ void KisAiIllustrationDocker::updateHistoryUi()
         if (prevThumb) {
             QWidget::setTabOrder(prevThumb, thumbBtn);
         }
+        if (!firstThumb) {
+            firstThumb = thumbBtn;
+        }
         prevThumb = thumbBtn;
         m_historyThumbsLayout->addWidget(thumbBtn);
+    }
+    // サムネをメインのタブ順 (中止ボタンの直後 → ログ操作の前) に接続する。
+    // ここがないと履歴群はどのブロックにも錨づけされず順序未定のまま。
+    if (firstThumb && m_cancelButton) {
+        QWidget::setTabOrder(m_cancelButton, firstThumb);
+    }
+    if (prevThumb && m_copyLogButton) {
+        QWidget::setTabOrder(prevThumb, m_copyLogButton);
     }
     m_historyThumbsLayout->addStretch(1);
 }

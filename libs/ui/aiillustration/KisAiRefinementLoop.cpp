@@ -77,7 +77,21 @@ KisAiStrokeProgram KisAiRefinementLoop::applyRigPatchesAndRelayout(const KisAiSt
                                                                    QStringList *rejected)
 {
     KisAiSceneRigOverrides delta;
-    KisAiStrokeProgram patched = KisAiProgramPatchCodec::applyPatches(base, patches, &delta, rejected);
+    // 拒否された rig パッチは delta に記録されずフィールドは構造体既定値のまま残る。
+    // raw パッチをそのまま辿ると base の調線値が既定値に上書きされて不正な再レイアウト
+    // が走るため、このラウンドの拒否理由を見てスキップする。
+    QStringList localRejected;
+    KisAiStrokeProgram patched = KisAiProgramPatchCodec::applyPatches(base, patches, &delta, &localRejected);
+    if (rejected)
+        rejected->append(localRejected);
+    const auto rigKeyRejected = [&localRejected](const QString &key) {
+        const QString prefix = QStringLiteral("/rig/%1:").arg(key);
+        for (const QString &reason : localRejected) {
+            if (reason.startsWith(prefix))
+                return true;
+        }
+        return false;
+    };
 
     // Re-layout only when a rig key actually moved: structural ops stay
     // frozen so good regions survive (patch-only Goal steps).
@@ -89,6 +103,9 @@ KisAiStrokeProgram KisAiRefinementLoop::applyRigPatchesAndRelayout(const KisAiSt
             continue;
         }
         const QString key = patch.path.mid(5);
+        if (rigKeyRejected(key)) {
+            continue;
+        }
         if (key == QLatin1String("eye_aperture")) {
             relaid.rig.eyeAperture = delta.eyeAperture;
             rigMoved = true;

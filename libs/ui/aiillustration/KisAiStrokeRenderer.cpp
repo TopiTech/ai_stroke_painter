@@ -1106,7 +1106,10 @@ void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter,
     }
 
     if (op.brush.isEraser) {
-        painter.setCompositionMode(QPainter::CompositionMode_Clear);
+        // CompositionMode_Clear はソースアルファ (opacity を乗算済み) を無視して
+        // 形状内を全面消去するため、不透明度 < 1 の消しゴムで塗った領域が丸ごと
+        // 消えていた。CoverageRaster と同じ DestinationOut で不透明度を尊重する。
+        painter.setCompositionMode(QPainter::CompositionMode_DestinationOut);
     } else if (op.blendMode == QLatin1String("color_dodge")) {
         painter.setCompositionMode(QPainter::CompositionMode_ColorDodge);
     } else if (op.blendMode == QLatin1String("multiply")) {
@@ -1538,7 +1541,23 @@ void KisAiStrokeRenderer::drawGradientFillOperation(QPainter &painter,
         if (!bounds.isEmpty() && boundsArea < static_cast<qint64>(4096) * 4096) {
             QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/dither")));
             painter.setPen(Qt::NoPen);
-            const int dabStep = 3;
+            // 面積だけでなく「サンプル数 × 頂点数」で予算を制限する。
+            // poly.containsPoint は O(頂点) のため、全キャンバス尺寸・多頂点の
+            // グラデーションだと数十億回のエッジ判定で UI が固まる。
+            // 予算超過時は間隔を広げて品質を保ったまま打ち切る。
+            int dabStep = 3;
+            const qint64 maxDitherWork = 64'000'000;
+            for (;;) {
+                const qint64 samplesX = (bounds.width() + dabStep - 1) / dabStep + 1;
+                const qint64 samplesY = (bounds.height() + dabStep - 1) / dabStep + 1;
+                if (samplesX * samplesY * qMax<qint64>(1, poly.size()) <= maxDitherWork) {
+                    break;
+                }
+                dabStep *= 2;
+                if (dabStep >= 128) {
+                    break;
+                }
+            }
             for (int y = bounds.top(); y <= bounds.bottom(); y += dabStep) {
                 for (int x = bounds.left(); x <= bounds.right(); x += dabStep) {
                     if (!poly.containsPoint(QPointF(x + 0.5, y + 0.5), Qt::OddEvenFill))

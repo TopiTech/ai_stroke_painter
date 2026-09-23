@@ -833,7 +833,28 @@ KisAiStrokeCommitReview KisAiDeliberateStroke::reviewStroke(
         for (const KisAiStrokePoint &p : op.points)
             px.append(QPointF(p.pos.x() * canvas.width(), p.pos.y() * canvas.height()));
         rev.dirtyRect = px.boundingRect();
-        rev.inkCoverage = opMassEstimate(op, canvas);
+        if (op.points.size() == 1) {
+            // 単一ダブは pathLength=0 で opMassEstimate が必ず0になり zero-coverage で落ちる。
+            // refineForRendering() が意図的ダブとして残した1点 (キャッチライト等 — 同一の
+            // キーワード/レイヤ判定) だけは不透明度で生存判定し、それ以外の単点
+            // (V5 が生成する corner_ink ドット等) は従来どおり落とす。
+            // 理由: 全単点を生かすと V10 受け入れ基準「半透明ストロークの α が合成超過しない」
+            // (KisAiCoverageRasterTest 5本) と衝突する。
+            const QString lowerId = op.id.toLower();
+            const bool intentionalDab = lowerId.contains(QLatin1String("glint"))
+                || lowerId.contains(QLatin1String("catchlight")) || lowerId.contains(QLatin1String("highlight"))
+                || lowerId.contains(QLatin1String("pupil")) || lowerId.contains(QLatin1String("eye"))
+                || lowerId.contains(QLatin1String("star")) || op.layer == QLatin1String("Highlights");
+            if (intentionalDab) {
+                const QPointF c = px.first();
+                rev.dirtyRect = QRectF(c.x() - 1.0, c.y() - 1.0, 2.0, 2.0);
+                rev.inkCoverage = qBound<qreal>(0.0, op.brush.opacity, 1.0);
+            } else {
+                rev.inkCoverage = opMassEstimate(op, canvas);
+            }
+        } else {
+            rev.inkCoverage = opMassEstimate(op, canvas);
+        }
         break;
     }
     case KisAiStrokeOperation::Kind::Ribbon: {

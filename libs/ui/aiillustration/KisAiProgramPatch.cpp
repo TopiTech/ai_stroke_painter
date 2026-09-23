@@ -35,7 +35,8 @@ bool rigKeyToField(const QString &key, KisAiSceneRigOverrides &rig, const QJsonV
     } else if (key == QLatin1String("hair_flyaway")) {
         rig.hairFlyaway = qBound<qreal>(0.0, value.toDouble(rig.hairFlyaway), 1.0);
     } else if (key == QLatin1String("hair_highlight_bands")) {
-        rig.hairHighlightBands = qBound(0, int(value.toDouble(rig.hairHighlightBands)), 3);
+        // 範囲外 double → int 変換は UB のため、先に倍精度でクランプしてから丸める。
+        rig.hairHighlightBands = qBound(0, qRound(qBound(0.0, value.toDouble(rig.hairHighlightBands), 3.0)), 3);
     } else if (key == QLatin1String("mouth_width_scale")) {
         rig.mouthWidthScale = qBound<qreal>(0.6, value.toDouble(rig.mouthWidthScale), 1.4);
     } else if (key == QLatin1String("has_brows")) {

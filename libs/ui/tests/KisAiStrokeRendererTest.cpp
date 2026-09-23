@@ -1669,8 +1669,10 @@ void KisAiStrokeRendererTest::testLineScreenRowBudgetMatchesDotBudget()
 
 void KisAiStrokeRendererTest::testTypeCheckerClampsHostileParticleBounds()
 {
-    // The type checker rewrites bounds/count for the checker-only path, so it
-    // must not pass 1e300-scale or inverted values through to the renderer.
+    // The type checker keeps coordinates on a huge-but-finite safety clamp
+    // (±1e7) so parseProgramJson()'s pixel/normalized auto-detection can still
+    // fire; 1e300-scale and NaN must never pass through. The final [0,1]
+    // normalization happens downstream (parseProgramJson / refineForRendering).
     QJsonObject opObj;
     opObj[QStringLiteral("kind")] = QStringLiteral("particles");
     opObj[QStringLiteral("bounds")] = QJsonArray({1.0e300, -5.0, 1.0e300, 1.0e300});
@@ -1683,8 +1685,11 @@ void KisAiStrokeRendererTest::testTypeCheckerClampsHostileParticleBounds()
     QCOMPARE(bounds.size(), 4);
     for (int i = 0; i < 4; ++i) {
         const qreal v = bounds.at(i).toDouble();
-        QVERIFY2(v >= 0.0 && v <= 1.0, qPrintable(QString::number(v)));
+        QVERIFY2(std::isfinite(v) && qAbs(v) <= 1.0e7, qPrintable(QString::number(v)));
     }
+    // 1e300-scale は安全クランプ値へ潰れ、有限のまま下流へ渡る。
+    QCOMPARE(bounds.at(0).toDouble(), 1.0e7);
+    QCOMPARE(bounds.at(1).toDouble(), -5.0);
     const int count = opObj.value(QStringLiteral("count")).toInt();
     QVERIFY(count >= 1 && count <= 256);
 }

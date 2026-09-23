@@ -252,12 +252,12 @@ krita_add_broken_unit_test( kis_categories_mapper_test.cpp testing_categories_ma
     LINK_LIBRARIES kritaui kritatestsdk
     )
 
-kis_add_test( KisAiStrokeProgramTest.cpp
+kis_add_test( KisAiStrokeProgramTest.cpp KisAiTestUtils.cpp
     TEST_NAME KisAiStrokeProgramTest
     LINK_LIBRARIES kritaui kritatestsdk
     )
 
-kis_add_test( KisAiStrokeRendererTest.cpp
+kis_add_test( KisAiStrokeRendererTest.cpp KisAiTestUtils.cpp
     TEST_NAME KisAiStrokeRendererTest
     LINK_LIBRARIES kritaui kritatestsdk
     )
@@ -328,6 +328,27 @@ kis_add_test(KisAiV7QualityTest.cpp
     TEST_NAME KisAiV7QualityTest
     LINK_LIBRARIES kritaui kritatestsdk
 )
+# Focused と upstream モードのテスト網羅を一致させる (抜けていた5本を登録)。
+kis_add_test(KisAiAtomicInkTest.cpp
+    TEST_NAME KisAiAtomicInkTest
+    LINK_LIBRARIES kritaui kritatestsdk
+)
+kis_add_test(KisAiV10QualityTest.cpp
+    TEST_NAME KisAiV10QualityTest
+    LINK_LIBRARIES kritaui kritatestsdk
+)
+kis_add_test(KisAiStartPageTest.cpp
+    TEST_NAME KisAiStartPageTest
+    LINK_LIBRARIES kritaui kritatestsdk
+)
+kis_add_test(KisAiLineartModeTest.cpp
+    TEST_NAME KisAiLineartModeTest
+    LINK_LIBRARIES kritaui kritatestsdk
+)
+kis_add_test(KisAiCoverageRasterTest.cpp
+    TEST_NAME KisAiCoverageRasterTest
+    LINK_LIBRARIES kritaui kritatestsdk
+)
 set_tests_properties(
     libs-ui-KisAiStrokeProgramTest
     libs-ui-KisAiStrokeRendererTest
@@ -337,6 +358,11 @@ set_tests_properties(
     libs-ui-KisAiV7QualityTest
     libs-ui-KisAiQualityVectorTest
     libs-ui-KisAiPerceptualRepairerTest
+    libs-ui-KisAiAtomicInkTest
+    libs-ui-KisAiV10QualityTest
+    libs-ui-KisAiStartPageTest
+    libs-ui-KisAiLineartModeTest
+    libs-ui-KisAiCoverageRasterTest
     libs-ui-KisAiPhysicalRendererTest
     libs-ui-KisAiAbstractOntologyTest
     libs-ui-KisAiQualityBenchGateTest

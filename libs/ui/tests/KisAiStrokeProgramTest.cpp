@@ -4369,6 +4369,114 @@ void KisAiStrokeProgramTest::testAnimeMouthParsingAndValidation()
     QCOMPARE(refined.operations.first().kind, KisAiStrokeOperation::Kind::AnimeMouth);
 }
 
+void KisAiStrokeProgramTest::testParseResponseApiErrorWithoutErrorMessagePointer()
+{
+    // 回帰: API error ペイロードで errorMessage==nullptr / diagnostic!=nullptr の
+    // 組み合わせを渡すと *errorMessage へ間接参照してクラッシュしていた。
+    const QByteArray bytes = QByteArrayLiteral("{\"error\": {\"message\": \"quota exceeded for key\"}}");
+    KisAiStrokeProgram prog;
+    KisAiJsonDiagnostic diag;
+    QVERIFY(!KisAiStrokeProgramCodec::parseResponse(bytes, &prog, nullptr, &diag));
+    QVERIFY(diag.hasError);
+    QVERIFY(diag.errorMessage.contains(QStringLiteral("quota exceeded")));
+}
+
+void KisAiStrokeProgramTest::testAnimeMouthSurvivesFullParsePipeline()
+{
+    // 回帰: type checker に anime_mouth 分岐が無く、parseResponse の実経路では
+    // 口オペレーションが黙って捨てられていた (parseProgramJson 直叩きのテストは通る)。
+    const QString json = QStringLiteral(R"({
+        "schema_version": 2,
+        "prompt": "anime smile portrait",
+        "operations": [
+            {
+                "kind": "anime_mouth",
+                "id": "hero_mouth",
+                "layer": "Lineart",
+                "center": [0.50, 0.65],
+                "size": [0.08, 0.04],
+                "expression": "open_smile",
+                "lip_color": "#ff758c",
+                "has_highlight": true,
+                "brush": { "profile": "gpen", "color": "#1a1224" }
+            }
+        ]
+    })");
+
+    KisAiStrokeProgram prog;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(json.toUtf8(), &prog, &error), qPrintable(error));
+    QCOMPARE(prog.operations.size(), 1);
+    QCOMPARE(prog.operations.first().kind, KisAiStrokeOperation::Kind::AnimeMouth);
+    QCOMPARE(prog.operations.first().id, QStringLiteral("hero_mouth"));
+    QCOMPARE(prog.operations.first().mouthExpression, QStringLiteral("open_smile"));
+}
+
+void KisAiStrokeProgramTest::testPixelCoordinatesNormalizeThroughFullPipeline()
+{
+    // 回帰: type checker が [-0.5, 1.5] へ先に潰していたため、parseResponse の実経路で
+    // 「maxCoord > 1.5 ならピクセル」という自動正規化が発動せず、全点が (1,1) に
+    // 固まって消滅していた。parseProgramJson 直叩きでは検出できない。
+    const QString json = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"canvas\": {\"width\": 1000, \"height\": 1000},\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"id\": \"pixel_stroke\",\n"
+        "      \"layer\": \"Lineart\",\n"
+        "      \"points\": [[250, 500, 1.0], [750, 500, 0.8]],\n"
+        "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#000000\", \"size\": 10}\n"
+        "    }\n"
+        "  ]\n"
+        "}");
+
+    KisAiStrokeProgram prog;
+    QString error;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(json.toUtf8(), &prog, &error), qPrintable(error));
+    QCOMPARE(prog.operations.size(), 1);
+    const auto &pts = prog.operations.first().points;
+    QCOMPARE(pts.size(), 2);
+    QVERIFY(qAbs(pts[0].pos.x() - 0.25) < 1.0e-6);
+    QVERIFY(qAbs(pts[0].pos.y() - 0.5) < 1.0e-6);
+    QVERIFY(qAbs(pts[1].pos.x() - 0.75) < 1.0e-6);
+    QVERIFY(qAbs(pts[1].pos.y() - 0.5) < 1.0e-6);
+}
+
+void KisAiStrokeProgramTest::testSceneSpecArtStyleEnumMapping()
+{
+    // 回帰: artStyle 4/5 (InkSketch/CyberNeon) が入れ替わって送られていた。
+    // Docker は ArtStyle 列挙値 (combo のインデックスではない) を渡す。
+    const QSize canvasSize(1024, 1024);
+    const auto systemTextOf = [&](int artStyle) -> QString {
+        const QJsonObject payload = KisAiSceneSpecCodec::buildSceneSpecPayload(QStringLiteral("gpt-4o"),
+                                                                               QStringLiteral("prompt"),
+                                                                               canvasSize,
+                                                                               artStyle,
+                                                                               QString(),
+                                                                               QString());
+        const QJsonArray messages = payload.value(QStringLiteral("messages")).toArray();
+        if (messages.isEmpty()) {
+            return QString();
+        }
+        return messages.at(0).toObject().value(QStringLiteral("content")).toString();
+    };
+
+    const QString ink = systemTextOf(4);
+    QVERIFY(!ink.isEmpty());
+    QVERIFY(ink.contains(QStringLiteral("ink_sketch")));
+    QVERIFY(!ink.contains(QStringLiteral("cyber_neon")));
+
+    const QString neon = systemTextOf(5);
+    QVERIFY(!neon.isEmpty());
+    QVERIFY(neon.contains(QStringLiteral("cyber_neon")));
+    QVERIFY(!neon.contains(QStringLiteral("ink_sketch")));
+
+    const QString wc = systemTextOf(2);
+    QVERIFY(wc.contains(QStringLiteral("watercolor")));
+}
+
 void KisAiStrokeProgramTest::testLandscapeRigsAndMultiTierComposition()
 {
     KisAiSceneSpec spec;
@@ -4464,13 +4572,15 @@ void KisAiStrokeProgramTest::testTypeCheckerBleedAndCrossingCoordinatesPreserved
 {
     // Regression: checkPointsArray and checkPolygonArray previously clamped strictly to [0.0, 1.0],
     // destroying valid bleed fills (e.g. [-0.1, 1.1]) and canvas-crossing paths (e.g. [-0.1, 0.5] -> [1.1, 0.5]).
-    // They must preserve coordinates in [-0.5, 1.5] while clamping wild 1e300 / NaN inputs.
+    // 契約: 座標は「巨大値だけを弾く」安全クランプ (±1e7) に留める。正規化ドメインへの
+    // 潰し込みは parseProgramJson のピクセル自動正規化を殺していたため、
+    // refineForRendering() に委ねる。1e300 等は有限値へ潰され、有限の死値は生き残る。
 
     // 1. Points array format 1 (array of arrays)
     QJsonArray ptsArr;
     ptsArr.append(QJsonArray{-0.1, 0.5, 0.8});
     ptsArr.append(QJsonArray{1.2, 0.5, 0.8});
-    ptsArr.append(QJsonArray{100.0, -50.0, 0.8}); // extreme coords clamped to [-0.5, 1.5]
+    ptsArr.append(QJsonArray{1.0e300, -1.0e300, 0.8}); // wild values clamped to ±1e7
 
     QString error;
     int coerced = 0;
@@ -4483,8 +4593,11 @@ void KisAiStrokeProgramTest::testTypeCheckerBleedAndCrossingCoordinatesPreserved
     QCOMPARE(p1.at(0).toDouble(), 1.2);
     QCOMPARE(p1.at(1).toDouble(), 0.5);
     const QJsonArray p2 = ptsArr.at(2).toArray();
-    QCOMPARE(p2.at(0).toDouble(), 1.5);
-    QCOMPARE(p2.at(1).toDouble(), -0.5);
+    QCOMPARE(p2.at(0).toDouble(), 1.0e7);
+    QCOMPARE(p2.at(1).toDouble(), -1.0e7);
+
+    // 1e7 のクランプ値は有限のまま、下流でピクセル正規化 or refine の [0,1] クランプで処理される。
+    QVERIFY(std::isfinite(p2.at(0).toDouble()));
 
     // 2. Points array format 2 (array of objects)
     QJsonArray ptsObjArr;
@@ -4504,15 +4617,15 @@ void KisAiStrokeProgramTest::testTypeCheckerBleedAndCrossingCoordinatesPreserved
     polyArr.append(QJsonArray{1.1, -0.1});
     polyArr.append(QJsonArray{1.1, 1.1});
     polyArr.append(QJsonArray{-0.1, 1.1});
-    polyArr.append(QJsonArray{-10.0, 10.0}); // extreme clamped
+    polyArr.append(QJsonArray{-1.0e300, 1.0e300}); // wild values clamped
     QVERIFY(KisAiStrokeTypeChecker::checkPolygonArray(&polyArr, &error, &coerced));
     QCOMPARE(polyArr.size(), 5);
     QCOMPARE(polyArr.at(0).toArray().at(0).toDouble(), -0.1);
     QCOMPARE(polyArr.at(0).toArray().at(1).toDouble(), -0.1);
     QCOMPARE(polyArr.at(1).toArray().at(0).toDouble(), 1.1);
     QCOMPARE(polyArr.at(2).toArray().at(1).toDouble(), 1.1);
-    QCOMPARE(polyArr.at(4).toArray().at(0).toDouble(), -0.5);
-    QCOMPARE(polyArr.at(4).toArray().at(1).toDouble(), 1.5);
+    QCOMPARE(polyArr.at(4).toArray().at(0).toDouble(), -1.0e7);
+    QCOMPARE(polyArr.at(4).toArray().at(1).toDouble(), 1.0e7);
 }
 
 void KisAiStrokeProgramTest::testReferenceImagePayloadMultimodal()

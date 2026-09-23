@@ -41,12 +41,22 @@ namespace
 
 QString findGoldenSetPath()
 {
+    // テスト実行ファイルは <src>/build-ai/libs/ui/tests にあり、 tools/ へは
+    // 4 段上が必要 (tests -> ui -> libs -> build-ai -> <src>)。以前の候補は最大3段までで、
+    // ドキュメント標準の build-ai レイアウトで golden_set が見つからずテストが落ちていた。
     const QString appDir = QCoreApplication::applicationDirPath();
-    const QStringList candidates = {appDir + QStringLiteral("/../../tools/ai_quality_bench/golden_set.json"),
-                                    appDir + QStringLiteral("/../../../tools/ai_quality_bench/golden_set.json"),
-                                    appDir + QStringLiteral("/../tools/ai_quality_bench/golden_set.json"),
-                                    QStringLiteral("tools/ai_quality_bench/golden_set.json"),
-                                    QStringLiteral("../tools/ai_quality_bench/golden_set.json")};
+    QStringList candidates;
+    const QStringList relativeTails = {QStringLiteral("/tools/ai_quality_bench/golden_set.json"),
+                                       QStringLiteral("/../tools/ai_quality_bench/golden_set.json"),
+                                       QStringLiteral("/../../tools/ai_quality_bench/golden_set.json"),
+                                       QStringLiteral("/../../../tools/ai_quality_bench/golden_set.json"),
+                                       QStringLiteral("/../../../../tools/ai_quality_bench/golden_set.json"),
+                                       QStringLiteral("/../../../../../tools/ai_quality_bench/golden_set.json")};
+    for (const QString &tail : relativeTails) {
+        candidates.append(appDir + tail);
+    }
+    candidates << QStringLiteral("tools/ai_quality_bench/golden_set.json")
+               << QStringLiteral("../tools/ai_quality_bench/golden_set.json");
 
     for (const QString &path : candidates) {
         if (QFile::exists(path)) {

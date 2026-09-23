@@ -102,10 +102,21 @@ QColor KisAiLightRig::shadowColor(const QColor &base, const KisAiLightSettings &
     // Hue-shifted shadow anchored on the rig fill tint; never dirty black.
     QColor shadow = KisAiStrokeQualityUtils::calculateHueShiftedShadow(base, rig.fillTint, 0.38);
     if (shadow.value() < 30) {
-        if (shadow.hue() < 0)
-            shadow = shadow.darker(100);
-        else
+        if (shadow.hue() < 0) {
+            // darker(100) は factor/100 == 1.0 の恒等演算で、彩度0の暗部は
+            // 「汚い黒」のまま残っていた。コメントの約束どおり明度だけ引き上げる。
+            const int v = shadow.value();
+            if (v <= 0) {
+                shadow = QColor(42, 42, 42, shadow.alpha());
+            } else {
+                shadow = QColor(qMin(255, shadow.red() * 42 / v),
+                                qMin(255, shadow.green() * 42 / v),
+                                qMin(255, shadow.blue() * 42 / v),
+                                shadow.alpha());
+            }
+        } else {
             shadow = QColor::fromHsv((shadow.hue() + 360) % 360, qMax(40, shadow.saturation()), 42, shadow.alpha());
+        }
     }
     return shadow;
 }

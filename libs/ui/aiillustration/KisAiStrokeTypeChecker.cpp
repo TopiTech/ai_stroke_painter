@@ -10,6 +10,16 @@
 #include <QRegularExpression>
 #include <cmath>
 
+namespace
+{
+// 座標系フィールドへの安全クランプ。
+// parseProgramJson() は「maxCoord > 1.5 ならピクセル座標」と判定してから
+// キャンバス寸法で正規化する。この段階で [-0.5, 1.5] へ潰してしまうと判定が
+// 永遠に発動せず、ピクセル座標のストロークが (1.5, 1.5) → 角に固まって全消滅する。
+// 1e300 等の巨大値だけを弾き、最終的な [0,1] クランプは refineForRendering() に委ねる。
+constexpr qreal kMaxSafeCoordinate = 1.0e7;
+} // namespace
+
 QString KisAiStrokeTypeCheckReport::summary() const
 {
     return QStringLiteral("TypeCheck: totalOps=%1, coerced=%2, errors=%3, valid=%4")
@@ -299,10 +309,10 @@ bool KisAiStrokeTypeChecker::checkPointsArray(QJsonArray *pointsArray, QString *
                 bool okP = (arr.size() >= 3) ? coerceToNumber(arr.at(2), &p) : true;
 
                 if (okX && okY) {
-                    // 正規化ドメイン [-0.5, 1.5] へ clamp (オフスクリーンブリード余白・キャンバス横断ストロークを許容しつつ 1e300 等の巨大値を防ぐ)。
+                    // 座標は安全クランプのみ (正規化/ピクセル判定は parseProgramJson 側)。
                     QJsonArray normPt;
-                    normPt.append(qBound(-0.5, x, 1.5));
-                    normPt.append(qBound(-0.5, y, 1.5));
+                    normPt.append(qBound(-kMaxSafeCoordinate, x, kMaxSafeCoordinate));
+                    normPt.append(qBound(-kMaxSafeCoordinate, y, kMaxSafeCoordinate));
                     normPt.append(qBound(0.0, okP ? p : 0.8, 1.0));
                     normalized.append(normPt);
 
@@ -332,8 +342,8 @@ bool KisAiStrokeTypeChecker::checkPointsArray(QJsonArray *pointsArray, QString *
                     p = 0.8;
                 }
                 QJsonArray normPt;
-                normPt.append(qBound(-0.5, x, 1.5));
-                normPt.append(qBound(-0.5, y, 1.5));
+                normPt.append(qBound(-kMaxSafeCoordinate, x, kMaxSafeCoordinate));
+                normPt.append(qBound(-kMaxSafeCoordinate, y, kMaxSafeCoordinate));
                 normPt.append(qBound(0.0, p, 1.0));
                 normalized.append(normPt);
                 if (coercedCount) ++(*coercedCount);
@@ -365,8 +375,8 @@ bool KisAiStrokeTypeChecker::checkPolygonArray(QJsonArray *polygonArray, QString
                 qreal x = 0.0, y = 0.0;
                 if (coerceToNumber(arr.at(0), &x) && coerceToNumber(arr.at(1), &y)) {
                     QJsonArray normPt;
-                    normPt.append(qBound(-0.5, x, 1.5));
-                    normPt.append(qBound(-0.5, y, 1.5));
+                    normPt.append(qBound(-kMaxSafeCoordinate, x, kMaxSafeCoordinate));
+                    normPt.append(qBound(-kMaxSafeCoordinate, y, kMaxSafeCoordinate));
                     normalized.append(normPt);
 
                     if (!arr.at(0).isDouble() || !arr.at(1).isDouble()) {
@@ -384,8 +394,8 @@ bool KisAiStrokeTypeChecker::checkPolygonArray(QJsonArray *polygonArray, QString
             qreal x = 0.0, y = 0.0;
             if (coerceToNumber(vx, &x) && coerceToNumber(vy, &y)) {
                 QJsonArray normPt;
-                normPt.append(qBound(-0.5, x, 1.5));
-                normPt.append(qBound(-0.5, y, 1.5));
+                normPt.append(qBound(-kMaxSafeCoordinate, x, kMaxSafeCoordinate));
+                normPt.append(qBound(-kMaxSafeCoordinate, y, kMaxSafeCoordinate));
                 normalized.append(normPt);
                 if (coercedCount) ++(*coercedCount);
             }
@@ -633,9 +643,10 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
                         break;
                     }
                     // Checker output feeds the renderer directly on the
-                    // checker-only path, so clamp here to the normalized [0,1]
-                    // domain instead of letting 1e300-scale values through.
-                    bArr[i] = qBound(0.0, n, 1.0);
+                    // checker-only path, so clamp to a huge-but-finite value
+                    // instead of letting 1e300-scale values through. The
+                    // pixel/normalized decision stays with parseProgramJson().
+                    bArr[i] = qBound(-kMaxSafeCoordinate, n, kMaxSafeCoordinate);
                 }
                 if (validBounds) {
                     (*opObj)[QStringLiteral("bounds")] = bArr;
@@ -674,8 +685,10 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
                     qreal centerY = 0.5;
                     coerceToNumber(cArr.at(0), &centerX);
                     coerceToNumber(cArr.at(1), &centerY);
-                    // Same normalized-domain clamp as the anime-eye center.
-                    (*opObj)[QStringLiteral("center")] = QJsonArray({qBound(0.0, centerX, 1.0), qBound(0.0, centerY, 1.0)});
+                    // Same normalized-domain allowance as the anime-eye center.
+                    (*opObj)[QStringLiteral("center")] =
+                        QJsonArray({qBound(-kMaxSafeCoordinate, centerX, kMaxSafeCoordinate),
+                                    qBound(-kMaxSafeCoordinate, centerY, kMaxSafeCoordinate)});
                 }
             }
         }
@@ -686,7 +699,7 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
         if (opObj->contains(QStringLiteral("inner_radius"))) {
             qreal inR = 0.15;
             if (coerceToNumber(opObj->value(QStringLiteral("inner_radius")), &inR)) {
-                (*opObj)[QStringLiteral("inner_radius")] = qBound(0.0, inR, 1.0);
+                (*opObj)[QStringLiteral("inner_radius")] = qBound(0.0, inR, kMaxSafeCoordinate);
             } else {
                 (*opObj)[QStringLiteral("inner_radius")] = 0.15;
                 if (report) ++report->coercedValues;
@@ -699,7 +712,7 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
         if (opObj->contains(QStringLiteral("outer_radius"))) {
             qreal outR = 0.70;
             if (coerceToNumber(opObj->value(QStringLiteral("outer_radius")), &outR)) {
-                (*opObj)[QStringLiteral("outer_radius")] = qBound(0.01, outR, 2.0);
+                (*opObj)[QStringLiteral("outer_radius")] = qBound(0.01, outR, kMaxSafeCoordinate);
             } else {
                 (*opObj)[QStringLiteral("outer_radius")] = 0.70;
                 if (report) ++report->coercedValues;
@@ -738,7 +751,8 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
                 qreal cx = 0.5, cy = 0.5;
                 coerceToNumber(cArr.at(0), &cx);
                 coerceToNumber(cArr.at(1), &cy);
-                (*opObj)[QStringLiteral("center")] = QJsonArray({qBound(0.0, cx, 1.0), qBound(0.0, cy, 1.0)});
+                (*opObj)[QStringLiteral("center")] = QJsonArray({qBound(-kMaxSafeCoordinate, cx, kMaxSafeCoordinate),
+                                                                 qBound(-kMaxSafeCoordinate, cy, kMaxSafeCoordinate)});
             } else {
                 (*opObj)[QStringLiteral("center")] = QJsonArray({0.5, 0.5});
                 if (report) ++report->coercedValues;
@@ -760,11 +774,13 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
                 qreal ew = 0.10, eh = 0.12;
                 coerceToNumber(sArr.at(0), &ew);
                 coerceToNumber(sArr.at(1), &eh);
-                (*opObj)[QStringLiteral("size")] = QJsonArray({qBound(0.01, ew, 0.50), qBound(0.01, eh, 0.50)});
+                (*opObj)[QStringLiteral("size")] =
+                    QJsonArray({qBound(0.0, ew, kMaxSafeCoordinate), qBound(0.0, eh, kMaxSafeCoordinate)});
             } else if (sVal.isDouble() || sVal.isString()) {
                 qreal esz = 0.10;
                 coerceToNumber(sVal, &esz);
-                (*opObj)[QStringLiteral("size")] = QJsonArray({qBound(0.01, esz, 0.50), qBound(0.01, esz * 1.2, 0.50)});
+                (*opObj)[QStringLiteral("size")] =
+                    QJsonArray({qBound(0.0, esz, kMaxSafeCoordinate), qBound(0.0, esz * 1.2, kMaxSafeCoordinate)});
             } else {
                 (*opObj)[QStringLiteral("size")] = QJsonArray({0.10, 0.12});
                 if (report) ++report->coercedValues;
@@ -779,6 +795,49 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
             (*opObj)[QStringLiteral("iris_color")] = opObj->value(QStringLiteral("color"));
             if (report) ++report->coercedValues;
         }
+    } else if (kindStr == QLatin1String("anime_mouth")) {
+        // スキーマ・システムプロンプトが推奨する kind。ここで落とすと LLM の口が
+        // 黙って消えるので、エイリアス正規化と座標クランプだけ行い parseProgramJson へ渡す。
+        if (!opObj->contains(QStringLiteral("center")) && opObj->contains(QStringLiteral("mouth_center"))) {
+            (*opObj)[QStringLiteral("center")] = opObj->value(QStringLiteral("mouth_center"));
+            if (report)
+                ++report->coercedValues;
+        }
+        if (opObj->contains(QStringLiteral("center"))) {
+            const QJsonValue cVal = opObj->value(QStringLiteral("center"));
+            QJsonArray cArr = cVal.toArray();
+            qreal cx = 0.0, cy = 0.0;
+            if (cArr.size() >= 2 && coerceToNumber(cArr.at(0), &cx) && coerceToNumber(cArr.at(1), &cy)) {
+                cArr[0] = qBound(-kMaxSafeCoordinate, cx, kMaxSafeCoordinate);
+                cArr[1] = qBound(-kMaxSafeCoordinate, cy, kMaxSafeCoordinate);
+                (*opObj)[QStringLiteral("center")] = cArr;
+            } else {
+                // 不正な型は削除し、parseProgramJson の既定値フォールバックに委ねる。
+                opObj->remove(QStringLiteral("center"));
+                if (report)
+                    ++report->coercedValues;
+            }
+        }
+        if (!opObj->contains(QStringLiteral("size")) && opObj->contains(QStringLiteral("mouth_size"))) {
+            (*opObj)[QStringLiteral("size")] = opObj->value(QStringLiteral("mouth_size"));
+            if (report)
+                ++report->coercedValues;
+        }
+        if (opObj->contains(QStringLiteral("size"))) {
+            const QJsonValue sVal = opObj->value(QStringLiteral("size"));
+            QJsonArray sArr = sVal.toArray();
+            qreal mw = 0.0, mh = 0.0;
+            if (sArr.size() >= 2 && coerceToNumber(sArr.at(0), &mw) && coerceToNumber(sArr.at(1), &mh)) {
+                sArr[0] = qBound(0.0, mw, kMaxSafeCoordinate);
+                sArr[1] = qBound(0.0, mh, kMaxSafeCoordinate);
+                (*opObj)[QStringLiteral("size")] = sArr;
+            } else {
+                opObj->remove(QStringLiteral("size"));
+                if (report)
+                    ++report->coercedValues;
+            }
+        }
+        // expression / lip_color / has_highlight は parseProgramJson 側で型強制される。
     } else {
         if (report) {
             ++report->typeErrors;

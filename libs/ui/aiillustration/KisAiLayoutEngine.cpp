@@ -1010,7 +1010,9 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::clothingForSpec(const KisAiScen
         clavicle.append(KisAiStrokePoint(hc.x() + side * neckW * 0.18, shoulderY + hh * 0.08, 0.20));
         clavicle.append(KisAiStrokePoint(hc.x() + side * shoulderW * 0.22, shoulderY + hh * 0.07, 0.65));
         clavicle.append(KisAiStrokePoint(hc.x() + side * shoulderW * 0.42, shoulderY + hh * 0.09, 0.25));
-        ops.append(makePath(side < 0 ? QStringLiteral("clavicle_l") : QStringLiteral("clavicle_r"),
+        // clothingForSpec の clavicle_l/r と ID が衝突すると、clipToId/パッチ/批評が
+        // 片側のジオメトリに誤って結び付く。下列であることを ID に含める。
+        ops.append(makePath(side < 0 ? QStringLiteral("clavicle_lower_l") : QStringLiteral("clavicle_lower_r"),
                             QStringLiteral("Lineart"),
                             clavicle,
                             darkerWarm(skin, 0.70),

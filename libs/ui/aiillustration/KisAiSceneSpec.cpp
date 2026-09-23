@@ -828,8 +828,10 @@ QJsonObject KisAiSceneSpecCodec::buildSceneSpecPayload(const QString &model,
                                                        const QString &referenceImageBase64)
 {
     // V6 W5: the Docker art-style combo finally reaches the Spec.
-    // Index 0 (General/Auto) leaves the style block untouched; 1..6 map
-    // onto the SceneSpec art_style vocabulary in combo order.
+    // The caller passes KisAiPromptAnalyzer::ArtStyle enum values (NOT combo
+    // indexes): General=0 leaves the style block untouched, 1..6 map onto the
+    // SceneSpec art_style vocabulary, PureLineart=7 has no vocabulary entry and
+    // intentionally stays empty.
     auto artStyleIdFor = [](int artStyle) -> QString {
         switch (artStyle) {
         case 1:
@@ -838,11 +840,11 @@ QJsonObject KisAiSceneSpecCodec::buildSceneSpecPayload(const QString &model,
             return QStringLiteral("watercolor");
         case 3:
             return QStringLiteral("impasto");
-        case 4:
-            return QStringLiteral("cyber_neon");
-        case 5:
+        case 4: // ArtStyle::InkSketch
             return QStringLiteral("ink_sketch");
-        case 6:
+        case 5: // ArtStyle::CyberNeon
+            return QStringLiteral("cyber_neon");
+        case 6: // ArtStyle::FineLineart
             return QStringLiteral("fine_line");
         default:
             return QString();

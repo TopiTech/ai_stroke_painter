@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: 2026 AI Stroke Painter contributors
 # SPDX-License-Identifier: GPL-2.0-or-later
 
+# ForEach-Object -Parallel (PS7+) を使うため明示的に要求する。
+# 5.1 では後段の実行時エラーで失敗するため、ここで即座に止める。
+#requires -Version 7.0
+
 <#
 .SYNOPSIS
     High-performance static type checking, syntax verification, and code quality analysis on AI Stroke Painter codebase.
@@ -182,6 +186,10 @@ if ($File) {
             if ($rawPath -match '->') {
                 $rawPath = ($rawPath -split '->')[-1].Trim()
             }
+            # git status --porcelain quotes paths containing spaces/non-ASCII.
+            if ($rawPath.Length -ge 2 -and $rawPath.StartsWith('"') -and $rawPath.EndsWith('"')) {
+                $rawPath = $rawPath.Substring(1, $rawPath.Length - 2)
+            }
             if ($rawPath) {
                 $absPath = Join-Path $repoRoot $rawPath
                 $changedPaths.Add($absPath) | Out-Null
@@ -295,6 +303,13 @@ if ($SyntaxOnly) {
         } else {
             Write-Host "  [WARN] No ninja target found for $leaf, skipping direct object compilation." -ForegroundColor Yellow
         }
+    }
+
+    if ($targets.Count -eq 0) {
+        # 対象が0だと後段の `ninja ... + $targets` が引数なし (= デフォルト全対象) に
+        # なって、宣称どおりの部分チェックではなくフルビルドを走らせてしまう。
+        Write-Host "==> [WARN] No compile targets resolved; nothing to check." -ForegroundColor Yellow
+        exit 0
     }
 
     Write-Host "==> Compiling $($targets.Count) object target(s) via ninja (-k 0)..." -ForegroundColor Cyan

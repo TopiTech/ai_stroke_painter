@@ -130,6 +130,10 @@ private Q_SLOTS:
     void testReferenceImagePayloadMultimodal();
     void testGoalModeAutonomousRefinementContinuation();
     void testFlagshipDirectivesAndTokenScaling();
+    void testParseResponseApiErrorWithoutErrorMessagePointer();
+    void testAnimeMouthSurvivesFullParsePipeline();
+    void testPixelCoordinatesNormalizeThroughFullPipeline();
+    void testSceneSpecArtStyleEnumMapping();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

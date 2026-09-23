@@ -66,8 +66,11 @@ dist/
 
 # Test output and log files
 test_*.txt
+*_test_out.txt
 *output.txt
 *.log
+Testing/
+tools/ai_quality_bench/benchmark_report.json
 
 # Environment and secrets
 .env
