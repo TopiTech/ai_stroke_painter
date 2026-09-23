@@ -1048,6 +1048,10 @@ QImage KisAiStrokeRenderer::renderOperationsToImage(const QVector<KisAiStrokeOpe
                                                     const QPainterPath &faceExclusionPath,
                                                     const QMap<QString, QPolygonF> &globalSilhouettes)
 {
+    if (canvasSize.width() <= 0 || canvasSize.height() <= 0 || operations.isEmpty()) {
+        return QImage();
+    }
+
     // D0: meaning-aware supersampling — faces/eyes deserve 3x on modest
     // canvases while plain backgrounds stay cheap. Memory-bounded.
     const int scale = KisAiDeliberateStroke::adaptiveSupersampleScale(operations, canvasSize);

@@ -645,10 +645,9 @@ void KisAiStartPageWidget::slotPasteFromClipboard()
         showCanvasNotification(i18n("クリップボードに画像がありません。"));
         return;
     }
-    auto *dlg = new KisDlgCreateNewDocument(this);
-    dlg->SelectPage(KisDlgCreateNewDocument::Page::CreateFromClipboard);
-    dlg->exec();
-    dlg->deleteLater();
+    KisDlgCreateNewDocument dlg(this);
+    dlg.SelectPage(KisDlgCreateNewDocument::Page::CreateFromClipboard);
+    dlg.exec();
 }
 
 void KisAiStartPageWidget::slotApplyPreset(int presetId)

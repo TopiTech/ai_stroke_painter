@@ -2545,7 +2545,8 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
                      QStringLiteral("symmetry warnings: %1").arg(symmetryWarnings.join(QStringLiteral(", "))));
             // In Quality or Max mode, apply symmetry and curvature stabilization
             if (KisAiModelRouter::qualityMode() != KisAiModelRouter::QualityMode::Fast) {
-                program.operations = KisAiDeliberateStroke::orderOperationsForRendering(program.operations);
+                program.operations =
+                    KisAiDeliberateStroke::orderOperationsForRendering(program.operations, program.canvasSize);
             }
         }
     }

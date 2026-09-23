@@ -69,8 +69,13 @@ void computeFrames(const QVector<StrokeSample> &samples,
     tangents.resize(n);
     normals.resize(n);
     // at(1) 参照を含むため 1点未満では接線計算不能 (paintStroke は n==0 のみ弾く)。
-    if (n < 2)
+    if (n < 2) {
+        if (n == 1) {
+            tangents[0] = QPointF(1.0, 0.0);
+            normals[0] = QPointF(0.0, 1.0);
+        }
         return;
+    }
     for (int i = 0; i < n; ++i) {
         QPointF t;
         if (closed && n > 2) {
@@ -185,6 +190,13 @@ QVector<StrokeSample> KisAiStrokeCoverageRaster::sampleStroke(const QVector<QPoi
     samples.reserve(segments * 12 + 2);
     const qreal flatnessPx = 0.15 * qMax(1, supersampleScale);
 
+    const auto safePressure = [&](int idx) -> qreal {
+        if (idx >= 0 && idx < pressures.size()) {
+            return pressures.at(idx);
+        }
+        return 0.8;
+    };
+
     for (int i = 0; i < segments; ++i) {
         QPointF p0, p1, p2, p3;
         qreal pr1, pr2;
@@ -192,15 +204,15 @@ QVector<StrokeSample> KisAiStrokeCoverageRaster::sampleStroke(const QVector<QPoi
         if (closed) {
             p0 = scaledPts.at((i - 1 + n) % n);
             p1 = scaledPts.at(i);
-            pr1 = pressures.at(i);
+            pr1 = safePressure(i);
             p2 = scaledPts.at((i + 1) % n);
-            pr2 = pressures.at((i + 1) % n);
+            pr2 = safePressure((i + 1) % n);
             p3 = scaledPts.at((i + 2) % n);
         } else {
             p1 = scaledPts.at(i);
-            pr1 = pressures.at(i);
+            pr1 = safePressure(i);
             p2 = scaledPts.at(i + 1);
-            pr2 = pressures.at(i + 1);
+            pr2 = safePressure(i + 1);
             p0 = (i > 0) ? scaledPts.at(i - 1) : (p1 + (p1 - p2));
             p3 = (i + 2 < n) ? scaledPts.at(i + 2) : (p2 + (p2 - p1));
         }
@@ -273,7 +285,7 @@ QVector<StrokeSample> KisAiStrokeCoverageRaster::sampleStroke(const QVector<QPoi
         const qreal endTaper = KisAiStrokeQualityUtils::calculateTaper(1.0, brush.profile, false);
         samples.append({scaledPts.last(),
                         KisAiStrokeQualityUtils::effectiveWidthPx(brush,
-                                                                  pressures.last() * endTaper,
+                                                                  safePressure(n - 1) * endTaper,
                                                                   workingSize,
                                                                   supersampleScale)});
     }
@@ -344,7 +356,7 @@ void KisAiStrokeCoverageRaster::paintStroke(QPainter &painter,
                                             int supersampleScale)
 {
     const int n = samples.size();
-    if (n == 0 || color.alpha() <= 0) {
+    if (n == 0 || color.alpha() <= 0 || workingSize.width() <= 0 || workingSize.height() <= 0) {
         return;
     }
 

@@ -23,6 +23,9 @@ private Q_SLOTS:
     void testFineLineNoJoinBeading();
     void testRibbonSelfOverlapNoBuildup();
     void testCornerPoolNoBeading();
+    void testSampleStrokeMismatchedPressures();
+    void testPaintStrokeDegenerateSize();
+    void testSingleSampleFrameComputation();
 };
 
 #endif // KIS_AI_COVERAGE_RASTER_TEST_H

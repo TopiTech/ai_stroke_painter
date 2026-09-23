@@ -1810,7 +1810,11 @@ void KisMainWindow::dragMove(QDragMoveEvent * event)
     }
 
     if (tabBar && tabBar->isVisible()) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 0, 0)
+        QPoint pos = tabBar->mapFromGlobal(mapToGlobal(event->position().toPoint()));
+#else
         QPoint pos = tabBar->mapFromGlobal(mapToGlobal(event->pos()));
+#endif
         if (tabBar->rect().contains(pos)) {
             const int tabIndex = tabBar->tabAt(pos);
 

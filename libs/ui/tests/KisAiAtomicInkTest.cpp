@@ -493,4 +493,34 @@ void KisAiAtomicInkTest::testPhysicalPathUsesCommitter()
              "physical path must stay atomic");
 }
 
+void KisAiAtomicInkTest::testOrderOperationsForRenderingDefaultCanvasSize()
+{
+    KisAiStrokeOperation op1;
+    op1.id = QStringLiteral("bg_fill");
+    op1.layer = QStringLiteral("Background");
+    op1.kind = KisAiStrokeOperation::Kind::Fill;
+    op1.polygon = {QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)};
+
+    KisAiStrokeOperation op2;
+    op2.id = QStringLiteral("eye_iris");
+    op2.layer = QStringLiteral("Lineart");
+    op2.kind = KisAiStrokeOperation::Kind::Path;
+    op2.points = {KisAiStrokePoint(0.4, 0.4), KisAiStrokePoint(0.6, 0.6)};
+
+    QVector<KisAiStrokeOperation> ops = {op2, op1};
+
+    // Test calling with 1 argument (using default canvasSize)
+    const QVector<KisAiStrokeOperation> orderedDefault =
+        KisAiDeliberateStroke::orderOperationsForRendering(ops);
+    QCOMPARE(orderedDefault.size(), 2);
+
+    // Test calling with 2 arguments (explicit canvasSize)
+    const QVector<KisAiStrokeOperation> orderedExplicit =
+        KisAiDeliberateStroke::orderOperationsForRendering(ops, QSize(512, 512));
+    QCOMPARE(orderedExplicit.size(), 2);
+    // Background mass must come before facial detail
+    QCOMPARE(orderedExplicit.first().id, QStringLiteral("bg_fill"));
+    QCOMPARE(orderedExplicit.last().id, QStringLiteral("eye_iris"));
+}
+
 KISTEST_MAIN(KisAiAtomicInkTest)

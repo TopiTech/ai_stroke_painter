@@ -118,7 +118,7 @@ public:
     /** Sorted copy helper used directly by the renderer buckets. */
     static QVector<KisAiStrokeOperation> orderOperationsForRendering(
         const QVector<KisAiStrokeOperation> &ops,
-        const QSize &canvasSize);
+        const QSize &canvasSize = QSize(1024, 1024));
 
     /** Face-detail ids are painted last (eyes, brows, mouth, nose...). */
     static bool isFaceDetail(const QString &id);

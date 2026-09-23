@@ -65,7 +65,7 @@ int maxAlpha(const QImage &img)
     return m;
 }
 
-int alphaAt(const QImage &img, const QPointF &pt)
+[[maybe_unused]] int alphaAt(const QImage &img, const QPointF &pt)
 {
     const int x = qBound(0, qRound(pt.x()), img.width() - 1);
     const int y = qBound(0, qRound(pt.y()), img.height() - 1);
@@ -347,6 +347,50 @@ void KisAiCoverageRasterTest::testCornerPoolNoBeading()
     QVERIFY(!img.isNull());
     const int m = maxAlpha(img);
     QVERIFY2(m <= 140, qPrintable(QStringLiteral("corner-pool max alpha=%1 (fillet stacking)").arg(m)));
+}
+
+void KisAiCoverageRasterTest::testSampleStrokeMismatchedPressures()
+{
+    // If pressures is empty or shorter than scaledPts, sampleStroke must safely fallback without out-of-bounds crash
+    const QVector<QPointF> scaledPts = {QPointF(10.0, 10.0), QPointF(50.0, 30.0), QPointF(100.0, 80.0)};
+    const QVector<qreal> emptyPressures;
+    KisAiStrokeBrush brush;
+    brush.size = 8.0;
+    brush.sizeMode = QStringLiteral("px");
+
+    const QVector<KisAiStrokeCoverageRaster::StrokeSample> samples =
+        KisAiStrokeCoverageRaster::sampleStroke(scaledPts, emptyPressures, false, true, brush, QSize(256, 256), 1);
+    QVERIFY(!samples.isEmpty());
+    for (const auto &s : samples) {
+        QVERIFY(s.width > 0.0);
+    }
+}
+
+void KisAiCoverageRasterTest::testPaintStrokeDegenerateSize()
+{
+    // paintStroke must safely reject degenerate or non-positive workingSize without crash or allocation
+    QImage canvas(100, 100, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+    QPainter painter(&canvas);
+
+    const QVector<KisAiStrokeCoverageRaster::StrokeSample> samples = {
+        {QPointF(10.0, 10.0), 4.0},
+        {QPointF(20.0, 20.0), 4.0}
+    };
+    KisAiStrokeBrush brush;
+    KisAiStrokeCoverageRaster::StrokeTexture texture;
+    // Should early return and not crash
+    KisAiStrokeCoverageRaster::paintStroke(painter, samples, false, brush, texture, QColor(0, 0, 0), QSize(0, 0), 1);
+    KisAiStrokeCoverageRaster::paintStroke(painter, samples, false, brush, texture, QColor(0, 0, 0), QSize(-10, -10), 1);
+}
+
+void KisAiCoverageRasterTest::testSingleSampleFrameComputation()
+{
+    // Rendering a profile that uses computeFrames on 1 point must not crash or leave uninitialized normals
+    const QVector<KisAiStrokePoint> singlePt = {KisAiStrokePoint(0.5, 0.5, 0.8)};
+    const QImage img = renderOp(pathOp(QStringLiteral("pencil_dot"), QStringLiteral("pencil"), singlePt, 1.0, false, 0.05));
+    // Since it has only 1 point, lintStroke drops it or it renders safely
+    QCOMPARE(img.size(), QSize(kCanvas, kCanvas));
 }
 
 KISTEST_MAIN(KisAiCoverageRasterTest)
