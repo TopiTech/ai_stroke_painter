@@ -1060,7 +1060,7 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
     payload[QStringLiteral("model")] = model.trimmed();
     payload[QStringLiteral("messages")] = messages;
     if (seed >= 0) {
-        payload[QStringLiteral("seed")] = seed;
+        payload[QStringLiteral("seed")] = static_cast<qint64>(seed & 0x7FFFFFFF);
     }
 
     if (enableStreaming) {
@@ -5373,7 +5373,8 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
                                                           bool forceJsonObjectOnly,
                                                           bool isRefinementExtraStep,
                                                           qreal targetReadiness,
-                                                          const QString &referenceImageBase64)
+                                                          const QString &referenceImageBase64,
+                                                          qint64 seed)
 {
     const bool reasoning = isReasoningModel(model);
     const bool vision = includeVision && isVisionModel(model)
@@ -5572,7 +5573,10 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
     QJsonObject payload;
     payload[QStringLiteral("model")] = model.trimmed();
     payload[QStringLiteral("messages")] = messages;
-    payload[QStringLiteral("seed")] = static_cast<qint64>(stableSeed(prompt.simplified()));
+    const qint64 effectiveSeed = (seed >= 0)
+        ? static_cast<qint64>(seed & 0x7FFFFFFF)
+        : static_cast<qint64>(stableSeed(prompt.simplified()) & 0x7FFFFFFFU);
+    payload[QStringLiteral("seed")] = effectiveSeed;
 
     if (enableStreaming) {
         payload[QStringLiteral("stream")] = true;

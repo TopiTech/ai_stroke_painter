@@ -913,7 +913,7 @@ QJsonObject KisAiSceneSpecCodec::buildSceneSpecPayload(const QString &model,
     QJsonObject payload;
     payload.insert(QStringLiteral("model"), model.trimmed());
     if (seed >= 0) {
-        payload.insert(QStringLiteral("seed"), seed);
+        payload.insert(QStringLiteral("seed"), static_cast<qint64>(seed & 0x7FFFFFFF));
     }
 
     QJsonArray messages;

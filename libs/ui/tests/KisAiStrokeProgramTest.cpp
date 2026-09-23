@@ -964,6 +964,86 @@ void KisAiStrokeProgramTest::testGoalModePayloadAndVisionModelDetection()
         }
     }
     QCOMPARE(imageCount, 2);
+
+    // 6. Gemini TYPE_INT32 compatibility: seed must be non-negative and <= 2147483647 (INT32_MAX)
+    const qint64 seedVal = textPayload.value(QStringLiteral("seed")).toInteger();
+    QVERIFY(seedVal >= 0);
+    QVERIFY(seedVal <= 2147483647LL);
+
+    // Verify explicit overflow seed (e.g. 2743118948LL) is masked into valid INT32
+    const QJsonObject overflowSeedGoalPayload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("test prompt"),
+        canvasSize,
+        1,
+        4,
+        QString(),
+        QString(),
+        400,
+        QString(),
+        false,
+        false,
+        false,
+        0.5,
+        1.0,
+        0,
+        0,
+        nullptr,
+        QString(),
+        QStringLiteral("auto"),
+        false,
+        false,
+        0.85,
+        QString(),
+        2743118948LL
+    );
+    const qint64 goalOverflowSeed = overflowSeedGoalPayload.value(QStringLiteral("seed")).toInteger();
+    QVERIFY(goalOverflowSeed >= 0);
+    QVERIFY(goalOverflowSeed <= 2147483647LL);
+    QCOMPARE(goalOverflowSeed, 2743118948LL & 0x7FFFFFFF);
+
+    const QJsonObject chatOverflowPayload = KisAiStrokeProgramCodec::buildChatCompletionsPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("test prompt"),
+        canvasSize,
+        500,
+        QString(),
+        QString(),
+        true,
+        false,
+        0.7,
+        1.0,
+        0,
+        0,
+        false,
+        QString(),
+        2743118948LL
+    );
+    const qint64 chatOverflowSeed = chatOverflowPayload.value(QStringLiteral("seed")).toInteger();
+    QVERIFY(chatOverflowSeed >= 0);
+    QVERIFY(chatOverflowSeed <= 2147483647LL);
+    QCOMPARE(chatOverflowSeed, 2743118948LL & 0x7FFFFFFF);
+
+    const QJsonObject sceneOverflowPayload = KisAiSceneSpecCodec::buildSceneSpecPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("test prompt"),
+        canvasSize,
+        0,
+        QString(),
+        QString(),
+        true,
+        true,
+        0.5,
+        1.0,
+        0,
+        false,
+        QString(),
+        2743118948LL
+    );
+    const qint64 sceneOverflowSeed = sceneOverflowPayload.value(QStringLiteral("seed")).toInteger();
+    QVERIFY(sceneOverflowSeed >= 0);
+    QVERIFY(sceneOverflowSeed <= 2147483647LL);
+    QCOMPARE(sceneOverflowSeed, 2743118948LL & 0x7FFFFFFF);
 }
 
 void KisAiStrokeProgramTest::testGoalModeProgramStepAndMerge()

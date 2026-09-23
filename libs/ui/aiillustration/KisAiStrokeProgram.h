@@ -417,7 +417,8 @@ public:
                                             bool forceJsonObjectOnly = false,
                                             bool isRefinementExtraStep = false,
                                             qreal targetReadiness = 0.85,
-                                            const QString &referenceImageBase64 = QString());
+                                            const QString &referenceImageBase64 = QString(),
+                                            qint64 seed = -1);
 
     /**
      * Parse SSE (Server-Sent Events) chunks into accumulated text content.
