@@ -134,6 +134,7 @@ private Q_SLOTS:
     void testAnimeMouthSurvivesFullParsePipeline();
     void testPixelCoordinatesNormalizeThroughFullPipeline();
     void testSceneSpecArtStyleEnumMapping();
+    void testMacroPrimitivesExpansion();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

@@ -248,7 +248,8 @@ public:
         qreal topP = 1.0,
         int maxTokensOverride = 0,
         bool forceJsonObjectOnly = false,
-        const QString &referenceImageBase64 = QString()
+        const QString &referenceImageBase64 = QString(),
+        qint64 seed = -1
     );
 
     /**

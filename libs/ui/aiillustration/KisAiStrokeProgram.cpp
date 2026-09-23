@@ -9,6 +9,8 @@
 #include "KisAiPromptAnalyzer.h"
 #include "KisAiSceneSpec.h"
 #include "KisAiStrokeTypeChecker.h"
+#include "KisAiStrokeQualityUtils.h"
+#include "KisAiRigLibrary.h"
 
 
 QString KisAiJsonDiagnostic::formatForLog() const
@@ -532,21 +534,18 @@ QString KisAiStrokeProgramCodec::buildDrawingWorkflowSection()
 {
     return QStringLiteral(
         "=== MASTER DRAWING WORKFLOW (MANDATORY) ===\n"
-        "Direct your drawing like a master digital painter:\n"
-        "1. Composition & Dynamic Staging: Fully embrace the user's prompt! Capture the requested camera angle, pose, "
-        "expression, and mood with freedom. Never default to a stiff passport bust if the prompt suggests action, "
-        "atmosphere, or unique character.\n"
-        "2. Sculpting 3D Volumes: Avoid flat 'coloring book' fills! Visualize the subject as 3-dimensional volumes in "
-        "space. Use gradient washes and directional tone transitions so forms feel rounded, alive, and sculpted by "
-        "light.\n"
-        "3. Multi-Tier Shading: Pair soft form shadows with sharp cast shadows. Warm illuminated surfaces must "
-        "transition through subtle subsurface warmth into cool ambient shadows.\n"
-        "4. Deliberate Inking (Line by Line): Draw lines with exquisite precision and varied line weight. Main "
-        "contours use bold confident strokes (0.003-0.005), while facial features, eyes, and hair tips use delicate "
-        "micro-lines (0.0015-0.0025) with tapered pressure.\n"
-        "5. Silent Pre-Audit: Before returning JSON, silently audit: full canvas coverage, dynamic recognizable "
-        "silhouette, accurate layer registration, genuine 3D depth, harmonious palette, and rich line craftsmanship. "
-        "Fix failures in the final JSON.");
+        "Direct your drawing like a master digital illustrator with artistic autonomy. "
+        "Silently audit the target composition, gesture dynamics, and focal hierarchy before laying down strokes:\n"
+        "1. Dynamic Staging & Cinematic Framing: Never lock into a stiff, centered passport-photo bust! "
+        "Embrace expressive camera angles (subtle dramatic tilt, 3/4 dynamic view, high/low angle, rule of thirds offset). "
+        "Incorporate organic gestures (hand touching face, hair fluttering in wind, dynamic shoulder lean).\n"
+        "2. Sculpting 3D Form Masses: Establish confident, continuous anatomical silhouettes on 'Flats' (skin, sweeping hair masses, clothing folds). "
+        "Assign clean IDs ('face_skin', 'body_base', 'hair_back', 'hair_bangs') to enable strict silhouette clipping (clip_to_id).\n"
+        "3. Multi-Tier Shading Depth (Multiply blend): Pair soft curvature form shadows (wash/directional) with crisp occlusion cast shadows "
+        "under hair fringe, chin, and drapery seams. Let shadows breathe with warm peach/coral subsurface scattering (SSS) transitions.\n"
+        "4. Exquisite Deliberate Inking: Inscribe lineart with organic calligraphic weight hierarchy! Outer structural contours use bold strokes (0.0035-0.0055), "
+        "while facial features (eyelashes, double eyelids, lip creases) and tapered hair tips use delicate micro-lines (0.0015-0.0025).\n"
+        "5. Vital Highlights & Specular Luminescence: Finish with radiant catchlights in pupils, hair halo luster (screen/color_dodge blend), and rim lighting accents.");
 }
 
 QString KisAiStrokeProgramCodec::buildArtisticGuidelinesSection()
@@ -609,6 +608,14 @@ QString KisAiStrokeProgramCodec::buildOperationKindsSection()
         "- 'particles': Atmospheric particles (ONLY when theme calls for it: petals, stars, embers). Bounds [x1, y1, "
         "x2, y2], count (8-24), shape ('petal'/'sparkle'/'star'/'dot').\n"
         "- 'manga_lines': Dynamic focus/speed lines. center [cx, cy], inner_radius, outer_radius, density (16-64).\n"
+        "- 'hair_flow_cluster': Flowing hair ribbon cluster with automated multi-strand synthesis. spine [ [x, y], ... ], "
+        "brush { 'color': '#hex' }, width_start, width_mid, width_end. Synthesizes main mass, parallel flowing strands, and tapered flyaways.\n"
+        "- 'cloth_drapery': Natural cloth tension folds and drapery. origin [x0, y0], target [x1, y1], brush { 'color': '#hex' }, "
+        "width (1.0-3.0). Synthesizes delicate lineart crease curves and soft shadow fold washes.\n"
+        "- 'hand_gesture': Expressive anime hand assembly. center [cx, cy], size [w, h], gesture "
+        "('reach'/'peace'/'open_palm'/'fist'/'touch_face'), brush { 'color': '#hex' }. Synthesizes anatomical palm planes, delicate finger lineart, and cast shadows.\n"
+        "- 'dynamic_pose': Cinematic gesture dynamics and speed/air flow lines. center [cx, cy], "
+        "pose ('dynamic_lean'/'action'/'floating'/'contrapposto'), brush { 'color': '#hex' }.\n"
         "- 'clip_to_id': Assign to any operation (e.g. shadow or highlight) to strictly clip its rasterization to the "
         "silhouette of a base part (e.g. clip_to_id: 'face_skin').\n"
         "- 'blend_mode': 'color_dodge' for vivid specular luminescence, 'multiply' for true shadows, 'screen' for soft "
@@ -696,6 +703,221 @@ QString KisAiStrokeProgramCodec::buildFlagshipDirectives()
         "   - Consistently specify 'clip_to_id' referencing base silhouette operations so shadows and highlights never bleed outside the target subject.");
 }
 
+QVector<KisAiStrokeOperation> KisAiStrokeProgramCodec::expandMacroOperation(const QJsonObject &o,
+                                                                          const QSize &canvasSize)
+{
+    QVector<KisAiStrokeOperation> ops;
+    const QString kindStr = o.value(QStringLiteral("kind")).toString().trimmed().toLower();
+    const QString idStr = o.value(QStringLiteral("id")).toString().trimmed();
+    const QString baseId = idStr.isEmpty() ? QStringLiteral("macro") : idStr;
+    const qreal canvasW = canvasSize.isValid() && canvasSize.width() > 0 ? canvasSize.width() : 1024.0;
+    const qreal canvasH = canvasSize.isValid() && canvasSize.height() > 0 ? canvasSize.height() : 1024.0;
+
+    auto parseCol = [](const QString &str, const QColor &fallback) -> QColor {
+        if (str.trimmed().isEmpty()) return fallback;
+        QColor c(str.trimmed());
+        return c.isValid() ? c : fallback;
+    };
+
+    auto parsePt = [canvasW, canvasH](const QJsonValue &pv) -> QPointF {
+        if (pv.isArray()) {
+            const QJsonArray arr = pv.toArray();
+            if (arr.size() >= 2) {
+                qreal x = arr.at(0).toDouble();
+                qreal y = arr.at(1).toDouble();
+                if (qMax(qAbs(x), qAbs(y)) > 2.0) {
+                    x /= canvasW;
+                    y /= canvasH;
+                }
+                return QPointF(qBound(0.0, x, 1.0), qBound(0.0, y, 1.0));
+            }
+        } else if (pv.isObject()) {
+            const QJsonObject obj = pv.toObject();
+            qreal x = obj.value(QStringLiteral("x")).toDouble();
+            qreal y = obj.value(QStringLiteral("y")).toDouble();
+            if (qMax(qAbs(x), qAbs(y)) > 2.0) {
+                x /= canvasW;
+                y /= canvasH;
+            }
+            return QPointF(qBound(0.0, x, 1.0), qBound(0.0, y, 1.0));
+        }
+        return QPointF(0.5, 0.5);
+    };
+
+    // 1. CLOTH DRAPERY
+    if (kindStr.contains(QLatin1String("drapery")) || kindStr.contains(QLatin1String("fold"))) {
+        const QPointF origin = parsePt(o.value(QStringLiteral("origin")));
+        const QPointF target = parsePt(o.value(QStringLiteral("target")));
+        const QJsonObject brushObj = o.value(QStringLiteral("brush")).toObject();
+        const QColor clothColor = parseCol(brushObj.value(QStringLiteral("color")).toString(), QColor(50, 60, 80));
+        const QColor shadowColor = calculateHueShiftedShadow(clothColor, true);
+        const qreal width = qBound<qreal>(1.0, o.value(QStringLiteral("width")).toDouble(2.0), 5.0);
+        return KisAiRigLibrary::draperyFoldOps(origin, target, width, clothColor, shadowColor, baseId);
+    }
+
+    // 2. HAIR FLOW CLUSTER
+    if (kindStr.contains(QLatin1String("hair_flow")) || kindStr.contains(QLatin1String("hair_cluster"))) {
+        const QJsonObject brushObj = o.value(QStringLiteral("brush")).toObject();
+        const QColor hairColor = parseCol(brushObj.value(QStringLiteral("color")).toString(), QColor(43, 58, 103));
+        const QColor inkColor = parseCol(QStringLiteral("#232328"), QColor(35, 35, 40));
+
+        QVector<QPointF> spinePts;
+        const QJsonArray spineArr = o.value(QStringLiteral("spine")).toArray();
+        for (const auto &sp : spineArr) {
+            spinePts.append(parsePt(sp));
+        }
+        if (spinePts.size() < 2) {
+            const QJsonArray ptsArr = o.value(QStringLiteral("points")).toArray();
+            for (const auto &sp : ptsArr) {
+                spinePts.append(parsePt(sp));
+            }
+        }
+        if (spinePts.size() < 2) {
+            const QPointF c = parsePt(o.value(QStringLiteral("center")));
+            spinePts.append(QPointF(c.x() - 0.05, c.y() - 0.10));
+            spinePts.append(QPointF(c.x(), c.y()));
+            spinePts.append(QPointF(c.x() + 0.04, c.y() + 0.12));
+        }
+
+        // Main Ribbon mass
+        KisAiStrokeOperation mainMass;
+        mainMass.kind = KisAiStrokeOperation::Kind::Ribbon;
+        mainMass.id = baseId + QStringLiteral("_main");
+        mainMass.layer = QStringLiteral("Flats");
+        mainMass.brush.profile = QStringLiteral("hair");
+        mainMass.brush.color = hairColor;
+        mainMass.spine = spinePts;
+        mainMass.widthStart = qBound(0.005, o.value(QStringLiteral("width_start")).toDouble(0.028), 0.08);
+        mainMass.widthMid = qBound(0.004, o.value(QStringLiteral("width_mid")).toDouble(0.018), 0.06);
+        mainMass.widthEnd = qBound(0.002, o.value(QStringLiteral("width_end")).toDouble(0.005), 0.03);
+        ops.append(mainMass);
+
+        // Side flowing lineart strokes
+        for (int side = -1; side <= 1; side += 2) {
+            KisAiStrokeOperation strand;
+            strand.kind = KisAiStrokeOperation::Kind::Path;
+            strand.id = QStringLiteral("%1_strand_%2").arg(baseId, side < 0 ? QStringLiteral("l") : QStringLiteral("r"));
+            strand.layer = QStringLiteral("Lineart");
+            strand.brush.profile = QStringLiteral("gpen");
+            strand.brush.color = inkColor;
+            strand.brush.size = 0.0025;
+            for (int i = 0; i < spinePts.size(); ++i) {
+                const qreal t = qreal(i) / qreal(qMax(1, spinePts.size() - 1));
+                const qreal offset = side * (0.006 * (1.0 - t * 0.5));
+                const qreal pressure = (i == 0 || i == spinePts.size() - 1) ? 0.3 : 0.8;
+                strand.points.append(KisAiStrokePoint(spinePts[i].x() + offset, spinePts[i].y(), pressure));
+            }
+            ops.append(strand);
+        }
+
+        // Specular highlight band
+        if (spinePts.size() >= 3) {
+            KisAiStrokeOperation halo;
+            halo.kind = KisAiStrokeOperation::Kind::Path;
+            halo.id = baseId + QStringLiteral("_halo");
+            halo.layer = QStringLiteral("Highlights");
+            halo.brush.profile = QStringLiteral("airbrush");
+            halo.brush.color = QColor(255, 255, 255, 180);
+            halo.brush.size = 0.006;
+            const int midIdx = spinePts.size() / 2;
+            halo.points.append(KisAiStrokePoint(spinePts[qMax(0, midIdx - 1)].x(), spinePts[qMax(0, midIdx - 1)].y(), 0.3));
+            halo.points.append(KisAiStrokePoint(spinePts[midIdx].x(), spinePts[midIdx].y(), 0.9));
+            halo.points.append(KisAiStrokePoint(spinePts[qMin(spinePts.size() - 1, midIdx + 1)].x(), spinePts[qMin(spinePts.size() - 1, midIdx + 1)].y(), 0.3));
+            ops.append(halo);
+        }
+        return ops;
+    }
+
+    // 3. HAND GESTURE
+    if (kindStr.contains(QLatin1String("hand")) || kindStr.contains(QLatin1String("gesture"))) {
+        const QPointF center = parsePt(o.value(QStringLiteral("center")));
+        const QJsonArray szArr = o.value(QStringLiteral("size")).toArray();
+        const qreal w = szArr.size() >= 1 ? qBound(0.03, szArr.at(0).toDouble(0.08), 0.25) : 0.08;
+        const qreal h = szArr.size() >= 2 ? qBound(0.03, szArr.at(1).toDouble(0.10), 0.25) : 0.10;
+        const QString gesture = o.value(QStringLiteral("gesture")).toString(QStringLiteral("reach")).toLower();
+        const QJsonObject brushObj = o.value(QStringLiteral("brush")).toObject();
+        const QColor skinColor = parseCol(brushObj.value(QStringLiteral("color")).toString(), QColor(255, 224, 192));
+        const QColor inkColor = parseCol(QStringLiteral("#4a3728"), QColor(74, 55, 40));
+
+        // Palm base fill
+        QPolygonF palm;
+        palm.append(QPointF(center.x() - w * 0.40, center.y() - h * 0.20));
+        palm.append(QPointF(center.x() + w * 0.40, center.y() - h * 0.20));
+        palm.append(QPointF(center.x() + w * 0.35, center.y() + h * 0.30));
+        palm.append(QPointF(center.x() - w * 0.35, center.y() + h * 0.30));
+        KisAiStrokeOperation palmFill;
+        palmFill.kind = KisAiStrokeOperation::Kind::Fill;
+        palmFill.id = baseId + QStringLiteral("_palm");
+        palmFill.layer = QStringLiteral("Flats");
+        palmFill.polygon = palm;
+        palmFill.brush.color = skinColor;
+        palmFill.brush.profile = QStringLiteral("brush");
+        ops.append(palmFill);
+
+        // 4 Finger strokes (reach / open / peace gesture lines)
+        for (int f = 0; f < 4; ++f) {
+            KisAiStrokeOperation finger;
+            finger.kind = KisAiStrokeOperation::Kind::Path;
+            finger.id = QStringLiteral("%1_finger_%2").arg(baseId).arg(f);
+            finger.layer = QStringLiteral("Lineart");
+            finger.brush.profile = QStringLiteral("gpen");
+            finger.brush.color = inkColor;
+            finger.brush.size = 0.0028;
+
+            const qreal fx = center.x() - w * 0.30 + f * (w * 0.20);
+            const qreal fy = center.y() - h * 0.20;
+            const qreal fingerLen = (f == 1 || f == 2) ? h * 0.50 : h * 0.40;
+            const qreal spread = (gesture == QLatin1String("peace") && f >= 2) ? 0.3 : 1.0;
+
+            finger.points.append(KisAiStrokePoint(fx, fy, 0.7));
+            finger.points.append(KisAiStrokePoint(fx + (fx - center.x()) * 0.3 * spread, fy - fingerLen * 0.55, 0.8));
+            finger.points.append(KisAiStrokePoint(fx + (fx - center.x()) * 0.45 * spread, fy - fingerLen, 0.3));
+            ops.append(finger);
+        }
+
+        // Thumb stroke
+        KisAiStrokeOperation thumb;
+        thumb.kind = KisAiStrokeOperation::Kind::Path;
+        thumb.id = baseId + QStringLiteral("_thumb");
+        thumb.layer = QStringLiteral("Lineart");
+        thumb.brush.profile = QStringLiteral("gpen");
+        thumb.brush.color = inkColor;
+        thumb.brush.size = 0.0028;
+        thumb.points.append(KisAiStrokePoint(center.x() - w * 0.38, center.y() + h * 0.05, 0.6));
+        thumb.points.append(KisAiStrokePoint(center.x() - w * 0.55, center.y() - h * 0.08, 0.7));
+        thumb.points.append(KisAiStrokePoint(center.x() - w * 0.50, center.y() - h * 0.22, 0.3));
+        ops.append(thumb);
+
+        return ops;
+    }
+
+    // 4. DYNAMIC POSE (Cinematic gesture / airflow lines)
+    if (kindStr.contains(QLatin1String("dynamic_pose")) || kindStr.contains(QLatin1String("flow_line"))) {
+        const QPointF center = parsePt(o.value(QStringLiteral("center")));
+        const QJsonObject brushObj = o.value(QStringLiteral("brush")).toObject();
+        const QColor flowColor = parseCol(brushObj.value(QStringLiteral("color")).toString(), QColor(255, 255, 255, 200));
+
+        for (int l = 0; l < 3; ++l) {
+            KisAiStrokeOperation flow;
+            flow.kind = KisAiStrokeOperation::Kind::Path;
+            flow.id = QStringLiteral("%1_flow_%2").arg(baseId).arg(l);
+            flow.layer = QStringLiteral("FX");
+            flow.brush.profile = QStringLiteral("airbrush");
+            flow.brush.color = flowColor;
+            flow.brush.size = 0.0035;
+
+            const qreal offY = (l - 1) * 0.06;
+            flow.points.append(KisAiStrokePoint(center.x() - 0.25, center.y() + offY - 0.05, 0.2));
+            flow.points.append(KisAiStrokePoint(center.x(), center.y() + offY, 0.7));
+            flow.points.append(KisAiStrokePoint(center.x() + 0.25, center.y() + offY + 0.05, 0.1));
+            ops.append(flow);
+        }
+        return ops;
+    }
+
+    return ops;
+}
+
 QString KisAiStrokeProgramCodec::buildSystemPrompt(const QSize &canvasSize,
                                                    const QString &prompt,
                                                    const QString &customInstructions,
@@ -757,7 +979,8 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
                                                                   int maxTokensOverride,
                                                                   int artStyle,
                                                                   bool forceJsonObjectOnly,
-                                                                  const QString &referenceImageBase64)
+                                                                  const QString &referenceImageBase64,
+                                                                  qint64 seed)
 {
     const bool reasoning = isReasoningModel(model);
     const bool advancedStroke = KisAiModelRouter::shouldUseAdvancedStrokeLogic(model, KisAiModelRouter::qualityMode());
@@ -836,7 +1059,9 @@ QJsonObject KisAiStrokeProgramCodec::buildChatCompletionsPayload(const QString &
     QJsonObject payload;
     payload[QStringLiteral("model")] = model.trimmed();
     payload[QStringLiteral("messages")] = messages;
-    payload[QStringLiteral("seed")] = static_cast<qint64>(stableSeed(prompt.simplified()));
+    if (seed >= 0) {
+        payload[QStringLiteral("seed")] = seed;
+    }
 
     if (enableStreaming) {
         payload[QStringLiteral("stream")] = true;
@@ -3357,6 +3582,11 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
 
             if (op.kind != KisAiStrokeOperation::Kind::Unknown) {
                 outProgram->operations.append(op);
+            } else {
+                const QVector<KisAiStrokeOperation> macroOps = expandMacroOperation(o, outProgram->canvasSize);
+                if (!macroOps.isEmpty()) {
+                    outProgram->operations.append(macroOps);
+                }
             }
         }
     }

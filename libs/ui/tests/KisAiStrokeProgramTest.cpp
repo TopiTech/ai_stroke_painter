@@ -4817,6 +4817,85 @@ void KisAiStrokeProgramTest::testFlagshipDirectivesAndTokenScaling()
     KisAiModelRouter::setForceAdvancedStrokeLogic(prevForce);
 }
 
+void KisAiStrokeProgramTest::testMacroPrimitivesExpansion()
+{
+    // Test that high-level macro primitives (cloth_drapery, hair_flow_cluster, hand_gesture, dynamic_pose)
+    // are automatically expanded into atomic procedural operations during parseResponse.
+    const QString jsonStr = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"prompt\": \"Action anime hero with flowing hair and dynamic drapery\",\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"cloth_drapery\",\n"
+        "      \"id\": \"cape_folds\",\n"
+        "      \"origin\": [0.35, 0.45],\n"
+        "      \"target\": [0.55, 0.65],\n"
+        "      \"brush\": { \"color\": \"#c83232\" },\n"
+        "      \"width\": 2.0\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"hair_flow_cluster\",\n"
+        "      \"id\": \"hero_bangs\",\n"
+        "      \"spine\": [[0.40, 0.20], [0.45, 0.32], [0.52, 0.42]],\n"
+        "      \"brush\": { \"color\": \"#2b3a67\" },\n"
+        "      \"width_start\": 0.03,\n"
+        "      \"width_mid\": 0.02,\n"
+        "      \"width_end\": 0.005\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"hand_gesture\",\n"
+        "      \"id\": \"reach_hand\",\n"
+        "      \"center\": [0.70, 0.55],\n"
+        "      \"size\": [0.08, 0.10],\n"
+        "      \"gesture\": \"reach\",\n"
+        "      \"brush\": { \"color\": \"#ffe0c0\" }\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"dynamic_pose\",\n"
+        "      \"id\": \"action_burst\",\n"
+        "      \"center\": [0.50, 0.50],\n"
+        "      \"pose\": \"action\",\n"
+        "      \"brush\": { \"color\": \"#ffffff\" }\n"
+        "    }\n"
+        "  ]\n"
+        "}");
+
+    KisAiStrokeProgram program;
+    QString error;
+    KisAiJsonDiagnostic diag;
+    KisAiStrokeQualityReport report;
+    const bool parsed = KisAiStrokeProgramCodec::parseResponse(jsonStr.toUtf8(), &program, &error, &diag, &report);
+    QVERIFY2(parsed, qPrintable(error));
+    QVERIFY(program.operations.size() >= 8);
+
+    // Verify cloth_drapery expansion produced operations with id prefix
+    bool hasDrapery = false;
+    bool hasHairCluster = false;
+    bool hasHandGesture = false;
+    bool hasDynamicPose = false;
+
+    for (const auto &op : program.operations) {
+        if (op.id.contains(QStringLiteral("cape_folds"))) {
+            hasDrapery = true;
+        }
+        if (op.id.contains(QStringLiteral("hero_bangs"))) {
+            hasHairCluster = true;
+        }
+        if (op.id.contains(QStringLiteral("reach_hand"))) {
+            hasHandGesture = true;
+        }
+        if (op.id.contains(QStringLiteral("action_burst"))) {
+            hasDynamicPose = true;
+        }
+    }
+
+    QVERIFY(hasDrapery);
+    QVERIFY(hasHairCluster);
+    QVERIFY(hasHandGesture);
+    QVERIFY(hasDynamicPose);
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 

@@ -795,12 +795,32 @@ QString KisAiSceneSpecCodec::canonicalSpecExample(const QString &domain)
             "\"rig\": {\"eye_aperture\": 0.85, \"hair_highlight_bands\": 1}, "
             "\"negative\": {\"no_particles_on_face\": true, \"no_text\": true, \"no_extra_limbs\": true}}");
     }
+
+    if (d.contains(QStringLiteral("action")) || d.contains(QStringLiteral("dynamic"))
+        || d.contains(QStringLiteral("jump")) || d.contains(QStringLiteral("battle"))) {
+        return QStringLiteral(
+            "=== CANONICAL SPEC EXAMPLE (dynamic action character; nudge values, keep keys) ===\n"
+            "{\"subject\": {\"type\": \"character\", \"pose_id\": \"dynamic_lean\", \"facing\": \"front-right\"}, "
+            "\"head\": {\"expression\": \"confident_smug\", \"gaze\": \"front\", \"hair_style\": \"long_wavy\", "
+            "\"hair_color\": \"#1e293b\", \"eye_color\": \"#06b6d4\", \"skin_tone\": \"#ffe0c0\"}, "
+            "\"composition\": {\"framing\": \"upper_body\", \"head_center\": [0.48, 0.35], \"head_height\": 0.38}, "
+            "\"palette\": {\"mood\": \"cinematic_warm\", \"key\": \"#0f172a\", \"accents\": [\"#38bdf8\", \"#f43f5e\"]}, "
+            "\"light\": {\"direction\": [-0.7, -0.5], \"warmth\": \"warm_key_cool_fill\", \"time\": \"day\"}, "
+            "\"background\": {\"type\": \"abstract\", \"elements\": [\"speed_lines\"], \"forbid\": [\"tree\"]}, "
+            "\"style\": {\"art_style\": \"anime_cel\", \"line_weight\": \"bold\", \"detail_level\": 0.75}, "
+            "\"camera\": {\"focal\": \"short\", \"tilt\": \"low_angle\"}, "
+            "\"narrative\": {\"time\": \"day\", \"weather\": \"clear\", \"props\": []}, "
+            "\"rig\": {\"eye_aperture\": 0.90, \"iris_ratio\": 0.60, \"eye_highlight\": \"radiant_sparkle\", "
+            "\"double_lid\": true, \"hair_highlight_bands\": 2, \"mouth_width_scale\": 1.1, \"has_brows\": true}, "
+            "\"negative\": {\"no_particles_on_face\": true, \"no_text\": true, \"no_extra_limbs\": true}}");
+    }
+
     return QStringLiteral(
-        "=== CANONICAL SPEC EXAMPLE (character; nudge values, keep keys) ===\n"
+        "=== CANONICAL SPEC EXAMPLE (expressive character; nudge values, keep keys) ===\n"
         "{\"subject\": {\"type\": \"character\", \"pose_id\": \"three_quarter_bust\", \"facing\": \"front-right\"}, "
         "\"head\": {\"expression\": \"smile_open\", \"gaze\": \"front\", \"hair_style\": \"long_hime\", "
         "\"hair_color\": \"#2b3a67\", \"eye_color\": \"#3b82f6\", \"skin_tone\": \"#ffe0c0\"}, "
-        "\"composition\": {\"framing\": \"bust_up\", \"head_center\": [0.5, 0.38], \"head_height\": 0.42}, "
+        "\"composition\": {\"framing\": \"bust_up\", \"head_center\": [0.49, 0.37], \"head_height\": 0.42}, "
         "\"palette\": {\"mood\": \"soft_daylight\", \"key\": \"#64748b\", \"accents\": [\"#ff9fb2\"]}, "
         "\"light\": {\"direction\": [-0.5, -0.7], \"warmth\": \"warm_key_cool_fill\", \"time\": \"day\"}, "
         "\"background\": {\"type\": \"simple_gradient\", \"elements\": [], \"forbid\": [\"tree\", "
@@ -825,7 +845,8 @@ QJsonObject KisAiSceneSpecCodec::buildSceneSpecPayload(const QString &model,
                                                        qreal topP,
                                                        int maxTokensOverride,
                                                        bool forceJsonObjectOnly,
-                                                       const QString &referenceImageBase64)
+                                                       const QString &referenceImageBase64,
+                                                       qint64 seed)
 {
     // V6 W5: the Docker art-style combo finally reaches the Spec.
     // The caller passes KisAiPromptAnalyzer::ArtStyle enum values (NOT combo
@@ -891,7 +912,9 @@ QJsonObject KisAiSceneSpecCodec::buildSceneSpecPayload(const QString &model,
 
     QJsonObject payload;
     payload.insert(QStringLiteral("model"), model.trimmed());
-    payload.insert(QStringLiteral("seed"), static_cast<qint64>(KisAiStrokeProgramCodec::stableSeed(prompt.simplified())));
+    if (seed >= 0) {
+        payload.insert(QStringLiteral("seed"), seed);
+    }
 
     QJsonArray messages;
     messages.append(

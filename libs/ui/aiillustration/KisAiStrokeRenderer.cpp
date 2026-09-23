@@ -258,6 +258,7 @@ KisAiStrokeRenderer::expandProceduralOperations(const QVector<KisAiStrokeOperati
         for (const auto &dot : inkingDots) {
             expanded.append(dot);
         }
+
     }
 
     // V5: Generate specular rim lights facing main light.
@@ -1229,12 +1230,22 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter,
     }
 
     const QString lowerId = op.id.toLower();
-    const bool isSkinContour = (op.layer.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) == 0)
-        && (lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face"))
+    const bool isLineart = (op.layer.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) == 0);
+    if (isLineart) {
+        const bool isSkinContour = (lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face"))
             || lowerId.contains(QLatin1String("jaw")) || lowerId.contains(QLatin1String("chin"))
             || lowerId.contains(QLatin1String("cheek")) || lowerId.contains(QLatin1String("nose")));
-    if (isSkinContour) {
-        color = KisAiStrokeQualityUtils::calculateHarmonicLineColor(color, QColor(255, 220, 205), true);
+        const bool isHairContour = (lowerId.contains(QLatin1String("hair")) || op.groupId.contains(QLatin1String("hair"), Qt::CaseInsensitive));
+        const bool isClothContour = (lowerId.contains(QLatin1String("cloth")) || op.groupId.contains(QLatin1String("cloth"), Qt::CaseInsensitive));
+
+        if (isSkinContour) {
+            color = KisAiStrokeQualityUtils::calculateHarmonicLineColor(color, QColor(255, 220, 205), true);
+        } else if (isHairContour && op.brush.color.isValid() && op.brush.color.value() < 80) {
+            // Harmonic hair lineart: enrich deep hair contours with underlying hue
+            color = KisAiStrokeQualityUtils::calculateHarmonicLineColor(color, op.brush.color, false);
+        } else if (isClothContour && op.brush.color.isValid() && op.brush.color.value() < 80) {
+            color = KisAiStrokeQualityUtils::calculateHarmonicLineColor(color, op.brush.color, false);
+        }
     }
 
     KisAiStrokeCoverageRaster::StrokeTexture texture;

@@ -1,3 +1,4 @@
+#include <QRandomGenerator>
 /*
  * SPDX-FileCopyrightText: 2026 AI Stroke Painter contributors
  * SPDX-License-Identifier: GPL-2.0-or-later
@@ -745,6 +746,9 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::clothingForSpec(const KisAiScen
     const qreal bustBottomY = shoulderY + hh * 0.65;
     const qreal shoulderW = hw * 1.55;
 
+    const KisAiRigParameterSet rigParams = KisAiRigLibrary::parametersFromSpec(spec);
+    const qreal sSlope = rigParams.shoulderSlope * hh * 1.5;
+
     // 1. Anatomical Neck Base
     QPolygonF neck;
     neck.append(QPointF(hc.x() - neckW * 0.48, neckTopY));
@@ -795,10 +799,11 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::clothingForSpec(const KisAiScen
 
     // 2. Clavicle lines (鎖骨)
     for (int side = -1; side <= 1; side += 2) {
+        const qreal sideSlope = (side < 0 ? -sSlope : sSlope);
         QVector<KisAiStrokePoint> clavicle;
         clavicle.append(KisAiStrokePoint(hc.x() + side * neckW * 0.12, neckBotY, 0.7));
-        clavicle.append(KisAiStrokePoint(hc.x() + side * neckW * 0.75, neckBotY + hh * 0.02, 0.8));
-        clavicle.append(KisAiStrokePoint(hc.x() + side * shoulderW * 0.45, neckBotY + hh * 0.06, 0.4));
+        clavicle.append(KisAiStrokePoint(hc.x() + side * neckW * 0.75, neckBotY + hh * 0.02 + sideSlope * 0.4, 0.8));
+        clavicle.append(KisAiStrokePoint(hc.x() + side * shoulderW * 0.45, neckBotY + hh * 0.06 + sideSlope, 0.4));
         ops.append(makePath(side < 0 ? QStringLiteral("clavicle_l") : QStringLiteral("clavicle_r"),
                             QStringLiteral("Lineart"),
                             clavicle,
@@ -812,10 +817,10 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::clothingForSpec(const KisAiScen
     QPolygonF torso;
     torso.append(QPointF(hc.x() - neckW * 0.55, neckBotY));
     torso.append(QPointF(hc.x() + neckW * 0.55, neckBotY));
-    torso.append(QPointF(hc.x() + shoulderW * 0.55, shoulderY + hh * 0.10));
-    torso.append(QPointF(hc.x() + shoulderW * 0.62, bustBottomY));
-    torso.append(QPointF(hc.x() - shoulderW * 0.62, bustBottomY));
-    torso.append(QPointF(hc.x() - shoulderW * 0.55, shoulderY + hh * 0.10));
+    torso.append(QPointF(hc.x() + shoulderW * 0.55, shoulderY + hh * 0.10 + sSlope));
+    torso.append(QPointF(hc.x() + shoulderW * 0.62, bustBottomY + sSlope * 0.5));
+    torso.append(QPointF(hc.x() - shoulderW * 0.62, bustBottomY - sSlope * 0.5));
+    torso.append(QPointF(hc.x() - shoulderW * 0.55, shoulderY + hh * 0.10 - sSlope));
     ops.append(makeFill(QStringLiteral("clothing"),
                         QStringLiteral("Flats"),
                         torso,
@@ -827,18 +832,18 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::clothingForSpec(const KisAiScen
     // V7: Procedural Drapery Folds (Tension folds; route away from open chest on dress)
     const QColor clothShadow = darkerWarm(mainCloth, 0.72);
     if (style != QLatin1String("dress")) {
-        const QPointF leftShoulder(hc.x() - shoulderW * 0.40, shoulderY + hh * 0.15);
-        const QPointF rightShoulder(hc.x() + shoulderW * 0.40, shoulderY + hh * 0.15);
+        const QPointF leftShoulder(hc.x() - shoulderW * 0.40, shoulderY + hh * 0.15 - sSlope);
+        const QPointF rightShoulder(hc.x() + shoulderW * 0.40, shoulderY + hh * 0.15 + sSlope);
         const QPointF chestCenter(hc.x(), shoulderY + hh * 0.35);
         ops.append(
             KisAiRigLibrary::draperyFoldOps(leftShoulder, chestCenter, 2.0, mainCloth, clothShadow, QStringLiteral("l")));
         ops.append(
             KisAiRigLibrary::draperyFoldOps(rightShoulder, chestCenter, 2.0, mainCloth, clothShadow, QStringLiteral("r")));
     } else {
-        const QPointF leftShoulder(hc.x() - shoulderW * 0.42, shoulderY + hh * 0.16);
-        const QPointF leftBustSide(hc.x() - shoulderW * 0.25, shoulderY + hh * 0.38);
-        const QPointF rightShoulder(hc.x() + shoulderW * 0.42, shoulderY + hh * 0.16);
-        const QPointF rightBustSide(hc.x() + shoulderW * 0.25, shoulderY + hh * 0.38);
+        const QPointF leftShoulder(hc.x() - shoulderW * 0.42, shoulderY + hh * 0.16 - sSlope);
+        const QPointF leftBustSide(hc.x() - shoulderW * 0.25, shoulderY + hh * 0.38 - sSlope * 0.5);
+        const QPointF rightShoulder(hc.x() + shoulderW * 0.42, shoulderY + hh * 0.16 + sSlope);
+        const QPointF rightBustSide(hc.x() + shoulderW * 0.25, shoulderY + hh * 0.38 + sSlope * 0.5);
         ops.append(
             KisAiRigLibrary::draperyFoldOps(leftShoulder, leftBustSide, 1.5, mainCloth, clothShadow, QStringLiteral("dress_l")));
         ops.append(
@@ -1461,12 +1466,13 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(const KisAiSce
     // Hair front mass (fringe, side locks, ahoge, halo) over face skin and contour
     ops.append(hairFrontMassForStyle(spec, hc, hw, hh));
 
+    const quint32 layoutDynamicSeed = QRandomGenerator::global()->generate();
     // V7: Hierarchical 3D hair clumps with ribbon flows, tapered tips & cast shadows
-    ops.append(KisAiRigLibrary::hierarchicalHairClumpOps(rigParams, canvasSize, 42));
+    ops.append(KisAiRigLibrary::hierarchicalHairClumpOps(rigParams, canvasSize, layoutDynamicSeed));
 
     // V6 W1: character weather/props share the landscape BackdropRig.
     // The face-box guard inside backdropWeatherOps keeps skies off faces.
-    ops.append(KisAiRigLibrary::backdropWeatherOps(rigParams, canvasSize, 42));
+    ops.append(KisAiRigLibrary::backdropWeatherOps(rigParams, canvasSize, layoutDynamicSeed ^ 0x77656174u));
 
     // Rig-driven shading: core + form + bounce + rim + chin AO + hair band.
     // V6 W2: 4-layer completion — form softness and floor bounce join core.
@@ -1490,7 +1496,7 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(const KisAiSce
     // V10: Curvature-following jagged angel halo highlight for hair
     ops.append(KisAiStrokeQualityUtils::generateJaggedHairHalo(
         hc, hw * 2.0, hh, spec.head.hairColor, canvasSize, -0.10,
-        spec.rig.hairHighlightBands > 0 ? spec.rig.hairHighlightBands : 1, 42));
+        spec.rig.hairHighlightBands > 0 ? spec.rig.hairHighlightBands : 1, layoutDynamicSeed ^ 0x68616c6fu));
 
     // V10: Floating angel halo torus above crown when prompt requests angel or halo
     const QString lowerPrompt = spec.prompt.toLower();

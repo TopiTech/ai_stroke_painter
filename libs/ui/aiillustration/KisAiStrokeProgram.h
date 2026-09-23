@@ -210,7 +210,8 @@ public:
                                                    int maxTokensOverride = 0,
                                                    int artStyle = 0,
                                                    bool forceJsonObjectOnly = false,
-                                                   const QString &referenceImageBase64 = QString());
+                                                   const QString &referenceImageBase64 = QString(),
+                                                   qint64 seed = -1);
 
     /**
      * Generate the comprehensive artistic digital painting system prompt with
@@ -257,6 +258,13 @@ public:
     static QString buildArtisticGuidelinesSection();
     static QString buildOperationKindsSection();
     static QString buildOutputSchemaExampleSection();
+
+    /**
+     * Expand high-level macro primitives ('hair_flow_cluster', 'cloth_drapery',
+     * 'hand_gesture', 'dynamic_pose') into atomic procedural operations.
+     */
+    static QVector<KisAiStrokeOperation> expandMacroOperation(const QJsonObject &opJson,
+                                                              const QSize &canvasSize);
 
     /**
      * Parse a JSON object into a KisAiStrokeProgram.

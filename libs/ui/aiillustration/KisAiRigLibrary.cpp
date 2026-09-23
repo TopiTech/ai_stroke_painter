@@ -168,10 +168,13 @@ void KisAiRigLibrary::applyCameraAdjust(KisAiRigParameterSet &params, const KisA
     else if (focal == QLatin1String("long"))
         params.headHeight *= 1.02;
     const QString tilt = camera.tilt.trimmed().toLower();
-    if (tilt == QLatin1String("high_angle"))
+    if (tilt == QLatin1String("high_angle")) {
         params.headCenter.setY(params.headCenter.y() - 0.02);
-    else if (tilt == QLatin1String("low_angle"))
+        params.headTiltDeg += 2.5;
+    } else if (tilt == QLatin1String("low_angle")) {
         params.headCenter.setY(params.headCenter.y() + 0.02);
+        params.headTiltDeg -= 2.5;
+    }
 }
 
 void KisAiRigLibrary::applyDetailBudget(KisAiRigParameterSet &params, qreal detailLevel)
@@ -302,6 +305,29 @@ KisAiRigParameterSet KisAiRigLibrary::parametersFromSpec(const KisAiSceneSpec &s
     p.backdrop.timeOfDay = resolvedTime;
     p.backdrop.weather = spec.narrative.weather.isEmpty() ? QStringLiteral("clear") : spec.narrative.weather;
     p.backdrop.props = spec.narrative.props;
+
+    // V7/V10: Contrapposto & Upper-body dynamic pose orientation
+    const QString pose = spec.subject.poseId.trimmed().toLower();
+    const QString facing = spec.subject.facing.trimmed().toLower();
+    const qreal sign = (facing == QLatin1String("front-left") || facing == QLatin1String("left")) ? -1.0 : 1.0;
+
+    if (pose.contains(QLatin1String("action")) || pose.contains(QLatin1String("dynamic"))) {
+        p.headTiltDeg = sign * 5.0;
+        p.shoulderSlope = sign * 0.035;
+        p.torsoTurn = sign * 0.06;
+    } else if (pose.contains(QLatin1String("lean")) || pose.contains(QLatin1String("tilt"))) {
+        p.headTiltDeg = sign * 4.0;
+        p.shoulderSlope = sign * 0.025;
+        p.torsoTurn = sign * 0.04;
+    } else if (pose.contains(QLatin1String("contrapposto")) || pose.contains(QLatin1String("three_quarter"))) {
+        p.headTiltDeg = sign * 2.0;
+        p.shoulderSlope = sign * 0.018;
+        p.torsoTurn = sign * 0.03;
+    } else if (pose.contains(QLatin1String("over_shoulder"))) {
+        p.headTiltDeg = -sign * 3.5;
+        p.shoulderSlope = sign * 0.04;
+        p.torsoTurn = sign * 0.07;
+    }
 
     return clamped(p);
 }

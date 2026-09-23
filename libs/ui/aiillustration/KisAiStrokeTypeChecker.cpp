@@ -456,6 +456,22 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
         kindStr = QStringLiteral("anime_eye");
         (*opObj)[QStringLiteral("kind")] = kindStr;
         if (report) ++report->coercedValues;
+    } else if (kindStr == QLatin1String("cloth_drapery") || kindStr == QLatin1String("drapery") || kindStr == QLatin1String("drapery_fold")) {
+        kindStr = QStringLiteral("cloth_drapery");
+        (*opObj)[QStringLiteral("kind")] = kindStr;
+        if (report) ++report->coercedValues;
+    } else if (kindStr == QLatin1String("hair_flow_cluster") || kindStr == QLatin1String("hair_flow") || kindStr == QLatin1String("hair_cluster")) {
+        kindStr = QStringLiteral("hair_flow_cluster");
+        (*opObj)[QStringLiteral("kind")] = kindStr;
+        if (report) ++report->coercedValues;
+    } else if (kindStr == QLatin1String("hand_gesture") || kindStr == QLatin1String("hand")) {
+        kindStr = QStringLiteral("hand_gesture");
+        (*opObj)[QStringLiteral("kind")] = kindStr;
+        if (report) ++report->coercedValues;
+    } else if (kindStr == QLatin1String("dynamic_pose") || kindStr == QLatin1String("flow_line")) {
+        kindStr = QStringLiteral("dynamic_pose");
+        (*opObj)[QStringLiteral("kind")] = kindStr;
+        if (report) ++report->coercedValues;
     }
 
     // If kind still empty, infer from geometry
@@ -838,6 +854,9 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
             }
         }
         // expression / lip_color / has_highlight は parseProgramJson 側で型強制される。
+    } else if (kindStr == QLatin1String("cloth_drapery") || kindStr == QLatin1String("hair_flow_cluster")
+               || kindStr == QLatin1String("hand_gesture") || kindStr == QLatin1String("dynamic_pose")) {
+        // High-level macro primitives: geometry is expanded downstream in KisAiStrokeProgramCodec
     } else {
         if (report) {
             ++report->typeErrors;

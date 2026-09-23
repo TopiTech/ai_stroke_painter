@@ -2463,7 +2463,27 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     QString parseError;
     KisAiJsonDiagnostic diagnostic;
     KisAiStrokeQualityReport qualityReport;
-    if (!KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError, &diagnostic, &qualityReport)) {
+
+    // V6 W3: N-Best candidate selection wiring for SceneSpec payloads
+    bool parsedViaNBest = false;
+    const int strokeProtocol = m_strokeProtocolCombo ? m_strokeProtocolCombo->currentData().toInt() : 0;
+    if (strokeProtocol == 0) {
+        const KisAiNBestResult nBest = KisAiRefinementLoop::selectBestSpecFromBodies(
+            m_lastFailedPrompt.isEmpty() ? QStringLiteral("artwork") : m_lastFailedPrompt,
+            effectiveCanvasSize(),
+            QVector<QByteArray>{response});
+        if (nBest.candidateCount > 0 && nBest.score.total > 0.3) {
+            program = KisAiLayoutEngine::generateProgram(nBest.spec, effectiveCanvasSize());
+            if (!program.operations.isEmpty()) {
+                parsedViaNBest = true;
+                logDebug(QStringLiteral("SPEC_NBEST"),
+                         QStringLiteral("選抜成功: %1 (score=%2)").arg(nBest.logLines.join(QLatin1Char(';'))).arg(nBest.score.total));
+                qualityReport.score = program.completionScore;
+            }
+        }
+    }
+
+    if (!parsedViaNBest && !KisAiStrokeProgramCodec::parseResponse(response, &program, &parseError, &diagnostic, &qualityReport)) {
         m_lastJsonDiagnostic = diagnostic;
         m_isQualityCorrectionRetry = false;
         logDebug(QStringLiteral("LLM_PARSE_ERR"), QStringLiteral("%1\n%2").arg(parseError, diagnostic.formatForLog()));
@@ -2517,14 +2537,16 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
                  .arg(program.operations.size())
                  .arg(program.completionScore));
 
-    // V6 W3: offline deterministic critic gate (no network). Eye-pair
-    // symmetry warnings surface in the debug log so the next round can
-    // target them.
+    // V6 W3 / V10: Autonomous Critic & Deliberate Stroke inspection
     {
         const QStringList symmetryWarnings = KisAiDeliberateStroke::eyePairSymmetryWarnings(program.operations);
         if (!symmetryWarnings.isEmpty()) {
             logDebug(QStringLiteral("CRITIC_ROUND"),
                      QStringLiteral("symmetry warnings: %1").arg(symmetryWarnings.join(QStringLiteral(", "))));
+            // In Quality or Max mode, apply symmetry and curvature stabilization
+            if (KisAiModelRouter::qualityMode() != KisAiModelRouter::QualityMode::Fast) {
+                program.operations = KisAiDeliberateStroke::orderOperationsForRendering(program.operations);
+            }
         }
     }
 
@@ -4727,7 +4749,7 @@ void KisAiIllustrationDocker::loadSettings()
     if (m_temperatureSpin)
         m_temperatureSpin->setValue(
             qBound(m_temperatureSpin->minimum(),
-                   settings.value(QStringLiteral("AIIllustration/temperature"), 0.35).toDouble(),
+                   settings.value(QStringLiteral("AIIllustration/temperature"), 0.75).toDouble(),
                    m_temperatureSpin->maximum()));
     if (m_topPSpin)
         m_topPSpin->setValue(qBound(m_topPSpin->minimum(),
