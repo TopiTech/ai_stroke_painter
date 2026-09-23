@@ -103,6 +103,19 @@ public:
     };
 
     /**
+     * Compute the effective full stroke width in pixels for a pressure value.
+     * sizeMode "px" widths are enlarged by the supersample factor so the final
+     * downscaled image keeps the requested device-pixel width; "ratio" scales
+     * the short canvas edge.
+     */
+    static qreal effectiveWidthPx(
+        const KisAiStrokeBrush &brush,
+        qreal pressure,
+        const QSize &canvasSize,
+        int supersampleScale = 1
+    );
+
+    /**
      * Generate continuous quad segments along the stroke spine without
      * self-intersection bowties or twist artifacts on sharp turns.
      */

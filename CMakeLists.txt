@@ -16,6 +16,7 @@ if (AI_STROKE_STANDALONE_TESTS)
         libs/ui/aiillustration/KisAiStrokeQualityUtils.cpp
         libs/ui/aiillustration/KisAiStrokeProgram.cpp
         libs/ui/aiillustration/KisAiStrokeRenderer.cpp
+        libs/ui/aiillustration/KisAiStrokeCoverageRaster.cpp
         libs/ui/aiillustration/KisAiIllustrationRenderer.cpp
         libs/ui/aiillustration/KisAiSceneSpec.cpp
         libs/ui/aiillustration/KisAiLayoutEngine.cpp
@@ -183,6 +184,16 @@ if (AI_STROKE_STANDALONE_TESTS)
     target_link_libraries(KisAiLineartModeTest PRIVATE ai_stroke_core Qt6::Test)
     add_test(NAME KisAiLineartModeTest COMMAND KisAiLineartModeTest)
 
+    add_executable(KisAiCoverageRasterTest
+        libs/ui/tests/KisAiCoverageRasterTest.cpp
+    )
+    target_include_directories(KisAiCoverageRasterTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiCoverageRasterTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiCoverageRasterTest COMMAND KisAiCoverageRasterTest)
+
     set(AI_STROKE_ALL_TEST_TARGETS
         KisAiStrokeProgramTest
         KisAiStrokeRendererTest
@@ -198,6 +209,7 @@ if (AI_STROKE_STANDALONE_TESTS)
         KisAiAtomicInkTest
         KisAiV10QualityTest
         KisAiLineartModeTest
+        KisAiCoverageRasterTest
     )
 
     set_tests_properties(

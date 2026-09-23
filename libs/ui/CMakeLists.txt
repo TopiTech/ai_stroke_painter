@@ -445,6 +445,7 @@ set(kritaui_LIB_SRCS
     aiillustration/KisAiStrokeQualityUtils.cpp
     aiillustration/KisAiStrokeProgram.cpp
     aiillustration/KisAiStrokeRenderer.cpp
+    aiillustration/KisAiStrokeCoverageRaster.cpp
     aiillustration/KisAiSceneSpec.cpp
     aiillustration/KisAiLayoutEngine.cpp
     aiillustration/KisAiLightRig.cpp

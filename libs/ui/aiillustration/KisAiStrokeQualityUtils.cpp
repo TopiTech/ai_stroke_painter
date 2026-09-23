@@ -63,7 +63,21 @@ QPolygonF scalePolygon(const QPolygonF &normPoly, const QSize &canvasSize)
     return res;
 }
 
-qreal effectiveWidthPx(const KisAiStrokeBrush &brush, qreal pressure, const QSize &canvasSize, int supersampleScale = 1)
+[[maybe_unused]] QPointF catmullRomPoint(const QPointF &p0, const QPointF &p1, const QPointF &p2, const QPointF &p3, qreal t){
+    const qreal t2 = t * t;
+    const qreal t3 = t2 * t;
+
+    return 0.5
+        * ((2.0 * p1) + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+           + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3);
+}
+
+} // namespace
+
+qreal KisAiStrokeQualityUtils::effectiveWidthPx(const KisAiStrokeBrush &brush,
+                                                qreal pressure,
+                                                const QSize &canvasSize,
+                                                int supersampleScale)
 {
     const qreal baseDim = qMin(canvasSize.width(), canvasSize.height());
     const qreal scale = qMax(1, supersampleScale);
@@ -77,20 +91,7 @@ qreal effectiveWidthPx(const KisAiStrokeBrush &brush, qreal pressure, const QSiz
     return sz;
 }
 
-[[maybe_unused]] QPointF catmullRomPoint(const QPointF &p0, const QPointF &p1, const QPointF &p2, const QPointF &p3, qreal t)
-{
-    const qreal t2 = t * t;
-    const qreal t3 = t2 * t;
-
-    return 0.5
-        * ((2.0 * p1) + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
-           + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3);
-}
-
-} // namespace
-
-QVector<KisAiStrokePoint>
-KisAiStrokeQualityUtils::resampleEquidistant(const QVector<KisAiStrokePoint> &points, qreal stepPx, bool closed)
+QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::resampleEquidistant(const QVector<KisAiStrokePoint> &points, qreal stepPx, bool closed)
 {
     if (points.size() < 2) {
         return points;
