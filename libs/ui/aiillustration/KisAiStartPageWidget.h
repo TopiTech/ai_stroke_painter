@@ -11,9 +11,14 @@
 #include <QWidget>
 #include <QPointer>
 #include <QModelIndex>
+#include <QList>
 
+class QBoxLayout;
+class QGridLayout;
+class QVBoxLayout;
 class QLineEdit;
 class QPushButton;
+class QResizeEvent;
 class QListView;
 class QLabel;
 class QStackedWidget;
@@ -48,6 +53,7 @@ public Q_SLOTS:
 
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
     QWidget *createHeroSection();
@@ -58,8 +64,19 @@ private:
 
     KisAiIllustrationDocker *aiDocker() const;
     void showCanvasNotification(const QString &message);
+    void updateResponsiveLayout();
 
     QPointer<KisMainWindow> m_mainWindow;
+    QScrollArea *m_scrollArea {nullptr};
+    QVBoxLayout *m_contentLayout {nullptr};
+    bool m_isNarrowLayout {false};
+    QVBoxLayout *m_heroLayout {nullptr};
+    QBoxLayout *m_heroHeaderLayout {nullptr};
+    QBoxLayout *m_promptBarLayout {nullptr};
+    QBoxLayout *m_primaryCardsLayout {nullptr};
+    QBoxLayout *m_recentAndGuideLayout {nullptr};
+    QGridLayout *m_presetsGrid {nullptr};
+    QList<QBoxLayout *> m_presetButtonLayouts;
     QLineEdit *m_promptInput {nullptr};
     QPushButton *m_promptSubmitBtn {nullptr};
     QListView *m_recentListView {nullptr};

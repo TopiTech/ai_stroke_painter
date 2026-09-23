@@ -100,6 +100,8 @@ public:
      * Decide whether to keep refining: false when the PSNR gain converged
      * or the round budget is spent.
      */
+    static bool canAdvanceGoalStep(int currentStep, int totalSteps, int maxExtraSteps);
+
     static bool
     shouldContinue(qreal psnrBefore, qreal psnrAfter, int roundsDone, int roundBudget, qreal minImprovementDb = 1.5);
 };

@@ -10,6 +10,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QStackedWidget>
 #include <QLabel>
 #include <QListView>
@@ -144,6 +145,41 @@ void KisAiStartPageTest::testActionCardLayout()
     QVERIFY(foundQuickCanvas);
     QVERIFY(foundOpenImage);
     QVERIFY(foundClipboard);
+}
+
+void KisAiStartPageTest::testResponsiveLayoutKeepsControlsWithinViewport()
+{
+    KisAiStartPageWidget widget(nullptr);
+    widget.show();
+
+    auto *scrollArea = widget.findChild<QScrollArea *>(QStringLiteral("aiStartScrollArea"));
+    auto *promptInput = widget.findChild<QLineEdit *>(QStringLiteral("aiPromptOmnibarInput"));
+    auto *generateButton = widget.findChild<QPushButton *>(QStringLiteral("aiPromptGenerateBtn"));
+    QVERIFY(scrollArea);
+    QVERIFY(promptInput);
+    QVERIFY(generateButton);
+
+    for (const int width : {320, 750, 1200, 750, 320}) {
+        widget.resize(width, 700);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(scrollArea->horizontalScrollBar()->maximum(), 0);
+        const QRect viewportRect(scrollArea->viewport()->mapTo(&widget, QPoint()), scrollArea->viewport()->size());
+        for (QPushButton *button : widget.findChildren<QPushButton *>()) {
+            if (button->isHidden()) {
+                continue;
+            }
+            const QRect buttonRect(button->mapTo(&widget, QPoint()), button->size());
+            QVERIFY2(viewportRect.left() <= buttonRect.left(), qPrintable(button->accessibleName()));
+            QVERIFY2(buttonRect.right() <= viewportRect.right(), qPrintable(button->accessibleName()));
+        }
+        const QRect promptRect(promptInput->mapTo(&widget, QPoint()), promptInput->size());
+        const QRect generateRect(generateButton->mapTo(&widget, QPoint()), generateButton->size());
+        QVERIFY(viewportRect.left() <= promptRect.left());
+        QVERIFY(promptRect.right() <= viewportRect.right());
+        QVERIFY(viewportRect.left() <= generateRect.left());
+        QVERIFY(generateRect.right() <= viewportRect.right());
+    }
 }
 
 void KisAiStartPageTest::testRecentStackEmptyState()

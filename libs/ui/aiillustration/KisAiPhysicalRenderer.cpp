@@ -223,12 +223,19 @@ void KisAiPhysicalRenderer::blendPixel(const QString &blendMode,
 
 bool KisAiPhysicalRenderer::isHdrFormatSupported()
 {
-    // Qt 6.2+ で Format_RGBA16FPx4_Premultiplied が利用可能
+#if QT_VERSION >= QT_VERSION_CHECK(6, 2, 0)
     return true;
+#else
+    return false;
+#endif
 }
 
 QImage KisAiPhysicalRenderer::toLinearHdr(const QImage &srgbImage)
 {
+#if QT_VERSION < QT_VERSION_CHECK(6, 2, 0)
+    Q_UNUSED(srgbImage);
+    return QImage();
+#else
     if (srgbImage.isNull()) {
         return QImage();
     }
@@ -271,10 +278,15 @@ QImage KisAiPhysicalRenderer::toLinearHdr(const QImage &srgbImage)
         }
     }
     return hdr;
+#endif
 }
 
 QImage KisAiPhysicalRenderer::toSrgbLdr(const QImage &hdrImage)
 {
+#if QT_VERSION < QT_VERSION_CHECK(6, 2, 0)
+    Q_UNUSED(hdrImage);
+    return QImage();
+#else
     if (hdrImage.isNull()) {
         return QImage();
     }
@@ -320,6 +332,7 @@ QImage KisAiPhysicalRenderer::toSrgbLdr(const QImage &hdrImage)
         }
     }
     return ldr;
+#endif
 }
 
 // ===========================================================================
@@ -328,6 +341,12 @@ QImage KisAiPhysicalRenderer::toSrgbLdr(const QImage &hdrImage)
 
 void KisAiPhysicalRenderer::compositeLayer(QImage &dstImage, const KisAiLayerImage &srcLayer, const QImage *clipMask)
 {
+#if QT_VERSION < QT_VERSION_CHECK(6, 2, 0)
+    Q_UNUSED(dstImage);
+    Q_UNUSED(srcLayer);
+    Q_UNUSED(clipMask);
+    return;
+#else
     if (!srcLayer.isValid() || dstImage.isNull()) {
         return;
     }
@@ -393,6 +412,7 @@ void KisAiPhysicalRenderer::compositeLayer(QImage &dstImage, const KisAiLayerIma
             blendPixel(mode, sR, sG, sB, sA, dR, dG, dB, dA, opacity);
         }
     }
+#endif
 }
 
 // ===========================================================================
@@ -417,6 +437,9 @@ const KisAiLayerImage *KisAiCompositeGraph::findLayer(const QString &layerName) 
 
 QImage KisAiCompositeGraph::evaluate() const
 {
+#if QT_VERSION < QT_VERSION_CHECK(6, 2, 0)
+    return QImage();
+#else
     if (size.isEmpty() || size.width() <= 0 || size.height() <= 0) {
         return QImage();
     }
@@ -462,6 +485,7 @@ QImage KisAiCompositeGraph::evaluate() const
 
     // 最終出力を sRGB LDR に変換
     return KisAiPhysicalRenderer::toSrgbLdr(composite);
+#endif
 }
 
 // ===========================================================================
@@ -491,6 +515,14 @@ QImage KisAiPhysicalRenderer::renderProgramToPhysicalImage(const KisAiStrokeProg
                                                            qreal trappingPx,
                                                            int superSampleFactor)
 {
+#if QT_VERSION < QT_VERSION_CHECK(6, 2, 0)
+    Q_UNUSED(program);
+    Q_UNUSED(targetSize);
+    Q_UNUSED(clipShadingToFlats);
+    Q_UNUSED(trappingPx);
+    Q_UNUSED(superSampleFactor);
+    return QImage();
+#else
     const bool hasExplicitTarget = !targetSize.isEmpty() && targetSize.width() >= 64 && targetSize.height() >= 64;
     QSize baseSize = hasExplicitTarget ? targetSize : program.canvasSize;
     if (baseSize.width() < 64 || baseSize.height() < 64) {
@@ -687,6 +719,7 @@ QImage KisAiPhysicalRenderer::renderProgramToPhysicalImage(const KisAiStrokeProg
     }
 
     return resultRender;
+#endif
 }
 
 } // namespace KisAi

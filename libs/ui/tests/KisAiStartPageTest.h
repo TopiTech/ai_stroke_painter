@@ -17,6 +17,7 @@ private Q_SLOTS:
     void testPresetPromptApplication();
     void testPresetStyleMapping();
     void testActionCardLayout();
+    void testResponsiveLayoutKeepsControlsWithinViewport();
     void testRecentStackEmptyState();
     void testQuickPromptEmptyDoesNotCrash();
     void testPasteEmptyClipboardDoesNotCrash();

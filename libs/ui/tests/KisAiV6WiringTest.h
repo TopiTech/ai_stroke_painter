@@ -63,6 +63,7 @@ private Q_SLOTS:
     void testVisionCriticImageToDataUrlTransparency();
     void testDraperyFoldIdsAreUnique();
     void testSamplingForClampsTopPAndMaxTokens();
+    void testGoalStepAdvanceLimitIncludesConfiguredFinalStep();
     void testRigClampedCoversPoseFields();
     void testLandscapeWaterMeadowSelection();
     void testSceneSpecNarrativeTimeLengthCapped();

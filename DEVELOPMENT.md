@@ -14,8 +14,10 @@
 結果を編集可能なレイヤーとして扱うための Krita 基盤です。PyKrita、SIP、一般的な
 ブラシエンジンの選択 UI、広範な形式プラグイン、テンプレート、ワークスペースは対象外です。
 
-現在の配布・起動確認環境は Windows + Craft + MinGW GCC + Qt6 です。Qt6 は上流 Krita
-で不安定版扱いのため、構成時に `-DALLOW_UNSTABLE=QT6` を必ず指定します。
+現在の配布・起動確認環境は Windows + Craft + MinGW GCC + Qt6 です。物理HDRレンダラーは
+Qt 6.2 で追加された浮動小数点 `QImage` 形式を使うため、この経路の実行にはQt 6.2以降が必要です。
+Krita本体のQt選択設定は上流仕様を維持しますが、Qt5/Qt6.0/6.1でのAI HDR経路は未対応・未検証です。
+Qt6 は上流 Krita で不安定版扱いのため、構成時に `-DALLOW_UNSTABLE=QT6` を必ず指定します。
 
 ## 2. ソース構成
 

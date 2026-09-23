@@ -204,6 +204,11 @@ QString KisAiRefinementLoop::formatTelemetry(const QString &category, const QStr
     return QStringLiteral("[%1] %2").arg(category, summary);
 }
 
+bool KisAiRefinementLoop::canAdvanceGoalStep(int currentStep, int totalSteps, int maxExtraSteps)
+{
+    return qint64(currentStep) < qint64(totalSteps) + qMax(0, maxExtraSteps);
+}
+
 bool KisAiRefinementLoop::shouldContinue(qreal psnrBefore,
                                          qreal psnrAfter,
                                          int roundsDone,

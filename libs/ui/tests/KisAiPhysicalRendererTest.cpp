@@ -9,6 +9,7 @@
 #include <QImage>
 #include <QPolygonF>
 #include <QSize>
+#include <QtGlobal>
 #ifndef AI_STROKE_STANDALONE
 #include <testui.h>
 #else
@@ -137,11 +138,15 @@ void KisAiPhysicalRendererTest::testBlendPixelPartialOpacity()
 
 void KisAiPhysicalRendererTest::testHdrFormatSupported()
 {
-    QVERIFY(KisAiPhysicalRenderer::isHdrFormatSupported());
+    QCOMPARE(KisAiPhysicalRenderer::isHdrFormatSupported(), QT_VERSION >= QT_VERSION_CHECK(6, 2, 0));
 }
 
 void KisAiPhysicalRendererTest::testToLinearHdrAndToSrgbLdrRoundtrip()
 {
+    if (!KisAiPhysicalRenderer::isHdrFormatSupported()) {
+        QSKIP("Physical HDR rendering requires Qt 6.2 or newer");
+    }
+
     // 32x32 の市松模様画像を作成
     QImage src(32, 32, QImage::Format_ARGB32_Premultiplied);
     src.fill(Qt::transparent);
@@ -178,6 +183,10 @@ void KisAiPhysicalRendererTest::testToLinearHdrAndToSrgbLdrRoundtrip()
 
 void KisAiPhysicalRendererTest::testCompositeLayerNormal()
 {
+    if (!KisAiPhysicalRenderer::isHdrFormatSupported()) {
+        QSKIP("Physical HDR rendering requires Qt 6.2 or newer");
+    }
+
     QImage dst(64, 64, QImage::Format_ARGB32_Premultiplied);
     dst.fill(QColor(100, 100, 100, 255));
 
@@ -189,14 +198,17 @@ void KisAiPhysicalRendererTest::testCompositeLayerNormal()
     lyr.image = lyrImg;
 
     KisAiPhysicalRenderer::compositeLayer(dst, lyr);
-    const QImage ldr = (dst.format() == QImage::Format_RGBA32FPx4_Premultiplied)
-        ? KisAiPhysicalRenderer::toSrgbLdr(dst) : dst;
+    const QImage ldr = KisAiPhysicalRenderer::isHdrFormatSupported() ? KisAiPhysicalRenderer::toSrgbLdr(dst) : dst;
     const QColor result = ldr.pixelColor(32, 32);
     QVERIFY(result.red() >= 195);
 }
 
 void KisAiPhysicalRendererTest::testCompositeLayerMultiply()
 {
+    if (!KisAiPhysicalRenderer::isHdrFormatSupported()) {
+        QSKIP("Physical HDR rendering requires Qt 6.2 or newer");
+    }
+
     // 白 (255, 255, 255) の上に 50% 灰色 (128, 128, 128) を乗算 -> 約 128
     QImage dst(32, 32, QImage::Format_ARGB32_Premultiplied);
     dst.fill(QColor(255, 255, 255, 255));
@@ -209,14 +221,17 @@ void KisAiPhysicalRendererTest::testCompositeLayerMultiply()
     lyr.image = lyrImg;
 
     KisAiPhysicalRenderer::compositeLayer(dst, lyr);
-    const QImage ldr = (dst.format() == QImage::Format_RGBA32FPx4_Premultiplied)
-        ? KisAiPhysicalRenderer::toSrgbLdr(dst) : dst;
+    const QImage ldr = KisAiPhysicalRenderer::isHdrFormatSupported() ? KisAiPhysicalRenderer::toSrgbLdr(dst) : dst;
     const QColor result = ldr.pixelColor(16, 16);
     QVERIFY(std::abs(result.red() - 128) <= 5);
 }
 
 void KisAiPhysicalRendererTest::testCompositeLayerWithClipMask()
 {
+    if (!KisAiPhysicalRenderer::isHdrFormatSupported()) {
+        QSKIP("Physical HDR rendering requires Qt 6.2 or newer");
+    }
+
     // dst は透明
     QImage dst(32, 32, QImage::Format_ARGB32_Premultiplied);
     dst.fill(Qt::transparent);
@@ -239,8 +254,7 @@ void KisAiPhysicalRendererTest::testCompositeLayerWithClipMask()
     }
 
     KisAiPhysicalRenderer::compositeLayer(dst, lyr, &mask);
-    const QImage ldr = (dst.format() == QImage::Format_RGBA32FPx4_Premultiplied)
-        ? KisAiPhysicalRenderer::toSrgbLdr(dst) : dst;
+    const QImage ldr = KisAiPhysicalRenderer::isHdrFormatSupported() ? KisAiPhysicalRenderer::toSrgbLdr(dst) : dst;
 
     // 左半分 (x=8) は赤、右半分 (x=24) は透明
     QVERIFY(ldr.pixelColor(8, 16).alpha() >= 250);
@@ -249,6 +263,10 @@ void KisAiPhysicalRendererTest::testCompositeLayerWithClipMask()
 
 void KisAiPhysicalRendererTest::testCompositeGraphEvaluate()
 {
+    if (!KisAiPhysicalRenderer::isHdrFormatSupported()) {
+        QSKIP("Physical HDR rendering requires Qt 6.2 or newer");
+    }
+
     KisAiCompositeGraph graph;
     graph.size = QSize(64, 64);
 
@@ -303,6 +321,10 @@ void KisAiPhysicalRendererTest::testDownsampleBox()
 
 void KisAiPhysicalRendererTest::testRenderProgramToPhysicalImage()
 {
+    if (!KisAiPhysicalRenderer::isHdrFormatSupported()) {
+        QSKIP("Physical HDR rendering requires Qt 6.2 or newer");
+    }
+
     KisAiStrokeProgram prog;
     prog.canvasSize = QSize(128, 128);
 
@@ -337,6 +359,10 @@ void KisAiPhysicalRendererTest::testRenderProgramToPhysicalImage()
 
 void KisAiPhysicalRendererTest::testCompositeLayerMismatchedSize()
 {
+    if (!KisAiPhysicalRenderer::isHdrFormatSupported()) {
+        QSKIP("Physical HDR rendering requires Qt 6.2 or newer");
+    }
+
     QImage dst(64, 64, QImage::Format_ARGB32_Premultiplied);
     dst.fill(QColor(100, 100, 100, 255));
 
@@ -371,8 +397,35 @@ void KisAiPhysicalRendererTest::testBlendPixelNanAndInfProtection()
     QVERIFY(std::isfinite(dstR) && std::isfinite(dstG) && std::isfinite(dstB) && std::isfinite(dstA));
 }
 
+void KisAiPhysicalRendererTest::testUnavailableHdrReturnsNullAndStandardRendererStillWorks()
+{
+    if (KisAiPhysicalRenderer::isHdrFormatSupported()) {
+        QSKIP("This test targets Qt versions below 6.2");
+    }
+
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(128, 128);
+
+    KisAiStrokeOperation fill;
+    fill.layer = QStringLiteral("Flats");
+    fill.kind = KisAiStrokeOperation::Kind::Fill;
+    fill.brush.color = QColor(220, 180, 140);
+    fill.polygon = QPolygonF() << QPointF(0.2, 0.2) << QPointF(0.8, 0.2) << QPointF(0.8, 0.8) << QPointF(0.2, 0.8);
+    program.operations.append(fill);
+
+    QVERIFY(KisAiPhysicalRenderer::renderProgramToPhysicalImage(program, QSize(128, 128)).isNull());
+
+    const QImage standard = KisAiStrokeRenderer::renderProgramToImagePhysical(program, QSize(128, 128), true, -1.0, 2);
+    QVERIFY(!standard.isNull());
+    QCOMPARE(standard.size(), QSize(128, 128));
+}
+
 void KisAiPhysicalRendererTest::testPhysicalRenderClampsDerivedOversizeCanvas()
 {
+    if (!KisAiPhysicalRenderer::isHdrFormatSupported()) {
+        QSKIP("Physical HDR rendering requires Qt 6.2 or newer");
+    }
+
     KisAiStrokeProgram prog;
     prog.canvasSize = QSize(9000, 9000);
     KisAiStrokeOperation op;

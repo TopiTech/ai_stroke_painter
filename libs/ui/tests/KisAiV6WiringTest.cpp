@@ -469,6 +469,15 @@ void KisAiV6WiringTest::testArtStyleReachesSpec()
 // W3/W6: refinement loop helpers (offline, no network)
 // ========================================================================
 
+void KisAiV6WiringTest::testGoalStepAdvanceLimitIncludesConfiguredFinalStep()
+{
+    QCOMPARE(KisAiRefinementLoop::canAdvanceGoalStep(4, 4, 4), true);
+    QCOMPARE(KisAiRefinementLoop::canAdvanceGoalStep(7, 4, 4), true);
+    QCOMPARE(KisAiRefinementLoop::canAdvanceGoalStep(8, 4, 4), false);
+    QCOMPARE(KisAiRefinementLoop::canAdvanceGoalStep(4, 4, 1), true);
+    QCOMPARE(KisAiRefinementLoop::canAdvanceGoalStep(5, 4, 1), false);
+}
+
 void KisAiV6WiringTest::testNBestSelectsBest()
 {
     KisAiModelRouter::setQualityMode(KisAiModelRouter::QualityMode::Quality);

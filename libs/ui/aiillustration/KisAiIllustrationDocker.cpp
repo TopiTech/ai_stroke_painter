@@ -1061,6 +1061,12 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_physicalRenderCheck->setToolTip(
         i18n("V8 Phase 3: 線形 sRGB 空間で W3C 物理合成と 4x "
              "スーパーサンプリングを行い、暗部バンディングと色相ドリフトを防止します。"));
+    const bool physicalRenderingAvailable = KisAi::KisAiPhysicalRenderer::isHdrFormatSupported();
+    m_physicalRenderCheck->setEnabled(physicalRenderingAvailable);
+    if (!physicalRenderingAvailable) {
+        m_physicalRenderCheck->setToolTip(
+            i18n("物理レンダリングには Qt 6.2 以降が必要です。標準レンダラーは引き続き使用できます。"));
+    }
 
     m_perceptualRepairCheck = new QCheckBox(i18n("知覚自動補正 (Perceptual Repair)"), m_detailsContainer);
     m_perceptualRepairCheck->setChecked(true);
@@ -4221,16 +4227,11 @@ void KisAiIllustrationDocker::advanceGoalStep()
     m_waitingForUserStepAdvance = false;
     m_goalCurrentRetryCount = 0;
     m_goalSelfCorrectionFeedback.clear();
-    m_goalCurrentStep++;
-    // Same safety ceiling as finishGoalStepRequest()'s reachedSafetyMax check:
-    // the last allowed step is m_goalTotalSteps + m_goalMaxExtraSteps, so the
-    // boundary must be >= here too. The previous strict > let one extra
-    // refinement run past the user-configured "追加ブラッシュアップ上限".
-    if (m_goalCurrentStep >= m_goalTotalSteps + m_goalMaxExtraSteps
-        && m_goalCurrentStep > m_goalTotalSteps) {
+    if (!KisAiRefinementLoop::canAdvanceGoalStep(m_goalCurrentStep, m_goalTotalSteps, m_goalMaxExtraSteps)) {
         finishGoalMode(true);
         return;
     }
+    m_goalCurrentStep++;
     executeGoalStep();
 }
 
@@ -4828,8 +4829,8 @@ void KisAiIllustrationDocker::loadSettings()
     }
     if (m_physicalRenderCheck) {
         const QSignalBlocker blocker(m_physicalRenderCheck);
-        m_physicalRenderCheck->setChecked(
-            settings.value(QStringLiteral("AIIllustration/physicalRender"), false).toBool());
+        m_physicalRenderCheck->setChecked(KisAi::KisAiPhysicalRenderer::isHdrFormatSupported()
+                                          && settings.value(QStringLiteral("AIIllustration/physicalRender"), false).toBool());
     }
     if (m_perceptualRepairCheck) {
         const QSignalBlocker blocker(m_perceptualRepairCheck);
@@ -5109,12 +5110,9 @@ void KisAiIllustrationDocker::finishTestConnectionRequest()
     const qint64 elapsedMs = QDateTime::currentMSecsSinceEpoch() - m_testStartTimeMs;
     const int httpStatus = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
     const bool success = reply->error() == QNetworkReply::NoError && httpStatus >= 200 && httpStatus < 300;
-    const QByteArray response = takeTestReplyData(reply.data());
+    takeTestReplyData(reply.data());
     const bool responseTooLarge = m_testResponseTooLarge;
     m_testResponseTooLarge = false;
-    // Capture before deleteLater(): reading from the reply afterwards is only
-    // safe while it still lives on this stack frame.
-    const QString replyErrorString = reply->errorString();
     reply->deleteLater();
 
     if (responseTooLarge) {
@@ -5129,57 +5127,21 @@ void KisAiIllustrationDocker::finishTestConnectionRequest()
     }
 
     if (success) {
-        QString modelResponseText;
-        const QJsonDocument doc = QJsonDocument::fromJson(response);
-        if (doc.isObject()) {
-            const QJsonArray choices = doc.object().value(QStringLiteral("choices")).toArray();
-            if (!choices.isEmpty()) {
-                const QJsonObject msg = choices.at(0).toObject().value(QStringLiteral("message")).toObject();
-                modelResponseText = msg.value(QStringLiteral("content")).toString().trimmed();
-            }
-        }
-        if (modelResponseText.length() > 50) {
-            modelResponseText.truncate(47);
-            modelResponseText += QStringLiteral("…");
-        }
-
-        const QString successMsg = modelResponseText.isEmpty()
-            ? i18n("✅ 接続成功 (%1ms): HTTP %2 応答を受信しました。", elapsedMs, httpStatus)
-            : i18n("✅ 接続成功 (%1ms): \"%2\"", elapsedMs, modelResponseText);
-
+        const QString successMsg = i18n("✅ 接続成功 (%1ms): HTTP %2 応答を受信しました。", elapsedMs, httpStatus);
         if (m_testConnectionStatusLabel) {
             m_testConnectionStatusLabel->setStyleSheet(QStringLiteral("color: #4ade80; font-weight: 600;"));
             m_testConnectionStatusLabel->setText(successMsg);
             m_testConnectionStatusLabel->setVisible(true);
         }
-        logDebug(QStringLiteral("TEST_SUCCESS"),
-                 QStringLiteral("HTTP %1 (%2ms): %3")
-                     .arg(httpStatus)
-                     .arg(elapsedMs)
-                     .arg(QString::fromUtf8(response.left(500))));
+        logDebug(QStringLiteral("TEST_SUCCESS"), QStringLiteral("HTTP %1 (%2ms)").arg(httpStatus).arg(elapsedMs));
     } else {
-        QString errorDetail;
-        const QJsonDocument doc = QJsonDocument::fromJson(response);
-        if (doc.isObject()) {
-            const QJsonObject err = doc.object().value(QStringLiteral("error")).toObject();
-            errorDetail = err.value(QStringLiteral("message")).toString().trimmed();
-        }
-        if (errorDetail.isEmpty()) {
-            errorDetail = replyErrorString;
-        }
-        errorDetail = redactCredentialText(errorDetail);
-
-        const QString failMsg = i18n("❌ 接続失敗 (HTTP %1, %2ms): %3", httpStatus, elapsedMs, errorDetail);
+        const QString failMsg = i18n("❌ 接続失敗 (HTTP %1, %2ms)", httpStatus, elapsedMs);
         if (m_testConnectionStatusLabel) {
             m_testConnectionStatusLabel->setStyleSheet(QStringLiteral("color: #f87171; font-weight: 600;"));
             m_testConnectionStatusLabel->setText(failMsg);
             m_testConnectionStatusLabel->setVisible(true);
         }
-        logDebug(QStringLiteral("TEST_FAILED"),
-                 QStringLiteral("HTTP %1 (%2ms): %3\nRaw: %4")
-                     .arg(httpStatus)
-                     .arg(elapsedMs)
-                     .arg(errorDetail, redactCredentialText(QString::fromUtf8(response.left(500)))));
+        logDebug(QStringLiteral("TEST_FAILED"), QStringLiteral("HTTP %1 (%2ms)").arg(httpStatus).arg(elapsedMs));
     }
 }
 

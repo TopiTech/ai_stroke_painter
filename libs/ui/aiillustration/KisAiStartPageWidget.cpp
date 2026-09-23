@@ -31,6 +31,7 @@
 #include <QRandomGenerator>
 #include <QScrollArea>
 #include <QStackedWidget>
+#include <QSizePolicy>
 #include <QStatusBar>
 #include <QToolButton>
 #include <QUrl>
@@ -104,17 +105,22 @@ KisAiStartPageWidget::KisAiStartPageWidget(KisMainWindow *mainWindow, QWidget *p
     auto *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(0, 0, 0, 0);
 
-    auto *scrollArea = new QScrollArea(this);
-    scrollArea->setObjectName(QStringLiteral("aiStartScrollArea"));
-    scrollArea->setWidgetResizable(true);
-    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-    scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_scrollArea = new QScrollArea(this);
+    m_scrollArea->setObjectName(QStringLiteral("aiStartScrollArea"));
+    m_scrollArea->setWidgetResizable(true);
+    m_scrollArea->setMinimumWidth(0);
+    m_scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_scrollArea->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_scrollArea->viewport()->installEventFilter(this);
 
-    auto *contentWidget = new QWidget(scrollArea);
+    auto *contentWidget = new QWidget(m_scrollArea);
     contentWidget->setObjectName(QStringLiteral("aiStartContent"));
+    contentWidget->setMinimumWidth(0);
+    contentWidget->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
 
     auto *contentLayout = new QVBoxLayout(contentWidget);
     contentLayout->setContentsMargins(40, 36, 40, 40);
+    m_contentLayout = contentLayout;
     contentLayout->setSpacing(24);
 
     // 1. Hero Brand Section
@@ -129,13 +135,15 @@ KisAiStartPageWidget::KisAiStartPageWidget(KisMainWindow *mainWindow, QWidget *p
     // 4. Creative Style Presets
     contentLayout->addWidget(createPresetsSection());
 
-    // 5. Recent Artworks & Guide (2 Columns)
+    // 5. Recent Artworks & Guide
     contentLayout->addWidget(createRecentAndGuideSection());
+
+    updateResponsiveLayout();
 
     contentLayout->addStretch(1);
 
-    scrollArea->setWidget(contentWidget);
-    mainLayout->addWidget(scrollArea);
+    m_scrollArea->setWidget(contentWidget);
+    mainLayout->addWidget(m_scrollArea);
 
     // Initialize recent files model
     slotUpdateRecentFiles();
@@ -155,31 +163,32 @@ KisAiIllustrationDocker *KisAiStartPageWidget::aiDocker() const
 QWidget *KisAiStartPageWidget::createHeroSection()
 {
     auto *container = new QWidget(this);
-    auto *layout = new QVBoxLayout(container);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(10);
+    m_heroLayout = new QVBoxLayout(container);
+    m_heroLayout->setContentsMargins(0, 0, 0, 0);
+    m_heroLayout->setSpacing(10);
 
-    auto *topRow = new QHBoxLayout();
-    topRow->setSpacing(14);
+    m_heroHeaderLayout = new QBoxLayout(QBoxLayout::LeftToRight);
+    m_heroHeaderLayout->setContentsMargins(0, 0, 0, 0);
+    m_heroHeaderLayout->setSpacing(14);
 
     auto *title = new QLabel(i18n("AI Stroke Painter"), container);
     title->setObjectName(QStringLiteral("aiHeroTitle"));
-    topRow->addWidget(title);
+    m_heroHeaderLayout->addWidget(title);
 
     // Status Badges
     auto *badgeAi = new QLabel(i18n("🟢 AI Engine Active"), container);
     badgeAi->setObjectName(QStringLiteral("aiStatusBadgeGreen"));
-    topRow->addWidget(badgeAi);
+    m_heroHeaderLayout->addWidget(badgeAi);
 
     auto *badgePipeline = new QLabel(i18n("⚡ V10 Atomic Ink"), container);
     badgePipeline->setObjectName(QStringLiteral("aiStatusBadge"));
-    topRow->addWidget(badgePipeline);
+    m_heroHeaderLayout->addWidget(badgePipeline);
 
     auto *badgeHdr = new QLabel(i18n("🎨 Linear HDR 32-bit"), container);
     badgeHdr->setObjectName(QStringLiteral("aiStatusBadge"));
-    topRow->addWidget(badgeHdr);
+    m_heroHeaderLayout->addWidget(badgeHdr);
 
-    topRow->addStretch(1);
+    m_heroHeaderLayout->addStretch(1);
 
     // Quick focus button
     auto *focusDockerBtn = new QPushButton(i18n("AI ワークスペースを表示"), container);
@@ -190,13 +199,13 @@ QWidget *KisAiStartPageWidget::createHeroSection()
         "QPushButton { background: rgba(30, 41, 59, 0.8); color: #cbd5e1; border: 1px solid rgba(71, 85, 105, 0.5); border-radius: 6px; font-size: 12px; font-weight: 500; padding: 6px 14px; }"
         "QPushButton:hover { background: rgba(51, 65, 85, 0.9); color: #f8fafc; border-color: #64748b; }"));
     connect(focusDockerBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotFocusAiDocker);
-    topRow->addWidget(focusDockerBtn);
+    m_heroHeaderLayout->addWidget(focusDockerBtn);
 
-    layout->addLayout(topRow);
+    m_heroLayout->addLayout(m_heroHeaderLayout);
 
     auto *subtitle = new QLabel(i18n("自律ベクターストローク & 物理インクシミュレーションによる次世代AIクリエイティブ環境"), container);
     subtitle->setObjectName(QStringLiteral("aiHeroSubtitle"));
-    layout->addWidget(subtitle);
+    m_heroLayout->addWidget(subtitle);
 
     return container;
 }
@@ -206,14 +215,14 @@ QWidget *KisAiStartPageWidget::createPromptBarSection()
     auto *frame = new QFrame(this);
     frame->setObjectName(QStringLiteral("aiPromptOmnibarFrame"));
 
-    auto *layout = new QHBoxLayout(frame);
-    layout->setContentsMargins(10, 6, 8, 6);
-    layout->setSpacing(10);
+    m_promptBarLayout = new QBoxLayout(QBoxLayout::LeftToRight, frame);
+    m_promptBarLayout->setContentsMargins(10, 6, 8, 6);
+    m_promptBarLayout->setSpacing(10);
 
     auto *iconLabel = new QLabel(QStringLiteral("✨"), frame);
     iconLabel->setStyleSheet(QStringLiteral("font-size: 16px;"));
     iconLabel->setAccessibleName(QString());
-    layout->addWidget(iconLabel);
+    m_promptBarLayout->addWidget(iconLabel);
 
     m_promptInput = new QLineEdit(frame);
     m_promptInput->setObjectName(QStringLiteral("aiPromptOmnibarInput"));
@@ -222,7 +231,7 @@ QWidget *KisAiStartPageWidget::createPromptBarSection()
     m_promptInput->setAccessibleDescription(i18n("生成したいイラストの指示を入力します。Enter で生成を開始します。"));
     m_promptInput->installEventFilter(this);
     connect(m_promptInput, &QLineEdit::returnPressed, this, &KisAiStartPageWidget::slotQuickPromptGenerate);
-    layout->addWidget(m_promptInput, 1);
+    m_promptBarLayout->addWidget(m_promptInput, 1);
 
     m_promptSubmitBtn = new QPushButton(i18n("⚡ 生成して開く"), frame);
     m_promptSubmitBtn->setObjectName(QStringLiteral("aiPromptGenerateBtn"));
@@ -230,7 +239,7 @@ QWidget *KisAiStartPageWidget::createPromptBarSection()
     m_promptSubmitBtn->setAccessibleName(i18n("生成して開く"));
     m_promptSubmitBtn->setToolTip(i18n("キャンバスを作成し、プロンプトを流し込んでAI生成を開始します (Enter)"));
     connect(m_promptSubmitBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotQuickPromptGenerate);
-    layout->addWidget(m_promptSubmitBtn);
+    m_promptBarLayout->addWidget(m_promptSubmitBtn);
 
     return frame;
 }
@@ -246,8 +255,9 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     label->setObjectName(QStringLiteral("aiSectionTitle"));
     layout->addWidget(label);
 
-    auto *cardsLayout = new QHBoxLayout();
-    cardsLayout->setSpacing(14);
+    m_primaryCardsLayout = new QBoxLayout(QBoxLayout::LeftToRight);
+    m_primaryCardsLayout->setContentsMargins(0, 0, 0, 0);
+    m_primaryCardsLayout->setSpacing(14);
 
     // 1. New Canvas Button
     auto *newBtn = new QPushButton(container);
@@ -274,7 +284,7 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     newDesc->setObjectName(QStringLiteral("aiCardDesc"));
     newLayout->addWidget(newDesc);
     connect(newBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotNewFile);
-    cardsLayout->addWidget(newBtn, 1);
+    m_primaryCardsLayout->addWidget(newBtn, 1);
 
     // 2. Quick 1024x1024 AI Canvas
     auto *quickBtn = new QPushButton(container);
@@ -301,7 +311,7 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     quickDesc->setObjectName(QStringLiteral("aiCardDesc"));
     quickLayout->addWidget(quickDesc);
     connect(quickBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotQuickCanvas1024);
-    cardsLayout->addWidget(quickBtn, 1);
+    m_primaryCardsLayout->addWidget(quickBtn, 1);
 
     // 3. Open Image / Project
     auto *openBtn = new QPushButton(container);
@@ -328,7 +338,7 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     openDesc->setObjectName(QStringLiteral("aiCardDesc"));
     openLayout->addWidget(openDesc);
     connect(openBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotOpenFile);
-    cardsLayout->addWidget(openBtn, 1);
+    m_primaryCardsLayout->addWidget(openBtn, 1);
 
     // 4. Paste from Clipboard
     auto *pasteBtn = new QPushButton(container);
@@ -354,9 +364,9 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     pasteDesc->setObjectName(QStringLiteral("aiCardDesc"));
     pasteLayout->addWidget(pasteDesc);
     connect(pasteBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotPasteFromClipboard);
-    cardsLayout->addWidget(pasteBtn, 1);
+    m_primaryCardsLayout->addWidget(pasteBtn, 1);
 
-    layout->addLayout(cardsLayout);
+    layout->addLayout(m_primaryCardsLayout);
     return container;
 }
 
@@ -371,8 +381,9 @@ QWidget *KisAiStartPageWidget::createPresetsSection()
     label->setObjectName(QStringLiteral("aiSectionTitle"));
     layout->addWidget(label);
 
-    auto *grid = new QGridLayout();
-    grid->setSpacing(12);
+    m_presetsGrid = new QGridLayout();
+    m_presetsGrid->setContentsMargins(0, 0, 0, 0);
+    m_presetsGrid->setSpacing(12);
 
     struct PresetInfo {
         int id;
@@ -399,9 +410,10 @@ QWidget *KisAiStartPageWidget::createPresetsSection()
         btn->setAccessibleDescription(p.desc);
         btn->setToolTip(QStringLiteral("%1 - %2").arg(p.title, p.desc));
 
-        auto *bLayout = new QHBoxLayout(btn);
+        auto *bLayout = new QBoxLayout(QBoxLayout::LeftToRight, btn);
         bLayout->setContentsMargins(12, 10, 12, 10);
         bLayout->setSpacing(12);
+        m_presetButtonLayouts.append(bLayout);
 
         auto *icon = new QLabel(p.icon, btn);
         icon->setStyleSheet(QStringLiteral("font-size: 22px;"));
@@ -412,6 +424,7 @@ QWidget *KisAiStartPageWidget::createPresetsSection()
         auto *title = new QLabel(p.title, btn);
         title->setStyleSheet(QStringLiteral("color: #f1f5f9; font-size: 13px; font-weight: 700;"));
         auto *desc = new QLabel(p.desc, btn);
+        desc->setWordWrap(true);
         desc->setStyleSheet(QStringLiteral("color: #94a3b8; font-size: 11px;"));
         textLayout->addWidget(title);
         textLayout->addWidget(desc);
@@ -426,20 +439,19 @@ QWidget *KisAiStartPageWidget::createPresetsSection()
             slotApplyPreset(presetId);
         });
 
-        // 2 items per row
-        grid->addWidget(btn, i / 2, i % 2);
+        m_presetsGrid->addWidget(btn, i / 2, i % 2);
     }
 
-    layout->addLayout(grid);
+    layout->addLayout(m_presetsGrid);
     return container;
 }
 
 QWidget *KisAiStartPageWidget::createRecentAndGuideSection()
 {
     auto *container = new QWidget(this);
-    auto *layout = new QHBoxLayout(container);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(16);
+    m_recentAndGuideLayout = new QBoxLayout(QBoxLayout::LeftToRight, container);
+    m_recentAndGuideLayout->setContentsMargins(0, 0, 0, 0);
+    m_recentAndGuideLayout->setSpacing(16);
 
     // Left Column: Recent Artworks
     auto *recentPanel = new QFrame(container);
@@ -485,7 +497,7 @@ QWidget *KisAiStartPageWidget::createRecentAndGuideSection()
     m_recentStack->addWidget(m_recentListView);
 
     recentLayout->addWidget(m_recentStack, 1);
-    layout->addWidget(recentPanel, 1);
+    m_recentAndGuideLayout->addWidget(recentPanel, 1);
 
     // Right Column: Tips & Keyboard Shortcuts
     auto *guidePanel = new QFrame(container);
@@ -548,13 +560,59 @@ QWidget *KisAiStartPageWidget::createRecentAndGuideSection()
     guideLayout->addLayout(shortcutGrid);
 
     guideLayout->addStretch(1);
-    layout->addWidget(guidePanel, 1);
+    m_recentAndGuideLayout->addWidget(guidePanel, 1);
 
     return container;
 }
 
+void KisAiStartPageWidget::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    updateResponsiveLayout();
+}
+
+void KisAiStartPageWidget::updateResponsiveLayout()
+{
+    if (!m_scrollArea || !m_contentLayout) {
+        return;
+    }
+
+    const int availableWidth = m_scrollArea->viewport()->width();
+    const bool narrow = availableWidth > 0 && availableWidth < 1024;
+    if (narrow == m_isNarrowLayout) {
+        return;
+    }
+    m_isNarrowLayout = narrow;
+
+    m_contentLayout->setContentsMargins(narrow ? 16 : 40, narrow ? 20 : 36, narrow ? 16 : 40, narrow ? 24 : 40);
+    m_heroHeaderLayout->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_promptBarLayout->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_primaryCardsLayout->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    m_recentAndGuideLayout->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    for (QBoxLayout *layout : m_presetButtonLayouts) {
+        layout->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+    }
+
+    QList<QWidget *> presetButtons;
+    while (QLayoutItem *item = m_presetsGrid->takeAt(0)) {
+        if (QWidget *button = item->widget()) {
+            presetButtons.append(button);
+        }
+        delete item;
+    }
+
+    const int presetColumns = narrow ? 1 : 2;
+    for (int i = 0; i < presetButtons.size(); ++i) {
+        m_presetsGrid->addWidget(presetButtons[i], i / presetColumns, i % presetColumns);
+    }
+}
+
 bool KisAiStartPageWidget::eventFilter(QObject *watched, QEvent *event)
 {
+    if (m_scrollArea && watched == m_scrollArea->viewport() && event->type() == QEvent::Resize) {
+        updateResponsiveLayout();
+    }
+
     if (watched == m_promptInput && event->type() == QEvent::KeyPress) {
         auto *ke = static_cast<QKeyEvent *>(event);
         if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
