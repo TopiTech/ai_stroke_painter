@@ -478,6 +478,66 @@ void KisAiV6WiringTest::testGoalStepAdvanceLimitIncludesConfiguredFinalStep()
     QCOMPARE(KisAiRefinementLoop::canAdvanceGoalStep(5, 4, 1), false);
 }
 
+void KisAiV6WiringTest::testRetryableHttpStatusClassifiesTransportAndServerErrors()
+{
+    // Transient server conditions.
+    QVERIFY(KisAiRefinementLoop::isRetryableHttpStatus(429));
+    QVERIFY(KisAiRefinementLoop::isRetryableHttpStatus(500));
+    QVERIFY(KisAiRefinementLoop::isRetryableHttpStatus(502));
+    QVERIFY(KisAiRefinementLoop::isRetryableHttpStatus(503));
+    QVERIFY(KisAiRefinementLoop::isRetryableHttpStatus(504));
+    // Transport-level failures carry no HTTP status.
+    QVERIFY(KisAiRefinementLoop::isRetryableHttpStatus(0));
+    QVERIFY(KisAiRefinementLoop::isRetryableHttpStatus(-1));
+    // Client/config errors and non-transient statuses must not retry.
+    QVERIFY(!KisAiRefinementLoop::isRetryableHttpStatus(400));
+    QVERIFY(!KisAiRefinementLoop::isRetryableHttpStatus(401));
+    QVERIFY(!KisAiRefinementLoop::isRetryableHttpStatus(404));
+    QVERIFY(!KisAiRefinementLoop::isRetryableHttpStatus(422));
+    QVERIFY(!KisAiRefinementLoop::isRetryableHttpStatus(505));
+    QVERIFY(!KisAiRefinementLoop::isRetryableHttpStatus(200));
+}
+
+void KisAiV6WiringTest::testClassifyGoalStepErrorOrdersRetryBeforeVisionFallback()
+{
+    using Action = KisAiRefinementLoop::GoalStepErrorAction;
+    const auto classify = [](int status, int retryCount, bool hadImage, bool fallbackActive) {
+        return static_cast<int>(
+            KisAiRefinementLoop::classifyGoalStepError(status, retryCount, 2, hadImage, fallbackActive));
+    };
+
+    // Regression: a transient 429 carrying an image must retry the same request
+    // BEFORE the one-shot Vision fallback is spent on it...
+    QCOMPARE(classify(429, 0, true, false), static_cast<int>(Action::Retry));
+    // ...and once the budget is spent it fails outright: dropping the image
+    // cannot fix rate limiting.
+    QCOMPARE(classify(429, 2, true, false), static_cast<int>(Action::Fail));
+
+    // Transport failures retry while budget remains, then stop without
+    // burning the fallback on a dead connection.
+    QCOMPARE(classify(0, 0, true, false), static_cast<int>(Action::Retry));
+    QCOMPARE(classify(0, 2, true, false), static_cast<int>(Action::Fail));
+
+    // Retryable 5xx with an image: retry first, fall back only when exhausted.
+    QCOMPARE(classify(500, 0, true, false), static_cast<int>(Action::Retry));
+    QCOMPARE(classify(500, 2, true, false), static_cast<int>(Action::VisionFallback));
+
+    // Auth/endpoint errors fail immediately even with an image attached.
+    QCOMPARE(classify(401, 0, true, false), static_cast<int>(Action::Fail));
+    QCOMPARE(classify(404, 0, true, false), static_cast<int>(Action::Fail));
+
+    // Content/validation errors with an image fall back (once) to text-only.
+    QCOMPARE(classify(400, 0, true, false), static_cast<int>(Action::VisionFallback));
+    QCOMPARE(classify(413, 0, true, false), static_cast<int>(Action::VisionFallback));
+    QCOMPARE(classify(422, 0, true, false), static_cast<int>(Action::VisionFallback));
+
+    // The fallback is one-shot: once active, further failures end the goal.
+    QCOMPARE(classify(422, 0, true, true), static_cast<int>(Action::Fail));
+
+    // Without an image there is nothing to fall back from.
+    QCOMPARE(classify(400, 0, false, false), static_cast<int>(Action::Fail));
+}
+
 void KisAiV6WiringTest::testNBestSelectsBest()
 {
     KisAiModelRouter::setQualityMode(KisAiModelRouter::QualityMode::Quality);

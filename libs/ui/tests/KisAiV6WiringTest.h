@@ -67,6 +67,8 @@ private Q_SLOTS:
     void testRigClampedCoversPoseFields();
     void testLandscapeWaterMeadowSelection();
     void testSceneSpecNarrativeTimeLengthCapped();
+    void testRetryableHttpStatusClassifiesTransportAndServerErrors();
+    void testClassifyGoalStepErrorOrdersRetryBeforeVisionFallback();
 };
 
 #endif // KIS_AI_V6_WIRING_TEST_H

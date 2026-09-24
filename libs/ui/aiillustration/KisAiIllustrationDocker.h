@@ -93,7 +93,7 @@ private:
     void startGoalMode(const QString &prompt);
     void executeGoalStep();
     void finishGoalStepRequest();
-    void advanceGoalStep();
+    void advanceGoalStep(bool userInitiated = false);
     void finishGoalMode(bool success = true);
     void scheduleGoalStepRetry(const QString &reasonMessage, bool isSelfCorrection, int retryAfterSec = 0);
     void executeGoalStepRetry();
@@ -202,6 +202,8 @@ private:
     bool m_waitingForUserStepAdvance {false};
     bool m_goalVisionFallbackActive {false};
     bool m_lastGoalRequestHadImage {false};
+    // Debounces user-driven step advancement (double-click / held Enter).
+    QElapsedTimer m_lastUserGoalAdvance;
     KisAiStrokeProgram m_goalAccumulatedProgram;
     QString m_lastGoalCritique;
     bool isGoalQualitySatisfied(const KisAiStrokeProgram &program) const;

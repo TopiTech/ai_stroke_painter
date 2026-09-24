@@ -1302,7 +1302,9 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         goalOptionsWidget->setVisible(checked);
         refreshGenerateButtonLabel();
     });
-    connect(m_nextStepButton, &QPushButton::clicked, this, &KisAiIllustrationDocker::advanceGoalStep);
+    connect(m_nextStepButton, &QPushButton::clicked, this, [this] {
+        advanceGoalStep(true);
+    });
     connect(m_finishGoalButton, &QPushButton::clicked, this, [this] {
         finishGoalMode(true);
     });
@@ -1682,7 +1684,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
         generateAction->setShortcutContext(Qt::ApplicationShortcut);
         connect(generateAction, &QAction::triggered, this, [this] {
             if (m_goalModeActive && m_waitingForUserStepAdvance) {
-                advanceGoalStep();
+                advanceGoalStep(true);
             } else {
                 generateIllustration();
             }
@@ -1740,7 +1742,7 @@ bool KisAiIllustrationDocker::eventFilter(QObject *watched, QEvent *event)
         if ((keyEvent->modifiers() & Qt::ControlModifier)
             && (keyEvent->key() == Qt::Key_Return || keyEvent->key() == Qt::Key_Enter)) {
             if (m_goalModeActive && m_waitingForUserStepAdvance) {
-                advanceGoalStep();
+                advanceGoalStep(true);
             } else {
                 generateIllustration();
             }
@@ -1761,7 +1763,7 @@ void KisAiIllustrationDocker::keyPressEvent(QKeyEvent *event)
     if ((event->modifiers() & Qt::ControlModifier)
         && (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter)) {
         if (m_goalModeActive && m_waitingForUserStepAdvance) {
-            advanceGoalStep();
+            advanceGoalStep(true);
         } else {
             generateIllustration();
         }
@@ -1973,7 +1975,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     QString errorMessage;
     const QString endpoint = m_endpointEditor->text().trimmed();
     const QString model = m_modelEditor->text().trimmed();
-    const QString apiKey = !m_inFlightApiKey.isEmpty() ? m_inFlightApiKey : m_apiKeyEditor->text();
+    const QString apiKey = !m_inFlightApiKey.isEmpty() ? m_inFlightApiKey : m_apiKeyEditor->text().trimmed();
 
     if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
         // A validation failure here means executeRetry()'s m_retryInFlight flag
@@ -2370,8 +2372,10 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         clearInFlightApiKey();
         return;
     }
-    // Content-type validation: reject clearly non-JSON responses before parsing.
-    if (!KisAiStrokeProgramCodec::isAcceptedResponseContentType(responseContentType, true)) {
+    // Content-type validation applies to successful responses only: failed
+    // requests (HTML gateway pages, proxy error bodies) are classified below by
+    // HTTP status with retry/backoff, instead of a spurious "not JSON" message.
+    if (requestSucceeded && !KisAiStrokeProgramCodec::isAcceptedResponseContentType(responseContentType, true)) {
         logDebug(QStringLiteral("LLM_CONTENT_TYPE"),
                  QStringLiteral("予期しないContent-Type: %1").arg(QString::fromUtf8(responseContentType)));
         setStatus(i18n("LLM の応答が JSON または SSE 形式ではありません (Content-Type: %1)。",
@@ -2405,7 +2409,10 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
                      .arg(httpStatus)
                      .arg(detail, redactCredentialText(QString::fromUtf8(rawResponse.left(500)))));
 
-        const bool isRetryableHttp = (httpStatus == 429 || (httpStatus >= 500 && httpStatus <= 504));
+        // Transport failures (httpStatus <= 0: refused/DNS/TLS) are transient
+        // too - classify them like the Goal path so they go through the bounded
+        // retry budget instead of failing the request on the first hiccup.
+        const bool isRetryableHttp = KisAiRefinementLoop::isRetryableHttpStatus(httpStatus);
         const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
         if (isRetryableHttp && m_currentRetryCount < maxRetries) {
             int retryAfterSec = 0;
@@ -2417,7 +2424,9 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
                     retryAfterSec = qMin(val, 60);
                 }
             }
-            scheduleRetry(i18n("HTTP %1 一時エラー", httpStatus), false, retryAfterSec);
+            scheduleRetry(httpStatus > 0 ? i18n("HTTP %1 一時エラー", httpStatus) : i18n("接続エラー"),
+                          false,
+                          retryAfterSec);
             return;
         }
 
@@ -2638,7 +2647,7 @@ void KisAiIllustrationDocker::generateRemoteImage(const QString &prompt)
     QString errorMessage;
     const QString endpoint = m_endpointEditor->text().trimmed();
     const QString model = m_modelEditor->text().trimmed();
-    const QString apiKey = m_apiKeyEditor->text();
+    const QString apiKey = m_apiKeyEditor->text().trimmed();
 
     if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
         if (m_uiMode != UiMode::Pro) {
@@ -2800,8 +2809,10 @@ void KisAiIllustrationDocker::finishRemoteImageRequest()
         setStatus(i18n("画像モデルの応答が上限を超えています。"), true);
         return;
     }
-    // Content-type validation: reject clearly non-JSON responses before parsing.
-    if (!KisAiStrokeProgramCodec::isAcceptedResponseContentType(responseContentType, false)) {
+    // Content-type validation applies to successful responses only: failed
+    // requests (HTML gateway pages, proxy error bodies) get the real HTTP status
+    // in the error branch below instead of a spurious "not JSON" message.
+    if (requestSucceeded && !KisAiStrokeProgramCodec::isAcceptedResponseContentType(responseContentType, false)) {
         logDebug(QStringLiteral("IMG_CONTENT_TYPE"),
                  QStringLiteral("予期しないContent-Type: %1").arg(QString::fromUtf8(responseContentType)));
         setStatus(i18n("画像モデルの応答が JSON 形式ではありません (Content-Type: %1)。",
@@ -3422,7 +3433,7 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
     if (mode == GenerationMode::LlmStrokes) {
         const QString endpoint = m_endpointEditor->text().trimmed();
         const QString model = m_modelEditor->text().trimmed();
-        const QString apiKey = m_apiKeyEditor->text();
+        const QString apiKey = m_apiKeyEditor->text().trimmed();
 
         QString errorMessage;
         if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
@@ -3925,8 +3936,11 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         finishGoalMode(false);
         return;
     }
-    // Content-type validation: reject clearly non-JSON responses before parsing.
-    if (!KisAiStrokeProgramCodec::isAcceptedResponseContentType(responseContentType, true)) {
+    // Content-type validation applies to successful responses only: failed
+    // requests (HTML gateway pages, proxy error bodies) are classified below by
+    // HTTP status - retry/backoff and Vision fallback - instead of being
+    // misreported as "not JSON".
+    if (requestSucceeded && !KisAiStrokeProgramCodec::isAcceptedResponseContentType(responseContentType, true)) {
         logDebug(QStringLiteral("GOAL_CONTENT_TYPE"),
                  QStringLiteral("予期しないContent-Type: %1").arg(QString::fromUtf8(responseContentType)));
         setStatus(i18n("LLM の応答が JSON または SSE 形式ではありません (Content-Type: %1)。",
@@ -3965,7 +3979,34 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
 
         // Vision フォールバック（保険機構）:
         // 画像付きリクエストが失敗した場合、テキストのみの指示にフォールバックして再試行
-        if (m_lastGoalRequestHadImage && !m_goalVisionFallbackActive) {
+        // Error triage: retry transient failures FIRST (429/5xx/transport, same
+        // request including the image), then the one-shot Vision text-only
+        // fallback for image-suspect 4xx / exhausted-5xx failures. Auth,
+        // endpoint and rate-limit errors never spend the fallback - dropping
+        // the image cannot fix them.
+        const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
+        const auto errorAction = KisAiRefinementLoop::classifyGoalStepError(httpStatus,
+                                                                            m_goalCurrentRetryCount,
+                                                                            maxRetries,
+                                                                            m_lastGoalRequestHadImage,
+                                                                            m_goalVisionFallbackActive);
+        if (errorAction == KisAiRefinementLoop::GoalStepErrorAction::Retry) {
+            int retryAfterSec = 0;
+            const QByteArray retryAfterHeader = reply->rawHeader("Retry-After");
+            if (!retryAfterHeader.isEmpty()) {
+                bool ok = false;
+                const int val = retryAfterHeader.trimmed().toInt(&ok);
+                if (ok && val > 0) {
+                    retryAfterSec = qMin(val, 60);
+                }
+            }
+            scheduleGoalStepRetry(httpStatus > 0 ? i18n("HTTP %1 一時エラー", httpStatus) : i18n("接続エラー"),
+                                  false,
+                                  retryAfterSec);
+            return;
+        }
+
+        if (errorAction == KisAiRefinementLoop::GoalStepErrorAction::VisionFallback) {
             m_goalVisionFallbackActive = true;
             m_lastGoalRequestHadImage = false;
             logDebug(QStringLiteral("GOAL_FALLBACK"),
@@ -3984,22 +4025,6 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
             QTimer::singleShot(600, this, [this] {
                 executeGoalStep();
             });
-            return;
-        }
-
-        const bool isRetryableHttp = (httpStatus == 429 || (httpStatus >= 500 && httpStatus <= 504));
-        const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
-        if (isRetryableHttp && m_goalCurrentRetryCount < maxRetries) {
-            int retryAfterSec = 0;
-            const QByteArray retryAfterHeader = reply->rawHeader("Retry-After");
-            if (!retryAfterHeader.isEmpty()) {
-                bool ok = false;
-                const int val = retryAfterHeader.trimmed().toInt(&ok);
-                if (ok && val > 0) {
-                    retryAfterSec = qMin(val, 60);
-                }
-            }
-            scheduleGoalStepRetry(i18n("HTTP %1 一時エラー", httpStatus), false, retryAfterSec);
             return;
         }
 
@@ -4207,10 +4232,31 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     }
 }
 
-void KisAiIllustrationDocker::advanceGoalStep()
+void KisAiIllustrationDocker::advanceGoalStep(bool userInitiated)
 {
     if (!m_goalModeActive) {
         return;
+    }
+    // Never advance on top of an in-flight request or a scheduled retry: the
+    // step counter would inflate without a fresh response for the new step.
+    if (m_reply || (m_retryTimer && m_retryTimer->isActive())) {
+        return;
+    }
+    // Debounce user activations (button double-click, Enter / Ctrl+Enter held
+    // or repeated): LocalStrokes executes a whole step synchronously and
+    // re-arms the waiting state before the second activation is delivered, so
+    // the waiting-flag gate at the call sites alone cannot stop a double step.
+    // Auto-advance singleShots pass userInitiated=false and are never debounced.
+    if (userInitiated && m_lastUserGoalAdvance.isValid() && m_lastUserGoalAdvance.elapsed() < 400) {
+        return;
+    }
+    if (userInitiated) {
+        m_lastUserGoalAdvance.start();
+    }
+    // Deactivate the trigger before running the step so a stray second click
+    // that slips past the debounce lands on a disabled button instead.
+    if (m_nextStepButton) {
+        m_nextStepButton->setEnabled(false);
     }
     m_waitingForUserStepAdvance = false;
     m_goalCurrentRetryCount = 0;
@@ -4876,7 +4922,7 @@ void KisAiIllustrationDocker::saveSettings()
         const bool saveKey = m_saveApiKeyCheck->isChecked();
         settings.setValue(QStringLiteral("AIIllustration/saveApiKey"), saveKey);
         if (saveKey) {
-            const QString rawKey = m_apiKeyEditor->text();
+            const QString rawKey = m_apiKeyEditor->text().trimmed();
             if (rawKey.isEmpty()) {
                 settings.remove(QStringLiteral("AIIllustration/apiKey"));
             } else {

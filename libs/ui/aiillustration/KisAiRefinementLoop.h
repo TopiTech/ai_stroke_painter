@@ -102,6 +102,34 @@ public:
      */
     static bool canAdvanceGoalStep(int currentStep, int totalSteps, int maxExtraSteps);
 
+    /**
+     * HTTP-status triage shared by the LLM and Goal response handlers.
+     * True for transient server conditions (429, 500-504) and for
+     * transport-level failures reported without an HTTP status
+     * (httpStatus <= 0: connection refused, DNS, TLS handshake).
+     */
+    static bool isRetryableHttpStatus(int httpStatus);
+
+    /** What the Goal step error path should do with a failed request. */
+    enum class GoalStepErrorAction {
+        Retry,          ///< transient failure: retry the same request (budget applies)
+        VisionFallback, ///< one-shot text-only fallback (image payload suspect)
+        Fail            ///< give up and end Goal mode
+    };
+
+    /**
+     * Decide the recovery action for one failed Goal step request.
+     * Retry beats VisionFallback: the one-shot fallback must not be spent on
+     * rate limits or transport errors, where dropping the image cannot help.
+     * The fallback only fires for image-bearing 4xx content errors or an
+     * exhausted 5xx budget, and never once it is already active.
+     */
+    static GoalStepErrorAction classifyGoalStepError(int httpStatus,
+                                                     int retryCount,
+                                                     int maxRetries,
+                                                     bool requestHadImage,
+                                                     bool visionFallbackActive);
+
     static bool
     shouldContinue(qreal psnrBefore, qreal psnrAfter, int roundsDone, int roundBudget, qreal minImprovementDb = 1.5);
 };

@@ -209,6 +209,40 @@ bool KisAiRefinementLoop::canAdvanceGoalStep(int currentStep, int totalSteps, in
     return qint64(currentStep) < qint64(totalSteps) + qMax(0, maxExtraSteps);
 }
 
+bool KisAiRefinementLoop::isRetryableHttpStatus(int httpStatus)
+{
+    // 429 and 5xx (up to 504) are transient server-side conditions; <= 0 covers
+    // transport-level failures where Qt reports an error but no HTTP status
+    // attribute was ever received (connection refused, DNS, TLS handshake).
+    return httpStatus == 429 || (httpStatus >= 500 && httpStatus <= 504) || httpStatus <= 0;
+}
+
+KisAiRefinementLoop::GoalStepErrorAction KisAiRefinementLoop::classifyGoalStepError(int httpStatus,
+                                                                                   int retryCount,
+                                                                                   int maxRetries,
+                                                                                   bool requestHadImage,
+                                                                                   bool visionFallbackActive)
+{
+    if (isRetryableHttpStatus(httpStatus) && retryCount < qMax(0, maxRetries)) {
+        return GoalStepErrorAction::Retry;
+    }
+
+    // The one-shot text-only fallback is only meaningful when an image was
+    // actually sent AND the failure plausibly concerns the payload (content
+    // validation, oversized body, server-side processing error).
+    // Auth, endpoint, rate-limit and transport failures are image-independent:
+    // burning the fallback there costs a full extra round trip and can never
+    // succeed where the original request failed.
+    const bool imageIndependent =
+        httpStatus == 401 || httpStatus == 403 || httpStatus == 404 || httpStatus == 408 || httpStatus == 429
+        || httpStatus <= 0;
+    const bool httpFailure = httpStatus >= 400 && httpStatus <= 599;
+    if (requestHadImage && !visionFallbackActive && httpFailure && !imageIndependent) {
+        return GoalStepErrorAction::VisionFallback;
+    }
+    return GoalStepErrorAction::Fail;
+}
+
 bool KisAiRefinementLoop::shouldContinue(qreal psnrBefore,
                                          qreal psnrAfter,
                                          int roundsDone,
