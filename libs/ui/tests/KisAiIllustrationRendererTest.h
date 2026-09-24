@@ -21,6 +21,8 @@ private Q_SLOTS:
     void testPromptExpansionPayloadAndParsing();
     void testCityConceptImagePrecedence();
     void testIsLoopbackEndpoint();
+    void testFormatBearerAuthHeader();
+    void testRedactCredentialText();
 };
 
 #endif // KIS_AI_ILLUSTRATION_RENDERER_TEST_H

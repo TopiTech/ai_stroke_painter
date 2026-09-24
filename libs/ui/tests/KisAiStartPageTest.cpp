@@ -6,6 +6,7 @@
 #include "KisAiStartPageTest.h"
 #include "aiillustration/KisAiPromptAnalyzer.h"
 #include "aiillustration/KisAiStartPageWidget.h"
+#include "utils/KisRecentDocumentsModelWrapper.h"
 
 #include <QLineEdit>
 #include <QPushButton>
@@ -192,6 +193,21 @@ void KisAiStartPageTest::testRecentStackEmptyState()
     auto *emptyLabel = widget.findChild<QLabel *>(QStringLiteral("aiEmptyStateLabel"));
     QVERIFY(emptyLabel != nullptr);
     QVERIFY(emptyLabel->text().contains(QStringLiteral("最近開いた作品はありません")));
+}
+
+void KisAiStartPageTest::testRecentDocumentsModelSignalConnection()
+{
+    KisAiStartPageWidget widget(nullptr);
+    KisRecentDocumentsModelWrapper *modelWrapper = KisRecentDocumentsModelWrapper::instance();
+    QVERIFY(modelWrapper != nullptr);
+
+    // Emitting the signal must refresh without error
+    Q_EMIT modelWrapper->sigModelIsUpToDate();
+    QCoreApplication::processEvents();
+
+    auto *recentListView = widget.findChild<QListView *>(QStringLiteral("aiRecentListView"));
+    QVERIFY(recentListView != nullptr);
+    QVERIFY(recentListView->model() != nullptr);
 }
 
 KISTEST_MAIN(KisAiStartPageTest)

@@ -152,27 +152,15 @@ void setFormRowVisible(QFormLayout *form, QWidget *fieldWidget, bool visible)
 
 static QByteArray formatBearerAuthHeader(const QString &apiKey)
 {
-    QString trimmed = apiKey.trimmed();
-    if (trimmed.startsWith(QLatin1String("Bearer "), Qt::CaseInsensitive)) {
-        trimmed = trimmed.mid(7).trimmed();
-    }
-    return QByteArrayLiteral("Bearer ") + trimmed.toUtf8();
+    return KisAiIllustrationRenderer::formatBearerAuthHeader(apiKey);
 }
 
 // 自前キーはもともとログに書かないが、敵対的/設定ミスのサーバーが認証情報を
 // エコーしてきた場合はそのままログ・ステータスラベルへ流出する。
-// Bearer トークンと sk- 系キーをマスクしてから表示/記録する防御層。
+// Bearer トークンや API キー、URL/JSON 中の機密情報をマスクしてから表示/記録する防御層。
 QString redactCredentialText(const QString &text)
 {
-    if (text.isEmpty()) {
-        return text;
-    }
-    static const QRegularExpression bearerRe(QStringLiteral(R"((Bearer\s+)[A-Za-z0-9\-._~+/=]+)"));
-    QString out = text;
-    out.replace(bearerRe, QStringLiteral("\\1***"));
-    static const QRegularExpression skRe(QStringLiteral(R"(sk-[A-Za-z0-9_\-]{6,})"));
-    out.replace(skRe, QStringLiteral("sk-***"));
-    return out;
+    return KisAiIllustrationRenderer::redactCredentialText(text);
 }
 
 bool protectApiKeyForCurrentUser(const QString &apiKey, QString *protectedValue)
@@ -3252,7 +3240,7 @@ QSize KisAiIllustrationDocker::effectiveCanvasSize() const
 
 bool KisAiIllustrationDocker::addImageAsLayer(const QImage &sourceImage, const QString &layerName)
 {
-    if (!m_mainWindow || sourceImage.isNull()) {
+    if (!m_mainWindow || !m_mainWindow->viewManager() || sourceImage.isNull()) {
         setStatus(i18n("生成結果をキャンバスに追加できません。"), true);
         return false;
     }
@@ -5673,6 +5661,12 @@ void KisAiIllustrationDocker::setReferenceImage(const QImage &image)
 {
     if (image.isNull()) {
         clearReferenceImage();
+        return;
+    }
+
+    if (image.width() > MAX_REFERENCE_IMAGE_EDGE || image.height() > MAX_REFERENCE_IMAGE_EDGE
+        || qint64(image.width()) * qint64(image.height()) > MAX_REFERENCE_IMAGE_PIXELS) {
+        setStatus(i18n("画像サイズが大きすぎます: %1×%2", image.width(), image.height()), true);
         return;
     }
 

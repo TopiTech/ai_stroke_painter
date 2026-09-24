@@ -408,6 +408,9 @@ void KisAiStrokeCoverageRaster::paintStroke(QPainter &painter,
     }
 
     QImage mask(bounds.size(), QImage::Format_ARGB32);
+    if (mask.isNull()) {
+        return;
+    }
     mask.fill(Qt::black);
 
     {
@@ -613,6 +616,9 @@ void KisAiStrokeCoverageRaster::paintStroke(QPainter &painter,
     }
 
     QImage tile(bounds.size(), QImage::Format_ARGB32);
+    if (tile.isNull()) {
+        return;
+    }
     const int cr = color.red();
     const int cg = color.green();
     const int cb = color.blue();

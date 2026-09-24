@@ -146,6 +146,11 @@ KisAiStartPageWidget::KisAiStartPageWidget(KisMainWindow *mainWindow, QWidget *p
     mainLayout->addWidget(m_scrollArea);
 
     // Initialize recent files model
+    KisRecentDocumentsModelWrapper *recentFilesModel = KisRecentDocumentsModelWrapper::instance();
+    if (recentFilesModel) {
+        connect(recentFilesModel, &KisRecentDocumentsModelWrapper::sigModelIsUpToDate,
+                this, &KisAiStartPageWidget::slotUpdateRecentFiles);
+    }
     slotUpdateRecentFiles();
 }
 
@@ -788,10 +793,16 @@ void KisAiStartPageWidget::slotRecentDocumentClicked(const QModelIndex &index)
 {
     if (!m_mainWindow || !index.isValid())
         return;
-    const QString fileUrl = index.data(Qt::ToolTipRole).toString();
-    if (fileUrl.isEmpty())
+    const QUrl url = index.data(Qt::UserRole + 1).toUrl();
+    QString filePath;
+    if (url.isValid() && url.isLocalFile()) {
+        filePath = url.toLocalFile();
+    } else {
+        filePath = index.data(Qt::ToolTipRole).toString();
+    }
+    if (filePath.isEmpty())
         return;
-    m_mainWindow->openDocument(fileUrl, KisMainWindow::None);
+    m_mainWindow->openDocument(filePath, KisMainWindow::None);
 }
 
 void KisAiStartPageWidget::showCanvasNotification(const QString &message)

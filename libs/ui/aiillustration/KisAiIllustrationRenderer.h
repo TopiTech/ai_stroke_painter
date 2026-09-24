@@ -41,6 +41,12 @@ public:
 
     /** Check whether an endpoint URL points to a loopback/local development address. */
     static bool isLoopbackEndpoint(const QString &endpoint);
+
+    /** Format an API key as a Bearer authorization header value, stripping any CRLF characters. */
+    static QByteArray formatBearerAuthHeader(const QString &apiKey);
+
+    /** Mask Bearer tokens, API keys, and sensitive URL/JSON query credentials from status text or logs. */
+    static QString redactCredentialText(const QString &text);
 };
 
 #endif // KIS_AI_ILLUSTRATION_RENDERER_H

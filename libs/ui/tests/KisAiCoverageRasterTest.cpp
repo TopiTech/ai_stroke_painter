@@ -393,4 +393,38 @@ void KisAiCoverageRasterTest::testSingleSampleFrameComputation()
     QCOMPARE(img.size(), QSize(kCanvas, kCanvas));
 }
 
+void KisAiCoverageRasterTest::testPaintStrokeNullOrDegenerateBuffer()
+{
+    // paintStroke must safely handle out-of-bounds samples and degenerate bounds without crashing
+    QImage canvas(100, 100, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+    QPainter painter(&canvas);
+
+    KisAiStrokeBrush brush;
+    brush.size = 10.0;
+    brush.sizeMode = QStringLiteral("px");
+
+    KisAiStrokeCoverageRaster::StrokeTexture texture;
+    texture.style = KisAiStrokeCoverageRaster::TextureStyle::Solid;
+
+    // Samples far outside working bounds (-5000, -5000)
+    const QVector<KisAiStrokeCoverageRaster::StrokeSample> outOfBoundsSamples = {
+        {QPointF(-5000.0, -5000.0), 10.0},
+        {QPointF(-4900.0, -4900.0), 10.0}
+    };
+    KisAiStrokeCoverageRaster::paintStroke(painter, outOfBoundsSamples, false, brush, texture, QColor(255, 0, 0), QSize(100, 100), 1);
+
+    // Normal samples with various texture styles must render without null pointer dereference
+    const QVector<KisAiStrokeCoverageRaster::StrokeSample> normalSamples = {
+        {QPointF(20.0, 20.0), 5.0},
+        {QPointF(50.0, 50.0), 5.0}
+    };
+    for (const auto style : {KisAiStrokeCoverageRaster::TextureStyle::Solid,
+                            KisAiStrokeCoverageRaster::TextureStyle::Airbrush,
+                            KisAiStrokeCoverageRaster::TextureStyle::Neon}) {
+        texture.style = style;
+        KisAiStrokeCoverageRaster::paintStroke(painter, normalSamples, false, brush, texture, QColor(0, 128, 255), QSize(100, 100), 1);
+    }
+}
+
 KISTEST_MAIN(KisAiCoverageRasterTest)

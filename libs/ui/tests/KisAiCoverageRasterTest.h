@@ -26,6 +26,7 @@ private Q_SLOTS:
     void testSampleStrokeMismatchedPressures();
     void testPaintStrokeDegenerateSize();
     void testSingleSampleFrameComputation();
+    void testPaintStrokeNullOrDegenerateBuffer();
 };
 
 #endif // KIS_AI_COVERAGE_RASTER_TEST_H

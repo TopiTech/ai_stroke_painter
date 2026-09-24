@@ -21,6 +21,7 @@ private Q_SLOTS:
     void testRecentStackEmptyState();
     void testQuickPromptEmptyDoesNotCrash();
     void testPasteEmptyClipboardDoesNotCrash();
+    void testRecentDocumentsModelSignalConnection();
 };
 
 #endif // KIS_AI_START_PAGE_TEST_H

@@ -276,4 +276,69 @@ void KisAiIllustrationRendererTest::testIsLoopbackEndpoint()
     QVERIFY(!KisAiIllustrationRenderer::isLoopbackEndpoint(QStringLiteral("")));
 }
 
+void KisAiIllustrationRendererTest::testFormatBearerAuthHeader()
+{
+    // Standard API key
+    QCOMPARE(KisAiIllustrationRenderer::formatBearerAuthHeader(QStringLiteral("sk-1234567890")),
+             QByteArrayLiteral("Bearer sk-1234567890"));
+
+    // Already has "Bearer " prefix (case-insensitive)
+    QCOMPARE(KisAiIllustrationRenderer::formatBearerAuthHeader(QStringLiteral("Bearer secret-token")),
+             QByteArrayLiteral("Bearer secret-token"));
+    QCOMPARE(KisAiIllustrationRenderer::formatBearerAuthHeader(QStringLiteral("bearer secret-token")),
+             QByteArrayLiteral("Bearer secret-token"));
+
+    // Strips surrounding whitespace
+    QCOMPARE(KisAiIllustrationRenderer::formatBearerAuthHeader(QStringLiteral("  my-key-abc   ")),
+             QByteArrayLiteral("Bearer my-key-abc"));
+
+    // Strips CRLF / newline characters to prevent HTTP header injection
+    QCOMPARE(KisAiIllustrationRenderer::formatBearerAuthHeader(QStringLiteral("clean-key\r\nX-Injected: attack\r\n")),
+             QByteArrayLiteral("Bearer clean-keyX-Injected: attack"));
+    QCOMPARE(KisAiIllustrationRenderer::formatBearerAuthHeader(QStringLiteral("key\nwith\nnewlines")),
+             QByteArrayLiteral("Bearer keywithnewlines"));
+}
+
+void KisAiIllustrationRendererTest::testRedactCredentialText()
+{
+    // Empty text
+    QCOMPARE(KisAiIllustrationRenderer::redactCredentialText(QString()), QString());
+
+    // Bearer token redaction
+    const QString bearerInput = QStringLiteral("Authorization: Bearer my-secret-token-12345.abc");
+    const QString bearerOutput = KisAiIllustrationRenderer::redactCredentialText(bearerInput);
+    QVERIFY(!bearerOutput.contains(QStringLiteral("my-secret-token")));
+    QVERIFY(bearerOutput.contains(QStringLiteral("Bearer ***")));
+
+    // OpenAI / Anthropic sk- key redaction
+    const QString skInput = QStringLiteral("Error: invalid key sk-proj-1234567890abcdef at line 1");
+    const QString skOutput = KisAiIllustrationRenderer::redactCredentialText(skInput);
+    QVERIFY(!skOutput.contains(QStringLiteral("1234567890abcdef")));
+    QVERIFY(skOutput.contains(QStringLiteral("sk-***")));
+
+    // Google Gemini API key redaction (AIzaSy...)
+    const QString geminiInput = QStringLiteral("Request to https://generativelanguage.googleapis.com failed: key AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q");
+    const QString geminiOutput = KisAiIllustrationRenderer::redactCredentialText(geminiInput);
+    QVERIFY(!geminiOutput.contains(QStringLiteral("A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q")));
+    QVERIFY(geminiOutput.contains(QStringLiteral("AIzaSy***")));
+
+    // Sensitive URL query parameters
+    const QString urlInput = QStringLiteral("GET https://example.com/api?api_key=super_secret_token&user=alice");
+    const QString urlOutput = KisAiIllustrationRenderer::redactCredentialText(urlInput);
+    QVERIFY(!urlOutput.contains(QStringLiteral("super_secret_token")));
+    QVERIFY(urlOutput.contains(QStringLiteral("api_key=***")));
+    QVERIFY(urlOutput.contains(QStringLiteral("user=alice")));
+
+    const QString urlParam2 = QStringLiteral("https://local:8000/v1/generate?key=xyz123&format=json");
+    const QString urlOut2 = KisAiIllustrationRenderer::redactCredentialText(urlParam2);
+    QVERIFY(!urlOut2.contains(QStringLiteral("xyz123")));
+    QVERIFY(urlOut2.contains(QStringLiteral("key=***")));
+
+    // JSON response body containing credentials
+    const QString jsonInput = QStringLiteral("{\"apiKey\": \"secret-api-key-999\", \"status\": \"ok\"}");
+    const QString jsonOutput = KisAiIllustrationRenderer::redactCredentialText(jsonInput);
+    QVERIFY(!jsonOutput.contains(QStringLiteral("secret-api-key-999")));
+    QVERIFY(jsonOutput.contains(QStringLiteral("\"apiKey\": \"***\"")));
+}
+
 KISTEST_MAIN(KisAiIllustrationRendererTest)

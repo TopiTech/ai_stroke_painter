@@ -9,6 +9,7 @@
 #define KISRECENTDOCUMENTSMODELWRAPPER_H
 
 #include <QStandardItemModel>
+#include "kritaui_export.h"
 
 class QString;
 class QIcon;
@@ -23,7 +24,7 @@ class QIcon;
  *
  * See also `KisRecentFilesManager`.
  */
-class KisRecentDocumentsModelWrapper : public QObject
+class KRITAUI_EXPORT KisRecentDocumentsModelWrapper : public QObject
 {
     Q_OBJECT
 public:
