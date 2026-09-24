@@ -63,6 +63,8 @@ dist/
 .mimocode/
 .agent/
 .gemini/
+.codewhale/
+.pi/
 
 # Test output and log files
 test_*.txt
