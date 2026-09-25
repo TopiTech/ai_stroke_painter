@@ -1187,9 +1187,9 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter,
         return;
     }
 
-    // V9: the committer already stabilized + linted. Re-stabilize is
-    // idempotent and cheap; lint uses the same geometry that will be inked.
-    const bool advanced = KisAiModelRouter::shouldUseAdvancedStrokeLogic();
+    const bool isLineart = (op.layer.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) == 0);
+    const bool advanced = KisAiModelRouter::shouldUseAdvancedStrokeLogic() || isLineart
+        || (op.brush.profile.compare(QLatin1String("gpen"), Qt::CaseInsensitive) == 0);
     const QVector<KisAiStrokePoint> stablePoints = advanced
         ? KisAiDeliberateStroke::applyFlagshipInkDynamics(
             KisAiDeliberateStroke::smoothFlagshipStroke(op.points,
@@ -1234,7 +1234,6 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter,
     }
 
     const QString lowerId = op.id.toLower();
-    const bool isLineart = (op.layer.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) == 0);
     if (isLineart) {
         const bool isSkinContour = (lowerId.contains(QLatin1String("skin")) || lowerId.contains(QLatin1String("face"))
             || lowerId.contains(QLatin1String("jaw")) || lowerId.contains(QLatin1String("chin"))

@@ -712,7 +712,6 @@ QVector<KisAiStrokePoint> KisAiDeliberateStroke::applyFlagshipInkDynamics(
             }
         }
     }
-
     return out;
 }
 

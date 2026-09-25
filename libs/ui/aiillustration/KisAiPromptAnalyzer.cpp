@@ -512,6 +512,15 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
         .arg(spec.harmony.ambientShadow.name())
         .arg(spec.harmony.accentColor.name());
 
+    out += QStringLiteral(
+        "=== DELIBERATE STROKE CRAFTSMANSHIP & 1-HOUR WORKFLOW DIRECTIVE ===\n"
+        "- PACING: This is a deep, 1-hour master-level drawing session. Do NOT rush or attempt to finish prematurely.\n"
+        "- SINGLE STROKE DISCIPLINE: Draw every single line with deliberate craftsmanship, patience, and calligraphic precision.\n"
+        "- LINE ANATOMY: Every inking stroke must feature smooth Catmull-Rom curvature, continuous line-weight modulation "
+        "(subtle entry flick -> grounded expressive body -> delicate tapered exit), and zero erratic jitter.\n"
+        "- FORBIDDEN: NEVER emit noisy zigzag hatch clusters, scribbles, or redundant overlapping scratches. Value line economy and structural elegance.\n"
+        "- ACCUMULATIVE COMMITMENT: Do NOT redraw earlier foundational layers unless targeted defect repair is needed.\n\n");
+
     if (spec.style == ArtStyle::PureLineart) {
         if (totalSteps <= 2) {
             if (phase == 1) {
@@ -529,6 +538,139 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
                     "- Deepen acute corners with corner inking fillets and add delicate shading hatch lines.\n"
                     "- Final Goal Check: Bring lineart to master inking quality.\n"
                 );
+            }
+            return out;
+        }
+
+        if (totalSteps >= 18) {
+            switch (phase) {
+            case 1:
+                out += QStringLiteral(
+                    "PHASE 1 MISSION: [MASTER COMPOSITION & GESTURE ANCHORS]\n"
+                    "- Target Layer: 'Lineart'. Pristine white canvas.\n"
+                    "- Establish global rule-of-thirds balance, figure pose dynamics, and head/torso bounding landmarks.\n"
+                );
+                break;
+            case 2:
+                out += QStringLiteral(
+                    "PHASE 2 MISSION: [HEAD CONTOUR & ANATOMICAL PROPORTIONS]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Inscribe the refined cranial dome, jawline silhouette, chin apex, and neck posture with single deliberate G-pen curves.\n"
+                );
+                break;
+            case 3:
+                out += QStringLiteral(
+                    "PHASE 3 MISSION: [FACIAL LANDMARKS & EYE SOCKET PLACEMENT]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Lay out precise registration anchors for brows, eye sockets, nose bridge, and lip center with delicate feather strokes.\n"
+                );
+                break;
+            case 4:
+                out += QStringLiteral(
+                    "PHASE 4 MISSION: [MASTER EYE INKING - UPPER LASH ARCHES & DOUBLE LIDS]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Inscribe authoritative, calligraphic upper eyelid arches with rich line weight (tapering at tear duct, thickening at peak, sharp wing flick).\n"
+                );
+                break;
+            case 5:
+                out += QStringLiteral(
+                    "PHASE 5 MISSION: [MASTER EYE INKING - PUPIL, IRIS RINGS & LIMBAL BORDER]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Draw circular/elliptical iris contours, central pupil core, inner limbal ring lines, and delicate catchlight boundary circles.\n"
+                );
+                break;
+            case 6:
+                out += QStringLiteral(
+                    "PHASE 6 MISSION: [NOSE, LIPS & FACIAL EXPRESSION MICRO-LINES]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Place subtle nose tip point/facet, expressive upper lip seam, and delicate lower lip shadow line. Maximum grace and restraint.\n"
+                );
+                break;
+            case 7:
+                out += QStringLiteral(
+                    "PHASE 7 MISSION: [PRIMARY HAIR MASSES & FLOW CONTOURS]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Define the large outer hair silhouette (bangs, side locks, crown volume) using long, sweeping Catmull-Rom splines.\n"
+                );
+                break;
+            case 8:
+                out += QStringLiteral(
+                    "PHASE 8 MISSION: [SECONDARY HAIR LOCKS & CLUMP SPLINES]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Subdivide large hair masses into rhythmically flowing clumps with tapering S-curves and C-curves.\n"
+                );
+                break;
+            case 9:
+                out += QStringLiteral(
+                    "PHASE 9 MISSION: [DELICATE FLYAWAYS & HAIR TIP TAPERING]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Add ultrafine individual hair strands and playful flyaways. Ensure clean tapering points without blunt ends.\n"
+                );
+                break;
+            case 10:
+                out += QStringLiteral(
+                    "PHASE 10 MISSION: [TORSO & SHOULDERS SILHOUETTE INKING]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Inscribe collarbones, shoulder lines, and main torso posture contours with crisp anatomical confidence.\n"
+                );
+                break;
+            case 11:
+                out += QStringLiteral(
+                    "PHASE 11 MISSION: [GARMENT CONTOURS & COLLAR/CUFF ANCHORS]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Outline garment silhouettes, neckline, lapels, sleeves, and main fabric edges.\n"
+                );
+                break;
+            case 12:
+                out += QStringLiteral(
+                    "PHASE 12 MISSION: [CLOTHING TENSION FOLDS & SEAM INKING]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Render tension pipe folds radiating from anchor points (elbows, waist, buttons) and delicate seam stitches.\n"
+                );
+                break;
+            case 13:
+                out += QStringLiteral(
+                    "PHASE 13 MISSION: [FINE DRAPERY, RUFFLES & ACCESSORY INKING]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Inscribe intricate clothing details, jewelry, ribbons, buttons, and costume embellishments.\n"
+                );
+                break;
+            case 14:
+                out += QStringLiteral(
+                    "PHASE 14 MISSION: [CHIN & NECK SHADOW PARALLEL HATCHING]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Inscribe exquisite, perfectly spaced parallel hatch lines along the cast shadow under the jaw and chin for tonal depth.\n"
+                );
+                break;
+            case 15:
+                out += QStringLiteral(
+                    "PHASE 15 MISSION: [CLOTHING CREVICE SHADING & FORM TONE HATCHING]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Add subtle cross-hatching or delicate density lines inside deep clothing folds and armpit crevices.\n"
+                );
+                break;
+            case 16:
+                out += QStringLiteral(
+                    "PHASE 16 MISSION: [CORNER INKING FILLETS & ACUTE ANGLE ACCENTS]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Deepen line intersections and acute vertices with inking fillets (ink pooling simulation) for comic weight.\n"
+                );
+                break;
+            case 17:
+                out += QStringLiteral(
+                    "PHASE 17 MISSION: [LINE WEIGHT MODULATION & CALLIGRAPHIC DYNAMICS]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Accentuate shadow-side contours with heavier strokes; keep light-side lines hair-thin. Inspect overall line balance.\n"
+                );
+                break;
+            case 18:
+            default:
+                out += QStringLiteral(
+                    "PHASE 18 MISSION: [FINAL INK CLEANUP, CORRECTIONS & PRESENTATION POLISH]\n"
+                    "- Target Layer: 'Lineart'.\n"
+                    "- Inspect full artwork. Clean any stray overlaps with is_eraser: true. Ensure flawless presentation-grade lineart.\n"
+                );
+                break;
             }
             return out;
         }
@@ -573,6 +715,142 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
                 "- Target Layer: 'Lineart'.\n"
                 "- Accentuate acute corners with corner inking fillets.\n"
                 "- Add delicate parallel hatch lines under chin and along shadow crevices for rich tone depth.\n"
+            );
+            break;
+        }
+        return out;
+    }
+
+    if (totalSteps >= 18) {
+        switch (phase) {
+        case 1:
+            out += QStringLiteral(
+                "PHASE 1 MISSION: [MASTER COMPOSITION, PROPORTIONS & CANVAS LAYOUT]\n"
+                "- Target Layers: 'Background' and 'Flats'.\n"
+                "- Establish the global rule-of-thirds balance, focal anchors, and rough anatomical gesture silhouettes.\n"
+                "- Zero white gaps: lay down seamless boundary blocks for subject and environmental frame.\n"
+            );
+            break;
+        case 2:
+            out += QStringLiteral(
+                "PHASE 2 MISSION: [ATMOSPHERIC FAR-BACKGROUND & HORIZON GRADIENTS]\n"
+                "- Target Layer: 'Background' ONLY.\n"
+                "- Build the sky, horizon atmosphere, far-distance haze, and ambient environment color tone with smooth gradient fills.\n"
+            );
+            break;
+        case 3:
+            out += QStringLiteral(
+                "PHASE 3 MISSION: [ENVIRONMENT STRUCTURES & MIDGROUND ARCHITECTURE]\n"
+                "- Target Layer: 'Background' ONLY.\n"
+                "- Render midground structures (buildings, natural landscape masses, interior walls, lighting props) to anchor depth.\n"
+            );
+            break;
+        case 4:
+            out += QStringLiteral(
+                "PHASE 4 MISSION: [CHARACTER SILHOUETTES & BASE GEOMETRY BLOCKING]\n"
+                "- Target Layer: 'Flats' ONLY.\n"
+                "- Define crisp, clean, non-overlapping geometric silhouettes for the character body, head, and posing volumes.\n"
+            );
+            break;
+        case 5:
+            out += QStringLiteral(
+                "PHASE 5 MISSION: [FLAT COLORING - SKIN BASE & INNER FABRIC]\n"
+                "- Target Layer: 'Flats' ONLY.\n"
+                "- Lay down rich, saturated, healthy skin flat colors (%1) and inner garment bases. Zero unpainted voids.\n"
+            ).arg(spec.harmony.keyLight.name());
+            break;
+        case 6:
+            out += QStringLiteral(
+                "PHASE 6 MISSION: [FLAT COLORING - HAIR CLUSTERS & OUTER COSTUME]\n"
+                "- Target Layer: 'Flats' ONLY.\n"
+                "- Block in base flat colors for main hair masses, outer clothing fabrics, and key costume accessories.\n"
+            );
+            break;
+        case 7:
+            out += QStringLiteral(
+                "PHASE 7 MISSION: [PRIMARY FORM SHADING & GLOBAL LIGHT DIRECTION]\n"
+                "- Target Layer: 'Shading' ONLY (Multiply blend mode).\n"
+                "- Establish global light direction (%1). Render smooth 3D form shading across face curvature, neck, and limbs.\n"
+            ).arg(spec.harmony.ambientShadow.name());
+            break;
+        case 8:
+            out += QStringLiteral(
+                "PHASE 8 MISSION: [SECONDARY CAST SHADOWS & AMBIENT OCCLUSION]\n"
+                "- Target Layer: 'Shading' ONLY (Multiply blend mode).\n"
+                "- Inscribe sharp, crisp cast shadows: under bangs onto forehead, jawline onto neck, and deep garment crevices.\n"
+            );
+            break;
+        case 9:
+            out += QStringLiteral(
+                "PHASE 9 MISSION: [SUBSURFACE SCATTERING & WARMTH BLUSH WASH]\n"
+                "- Target Layer: 'Shading' / 'Flats'.\n"
+                "- Add delicate subsurface scattering (SSS) warmth along terminator shadow edges, cheek blush washes, and earlobe warmth.\n"
+            );
+            break;
+        case 10:
+            out += QStringLiteral(
+                "PHASE 10 MISSION: [STRUCTURAL ROUGH CONTOURS & FEATURE REGISTRATION]\n"
+                "- Target Layer: 'Lineart' ONLY.\n"
+                "- Lay down structural placement lines, anatomical anchors, and feature registrations over the shaded forms.\n"
+            );
+            break;
+        case 11:
+            out += QStringLiteral(
+                "PHASE 11 MISSION: [DELIBERATE MICRO-INKING - EYES & EXPRESSION]\n"
+                "- Target Layer: 'Lineart' ONLY.\n"
+                "- CRITICAL CRAFTSMANSHIP: Draw upper lash arches, double eyelids, iris rings, pupil cores, and subtle lip contours.\n"
+                "- Inscribe each line with extreme care and smooth Catmull-Rom curvature. Zero scribbles or noisy dots.\n"
+            );
+            break;
+        case 12:
+            out += QStringLiteral(
+                "PHASE 12 MISSION: [DELIBERATE PRECISION INKING - SILHOUETTES & CONTOURS]\n"
+                "- Target Layer: 'Lineart' ONLY.\n"
+                "- Inscribe authoritative outer contour linework using G-pen splines with dynamic line-weight tapering.\n"
+            );
+            break;
+        case 13:
+            out += QStringLiteral(
+                "PHASE 13 MISSION: [DELIBERATE PRECISION INKING - HAIR STRANDS & FLOW SPLINES]\n"
+                "- Target Layer: 'Lineart' ONLY.\n"
+                "- Trace flowing hair clumps, sub-strands, and delicate flyaway lines. Every strand must taper gracefully to a point.\n"
+            );
+            break;
+        case 14:
+            out += QStringLiteral(
+                "PHASE 14 MISSION: [DELIBERATE PRECISION INKING - CLOTH FOLDS, SEAMS & DRAPERY]\n"
+                "- Target Layer: 'Lineart' ONLY.\n"
+                "- Inscribe tension lines, dynamic drapery folds, seams, and fabric hems. Express material weight through line weight.\n"
+            );
+            break;
+        case 15:
+            out += QStringLiteral(
+                "PHASE 15 MISSION: [DELICATE FORM HATCHING & CORNER INKING FILLETS]\n"
+                "- Target Layer: 'Lineart' ONLY.\n"
+                "- Accentuate acute corners with corner fillets (ink pooling). Add delicate, orderly parallel tone hatching in shadows.\n"
+            );
+            break;
+        case 16:
+            out += QStringLiteral(
+                "PHASE 16 MISSION: [PRIMARY DIFFUSE HIGHLIGHTS & HAIR ANGEL HALO]\n"
+                "- Target Layer: 'Highlights' ONLY (Screen blend mode).\n"
+                "- Place soft luminous sheen on hair crests (angel halo), gentle forehead/nose bridge diffuse light, and cloth sheen.\n"
+            );
+            break;
+        case 17:
+            out += QStringLiteral(
+                "PHASE 17 MISSION: [SPECULAR GLINTS, LIP SHINE & EYE CATCHLIGHTS]\n"
+                "- Target Layer: 'Highlights' ONLY (Screen blend mode).\n"
+                "- Paint crisp, brilliant specular highlights: eye catchlights (#ffffff), lip moist gleam, and sharp jewelry glints.\n"
+            );
+            break;
+        case 18:
+        default:
+            out += QStringLiteral(
+                "PHASE 18 MISSION: [ATMOSPHERIC RIM LIGHT, BLOOM & MASTERWORK POLISH]\n"
+                "- Target Layers: 'Highlights' and 'FX'.\n"
+                "- Inscribe dramatic rim light along outer hair and shoulder contours. Balance overall contrast and atmospheric harmony.\n"
+                "- STRICT: No random noise or clutter particles unless explicitly requested in the prompt. Deliver 100% masterwork readiness.\n"
             );
             break;
         }

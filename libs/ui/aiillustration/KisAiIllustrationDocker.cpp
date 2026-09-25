@@ -1164,28 +1164,21 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     goalOptionsLayout->setContentsMargins(0, 4, 0, 0);
     goalOptionsLayout->setSpacing(6);
 
-    m_goalStepsSpin = new QSpinBox(goalOptionsWidget);
-    m_goalStepsSpin->setRange(2, 6);
-    m_goalStepsSpin->setValue(4);
-    m_goalStepsSpin->setSuffix(i18n(" 段階"));
-    m_goalStepsSpin->setAccessibleName(i18n("Goal mode step count"));
-    goalOptionsLayout->addRow(i18n("基本ステップ数"), m_goalStepsSpin);
-
     m_goalTargetReadinessSpin = new QSpinBox(goalOptionsWidget);
     m_goalTargetReadinessSpin->setRange(60, 98);
     m_goalTargetReadinessSpin->setValue(85);
     m_goalTargetReadinessSpin->setSuffix(QStringLiteral(" %"));
-    m_goalTargetReadinessSpin->setToolTip(i18n("作画完了とみなす目標完成度です。基本ステップ数終了後も、この完成度に達するまで追加ブラッシュアップを自律継続します。"));
+    m_goalTargetReadinessSpin->setToolTip(i18n("作画完了とみなす目標完成度です。目標に達するまで自律的に多段階作画・視覚批評・ブラッシュアップを継続します。"));
     m_goalTargetReadinessSpin->setAccessibleName(i18n("Goal target readiness percentage"));
     goalOptionsLayout->addRow(i18n("目標完成度 (クオリティ)"), m_goalTargetReadinessSpin);
 
-    m_goalMaxExtraStepsSpin = new QSpinBox(goalOptionsWidget);
-    m_goalMaxExtraStepsSpin->setRange(1, 8);
-    m_goalMaxExtraStepsSpin->setValue(4);
-    m_goalMaxExtraStepsSpin->setSuffix(i18n(" 段階まで"));
-    m_goalMaxExtraStepsSpin->setToolTip(i18n("目標完成度に達しない場合に自律継続する追加ブラッシュアップの最大安全ステップ数です。"));
-    m_goalMaxExtraStepsSpin->setAccessibleName(i18n("Goal maximum extra refinement steps"));
-    goalOptionsLayout->addRow(i18n("追加ブラッシュアップ上限"), m_goalMaxExtraStepsSpin);
+    m_goalSafetyLimitSpin = new QSpinBox(goalOptionsWidget);
+    m_goalSafetyLimitSpin->setRange(10, 60);
+    m_goalSafetyLimitSpin->setValue(36);
+    m_goalSafetyLimitSpin->setSuffix(i18n(" ステップまで"));
+    m_goalSafetyLimitSpin->setToolTip(i18n("無限ループ等の暴走を防止するための最大安全上限ステップ数です（1時間の綿密な制作セッションを想定）。通常は目標完成度に達した時点で自動完了します。"));
+    m_goalSafetyLimitSpin->setAccessibleName(i18n("Goal safety step limit"));
+    goalOptionsLayout->addRow(i18n("暴走防止用上限ステップ数"), m_goalSafetyLimitSpin);
 
     m_artStyleCombo = new QComboBox(goalOptionsWidget);
     m_artStyleCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
@@ -1489,7 +1482,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     connect(m_goalModeCheck, &QCheckBox::toggled, this, [this] {
         saveSettings();
     });
-    connect(m_goalStepsSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] {
+    connect(m_goalSafetyLimitSpin, qOverload<int>(&QSpinBox::valueChanged), this, [this] {
         saveSettings();
     });
     connect(m_artStyleCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
@@ -1654,9 +1647,8 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
         // Goal Mode controls
         chainTab(m_goalModeCheck);
-        chainTab(m_goalStepsSpin);
         chainTab(m_goalTargetReadinessSpin);
-        chainTab(m_goalMaxExtraStepsSpin);
+        chainTab(m_goalSafetyLimitSpin);
         chainTab(m_artStyleCombo);
         chainTab(m_pausePerStepCheck);
 
@@ -3169,14 +3161,11 @@ void KisAiIllustrationDocker::setBusy(bool busy)
             (m_currentMode == GenerationMode::LlmStrokes || m_currentMode == GenerationMode::LocalStrokes);
         m_goalModeCheck->setEnabled(allowGeneralInput && goalCompatible);
     }
-    if (m_goalStepsSpin) {
-        m_goalStepsSpin->setEnabled(allowGeneralInput);
-    }
     if (m_goalTargetReadinessSpin) {
         m_goalTargetReadinessSpin->setEnabled(allowGeneralInput);
     }
-    if (m_goalMaxExtraStepsSpin) {
-        m_goalMaxExtraStepsSpin->setEnabled(allowGeneralInput);
+    if (m_goalSafetyLimitSpin) {
+        m_goalSafetyLimitSpin->setEnabled(allowGeneralInput);
     }
     if (m_artStyleCombo) {
         m_artStyleCombo->setEnabled(allowGeneralInput);
@@ -3420,7 +3409,7 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
     m_goalModeActive = true;
     m_goalPrompt = prompt;
     m_goalCurrentStep = 1;
-    m_goalTotalSteps = m_goalStepsSpin ? m_goalStepsSpin->value() : 4;
+    m_goalTotalSteps = KisAiPromptAnalyzer::DEFAULT_GOAL_MASTERWORK_STEPS;
     m_waitingForUserStepAdvance = false;
     m_goalVisionFallbackActive = false;
     m_lastGoalRequestHadImage = false;
@@ -3489,21 +3478,23 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
     }
 
     m_goalTargetReadiness = m_goalTargetReadinessSpin ? (m_goalTargetReadinessSpin->value() / 100.0) : 0.85;
-    m_goalMaxExtraSteps = m_goalMaxExtraStepsSpin ? m_goalMaxExtraStepsSpin->value() : 4;
+    m_goalSafetyLimit = m_goalSafetyLimitSpin ? m_goalSafetyLimitSpin->value() : 36;
+    m_goalMaxExtraSteps = qMax(0, m_goalSafetyLimit - m_goalTotalSteps);
 
     logDebug(QStringLiteral("GOAL_START"),
-             QStringLiteral("Goalモード開始 (基本 %1 段階, 目標完成度 %2%, prompt=\"%3\")")
+             QStringLiteral("Goalモード開始 (1時間マスターワーク %1 工程, 暴走防止上限 %2, 目標完成度 %3%, prompt=\"%4\")")
                  .arg(m_goalTotalSteps)
+                 .arg(m_goalSafetyLimit)
                  .arg(qRound(m_goalTargetReadiness * 100.0))
                  .arg(prompt.left(60)));
 
     if (m_goalInspectorCard) {
         m_goalInspectorCard->setVisible(true);
         if (m_goalPhaseLabel) {
-            m_goalPhaseLabel->setText(i18n("🎯 ステップ 1/%1 開始準備中…", m_goalTotalSteps));
+            m_goalPhaseLabel->setText(i18n("🎯 工程 1/%1 開始準備中…", m_goalTotalSteps));
         }
         if (m_agentFocusLabel) {
-            m_agentFocusLabel->setText(i18n("🎯 着目領域: 構図立案・ベース構築"));
+            m_agentFocusLabel->setText(i18n("🎯 着目領域: 構図立案・キャンバスレイアウト"));
         }
         if (m_readinessBar) {
             m_readinessBar->setValue(0);
@@ -3555,16 +3546,15 @@ void KisAiIllustrationDocker::executeGoalStep()
         if (m_goalPhaseLabel) {
             if (isExtraRefine) {
                 m_goalPhaseLabel->setText(
-                    i18n("🎯 ステップ %1 (追加ブラッシュアップ %2/%3): ローカル作画実行中…",
+                    i18n("🎯 自律ブラッシュアップ (ステップ %1 / 暴走防止上限 %2): ローカル作画実行中…",
                          m_goalCurrentStep,
-                         m_goalCurrentStep - m_goalTotalSteps,
-                         m_goalMaxExtraSteps));
+                         m_goalTotalSteps + m_goalMaxExtraSteps));
             } else {
                 m_goalPhaseLabel->setText(
-                    i18n("🎯 ステップ %1/%2: ローカル作画実行中…", m_goalCurrentStep, m_goalTotalSteps));
+                    i18n("🎯 工程 %1/%2: ローカル作画実行中…", m_goalCurrentStep, m_goalTotalSteps));
             }
         }
-        setStatus(i18n("Goal ステップ %1/%2 のストロークを生成しています…", m_goalCurrentStep, m_goalTotalSteps));
+        setStatus(i18n("Goal 工程 %1/%2 のストロークを生成しています…", m_goalCurrentStep, m_goalTotalSteps));
 
         const KisAiStrokeProgram program = KisAiStrokeProgramCodec::createDeterministicProgramStep(m_goalPrompt,
                                                                                                    canvasSize,
@@ -3601,8 +3591,15 @@ void KisAiIllustrationDocker::executeGoalStep()
         }
 
         if (m_goalPhaseLabel) {
-            m_goalPhaseLabel->setText(
-                i18n("🎯 ステップ %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
+            if (isExtraRefine) {
+                m_goalPhaseLabel->setText(
+                    i18n("🎯 自律ブラッシュアップ (ステップ %1 / 暴走防止上限 %2) 完了",
+                         m_goalCurrentStep,
+                         m_goalTotalSteps + m_goalMaxExtraSteps));
+            } else {
+                m_goalPhaseLabel->setText(
+                    i18n("🎯 工程 %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
+            }
         }
         if (m_agentFocusLabel) {
             m_agentFocusLabel->setText(i18n("🎯 着目領域: %1", program.stepPhase));
@@ -3618,7 +3615,9 @@ void KisAiIllustrationDocker::executeGoalStep()
 
         setBusy(false);
 
-        if (m_goalCurrentStep >= m_goalTotalSteps) {
+        if (m_goalCurrentStep >= m_goalTotalSteps + m_goalMaxExtraSteps) {
+            finishGoalMode(true);
+        } else if (m_goalCurrentStep >= m_goalTotalSteps && isGoalQualitySatisfied(program)) {
             finishGoalMode(true);
         } else if (m_pausePerStepCheck && m_pausePerStepCheck->isChecked()) {
             m_waitingForUserStepAdvance = true;
@@ -3631,7 +3630,7 @@ void KisAiIllustrationDocker::executeGoalStep()
                 m_finishGoalButton->setEnabled(true);
             }
             setStatus(
-                i18n("ステップ %1 完了。加筆や確認後、「次のステップへ進む」を押してください。", m_goalCurrentStep));
+                i18n("工程 %1 完了。加筆や確認後、「次のステップへ進む」を押してください。", m_goalCurrentStep));
         } else {
             QTimer::singleShot(300, this, [this] {
                 advanceGoalStep();
@@ -3797,28 +3796,27 @@ void KisAiIllustrationDocker::executeGoalStep()
             : (m_goalVisionFallbackActive ? i18n(" (テキストフォールバック)") : QString());
 
         if (isExtraRefine) {
-            setStatus(i18n("%1 に Goal 追加ブラッシュアップ %2 (通算ステップ %3) を送信中%4…",
+            setStatus(i18n("%1 に Goal 自律ブラッシュアップ (ステップ %2 / 暴走防止上限 %3) を送信中%4…",
                            KisAiIllustrationRenderer::displayEndpoint(endpoint),
-                           m_goalCurrentStep - m_goalTotalSteps,
                            m_goalCurrentStep,
+                           m_goalTotalSteps + m_goalMaxExtraSteps,
                            visionTag));
             if (m_goalPhaseLabel) {
                 m_goalPhaseLabel->setText(
-                    i18n("🎯 ステップ %1 (追加ブラッシュアップ %2/%3): LLM 生成中%4…",
+                    i18n("🎯 自律ブラッシュアップ (ステップ %1 / 暴走防止上限 %2): LLM 生成中%3…",
                          m_goalCurrentStep,
-                         m_goalCurrentStep - m_goalTotalSteps,
-                         m_goalMaxExtraSteps,
+                         m_goalTotalSteps + m_goalMaxExtraSteps,
                          visionTag));
             }
         } else {
-            setStatus(i18n("%1 に Goal ステップ %2/%3 を送信中%4…",
+            setStatus(i18n("%1 に Goal 工程 %2/%3 を送信中%4…",
                            KisAiIllustrationRenderer::displayEndpoint(endpoint),
                            m_goalCurrentStep,
                            m_goalTotalSteps,
                            visionTag));
             if (m_goalPhaseLabel) {
                 m_goalPhaseLabel->setText(
-                    i18n("🎯 ステップ %1/%2: LLM 生成中%3…", m_goalCurrentStep, m_goalTotalSteps, visionTag));
+                    i18n("🎯 工程 %1/%2: LLM 生成中%3…", m_goalCurrentStep, m_goalTotalSteps, visionTag));
             }
         }
 
@@ -4154,13 +4152,12 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     if (m_goalPhaseLabel) {
         if (isExtraRefine) {
             m_goalPhaseLabel->setText(
-                i18n("🎯 ステップ %1 (追加ブラッシュアップ %2/%3) 完了",
+                i18n("🎯 自律ブラッシュアップ (ステップ %1 / 暴走防止上限 %2) 完了",
                      m_goalCurrentStep,
-                     m_goalCurrentStep - m_goalTotalSteps,
-                     m_goalMaxExtraSteps));
+                     m_goalTotalSteps + m_goalMaxExtraSteps));
         } else {
             m_goalPhaseLabel->setText(
-                i18n("🎯 ステップ %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
+                i18n("🎯 工程 %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
         }
     }
     if (m_agentFocusLabel) {
@@ -4179,12 +4176,12 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         if (!critique.isEmpty()) {
             m_critiqueLabel->setText(i18n("👀 AI視覚批評: %1", critique));
         } else {
-            m_critiqueLabel->setText(i18n("ステップ %1 の作画が完了しました。", m_goalCurrentStep));
+            m_critiqueLabel->setText(i18n("工程 %1 の作画が完了しました。", m_goalCurrentStep));
         }
     }
 
-    const bool qualitySatisfied = isGoalQualitySatisfied(program) && m_goalCurrentStep >= 2;
     const bool isInitialStepsEnded = (m_goalCurrentStep >= m_goalTotalSteps);
+    const bool qualitySatisfied = isGoalQualitySatisfied(program) && isInitialStepsEnded;
     const bool reachedSafetyMax = (m_goalCurrentStep >= m_goalTotalSteps + m_goalMaxExtraSteps);
 
     if (qualitySatisfied) {
@@ -4211,11 +4208,11 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
             m_finishGoalButton->setEnabled(true);
         }
         if (isInitialStepsEnded) {
-            setStatus(i18n("基本ステップ終了。完成度 %1% (目標 %2%) のため、追加ブラッシュアップへ進むには「次のステップへ進む」を押してください。",
+            setStatus(i18n("全工程完了。完成度 %1% (目標 %2%)。さらに自律ブラッシュアップを進めるには「次のステップへ進む」を押してください。",
                            qRound(program.readinessScore * 100.0),
                            qRound(m_goalTargetReadiness * 100.0)));
         } else {
-            setStatus(i18n("ステップ %1 完了。キャンバスへの手動加筆・確認後、「次のステップへ進む」を押してください。",
+            setStatus(i18n("工程 %1 完了。キャンバスへの手動加筆・確認後、「次のステップへ進む」を押してください。",
                            m_goalCurrentStep));
         }
     } else {
@@ -4693,24 +4690,27 @@ void KisAiIllustrationDocker::loadSettings()
     const bool goalEnabled = settings.value(QStringLiteral("AIIllustration/goalModeEnabled"), false).toBool();
     if (m_goalModeCheck)
         m_goalModeCheck->setChecked(goalEnabled);
-    if (m_goalStepsSpin)
-        m_goalStepsSpin->setValue(readBoundedSetting(settings,
-                                                     QStringLiteral("AIIllustration/goalSteps"),
-                                                     4,
-                                                     m_goalStepsSpin->minimum(),
-                                                     m_goalStepsSpin->maximum()));
     if (m_goalTargetReadinessSpin)
         m_goalTargetReadinessSpin->setValue(readBoundedSetting(settings,
                                                                QStringLiteral("AIIllustration/goalTargetReadiness"),
                                                                85,
                                                                m_goalTargetReadinessSpin->minimum(),
                                                                m_goalTargetReadinessSpin->maximum()));
-    if (m_goalMaxExtraStepsSpin)
-        m_goalMaxExtraStepsSpin->setValue(readBoundedSetting(settings,
-                                                             QStringLiteral("AIIllustration/goalMaxExtraSteps"),
-                                                             4,
-                                                             m_goalMaxExtraStepsSpin->minimum(),
-                                                             m_goalMaxExtraStepsSpin->maximum()));
+    if (m_goalSafetyLimitSpin) {
+        int defaultLimit = 36;
+        if (!settings.contains(QStringLiteral("AIIllustration/goalSafetyLimit"))) {
+            if (settings.contains(QStringLiteral("AIIllustration/goalSteps"))
+                || settings.contains(QStringLiteral("AIIllustration/goalMaxExtraSteps"))) {
+                defaultLimit = settings.value(QStringLiteral("AIIllustration/goalSteps"), 18).toInt()
+                    + settings.value(QStringLiteral("AIIllustration/goalMaxExtraSteps"), 18).toInt();
+            }
+        }
+        m_goalSafetyLimitSpin->setValue(readBoundedSetting(settings,
+                                                           QStringLiteral("AIIllustration/goalSafetyLimit"),
+                                                           defaultLimit,
+                                                           m_goalSafetyLimitSpin->minimum(),
+                                                           m_goalSafetyLimitSpin->maximum()));
+    }
     const int artStyle = settings.value(QStringLiteral("AIIllustration/artStyle"), 0).toInt();
     if (m_artStyleCombo) {
         int idx = m_artStyleCombo->findData(artStyle);
@@ -4950,12 +4950,10 @@ void KisAiIllustrationDocker::saveSettings()
 
     if (m_goalModeCheck)
         settings.setValue(QStringLiteral("AIIllustration/goalModeEnabled"), m_goalModeCheck->isChecked());
-    if (m_goalStepsSpin)
-        settings.setValue(QStringLiteral("AIIllustration/goalSteps"), m_goalStepsSpin->value());
     if (m_goalTargetReadinessSpin)
         settings.setValue(QStringLiteral("AIIllustration/goalTargetReadiness"), m_goalTargetReadinessSpin->value());
-    if (m_goalMaxExtraStepsSpin)
-        settings.setValue(QStringLiteral("AIIllustration/goalMaxExtraSteps"), m_goalMaxExtraStepsSpin->value());
+    if (m_goalSafetyLimitSpin)
+        settings.setValue(QStringLiteral("AIIllustration/goalSafetyLimit"), m_goalSafetyLimitSpin->value());
     if (m_artStyleCombo)
         settings.setValue(QStringLiteral("AIIllustration/artStyle"), m_artStyleCombo->currentData().toInt());
     if (m_pausePerStepCheck)

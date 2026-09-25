@@ -4,5 +4,5 @@ set QT_PLUGIN_PATH=C:\CraftRoot\plugins
 set QT_QPA_PLATFORM=offscreen
 cd /d "%~dp0build-test"
 cmake --build . --parallel
-ctest -L AIStroke --output-on-failure --no-tests=error
+ctest -L AIStroke --output-on-failure --no-tests=error --timeout 15
 echo EXIT=%ERRORLEVEL%

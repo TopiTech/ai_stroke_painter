@@ -192,8 +192,9 @@ private:
     bool m_goalModeActive {false};
     KisImageWSP m_goalTargetImage;
     int m_goalCurrentStep {1};
-    int m_goalTotalSteps {4};
-    int m_goalMaxExtraSteps {4};
+    int m_goalTotalSteps {18};
+    int m_goalMaxExtraSteps {18};
+    int m_goalSafetyLimit {36};
     qreal m_goalTargetReadiness {0.85};
     int m_goalCurrentRetryCount {0};
     QString m_goalSelfCorrectionFeedback;
@@ -270,9 +271,8 @@ private:
     // Goal Mode UI Controls
     QCheckBox *m_goalModeCheck {nullptr};
     QCheckBox *m_pausePerStepCheck {nullptr};
-    QSpinBox *m_goalStepsSpin {nullptr};
     QSpinBox *m_goalTargetReadinessSpin {nullptr};
-    QSpinBox *m_goalMaxExtraStepsSpin {nullptr};
+    QSpinBox *m_goalSafetyLimitSpin {nullptr};
     QComboBox *m_artStyleCombo {nullptr};
     QFrame *m_goalInspectorCard {nullptr};
     QLabel *m_goalPhaseLabel {nullptr};

@@ -735,21 +735,26 @@ QString KisAiStrokeProgramCodec::buildFlagshipDirectives()
     return QStringLiteral(
         "=== ADVANCED FLAGSHIP & DELIBERATE ART DIRECTION ===\n"
         "You are operating in High-Precision Flagship Mode. Maximize geometric nuance and painterly depth:\n"
-        "1. 4-Tier Volumetric Shading Architecture:\n"
+        "1. Master Deliberate Inking & Catmull-Rom Curvature (Single-Stroke Craftsmanship):\n"
+        "   - Treat every single stroke as an indispensable work of art. Never rush or output coarse approximations.\n"
+        "   - Supply smooth, multi-point coordinate sequences (5 to 12 points) for organic curves rather than coarse 2-point lines.\n"
+        "   - Continuous line-weight modulation: feathered entry (pressure 0.10-0.25), confident grounded core (0.70-0.95), and delicate tapered exit (0.05-0.20).\n"
+        "   - Corner inking fillets: naturally thicken lines at acute junctions and intersections to simulate physical nib ink pooling.\n"
+        "   - STRICTLY FORBIDDEN: Random scribble clusters, jittery jagged zigzag lines, or rough repetitive hatch noise.\n"
+        "2. 4-Tier Volumetric Shading Architecture:\n"
         "   - Ambient Environment Wash: Background & broad tone washes setting light atmosphere.\n"
         "   - Tier 1 Form Shading: Smoothly rounded curvature on cheeks, neck, arms, and drapery folds (style: wash/directional).\n"
         "   - Tier 2 Occlusion Cast Shadows: Crisp shadow edges under bangs, nose, jawline, and collar folds (style: contour with clip_to_id).\n"
         "   - Tier 3 Ambient Occlusion (AO): Deep crevices where geometric forms contact, anchor, or overlap.\n"
-        "2. Subsurface Scattering (SSS) & Terminator Warmth:\n"
+        "3. Subsurface Scattering (SSS) & Terminator Warmth:\n"
         "   - Along the terminator between light and shadow on skin and warm organic surfaces, introduce warm transition accents (coral, peach, or rose).\n"
         "   - Avoid dead neutral gray or muddy black shading.\n"
-        "3. Master Deliberate Inking & Catmull-Rom Curvature:\n"
-        "   - Supply smooth, multi-point coordinate sequences (6 to 12 points) for primary contours rather than coarse zigzags.\n"
-        "   - Vary pressure continuously: flick entries (0.15-0.25), grounded crests (0.7-0.95), and delicate tapered exits (0.1-0.2).\n"
-        "   - Use micro-detail strokes for eye corners, eyelashes, double eyelids, iris limbal rings, and lips.\n"
-        "4. Hair Clump Architecture:\n"
+        "4. Facial Micro-Anatomy Mastery:\n"
+        "   - Use micro-detail precision strokes for eye corners, eyelashes, double eyelids, iris limbal rings, and lips.\n"
+        "   - Place eye catchlights precisely on the pupil/iris boundary without blurry spill.\n"
+        "5. Hair Clump Architecture:\n"
         "   - Foundation mass on 'Flats' -> underside occlusion shading on 'Shading' -> ribbon spine clumps ('ribbon' with width_start/mid/end) -> delicate flyaways on 'Lineart'.\n"
-        "5. Accurate Silhouette Anchoring:\n"
+        "6. Accurate Silhouette Anchoring:\n"
         "   - Consistently specify 'clip_to_id' referencing base silhouette operations so shadows and highlights never bleed outside the target subject.");
 }
 
@@ -5438,13 +5443,38 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
     const QString systemText = buildSystemPrompt(canvasSize, prompt, combinedInstructions, artStyle, advancedStroke);
 
     const int geometryBudget = qBound(50, strokeBudget, 3000);
-    const int baseStepTarget = geometryBudget / (totalSteps > 0 ? qMax(1, totalSteps) : 4);
-    const int operationTarget = qBound(24, baseStepTarget, 150);
+    const int baseStepTarget = (totalSteps >= 18)
+        ? qBound(15, geometryBudget / 18, 60)
+        : (geometryBudget / (totalSteps > 0 ? qMax(1, totalSteps) : 4));
+    const int operationTarget = qBound(12, baseStepTarget, 150);
 
     const bool isExtraRefine = (isRefinementExtraStep || step > totalSteps);
     QString phaseName;
     if (isExtraRefine) {
         phaseName = QStringLiteral("Autonomous Polish & Defect Correction (Refinement %1)").arg(qMax(1, step - totalSteps));
+    } else if (totalSteps >= 18) {
+        static const QString s_masterPhases[] = {
+            QStringLiteral("Composition, Proportions & Canvas Layout"),
+            QStringLiteral("Atmospheric Background Wash & Horizon Gradients"),
+            QStringLiteral("Environment Structures & Midground Elements"),
+            QStringLiteral("Character Silhouettes & Base Blocking"),
+            QStringLiteral("Flat Coloring - Skin Base & Undergarments"),
+            QStringLiteral("Flat Coloring - Hair Clusters & Costumes"),
+            QStringLiteral("Primary Form Shading & Global Light Direction"),
+            QStringLiteral("Secondary Cast Shadows & Ambient Occlusion"),
+            QStringLiteral("Subsurface Scattering & Warmth Blush Wash"),
+            QStringLiteral("Structural Rough Contours & Feature Registration"),
+            QStringLiteral("Deliberate Micro-Inking - Eyes & Expression"),
+            QStringLiteral("Deliberate Precision Inking - Silhouettes & Outer Contours"),
+            QStringLiteral("Deliberate Precision Inking - Hair Strands & Flow Splines"),
+            QStringLiteral("Deliberate Precision Inking - Cloth Folds, Seams & Drapery"),
+            QStringLiteral("Delicate Form Hatching & Corner Inking Fillets"),
+            QStringLiteral("Primary Diffuse Highlights & Hair Angel Halo"),
+            QStringLiteral("Specular Glints, Lip Shine & Eye Catchlights"),
+            QStringLiteral("Atmospheric Rim Light, Bloom & Masterwork Polish")
+        };
+        const int idx = qBound(0, step - 1, 17);
+        phaseName = s_masterPhases[idx];
     } else if (totalSteps <= 2) {
         phaseName =
             (step == 1) ? QStringLiteral("Flats & Shading Foundation") : QStringLiteral("Lineart, Highlights & Polish");
@@ -5510,13 +5540,13 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
             QStringLiteral(
                 "Execute Autonomous Refinement Step %1 (Refinement Round %2) in Goal Mode for prompt: '%3'. "
                 "Baseline structural phases are complete, but quality is below target readiness (%4). "
-                "Perform surgical refinement: "
+                "Perform surgical refinement with masterly single-stroke care: "
                 "1. [OBSERVE & CRITIQUE]: Inspect the canvas screenshot and accumulated geometry. "
                 "Provide concise 'agent_critique' and structured 'regions' array: "
                 "[{\"area\": \"left_eye|right_eye|hair|face_skin|shading|highlights|background|fx\", \"issue\": \"defect "
                 "description\", \"action\": \"repaint|soften|remove|keep\", \"priority\": 1-5}]. "
                 "2. [READINESS EVALUATION]: Accurately assess 'readiness_score' (0.0 to 1.0). If >= %4 and truly finished with no remaining defects, set 'goal_reached' to true. Otherwise keep 'goal_reached' false and state what needs work. "
-                "3. [SURGICAL POLISH]: Do NOT redraw whole silhouettes. Emit high-impact corrective strokes: exquisite micro-linework, occlusion shading, highlights, or eraser strokes (is_eraser: true) to clean stray lines. "
+                "3. [SURGICAL POLISH & DELIBERATE INKING]: Do NOT redraw whole silhouettes. Emit high-impact corrective strokes: exquisite micro-linework, occlusion shading, highlights, or eraser strokes (is_eraser: true) to clean stray lines. "
                 "Set 'step_phase' to '%5', 'current_step' to %1. Output strictly valid RFC 8259 JSON.")
                 .arg(step)
                 .arg(qMax(1, step - totalSteps))
@@ -5527,16 +5557,17 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
         userObj[QStringLiteral("directive")] =
             QStringLiteral(
                 "Execute Step %1 of %2 in Goal Mode for prompt: '%5'. "
-                "Perform your artistic cognitive cycle: "
+                "Masterwork Directive (1-Hour Session): Treat this drawing step with profound care, patience, and deliberate craftsmanship. "
+                "Every single stroke must be executed with intentional curve design, smooth Catmull-Rom curvature, and dynamic line-weight tapering. "
                 "1. [OBSERVE & CRITIQUE]: Inspect the canvas screenshot (if attached) and accumulated geometry. "
                 "Provide concise 'agent_critique' and structured 'regions' array: "
                 "[{\"area\": \"left_eye|right_eye|hair|face_skin|shading|highlights|background|fx\", \"issue\": \"defect "
                 "description\", \"action\": \"repaint|soften|remove|keep\", \"priority\": 1-5}]. "
-                "2. [FOCUS]: Specify 'target_focus_area' (e.g. 'Face & Expression', 'Hair Strands & Volume', 'Form Shading "
-                "& Ambient Occlusion', 'Specular Highlights & Atmosphere'). "
+                "2. [FOCUS]: Specify 'target_focus_area' (e.g. 'Face & Eyes Micro-Inking', 'Hair Strands & Curvature', 'Volumetric Shading & AO', 'Specular Accents'). "
                 "3. [READINESS EVALUATION]: Provide 'readiness_score' from 0.0 (bare outline) to 1.0 (finished "
                 "presentation). If >= %6 and presentation-ready, set 'goal_reached' to true. "
-                "4. [ACT & REFINE]: Generate the necessary high-precision operations for phase '%3'. "
+                "4. [ACT & REFINE WITH SINGLE STROKE CRAFTSMANSHIP]: Generate the necessary high-precision operations for phase '%3'. "
+                "Dedicate your stroke budget to beautifully constructed, smooth strokes. Never rush or output coarse zigzag scribbles. "
                 "If previous critique regions identified defects (e.g. weak facial lines, missing cast shadows, misaligned "
                 "features), "
                 "actively emit targeted correction operations: refine those specific features with exquisite linework, add "
@@ -5718,7 +5749,22 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgramStep(const
             } else {
                 match = (l == QLatin1String("FX"));
             }
-        } else { // 6 or more
+        } else if (totalSteps >= 18) {
+            // Distribute operations across the 18 masterwork phases
+            if (step <= 3) {
+                match = (l == QLatin1String("Background"));
+            } else if (step <= 6) {
+                match = (l == QLatin1String("Flats"));
+            } else if (step <= 9) {
+                match = (l == QLatin1String("Shading"));
+            } else if (step <= 15) {
+                match = (l == QLatin1String("Lineart"));
+            } else if (step <= 17) {
+                match = (l == QLatin1String("Highlights"));
+            } else {
+                match = (l == QLatin1String("FX"));
+            }
+        } else { // 6 to 17
             if (step == 1) {
                 match = (l == QLatin1String("Background"));
             } else if (step == 2) {
@@ -5738,7 +5784,33 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgramStep(const
         }
     }
 
-    if (totalSteps <= 2) {
+    if (totalSteps >= 18) {
+        static const QString s_masterPhases[] = {
+            QStringLiteral("Composition, Proportions & Canvas Layout"),
+            QStringLiteral("Atmospheric Background Wash & Horizon Gradients"),
+            QStringLiteral("Environment Structures & Midground Elements"),
+            QStringLiteral("Character Silhouettes & Base Blocking"),
+            QStringLiteral("Flat Coloring - Skin Base & Undergarments"),
+            QStringLiteral("Flat Coloring - Hair Clusters & Costumes"),
+            QStringLiteral("Primary Form Shading & Global Light Direction"),
+            QStringLiteral("Secondary Cast Shadows & Ambient Occlusion"),
+            QStringLiteral("Subsurface Scattering & Warmth Blush Wash"),
+            QStringLiteral("Structural Rough Contours & Feature Registration"),
+            QStringLiteral("Deliberate Micro-Inking - Eyes & Expression"),
+            QStringLiteral("Deliberate Precision Inking - Silhouettes & Outer Contours"),
+            QStringLiteral("Deliberate Precision Inking - Hair Strands & Flow Splines"),
+            QStringLiteral("Deliberate Precision Inking - Cloth Folds, Seams & Drapery"),
+            QStringLiteral("Delicate Form Hatching & Corner Inking Fillets"),
+            QStringLiteral("Primary Diffuse Highlights & Hair Angel Halo"),
+            QStringLiteral("Specular Glints, Lip Shine & Eye Catchlights"),
+            QStringLiteral("Atmospheric Rim Light, Bloom & Masterwork Polish")
+        };
+        const int idx = qBound(0, step - 1, 17);
+        stepProg.stepPhase = s_masterPhases[idx];
+        stepProg.visualCritique = QStringLiteral("Masterwork phase %1 (%2) executed with deliberate stroke precision.")
+                                      .arg(step)
+                                      .arg(stepProg.stepPhase);
+    } else if (totalSteps <= 2) {
         if (step == 1) {
             stepProg.stepPhase = QStringLiteral("Flats & Shading Foundation");
             stepProg.visualCritique = QStringLiteral("Base silhouettes, flats, and volume blocking are established.");
