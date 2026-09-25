@@ -1672,7 +1672,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     {
         auto *generateAction = new QAction(this);
         generateAction->setObjectName(QStringLiteral("aiGenerateShortcut"));
-        generateAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Return));
+        generateAction->setShortcuts({QKeySequence(Qt::CTRL | Qt::Key_Return), QKeySequence(Qt::CTRL | Qt::Key_Enter)});
         generateAction->setShortcutContext(Qt::ApplicationShortcut);
         connect(generateAction, &QAction::triggered, this, [this] {
             if (m_goalModeActive && m_waitingForUserStepAdvance) {
@@ -1938,7 +1938,7 @@ void KisAiIllustrationDocker::generateLocalStrokes(const QString &prompt)
     if (view && view->image()) {
         QString statusMsg;
         if (KisAiStrokeRenderer::renderProgramToLayers(view->image(),
-                                                       m_mainWindow->viewManager(),
+                                                       m_mainWindow ? m_mainWindow->viewManager() : nullptr,
                                                        program,
                                                        &statusMsg)) {
             const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
@@ -3292,6 +3292,7 @@ bool KisAiIllustrationDocker::addImageAsLayer(const QImage &sourceImage, const Q
 QString KisAiIllustrationDocker::promptForLayerName(const QString &prompt) const
 {
     QString title = KisAiIllustrationRenderer::normalizedPrompt(prompt);
+    title = redactCredentialText(title);
     constexpr int maxLayerTitleLength = 56;
     if (title.size() > maxLayerTitleLength) {
         title.truncate(maxLayerTitleLength - 1);
@@ -3573,7 +3574,7 @@ void KisAiIllustrationDocker::executeGoalStep()
         if (view && view->image()) {
             QString statusMsg;
             if (KisAiStrokeRenderer::renderProgramToLayers(view->image(),
-                                                           m_mainWindow->viewManager(),
+                                                           m_mainWindow ? m_mainWindow->viewManager() : nullptr,
                                                            m_goalAccumulatedProgram,
                                                            &statusMsg,
                                                            true,

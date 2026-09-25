@@ -229,6 +229,20 @@ void KisAiStartPageTest::testKeyboardFocusAndShortcuts()
     QCOMPARE(widget.focusWidget(), promptInput);
     QCOMPARE(promptInput->selectedText(), QStringLiteral("テストプロンプト"));
 
+    // Test Ctrl+Return and Ctrl+Enter trigger slotQuickPromptGenerate without crash
+    QKeyEvent ctrlReturn(QEvent::KeyPress, Qt::Key_Return, Qt::ControlModifier);
+    QCoreApplication::sendEvent(&widget, &ctrlReturn);
+
+    QKeyEvent ctrlEnter(QEvent::KeyPress, Qt::Key_Enter, Qt::ControlModifier);
+    QCoreApplication::sendEvent(&widget, &ctrlEnter);
+
+    // Test Ctrl+N and Ctrl+O shortcuts handle cleanly without main window
+    QKeyEvent ctrlN(QEvent::KeyPress, Qt::Key_N, Qt::ControlModifier);
+    QCoreApplication::sendEvent(&widget, &ctrlN);
+
+    QKeyEvent ctrlO(QEvent::KeyPress, Qt::Key_O, Qt::ControlModifier);
+    QCoreApplication::sendEvent(&widget, &ctrlO);
+
     // Verify all primary cards and presets have TabFocus policy for keyboard navigation
     const QList<QPushButton *> buttons = widget.findChildren<QPushButton *>();
     for (QPushButton *btn : buttons) {

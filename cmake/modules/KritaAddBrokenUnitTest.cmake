@@ -83,7 +83,9 @@ function(KRITA_ADD_UNIT_TEST)
       get_filename_component(_krita_test_compiler_runtime_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
       set(_krita_test_runtime_path
           "$<TARGET_FILE_DIR:${_targetname}>\\;$<TARGET_FILE_DIR:Qt${QT_MAJOR_VERSION}::Core>\\;${_krita_test_compiler_runtime_dir}\\;$ENV{PATH}")
-      set_tests_properties(${_testname} PROPERTIES ENVIRONMENT "PATH=${_krita_test_runtime_path}")
+      set(_krita_test_qt_plugin_path "$<TARGET_FILE_DIR:Qt${QT_MAJOR_VERSION}::Core>/../plugins")
+      set_tests_properties(${_testname} PROPERTIES
+          ENVIRONMENT "PATH=${_krita_test_runtime_path}\;QT_QPA_PLATFORM=offscreen\;QT_PLUGIN_PATH=${_krita_test_qt_plugin_path}")
     endif()
   endif()
 

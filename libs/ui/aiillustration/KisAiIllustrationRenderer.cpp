@@ -374,6 +374,10 @@ QString KisAiIllustrationRenderer::redactCredentialText(const QString &text)
     out.replace(skRe, QStringLiteral("sk-***"));
     static const QRegularExpression geminiRe(QStringLiteral(R"(AIzaSy[A-Za-z0-9_\-]{33})"));
     out.replace(geminiRe, QStringLiteral("AIzaSy***"));
+    static const QRegularExpression hfRe(QStringLiteral(R"(hf_[A-Za-z0-9]{20,})"));
+    out.replace(hfRe, QStringLiteral("hf_***"));
+    static const QRegularExpression replicateRe(QStringLiteral(R"(r8_[A-Za-z0-9]{20,})"));
+    out.replace(replicateRe, QStringLiteral("r8_***"));
     static const QRegularExpression queryParamRe(
         QStringLiteral(R"(([?&](?:api_key|key|token|password|secret|auth)=)[^&\s]+)"),
         QRegularExpression::CaseInsensitiveOption);

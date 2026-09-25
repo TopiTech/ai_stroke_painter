@@ -339,6 +339,18 @@ void KisAiIllustrationRendererTest::testRedactCredentialText()
     const QString jsonOutput = KisAiIllustrationRenderer::redactCredentialText(jsonInput);
     QVERIFY(!jsonOutput.contains(QStringLiteral("secret-api-key-999")));
     QVERIFY(jsonOutput.contains(QStringLiteral("\"apiKey\": \"***\"")));
+
+    // HuggingFace token redaction (hf_...)
+    const QString hfInput = QStringLiteral("Connecting to HF inference endpoint with token hf_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789");
+    const QString hfOutput = KisAiIllustrationRenderer::redactCredentialText(hfInput);
+    QVERIFY(!hfOutput.contains(QStringLiteral("AbCdEfGhIjKlMnOpQrStUvWxYz0123456789")));
+    QVERIFY(hfOutput.contains(QStringLiteral("hf_***")));
+
+    // Replicate token redaction (r8_...)
+    const QString repInput = QStringLiteral("Model deployed on Replicate with auth token r8_1234567890abcdefghijklmnopqrstuvwxyz");
+    const QString repOutput = KisAiIllustrationRenderer::redactCredentialText(repInput);
+    QVERIFY(!repOutput.contains(QStringLiteral("1234567890abcdefghijklmnopqrstuvwxyz")));
+    QVERIFY(repOutput.contains(QStringLiteral("r8_***")));
 }
 
 KISTEST_MAIN(KisAiIllustrationRendererTest)

@@ -69,7 +69,7 @@ if (NOT AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
         libs-ui-KisAiCoverageRasterTest
         PROPERTIES
             LABELS "AIStroke"
-            TIMEOUT 120)
+            TIMEOUT 30)
     return()
 endif()
 
@@ -368,4 +368,4 @@ set_tests_properties(
     libs-ui-KisAiQualityBenchGateTest
     PROPERTIES
         LABELS "AIStroke"
-        TIMEOUT 120)
+        TIMEOUT 30)

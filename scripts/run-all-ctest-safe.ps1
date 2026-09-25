@@ -1,4 +1,5 @@
 param(
+    [string]$BuildDir = "",
     [int]$TotalTimeoutSec = 120
 )
 
@@ -20,7 +21,13 @@ $env:QT_PLUGIN_PATH = "C:\CraftRoot\plugins"
 $env:QT_QPA_PLATFORM = "offscreen"
 
 $repoRoot = (Get-Item $PSScriptRoot).Parent.FullName
-$buildDir = Join-Path $repoRoot "build-test"
+$buildDir = if (-not [string]::IsNullOrWhiteSpace($BuildDir)) {
+    (Resolve-Path $BuildDir).Path
+} elseif (Test-Path (Join-Path $repoRoot "build-ai")) {
+    Join-Path $repoRoot "build-ai"
+} else {
+    Join-Path $repoRoot "build-test"
+}
 
 Write-Host "Building project in $buildDir..."
 $buildPsi = New-Object System.Diagnostics.ProcessStartInfo

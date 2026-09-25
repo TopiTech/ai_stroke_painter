@@ -55,6 +55,13 @@
 #  define QTEST_DISABLE_KEYPAD_NAVIGATION
 #endif
 
+#if defined(Q_OS_WIN)
+#  include <windows.h>
+#  define KISTEST_SETUP_WINDOWS_CRASH_GUARD SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#else
+#  define KISTEST_SETUP_WINDOWS_CRASH_GUARD
+#endif
+
 
 #if defined(TESTRESOURCES) || defined(TESTPIGMENT) || defined (TESTFLAKE) || defined(TESTBRUSH) || defined(TESTIMAGE) || defined(TESTUI)
 #include <QImageReader>
@@ -251,6 +258,10 @@ void registerResources()
 #define KISTEST_MAIN(TestObject) \
 int main(int argc, char *argv[]) \
 { \
+    KISTEST_SETUP_WINDOWS_CRASH_GUARD \
+    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) { \
+        qputenv("QT_QPA_PLATFORM", "offscreen"); \
+    } \
     qputenv("LANGUAGE", "en"); \
     QLocale::setDefault(QLocale(QLocale::English, QLocale::UnitedStates)); \
     qputenv("QT_LOGGING_RULES", ""); \
@@ -271,6 +282,10 @@ int main(int argc, char *argv[]) \
 #define KISTEST_MAIN(TestObject) \
 int main(int argc, char *argv[]) \
 { \
+    KISTEST_SETUP_WINDOWS_CRASH_GUARD \
+    if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM")) { \
+        qputenv("QT_QPA_PLATFORM", "offscreen"); \
+    } \
     qputenv("LANGUAGE", "en"); \
     QLocale::setDefault(QLocale(QLocale::English, QLocale::UnitedStates)); \
     qputenv("QT_LOGGING_RULES", ""); \

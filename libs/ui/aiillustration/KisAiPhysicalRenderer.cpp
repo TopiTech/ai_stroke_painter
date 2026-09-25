@@ -319,8 +319,7 @@ QImage KisAiPhysicalRenderer::toSrgbLdr(const QImage &hdrImage)
             const float linG = srcLine[x * 4 + 1];
             const float linB = srcLine[x * 4 + 2];
             const float a = qBound(0.0f, srcLine[x * 4 + 3], 1.0f);
-
-            if (a <= 1e-6f) {
+            if (a <= 1e-6f || !std::isfinite(linR) || !std::isfinite(linG) || !std::isfinite(linB)) {
                 dstLine[x] = 0;
             } else {
                 const float straightLinR = qBound(0.0f, linR / a, 1.0f);
@@ -388,9 +387,15 @@ void KisAiPhysicalRenderer::compositeLayer(QImage &dstImage, const KisAiLayerIma
 
     if (srcFp.size() != dstImage.size()) {
         srcFp = srcFp.scaled(dstImage.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        if (srcFp.isNull() || srcFp.size() != dstImage.size()) {
+            return;
+        }
     }
     if (!maskFp.isNull() && maskFp.size() != dstImage.size()) {
         maskFp = maskFp.scaled(dstImage.size(), Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
+        if (maskFp.size() != dstImage.size()) {
+            maskFp = QImage();
+        }
     }
 
     const float opacity = qBound(0.0f, static_cast<float>(srcLayer.opacityFactor), 1.0f);

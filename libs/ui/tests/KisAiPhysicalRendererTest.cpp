@@ -395,6 +395,20 @@ void KisAiPhysicalRendererTest::testBlendPixelNanAndInfProtection()
     // Inf opacity
     KisAiPhysicalRenderer::blendPixel(QStringLiteral("multiply"), 0.5f, 0.5f, 0.5f, 1.0f, dstR, dstG, dstB, dstA, infVal);
     QVERIFY(std::isfinite(dstR) && std::isfinite(dstG) && std::isfinite(dstB) && std::isfinite(dstA));
+
+    // toSrgbLdr with NaN / Inf float values
+    if (KisAiPhysicalRenderer::isHdrFormatSupported()) {
+        QImage nanHdr(2, 2, QImage::Format_RGBA32FPx4_Premultiplied);
+        nanHdr.fill(Qt::transparent);
+        float *line = reinterpret_cast<float *>(nanHdr.scanLine(0));
+        line[0] = nanVal;
+        line[1] = infVal;
+        line[2] = 0.5f;
+        line[3] = 1.0f;
+        const QImage ldr = KisAiPhysicalRenderer::toSrgbLdr(nanHdr);
+        QVERIFY(!ldr.isNull());
+        QCOMPARE(ldr.pixel(0, 0), 0u);
+    }
 }
 
 void KisAiPhysicalRendererTest::testUnavailableHdrReturnsNullAndStandardRendererStillWorks()

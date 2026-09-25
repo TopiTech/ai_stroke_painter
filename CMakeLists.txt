@@ -226,9 +226,10 @@ if (AI_STROKE_STANDALONE_TESTS)
         get_filename_component(ai_stroke_compiler_runtime_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
         set(ai_stroke_test_runtime_path
             "$<TARGET_FILE_DIR:Qt6::Core>\\;${ai_stroke_compiler_runtime_dir}\\;$ENV{PATH}")
+        set(ai_stroke_test_qt_plugin_path "$<TARGET_FILE_DIR:Qt6::Core>/../plugins")
         set_tests_properties(
             ${AI_STROKE_ALL_TEST_TARGETS}
-            PROPERTIES ENVIRONMENT "PATH=${ai_stroke_test_runtime_path}")
+            PROPERTIES ENVIRONMENT "PATH=${ai_stroke_test_runtime_path}\;QT_QPA_PLATFORM=offscreen\;QT_PLUGIN_PATH=${ai_stroke_test_qt_plugin_path}")
     endif()
 
     return()

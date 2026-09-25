@@ -599,9 +599,6 @@ void KisAiStartPageWidget::updateResponsiveLayout()
     m_promptBarLayout->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     m_primaryCardsLayout->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     m_recentAndGuideLayout->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
-    for (QBoxLayout *layout : m_presetButtonLayouts) {
-        layout->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
-    }
 
     QList<QWidget *> presetButtons;
     while (QLayoutItem *item = m_presetsGrid->takeAt(0)) {
@@ -642,6 +639,21 @@ void KisAiStartPageWidget::keyPressEvent(QKeyEvent *event)
             event->accept();
             return;
         }
+    }
+    if ((event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) && (event->modifiers() & Qt::ControlModifier)) {
+        slotQuickPromptGenerate();
+        event->accept();
+        return;
+    }
+    if (event->key() == Qt::Key_N && (event->modifiers() & Qt::ControlModifier)) {
+        slotNewFile();
+        event->accept();
+        return;
+    }
+    if (event->key() == Qt::Key_O && (event->modifiers() & Qt::ControlModifier)) {
+        slotOpenFile();
+        event->accept();
+        return;
     }
     QWidget::keyPressEvent(event);
 }
@@ -827,7 +839,7 @@ void KisAiStartPageWidget::showCanvasNotification(const QString &message)
 {
     // 空実装だと「クリップボードに画像がありません」等が完全に消え、カードが
     // 動いたように見えない。メインウィンドウのステータスバーへ表示する。
-    if (m_mainWindow) {
+    if (m_mainWindow && m_mainWindow->statusBar()) {
         m_mainWindow->statusBar()->showMessage(message, 5000);
     }
 }

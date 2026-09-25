@@ -521,6 +521,18 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
         "- FORBIDDEN: NEVER emit noisy zigzag hatch clusters, scribbles, or redundant overlapping scratches. Value line economy and structural elegance.\n"
         "- ACCUMULATIVE COMMITMENT: Do NOT redraw earlier foundational layers unless targeted defect repair is needed.\n\n");
 
+    if (phase > totalSteps) {
+        const int refineRound = qMax(1, phase - totalSteps);
+        out += QStringLiteral(
+            "AUTONOMOUS REFINEMENT ROUND %1 MISSION: [SURGICAL CORRECTION & READINESS REACH]\n"
+            "- Core structural phases (1 to %2) are complete. Focus strictly on targeted defect correction.\n"
+            "- Inspect accumulated geometry and previous critique regions. Correct any anatomical deformities, weak line weights, or missing shadows.\n"
+            "- Use 'is_eraser: true' to carve away stray overlaps or messy artifacts. Inscribe crisp micro-details on focal features (eyes, face, highlights).\n"
+            "- If presentation-ready with no remaining defects, evaluate readiness_score >= target_readiness and set goal_reached: true.\n"
+        ).arg(refineRound).arg(totalSteps);
+        return out;
+    }
+
     if (spec.style == ArtStyle::PureLineart) {
         if (totalSteps <= 2) {
             if (phase == 1) {
