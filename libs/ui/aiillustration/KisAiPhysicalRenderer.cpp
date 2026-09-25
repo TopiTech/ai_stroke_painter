@@ -247,6 +247,9 @@ QImage KisAiPhysicalRenderer::toLinearHdr(const QImage &srgbImage)
     // 内部ストレージとして Format_RGBA32FPx4_Premultiplied または Format_RGBA16FPx4_Premultiplied を使用
     // float 配列演算が直接行いやすい Format_RGBA32FPx4_Premultiplied を優先
     QImage hdr(w, h, QImage::Format_RGBA32FPx4_Premultiplied);
+    if (hdr.isNull()) {
+        return QImage();
+    }
     hdr.setColorSpace(QColorSpace(QColorSpace::NamedColorSpace::SRgbLinear));
 
     for (int y = 0; y < h; ++y) {
@@ -294,12 +297,18 @@ QImage KisAiPhysicalRenderer::toSrgbLdr(const QImage &hdrImage)
     const int w = hdrImage.width();
     const int h = hdrImage.height();
     QImage ldr(w, h, QImage::Format_ARGB32_Premultiplied);
+    if (ldr.isNull()) {
+        return QImage();
+    }
     ldr.setColorSpace(QColorSpace(QColorSpace::NamedColorSpace::SRgb));
 
     // RGBA32FPx4 からの変換
     QImage srcFp = hdrImage;
     if (srcFp.format() != QImage::Format_RGBA32FPx4_Premultiplied) {
         srcFp = srcFp.convertToFormat(QImage::Format_RGBA32FPx4_Premultiplied);
+        if (srcFp.isNull()) {
+            return QImage();
+        }
     }
 
     for (int y = 0; y < h; ++y) {
@@ -353,6 +362,9 @@ void KisAiPhysicalRenderer::compositeLayer(QImage &dstImage, const KisAiLayerIma
 
     const int w = dstImage.width();
     const int h = dstImage.height();
+    if (w <= 0 || h <= 0) {
+        return;
+    }
 
     QImage srcFp = srcLayer.image;
     if (srcFp.format() != QImage::Format_RGBA32FPx4_Premultiplied) {
@@ -360,6 +372,9 @@ void KisAiPhysicalRenderer::compositeLayer(QImage &dstImage, const KisAiLayerIma
     }
     if (dstImage.format() != QImage::Format_RGBA32FPx4_Premultiplied) {
         dstImage = toLinearHdr(dstImage);
+    }
+    if (srcFp.isNull() || dstImage.isNull()) {
+        return;
     }
 
     QImage maskFp;
@@ -446,12 +461,17 @@ QImage KisAiCompositeGraph::evaluate() const
 
     // キャンバス初期化 (透明 HDR)
     QImage composite(size, QImage::Format_RGBA32FPx4_Premultiplied);
+    if (composite.isNull()) {
+        return QImage();
+    }
     composite.fill(Qt::transparent);
 
     if (!backgroundImage.isNull()) {
         const QImage bgHdr = KisAiPhysicalRenderer::toLinearHdr(
             backgroundImage.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
-        composite = bgHdr;
+        if (!bgHdr.isNull()) {
+            composite = bgHdr;
+        }
     }
 
     // レイヤーマップ作成 (クリッピング参照用)
@@ -462,7 +482,9 @@ QImage KisAiCompositeGraph::evaluate() const
             if (lyrHdr.format() != QImage::Format_RGBA32FPx4_Premultiplied) {
                 lyrHdr = KisAiPhysicalRenderer::toLinearHdr(lyrHdr);
             }
-            layerMap[layer.name.toLower()] = lyrHdr;
+            if (!lyrHdr.isNull()) {
+                layerMap[layer.name.toLower()] = lyrHdr;
+            }
         }
     }
 
@@ -494,7 +516,7 @@ QImage KisAiCompositeGraph::evaluate() const
 
 QImage KisAiPhysicalRenderer::downsampleBox(const QImage &src, const QSize &targetSize)
 {
-    if (src.isNull() || targetSize.isEmpty()) {
+    if (src.isNull() || targetSize.isEmpty() || targetSize.width() <= 0 || targetSize.height() <= 0) {
         return QImage();
     }
     if (src.size() == targetSize) {

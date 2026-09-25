@@ -210,4 +210,35 @@ void KisAiStartPageTest::testRecentDocumentsModelSignalConnection()
     QVERIFY(recentListView->model() != nullptr);
 }
 
+void KisAiStartPageTest::testKeyboardFocusAndShortcuts()
+{
+    KisAiStartPageWidget widget(nullptr);
+    widget.show();
+
+    auto *promptInput = widget.findChild<QLineEdit *>(QStringLiteral("aiPromptOmnibarInput"));
+    QVERIFY(promptInput != nullptr);
+
+    // Test Ctrl+Alt+A focuses and selects the prompt input
+    promptInput->setText(QStringLiteral("テストプロンプト"));
+    promptInput->clearFocus();
+    QVERIFY(widget.focusWidget() != promptInput);
+
+    QKeyEvent ctrlAltA(QEvent::KeyPress, Qt::Key_A, Qt::ControlModifier | Qt::AltModifier);
+    QCoreApplication::sendEvent(&widget, &ctrlAltA);
+
+    QCOMPARE(widget.focusWidget(), promptInput);
+    QCOMPARE(promptInput->selectedText(), QStringLiteral("テストプロンプト"));
+
+    // Verify all primary cards and presets have TabFocus policy for keyboard navigation
+    const QList<QPushButton *> buttons = widget.findChildren<QPushButton *>();
+    for (QPushButton *btn : buttons) {
+        if (btn->isVisible()) {
+            QVERIFY2(btn->focusPolicy() & Qt::TabFocus,
+                     qPrintable(QStringLiteral("Button missing TabFocus: %1").arg(btn->accessibleName())));
+            QVERIFY2(!btn->accessibleName().trimmed().isEmpty(),
+                     qPrintable(QStringLiteral("Button missing accessibleName: %1").arg(btn->objectName())));
+        }
+    }
+}
+
 KISTEST_MAIN(KisAiStartPageTest)

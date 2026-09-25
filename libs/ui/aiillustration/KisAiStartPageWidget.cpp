@@ -59,10 +59,11 @@ KisAiStartPageWidget::KisAiStartPageWidget(KisMainWindow *mainWindow, QWidget *p
         "QFrame#aiPromptOmnibarFrame { background: rgba(22, 30, 49, 0.9); border: 1px solid rgba(75, 110, 175, 0.4); border-radius: 12px; padding: 6px 10px; }"
         "QFrame#aiPromptOmnibarFrame:hover { border: 1px solid rgba(96, 165, 250, 0.7); background: rgba(26, 36, 58, 0.95); }"
         "QLineEdit#aiPromptOmnibarInput { background: transparent; border: none; color: #f8fafc; font-size: 14px; padding: 6px 8px; }"
-        "QLineEdit#aiPromptOmnibarInput:focus { outline: none; }"
+        "QLineEdit#aiPromptOmnibarInput:focus { outline: none; border-bottom: 2px solid #60a5fa; }"
         "QPushButton#aiPromptGenerateBtn { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #6366f1); color: #ffffff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; padding: 8px 18px; }"
         "QPushButton#aiPromptGenerateBtn:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #60a5fa, stop:1 #818cf8); }"
         "QPushButton#aiPromptGenerateBtn:pressed { background: #2563eb; }"
+        "QPushButton#aiPromptGenerateBtn:focus { border: 2px solid #ffffff; outline: none; }"
 
         /* Cards Base */
         "QFrame.aiActionCard { background: rgba(20, 27, 43, 0.75); border: 1px solid rgba(51, 65, 85, 0.6); border-radius: 12px; }"
@@ -74,11 +75,13 @@ KisAiStartPageWidget::KisAiStartPageWidget(KisMainWindow *mainWindow, QWidget *p
         /* Clickable Card Buttons */
         "QPushButton.aiCardButton { text-align: left; background: rgba(20, 27, 43, 0.75); border: 1px solid rgba(51, 65, 85, 0.6); border-radius: 10px; padding: 12px 14px; color: #edf3ff; }"
         "QPushButton.aiCardButton:hover { background: rgba(30, 42, 66, 0.92); border: 1px solid rgba(99, 130, 240, 0.65); }"
+        "QPushButton.aiCardButton:focus { background: rgba(30, 42, 66, 0.95); border: 2px solid #60a5fa; outline: none; }"
         "QPushButton.aiCardButton:pressed { background: rgba(15, 20, 32, 0.95); border-color: #3b82f6; }"
 
         /* Presets */
         "QPushButton.aiPresetBtn { text-align: left; background: rgba(22, 30, 48, 0.7); border: 1px solid rgba(45, 60, 85, 0.5); border-radius: 10px; padding: 10px 14px; }"
         "QPushButton.aiPresetBtn:hover { background: rgba(33, 46, 74, 0.85); border: 1px solid rgba(129, 140, 248, 0.6); }"
+        "QPushButton.aiPresetBtn:focus { background: rgba(33, 46, 74, 0.95); border: 2px solid #818cf8; outline: none; }"
         "QPushButton.aiPresetBtn:pressed { background: rgba(18, 24, 38, 0.95); }"
 
         /* Section Titles */
@@ -90,10 +93,12 @@ KisAiStartPageWidget::KisAiStartPageWidget(KisMainWindow *mainWindow, QWidget *p
         "QListView#aiRecentListView::item { padding: 6px 8px; border-radius: 6px; }"
         "QListView#aiRecentListView::item:hover { background: rgba(45, 62, 95, 0.5); }"
         "QListView#aiRecentListView::item:selected { background: rgba(59, 130, 246, 0.4); color: #ffffff; }"
+        "QListView#aiRecentListView:focus { border: 1px solid rgba(96, 165, 250, 0.7); border-radius: 6px; }"
 
         "QLabel#aiEmptyStateLabel { color: #64748b; font-size: 12px; }"
         "QPushButton#aiClearRecentBtn { background: transparent; color: #64748b; border: none; font-size: 11px; text-decoration: underline; }"
         "QPushButton#aiClearRecentBtn:hover { color: #94a3b8; }"
+        "QPushButton#aiClearRecentBtn:focus { color: #93c5fd; outline: 1px dotted #93c5fd; }"
 
         /* Guide text */
         "QLabel#aiGuideHeading { color: #93c5fd; font-size: 12px; font-weight: 600; }"
@@ -626,6 +631,19 @@ bool KisAiStartPageWidget::eventFilter(QObject *watched, QEvent *event)
         }
     }
     return QWidget::eventFilter(watched, event);
+}
+
+void KisAiStartPageWidget::keyPressEvent(QKeyEvent *event)
+{
+    if (event->key() == Qt::Key_A && (event->modifiers() & Qt::ControlModifier) && (event->modifiers() & Qt::AltModifier)) {
+        if (m_promptInput) {
+            m_promptInput->setFocus();
+            m_promptInput->selectAll();
+            event->accept();
+            return;
+        }
+    }
+    QWidget::keyPressEvent(event);
 }
 
 void KisAiStartPageWidget::slotQuickPromptGenerate()

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 # ForEach-Object -Parallel (PS7+) を使うため明示的に要求する。
-# 5.1 では後段の実行時エラーで失敗するため、ここで即座に止める。
+# 5.1 では後段の実行時エラーで失敗するため、スクリプト先頭で検出する。
 #requires -Version 7.0
 
 <#
@@ -75,6 +75,11 @@ param(
     [switch]$SummaryOnly,
     [switch]$WarningsAsErrors
 )
+
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Error "PowerShell 7.0 or higher is required to run run-type-check.ps1. Please run using 'pwsh'."
+    exit 1
+}
 
 $ErrorActionPreference = "Continue"
 

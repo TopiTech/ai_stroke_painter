@@ -218,8 +218,9 @@ public:
 #if defined(AI_STROKE_PAINTER_APP)
         welcomeScroller = new QScrollArea();
         welcomeScroller->setObjectName(QStringLiteral("aiWelcomeScroller"));
+        welcomeScroller->setFrameShape(QFrame::NoFrame);
         welcomeScroller->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-        welcomeScroller->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+        welcomeScroller->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
         welcomeScroller->setWidgetResizable(true);
 
         auto *startPage = new KisAiStartPageWidget(parent, welcomeScroller);

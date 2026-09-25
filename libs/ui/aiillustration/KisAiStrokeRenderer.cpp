@@ -1934,6 +1934,9 @@ void KisAiStrokeRenderer::applySoftEdgeDiffusion(QImage &image, int radius)
 
     const int boundedRadius = qBound(1, radius, qMax(1, qMin(w - 1, h - 1)));
     QImage temp(image.size(), image.format());
+    if (temp.isNull()) {
+        return;
+    }
     const int diameter = boundedRadius * 2 + 1;
     const qreal invDiv = 1.0 / diameter;
 
@@ -2021,9 +2024,15 @@ QImage KisAiStrokeRenderer::generateBloomMap(const QImage &image, qreal intensit
     if (src.format() != QImage::Format_ARGB32_Premultiplied) {
         src = src.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     }
+    if (src.isNull()) {
+        return QImage();
+    }
 
     // Step 1: Extract bright highlights (luminance > 170)
     QImage bright(w, h, QImage::Format_ARGB32_Premultiplied);
+    if (bright.isNull()) {
+        return QImage();
+    }
     bright.fill(Qt::transparent);
 
     for (int y = 0; y < h; ++y) {
@@ -2190,6 +2199,9 @@ void KisAiStrokeRenderer::applyVignette(QImage &image, qreal strength)
     if (image.format() != QImage::Format_ARGB32_Premultiplied && image.format() != QImage::Format_ARGB32) {
         image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     }
+    if (image.isNull()) {
+        return;
+    }
 
     const qreal cx = (w - 1) * 0.5;
     const qreal cy = (h - 1) * 0.5;
@@ -2223,6 +2235,9 @@ void KisAiStrokeRenderer::applyFinishingPostProcess(QImage &image)
 
     if (image.format() != QImage::Format_ARGB32_Premultiplied) {
         image = image.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    }
+    if (image.isNull()) {
+        return;
     }
 
     // 1. Bloom glow matching layers (Screen 40%, radius 8)

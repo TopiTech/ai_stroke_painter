@@ -22,6 +22,7 @@ private Q_SLOTS:
     void testQuickPromptEmptyDoesNotCrash();
     void testPasteEmptyClipboardDoesNotCrash();
     void testRecentDocumentsModelSignalConnection();
+    void testKeyboardFocusAndShortcuts();
 };
 
 #endif // KIS_AI_START_PAGE_TEST_H

@@ -1,4 +1,8 @@
 #requires -Version 7.0
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Error "PowerShell 7.0 or higher is required to run build-ai-stroke-painter.ps1. Please run using 'pwsh'."
+    exit 1
+}
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest

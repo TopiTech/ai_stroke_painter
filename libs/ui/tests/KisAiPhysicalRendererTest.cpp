@@ -444,4 +444,51 @@ void KisAiPhysicalRendererTest::testPhysicalRenderClampsDerivedOversizeCanvas()
                                                            rendered.height())));
 }
 
+void KisAiPhysicalRendererTest::testNullAndEmptySafety()
+{
+    // 1. toLinearHdr on null image
+    QVERIFY(KisAiPhysicalRenderer::toLinearHdr(QImage()).isNull());
+
+    // 2. toSrgbLdr on null image
+    QVERIFY(KisAiPhysicalRenderer::toSrgbLdr(QImage()).isNull());
+
+    // 3. downsampleBox on null image or zero dimensions
+    QVERIFY(KisAiPhysicalRenderer::downsampleBox(QImage(), QSize(100, 100)).isNull());
+    QImage validImage(64, 64, QImage::Format_ARGB32_Premultiplied);
+    validImage.fill(Qt::red);
+    QVERIFY(KisAiPhysicalRenderer::downsampleBox(validImage, QSize()).isNull());
+    QVERIFY(KisAiPhysicalRenderer::downsampleBox(validImage, QSize(0, 50)).isNull());
+    QVERIFY(KisAiPhysicalRenderer::downsampleBox(validImage, QSize(-10, -10)).isNull());
+
+    // 4. compositeLayer with invalid / null arguments does not crash
+    QImage dstNull;
+    KisAiLayerImage invalidLayer;
+    KisAiPhysicalRenderer::compositeLayer(dstNull, invalidLayer, nullptr);
+
+    KisAiLayerImage validLayer;
+    validLayer.name = QStringLiteral("Flats");
+    validLayer.image = validImage;
+    validLayer.blendMode = QStringLiteral("normal");
+    // Passing null dst
+    KisAiPhysicalRenderer::compositeLayer(dstNull, validLayer, nullptr);
+    // Passing invalid layer to valid dst
+    QImage dstValid(64, 64, QImage::Format_RGBA32FPx4_Premultiplied);
+    dstValid.fill(Qt::transparent);
+    KisAiPhysicalRenderer::compositeLayer(dstValid, invalidLayer, nullptr);
+
+    // 5. CompositeGraph evaluate with empty size or null background
+    KisAiCompositeGraph emptyGraph;
+    emptyGraph.size = QSize(0, 0);
+    QVERIFY(emptyGraph.evaluate().isNull());
+
+    KisAiCompositeGraph validGraph;
+    validGraph.size = QSize(64, 64);
+    validGraph.layers.append(validLayer);
+    const QImage evalResult = validGraph.evaluate();
+    if (KisAiPhysicalRenderer::isHdrFormatSupported()) {
+        QVERIFY(!evalResult.isNull());
+        QCOMPARE(evalResult.size(), QSize(64, 64));
+    }
+}
+
 KISTEST_MAIN(KisAiPhysicalRendererTest)
