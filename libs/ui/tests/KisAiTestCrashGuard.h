@@ -24,7 +24,7 @@
 
 #if defined(Q_OS_WIN) || defined(_WIN32)
 #include <windows.h>
-#if defined(_MSC_VER) || defined(__MINGW32__)
+#if defined(_MSC_VER)
 #include <crtdbg.h>
 #endif
 #endif
@@ -153,9 +153,31 @@ inline void setupWindowsTestCrashGuard()
     }
 
     // 4. CRT assertion & abort behavior suppression
-#if defined(_MSC_VER) || defined(__MINGW32__)
+#if defined(_MSC_VER)
     _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
     _set_error_mode(_OUT_TO_STDERR);
+#elif defined(__MINGW32__)
+    // Under MinGW targeting msvcrt.dll, _set_abort_behavior is not exported by libmsvcrt.a,
+    // which results in an undefined reference to `__imp__set_abort_behavior` during linking.
+    // Dynamically resolve CRT functions from the loaded CRT DLL if available.
+    typedef unsigned int (__cdecl *SetAbortBehaviorFunc)(unsigned int, unsigned int);
+    typedef int (__cdecl *SetErrorModeFunc)(int);
+    HMODULE hCrt = GetModuleHandleW(L"ucrtbase.dll");
+    if (!hCrt) {
+        hCrt = GetModuleHandleW(L"msvcrt.dll");
+    }
+    if (hCrt) {
+        SetAbortBehaviorFunc pSetAbortBehavior =
+            reinterpret_cast<SetAbortBehaviorFunc>(reinterpret_cast<void*>(GetProcAddress(hCrt, "_set_abort_behavior")));
+        if (pSetAbortBehavior) {
+            pSetAbortBehavior(0, 0x0001 /* _WRITE_ABORT_MSG */ | 0x0002 /* _CALL_REPORTFAULT */);
+        }
+        SetErrorModeFunc pSetErrorMode =
+            reinterpret_cast<SetErrorModeFunc>(reinterpret_cast<void*>(GetProcAddress(hCrt, "_set_error_mode")));
+        if (pSetErrorMode) {
+            pSetErrorMode(1 /* _OUT_TO_STDERR */);
+        }
+    }
 #endif
 
     // 5. Unhandled exception filter to terminate without WerFault intervention
