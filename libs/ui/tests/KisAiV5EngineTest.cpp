@@ -19,6 +19,7 @@
 #include <QJsonObject>
 #include <QPainter>
 #include <QTest>
+#include "KisAiTestCrashGuard.h"
 
 using namespace QTest;
 
@@ -959,4 +960,4 @@ void KisAiV5EngineTest::testFlagshipInkDynamicsCurvatureModulation()
     }
 }
 
-QTEST_MAIN(KisAiV5EngineTest)
+AI_STROKE_TEST_MAIN(KisAiV5EngineTest)

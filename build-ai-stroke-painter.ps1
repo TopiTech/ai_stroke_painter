@@ -20,6 +20,9 @@ $env:PATH = @(
     $env:PATH
 ) -join ';'
 $env:PKG_CONFIG_PATH = Join-Path $craftRoot 'lib\pkgconfig'
+$env:KRITA_NO_ASSERT_MSG = '1'
+$env:QT_ASSUME_STDERR_HAS_CONSOLE = '1'
+$env:QT_QPA_PLATFORM = 'offscreen'
 
 Write-Host 'Configuring the CMake build...' -ForegroundColor Cyan
 cmake -S . -B $buildDir -G Ninja `
@@ -40,7 +43,7 @@ if ($LASTEXITCODE -ne 0) {
 # 実行ファイル名は ai-stroke-painter ですが、CMake のアプリケーションターゲット名は krita です。
 Write-Host 'Building the application and AI Stroke Painter tests...' -ForegroundColor Cyan
 cmake --build $buildDir `
-    --target krita KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest KisAiV5EngineTest KisAiV6WiringTest KisAiV7QualityTest KisAiQualityVectorTest KisAiPerceptualRepairerTest KisAiPhysicalRendererTest KisAiAbstractOntologyTest KisAiQualityBenchGateTest KisAiAtomicInkTest KisAiV10QualityTest KisAiStartPageTest KisAiLineartModeTest KisAiCoverageRasterTest `
+    --target krita KisAiCrashGuardTest KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest KisAiV5EngineTest KisAiV6WiringTest KisAiV7QualityTest KisAiQualityVectorTest KisAiPerceptualRepairerTest KisAiPhysicalRendererTest KisAiAbstractOntologyTest KisAiQualityBenchGateTest KisAiAtomicInkTest KisAiV10QualityTest KisAiStartPageTest KisAiLineartModeTest KisAiCoverageRasterTest `
     --parallel
 
 if ($LASTEXITCODE -ne 0) {

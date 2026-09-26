@@ -57,7 +57,130 @@
 
 #if defined(Q_OS_WIN)
 #  include <windows.h>
-#  define KISTEST_SETUP_WINDOWS_CRASH_GUARD SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+#  include <cstdio>
+#  include <cstdlib>
+#  if defined(_MSC_VER) || defined(__MINGW32__)
+#  include <crtdbg.h>
+#  endif
+
+namespace {
+#if defined(__x86_64__) || defined(_M_X64)
+inline bool kisTestHookFunction64(void *targetFunc, void *hookFunc)
+{
+    if (!targetFunc || !hookFunc) return false;
+    DWORD oldProtect = 0;
+    const SIZE_T patchSize = 12;
+    if (!VirtualProtect(targetFunc, patchSize, PAGE_EXECUTE_READWRITE, &oldProtect)) {
+        return false;
+    }
+    unsigned char patch[12];
+    patch[0] = 0x48;
+    patch[1] = 0xB8;
+    uintptr_t hookAddr = reinterpret_cast<uintptr_t>(hookFunc);
+    memcpy(&patch[2], &hookAddr, sizeof(hookAddr));
+    patch[10] = 0xFF;
+    patch[11] = 0xE0;
+    memcpy(targetFunc, patch, patchSize);
+    VirtualProtect(targetFunc, patchSize, oldProtect, &oldProtect);
+    FlushInstructionCache(GetCurrentProcess(), targetFunc, patchSize);
+    return true;
+}
+#endif
+
+static inline int WINAPI KisTestMockMessageBoxW(HWND, LPCWSTR lpText, LPCWSTR lpCaption, UINT uType)
+{
+    fprintf(stderr, "\n[KISTEST CRASH GUARD] Suppressed Win32 MessageBoxW popup! Caption: '%ls', Text: '%ls', Type: 0x%X\n",
+            lpCaption ? lpCaption : L"(null)", lpText ? lpText : L"(null)", uType);
+    fflush(stderr);
+    const UINT type = (uType & MB_TYPEMASK);
+    if (type == MB_YESNO) return IDYES;
+    if (type == MB_YESNOCANCEL) return IDYES;
+    if (type == MB_ABORTRETRYIGNORE) return IDIGNORE;
+    if (type == MB_CANCELTRYCONTINUE) return IDCONTINUE;
+    if (type == MB_RETRYCANCEL) return IDCANCEL;
+    return IDOK;
+}
+
+static inline int WINAPI KisTestMockMessageBoxA(HWND, LPCSTR lpText, LPCSTR lpCaption, UINT uType)
+{
+    fprintf(stderr, "\n[KISTEST CRASH GUARD] Suppressed Win32 MessageBoxA popup! Caption: '%s', Text: '%s', Type: 0x%X\n",
+            lpCaption ? lpCaption : "(null)", lpText ? lpText : "(null)", uType);
+    fflush(stderr);
+    const UINT type = (uType & MB_TYPEMASK);
+    if (type == MB_YESNO) return IDYES;
+    if (type == MB_YESNOCANCEL) return IDYES;
+    if (type == MB_ABORTRETRYIGNORE) return IDIGNORE;
+    if (type == MB_CANCELTRYCONTINUE) return IDCONTINUE;
+    if (type == MB_RETRYCANCEL) return IDCANCEL;
+    return IDOK;
+}
+
+static inline LONG WINAPI KisTestUnhandledExceptionFilter(EXCEPTION_POINTERS *pExceptionInfo)
+{
+    DWORD code = pExceptionInfo && pExceptionInfo->ExceptionRecord ? pExceptionInfo->ExceptionRecord->ExceptionCode : 0;
+    void *addr = pExceptionInfo && pExceptionInfo->ExceptionRecord ? pExceptionInfo->ExceptionRecord->ExceptionAddress : nullptr;
+    fprintf(stderr, "\n[KISTEST CRASH GUARD FATAL] Unhandled exception 0x%08lX at %p. Terminating process immediately.\n",
+            static_cast<unsigned long>(code), addr);
+    fflush(stderr);
+    TerminateProcess(GetCurrentProcess(), code ? code : 1);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+inline void setupKisTestWindowsCrashGuard()
+{
+    static bool s_guardInstalled = false;
+    if (s_guardInstalled) return;
+    s_guardInstalled = true;
+
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+
+    typedef BOOL (WINAPI *SetProcessErrorModeFunc)(DWORD);
+    HMODULE hKernel32 = GetModuleHandleW(L"kernel32.dll");
+    if (hKernel32) {
+        SetProcessErrorModeFunc pSetProcessErrorMode =
+            reinterpret_cast<SetProcessErrorModeFunc>(reinterpret_cast<void*>(GetProcAddress(hKernel32, "SetProcessErrorMode")));
+        if (pSetProcessErrorMode) {
+            pSetProcessErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
+        }
+    }
+
+    typedef HRESULT (WINAPI *WerSetFlagsFunc)(DWORD);
+    HMODULE hWer = LoadLibraryW(L"wer.dll");
+    if (hWer) {
+        WerSetFlagsFunc pWerSetFlags =
+            reinterpret_cast<WerSetFlagsFunc>(reinterpret_cast<void*>(GetProcAddress(hWer, "WerSetFlags")));
+        if (pWerSetFlags) {
+            pWerSetFlags(0x0020 /* WER_FAULT_REPORTING_NO_UI */);
+        }
+    }
+
+#if defined(_MSC_VER) || defined(__MINGW32__)
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+    _set_error_mode(_OUT_TO_STDERR);
+#endif
+
+    SetUnhandledExceptionFilter(KisTestUnhandledExceptionFilter);
+
+    HMODULE hUser32 = LoadLibraryW(L"user32.dll");
+    if (hUser32) {
+#if defined(__x86_64__) || defined(_M_X64)
+        void *pMessageBoxW = reinterpret_cast<void*>(GetProcAddress(hUser32, "MessageBoxW"));
+        if (pMessageBoxW) {
+            kisTestHookFunction64(pMessageBoxW, reinterpret_cast<void*>(KisTestMockMessageBoxW));
+        }
+        void *pMessageBoxA = reinterpret_cast<void*>(GetProcAddress(hUser32, "MessageBoxA"));
+        if (pMessageBoxA) {
+            kisTestHookFunction64(pMessageBoxA, reinterpret_cast<void*>(KisTestMockMessageBoxA));
+        }
+#endif
+    }
+
+    qputenv("KRITA_NO_ASSERT_MSG", "1");
+    qputenv("QT_ASSUME_STDERR_HAS_CONSOLE", "1");
+}
+} // namespace
+
+#  define KISTEST_SETUP_WINDOWS_CRASH_GUARD setupKisTestWindowsCrashGuard();
 #else
 #  define KISTEST_SETUP_WINDOWS_CRASH_GUARD
 #endif

@@ -50,7 +50,11 @@ if (NOT AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
     kis_add_test(KisAiCoverageRasterTest.cpp
         TEST_NAME KisAiCoverageRasterTest
         LINK_LIBRARIES kritaui kritatestsdk)
+    kis_add_test(KisAiCrashGuardTest.cpp
+        TEST_NAME KisAiCrashGuardTest
+        LINK_LIBRARIES kritaui kritatestsdk)
     set_tests_properties(
+        libs-ui-KisAiCrashGuardTest
         libs-ui-KisAiStrokeProgramTest
         libs-ui-KisAiStrokeRendererTest
         libs-ui-KisAiIllustrationRendererTest
@@ -69,7 +73,8 @@ if (NOT AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
         libs-ui-KisAiCoverageRasterTest
         PROPERTIES
             LABELS "AIStroke"
-            TIMEOUT 30)
+            TIMEOUT 30
+            ENVIRONMENT "KRITA_NO_ASSERT_MSG=1;QT_QPA_PLATFORM=offscreen;QT_ASSUME_STDERR_HAS_CONSOLE=1")
     return()
 endif()
 

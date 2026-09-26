@@ -20,12 +20,12 @@
 #include <QVector>
 #include <cmath>
 #include <limits>
+#include "KisAiTestCrashGuard.h"
 #ifndef AI_STROKE_STANDALONE
 #include <testui.h>
 #else
-#include <QTest>
 #ifndef KISTEST_MAIN
-#define KISTEST_MAIN(TestClass) QTEST_MAIN(TestClass)
+#define KISTEST_MAIN(TestClass) AI_STROKE_TEST_MAIN(TestClass)
 #endif
 #endif
 

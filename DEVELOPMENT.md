@@ -122,15 +122,15 @@ cmake -S . -B build-ai -G Ninja `
 
 # アプリケーション本体と AI Stroke Painter の検証テストを並列ビルド
 # 実行ファイル名は ai-stroke-painter だが、CMake のアプリケーションターゲット名は krita。
-# テストターゲット一覧は build-ai-stroke-painter.ps1 と同梱 (全16本)。
-cmake --build build-ai --target krita KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest KisAiV5EngineTest KisAiV6WiringTest KisAiV7QualityTest KisAiQualityVectorTest KisAiPerceptualRepairerTest KisAiPhysicalRendererTest KisAiAbstractOntologyTest KisAiQualityBenchGateTest KisAiAtomicInkTest KisAiV10QualityTest KisAiStartPageTest KisAiLineartModeTest KisAiCoverageRasterTest --parallel
+# テストターゲット一覧は build-ai-stroke-painter.ps1 と同梱 (全17本)。
+cmake --build build-ai --target krita KisAiCrashGuardTest KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest KisAiV5EngineTest KisAiV6WiringTest KisAiV7QualityTest KisAiQualityVectorTest KisAiPerceptualRepairerTest KisAiPhysicalRendererTest KisAiAbstractOntologyTest KisAiQualityBenchGateTest KisAiAtomicInkTest KisAiV10QualityTest KisAiStartPageTest KisAiLineartModeTest KisAiCoverageRasterTest --parallel
 cmake --install build-ai --prefix "$craftRoot\ai-stroke-painter"
 ```
 
 ### 単体テストの実行（CI / ローカル）
 
-AI ストロークのパース・スキーマ生成・品質補正・Centripetal スプライン・筆圧テーパー・スーパーサンプリング・クリッピングマスク・代表作品の画素品質指標を回帰テストします。
-通常のAIビルドでは、プロジェクトの対象範囲に含まれないKrita上流テストの大半は登録せず、AI Stroke Painter の16本 (ラベル `AIStroke`) と、libs/image のコア画像テスト (ラベル `KritaCore`) のみを登録します。無指定の `ctest` はこの両方を実行し、`-L AIStroke` で AI 分だけに絞れます。
+AI ストロークのパース・スキーマ生成・品質補正・Centripetal スプライン・筆圧テーパー・スーパーサンプリング・クリッピングマスク・代表作品の画素品質指標・クラッシュガードを回帰テストします。
+通常のAIビルドでは、プロジェクトの対象範囲に含まれないKrita上流テストの大半は登録せず、AI Stroke Painter の17本 (ラベル `AIStroke`) と、libs/image のコア画像テスト (ラベル `KritaCore`) のみを登録します。無指定の `ctest` はこの両方を実行し、`-L AIStroke` で AI 分だけに絞れます。
 
 ```powershell
 # AI Stroke Painterの対象機能を全件実行（BUILD_TESTING=ONのbuild-ai）
@@ -146,6 +146,23 @@ cmake -B build-test -G Ninja -DAI_STROKE_STANDALONE_TESTS=ON -DCMAKE_PREFIX_PATH
 cmake --build build-test
 ctest --test-dir build-test --output-on-failure --no-tests=error
 ```
+
+#### Windows テストスタック防止策（WerFault / Win32 MessageBoxW 再発防止）
+
+Windows 環境でテスト中に `WerFault.exe`（Windows エラー報告）や `MessageBoxW`（CRT アサーション/エラーダイアログ、Safe Assert ダイアログ）がバックグラウンドでポップアップし、テストプロセスが対話入力待ちで永久にスタックするのを防ぐため、以下の多層防御が自動適用されています：
+
+1. **テストクラッシュガード (`KisAiTestCrashGuard.h` / `kistest.h`)**:
+   - `SetErrorMode` / `SetProcessErrorMode`: GPフォールトやハードエラーのUIダイアログをプロセス単位で完全無効化。
+   - `WerSetFlags(WER_FAULT_REPORTING_NO_UI)`: クラッシュ時に `WerFault.exe` ダイアログが表示されるのを阻止。
+   - `_set_abort_behavior` / `_set_error_mode`: CRT の `abort()` や `assert()` 失敗時にメッセージボックスを出さず、標準エラー出力にのみ流す。
+   - `SetUnhandledExceptionFilter`: 未処理の SEH 例外（アクセス違反等）を捕捉し、WerFault を起動させずに即座に非対話的に異常終了コードで終了。
+   - `MessageBoxW` / `MessageBoxA` インラインインターセプト: 外部・CRT・Qtから Win32 API の MessageBox が直接呼ばれた場合でも、UIダイアログを表示せず標準エラー出力に引数を記録して即座に非対話的デフォルト値（IDOK/IDYES/IDIGNORE等）を返す。
+2. **自動環境変数注入**:
+   - `KRITA_NO_ASSERT_MSG=1`: Krita の safe assert (`kis_assert_common`) による `QMessageBox::critical` ポップアップを遮断。
+   - `QT_ASSUME_STDERR_HAS_CONSOLE=1`: Qt のコンソール出力を確実に stderr へ誘導。
+   - `QT_QPA_PLATFORM=offscreen`: オフスクリーンレンダリングによる非表示実行。
+3. **バッチ / スクリプトによる残存プロセス隔離**:
+   - `run-aistroke-ctest.bat`: テスト実行前後にゾンビ化した `WerFault.exe` や古いテストプロセスを自動検出・強制終了。
 
 Krita上流の回帰テストを調査・更新する必要がある場合だけ、完全なリソース・プラグイン構成を用意したビルドで明示的に有効化します。AI Stroke Painterの通常検証には含めません。
 

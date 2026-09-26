@@ -194,7 +194,18 @@ if (AI_STROKE_STANDALONE_TESTS)
     target_link_libraries(KisAiCoverageRasterTest PRIVATE ai_stroke_core Qt6::Test)
     add_test(NAME KisAiCoverageRasterTest COMMAND KisAiCoverageRasterTest)
 
+    add_executable(KisAiCrashGuardTest
+        libs/ui/tests/KisAiCrashGuardTest.cpp
+    )
+    target_include_directories(KisAiCrashGuardTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiCrashGuardTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiCrashGuardTest COMMAND KisAiCrashGuardTest)
+
     set(AI_STROKE_ALL_TEST_TARGETS
+        KisAiCrashGuardTest
         KisAiStrokeProgramTest
         KisAiStrokeRendererTest
         KisAiIllustrationRendererTest
@@ -229,7 +240,7 @@ if (AI_STROKE_STANDALONE_TESTS)
         set(ai_stroke_test_qt_plugin_path "$<TARGET_FILE_DIR:Qt6::Core>/../plugins")
         set_tests_properties(
             ${AI_STROKE_ALL_TEST_TARGETS}
-            PROPERTIES ENVIRONMENT "PATH=${ai_stroke_test_runtime_path}\;QT_QPA_PLATFORM=offscreen\;QT_PLUGIN_PATH=${ai_stroke_test_qt_plugin_path}")
+            PROPERTIES ENVIRONMENT "PATH=${ai_stroke_test_runtime_path}\;QT_QPA_PLATFORM=offscreen\;QT_PLUGIN_PATH=${ai_stroke_test_qt_plugin_path}\;KRITA_NO_ASSERT_MSG=1\;QT_ASSUME_STDERR_HAS_CONSOLE=1")
     endif()
 
     return()
