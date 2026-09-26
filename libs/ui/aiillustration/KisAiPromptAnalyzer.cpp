@@ -1094,6 +1094,22 @@ QString KisAiPromptAnalyzer::parseExpandedPrompt(const QByteArray &responseBytes
                 }
             }
         }
+    } else if (root.contains(QStringLiteral("content"))) {
+        // Anthropic Claude Messages API format: {"content": [{"type": "text", "text": "..."}]}
+        const QJsonValue contentVal = root.value(QStringLiteral("content"));
+        if (contentVal.isString()) {
+            content = contentVal.toString();
+        } else if (contentVal.isArray()) {
+            const QJsonArray contentParts = contentVal.toArray();
+            for (const QJsonValue &partVal : contentParts) {
+                if (partVal.isObject()) {
+                    const QJsonObject partObj = partVal.toObject();
+                    if (partObj.value(QStringLiteral("type")).toString() == QLatin1String("text")) {
+                        content.append(partObj.value(QStringLiteral("text")).toString());
+                    }
+                }
+            }
+        }
     }
 
     if (content.isEmpty()) {

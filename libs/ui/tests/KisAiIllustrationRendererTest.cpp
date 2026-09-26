@@ -95,6 +95,19 @@ void KisAiIllustrationRendererTest::testValidateImageEndpoint()
         &errorMsg));
     QVERIFY(!errorMsg.isEmpty());
 
+    // Groq and Perplexity token patterns in URL path or query
+    errorMsg.clear();
+    QVERIFY(!KisAiIllustrationRenderer::validateImageEndpoint(
+        QStringLiteral("https://api.groq.com/openai/v1/gsk_abcdef1234567890abcdef"),
+        &errorMsg));
+    QVERIFY(!errorMsg.isEmpty());
+
+    errorMsg.clear();
+    QVERIFY(!KisAiIllustrationRenderer::validateImageEndpoint(
+        QStringLiteral("https://api.perplexity.ai/chat/completions?token=pplx-abcdef1234567890"),
+        &errorMsg));
+    QVERIFY(!errorMsg.isEmpty());
+
     // Normal versioned API paths without secrets stay valid.
     errorMsg.clear();
     QVERIFY(KisAiIllustrationRenderer::validateImageEndpoint(
@@ -126,6 +139,10 @@ void KisAiIllustrationRendererTest::testDisplayEndpoint()
     const QString displayed = KisAiIllustrationRenderer::displayEndpoint(QStringLiteral("https://user:secret@api.openai.com:443/v1/chat/completions"));
     QVERIFY(!displayed.contains(QStringLiteral("secret")));
     QVERIFY(displayed.contains(QStringLiteral("api.openai.com")));
+
+    // Port numbers should be preserved in displayEndpoint
+    const QString portDisplayed = KisAiIllustrationRenderer::displayEndpoint(QStringLiteral("http://localhost:11434/v1/chat"));
+    QVERIFY(portDisplayed.contains(QStringLiteral("localhost:11434")));
 }
 
 void KisAiIllustrationRendererTest::testNormalizedPrompt()
@@ -260,6 +277,20 @@ void KisAiIllustrationRendererTest::testPromptExpansionPayloadAndParsing()
     const QString geminiParsed = KisAiPromptAnalyzer::parseExpandedPrompt(geminiResponse, &geminiErr);
     QVERIFY(geminiErr.isEmpty());
     QCOMPARE(geminiParsed, QStringLiteral("サイバーパンク都市の雨夜、ネオンサインの反射"));
+
+    // Test Anthropic Claude Messages API format parsing
+    const QByteArray claudeResponse = R"({
+        "content": [
+            {
+                "type": "text",
+                "text": "青空の下に咲くひまわり畑、水彩調のイラスト"
+            }
+        ]
+    })";
+    QString claudeErr;
+    const QString claudeParsed = KisAiPromptAnalyzer::parseExpandedPrompt(claudeResponse, &claudeErr);
+    QVERIFY(claudeErr.isEmpty());
+    QCOMPARE(claudeParsed, QStringLiteral("青空の下に咲くひまわり畑、水彩調のイラスト"));
 
     // Test reasoning model <think> tag stripping
     const QByteArray reasoningResponse = R"({
@@ -434,6 +465,24 @@ void KisAiIllustrationRendererTest::testRedactCredentialText()
     QVERIFY(!ghOutput.contains(QStringLiteral("1234567890abcdefghijklmnopqrstuvwxyz")));
     QVERIFY(!ghOutput.contains(QStringLiteral("11AAAAAAA000000000_BBBBBBBBBBBBBBBB")));
     QVERIFY(ghOutput.contains(QStringLiteral("gh_***")));
+
+    // Groq API key redaction (gsk_...)
+    const QString groqInput = QStringLiteral("Groq connection failed with key gsk_1234567890abcdef1234567890abcdef");
+    const QString groqOutput = KisAiIllustrationRenderer::redactCredentialText(groqInput);
+    QVERIFY(!groqOutput.contains(QStringLiteral("1234567890abcdef")));
+    QVERIFY(groqOutput.contains(QStringLiteral("gsk_***")));
+
+    // Perplexity API key redaction (pplx-...)
+    const QString pplxInput = QStringLiteral("Perplexity auth error: pplx-1234567890abcdef1234567890abcdef");
+    const QString pplxOutput = KisAiIllustrationRenderer::redactCredentialText(pplxInput);
+    QVERIFY(!pplxOutput.contains(QStringLiteral("1234567890abcdef")));
+    QVERIFY(pplxOutput.contains(QStringLiteral("pplx-***")));
+
+    // Custom header redaction (x-api-key: ...)
+    const QString headerInput = QStringLiteral("HTTP headers: x-api-key: secret_custom_key_xyz123\nHost: api.example.com");
+    const QString headerOutput = KisAiIllustrationRenderer::redactCredentialText(headerInput);
+    QVERIFY(!headerOutput.contains(QStringLiteral("secret_custom_key_xyz123")));
+    QVERIFY(headerOutput.contains(QStringLiteral("x-api-key: ***")));
 }
 
 KISTEST_MAIN(KisAiIllustrationRendererTest)

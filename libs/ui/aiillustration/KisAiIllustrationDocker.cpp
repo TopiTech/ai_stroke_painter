@@ -602,21 +602,29 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_refImageSelectBtn = new QPushButton(i18n("ファイル選択..."), m_referenceImageCard);
     m_refImageSelectBtn->setToolTip(i18n("ローカル画像ファイル(PNG, JPG, WebP)を参照画像として設定します。"));
     m_refImageSelectBtn->setCursor(Qt::PointingHandCursor);
+    m_refImageSelectBtn->setAccessibleName(i18n("Select reference image from file"));
+    m_refImageSelectBtn->setAccessibleDescription(i18n("ローカル画像ファイルを参照画像として選択します。"));
     refButtonsGrid->addWidget(m_refImageSelectBtn, 0, 0);
 
     m_refImageFromCanvasBtn = new QPushButton(i18n("キャンバスから取得"), m_referenceImageCard);
     m_refImageFromCanvasBtn->setToolTip(i18n("現在開いているキャンバスの描画内容を参照画像として取り込みます。"));
     m_refImageFromCanvasBtn->setCursor(Qt::PointingHandCursor);
+    m_refImageFromCanvasBtn->setAccessibleName(i18n("Capture reference image from canvas"));
+    m_refImageFromCanvasBtn->setAccessibleDescription(i18n("現在のキャンバス画像を参照画像として取得します。"));
     refButtonsGrid->addWidget(m_refImageFromCanvasBtn, 0, 1);
 
     m_refImagePasteBtn = new QPushButton(i18n("📋 貼り付け"), m_referenceImageCard);
     m_refImagePasteBtn->setToolTip(i18n("クリップボードにコピーされている画像を参照画像として設定します。"));
     m_refImagePasteBtn->setCursor(Qt::PointingHandCursor);
+    m_refImagePasteBtn->setAccessibleName(i18n("Paste reference image from clipboard"));
+    m_refImagePasteBtn->setAccessibleDescription(i18n("クリップボードの画像を参照画像として貼り付けます。"));
     refButtonsGrid->addWidget(m_refImagePasteBtn, 1, 0);
 
     m_refImageClearBtn = new QPushButton(i18n("✕ 解除"), m_referenceImageCard);
     m_refImageClearBtn->setToolTip(i18n("参照画像を解除します。"));
     m_refImageClearBtn->setCursor(Qt::PointingHandCursor);
+    m_refImageClearBtn->setAccessibleName(i18n("Clear reference image"));
+    m_refImageClearBtn->setAccessibleDescription(i18n("設定されている参照画像を解除します。"));
     m_refImageClearBtn->setVisible(false);
     refButtonsGrid->addWidget(m_refImageClearBtn, 1, 1);
 
@@ -5108,6 +5116,7 @@ void KisAiIllustrationDocker::testLlmConnection()
     m_testResponseTooLarge = false;
     m_testReply = m_networkManager->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
     m_testReply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
+    m_inFlightApiKey = apiKey;
     // 保存OFF時のキーはリクエスト後に入力欄に残さない (DEVELOPMENT.md §7.4)。
     if (m_saveApiKeyCheck && !m_saveApiKeyCheck->isChecked() && m_apiKeyEditor) {
         m_apiKeyEditor->clear();
@@ -5459,6 +5468,7 @@ void KisAiIllustrationDocker::expandPromptWithAi()
 
     m_expandPromptReply = m_networkManager->post(request, payload);
     m_expandPromptReply->setReadBufferSize(MAX_REMOTE_RESPONSE_BYTES);
+    m_inFlightApiKey = apiKey;
     // 保存OFF時のキーはリクエスト後に入力欄に残さない (DEVELOPMENT.md §7.4)。
     if (m_saveApiKeyCheck && !m_saveApiKeyCheck->isChecked() && m_apiKeyEditor) {
         m_apiKeyEditor->clear();

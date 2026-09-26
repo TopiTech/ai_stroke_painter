@@ -2691,6 +2691,34 @@ bool KisAiStrokeProgramCodec::parseResponse(const QByteArray &responseBytes,
                 }
             }
         }
+
+        // Anthropic Claude native format: content[0].text or content array
+        if (root.contains(QStringLiteral("content"))) {
+            const QJsonValue contentVal = root.value(QStringLiteral("content"));
+            QString claudeText;
+            if (contentVal.isString()) {
+                claudeText = contentVal.toString();
+            } else if (contentVal.isArray()) {
+                for (const QJsonValue &pVal : contentVal.toArray()) {
+                    if (pVal.isObject() && pVal.toObject().value(QStringLiteral("type")).toString() == QLatin1String("text")) {
+                        claudeText.append(pVal.toObject().value(QStringLiteral("text")).toString());
+                    }
+                }
+            }
+            if (!claudeText.isEmpty()) {
+                const QString cleanJson = sanitizeAndExtractJson(claudeText, diagnostic);
+                const QJsonDocument programDoc = QJsonDocument::fromJson(cleanJson.toUtf8());
+                if (programDoc.isObject()) {
+                    const QJsonObject innerEnv = findProgramEnvelope(programDoc.object(), 0);
+                    if (!innerEnv.isEmpty() && parseAndRefine(innerEnv)) {
+                        return true;
+                    }
+                }
+                if (extractOperationsFromRawText(claudeText, outProgram, errorMessage, diagnostic, qualityReport)) {
+                    return true;
+                }
+            }
+        }
     }
 
     // 2. Streamed response or raw model output: run sanitizeAndExtractJson

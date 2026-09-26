@@ -126,6 +126,16 @@ float KisAiPhysicalRenderer::blendAdd(float cb, float cs)
     return std::min(1.0f, cb + cs);
 }
 
+float KisAiPhysicalRenderer::blendDarken(float cb, float cs)
+{
+    return std::min(cb, cs);
+}
+
+float KisAiPhysicalRenderer::blendLighten(float cb, float cs)
+{
+    return std::max(cb, cs);
+}
+
 // ===========================================================================
 // 単一ピクセル物理ブレンド (Premultiplied RGBA 浮動小数点)
 // ===========================================================================
@@ -210,6 +220,14 @@ void KisAiPhysicalRenderer::blendPixel(const QString &blendMode,
         bR = blendAdd(cbR, csR);
         bG = blendAdd(cbG, csG);
         bB = blendAdd(cbB, csB);
+    } else if (mode == QLatin1String("darken")) {
+        bR = blendDarken(cbR, csR);
+        bG = blendDarken(cbG, csG);
+        bB = blendDarken(cbB, csB);
+    } else if (mode == QLatin1String("lighten")) {
+        bR = blendLighten(cbR, csR);
+        bG = blendLighten(cbG, csG);
+        bB = blendLighten(cbB, csB);
     }
 
     // W3C Compositing & Blending formula:
@@ -328,7 +346,7 @@ QImage KisAiPhysicalRenderer::toSrgbLdr(const QImage &hdrImage)
             const float linG = srcLine[x * 4 + 1];
             const float linB = srcLine[x * 4 + 2];
             const float a = qBound(0.0f, srcLine[x * 4 + 3], 1.0f);
-            if (a <= 1e-6f || !std::isfinite(linR) || !std::isfinite(linG) || !std::isfinite(linB)) {
+            if (!std::isfinite(a) || a <= 1e-6f || !std::isfinite(linR) || !std::isfinite(linG) || !std::isfinite(linB)) {
                 dstLine[x] = 0;
             } else {
                 const float straightLinR = qBound(0.0f, linR / a, 1.0f);
@@ -618,6 +636,11 @@ QImage KisAiPhysicalRenderer::renderProgramToPhysicalImage(const KisAiStrokeProg
     QPainterPath faceExclusionPath;
     for (const KisAiStrokeOperation &op : activeProgram.operations) {
         if (op.kind == KisAiStrokeOperation::Kind::AnimeEye) {
+            if (!std::isfinite(op.eyeCenter.x()) || !std::isfinite(op.eyeCenter.y())
+                || !std::isfinite(op.eyeSize.width()) || !std::isfinite(op.eyeSize.height())
+                || op.eyeSize.width() <= 0.0 || op.eyeSize.height() <= 0.0) {
+                continue;
+            }
             const QPointF pt = scalePoint(op.eyeCenter, renderSize);
             const qreal ew = op.eyeSize.width() * renderSize.width();
             const qreal eh = op.eyeSize.height() * renderSize.height();

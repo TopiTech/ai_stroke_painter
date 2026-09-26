@@ -23,6 +23,7 @@ private Q_SLOTS:
     void testPasteEmptyClipboardDoesNotCrash();
     void testRecentDocumentsModelSignalConnection();
     void testKeyboardFocusAndShortcuts();
+    void testStartPageAutoFocusAndTabOrder();
 };
 
 #endif // KIS_AI_START_PAGE_TEST_H

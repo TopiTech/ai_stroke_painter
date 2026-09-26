@@ -8,6 +8,8 @@
 #include "aiillustration/KisAiStartPageWidget.h"
 #include "utils/KisRecentDocumentsModelWrapper.h"
 
+#include <QBoxLayout>
+#include <QFrame>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
@@ -261,6 +263,41 @@ void KisAiStartPageTest::testKeyboardFocusAndShortcuts()
         }
     }
     QVERIFY(foundPasteCardWithShortcut);
+}
+
+void KisAiStartPageTest::testStartPageAutoFocusAndTabOrder()
+{
+    KisAiStartPageWidget widget(nullptr);
+    widget.show();
+    QCoreApplication::processEvents();
+
+    auto *promptInput = widget.findChild<QLineEdit *>(QStringLiteral("aiPromptOmnibarInput"));
+    auto *generateBtn = widget.findChild<QPushButton *>(QStringLiteral("aiPromptGenerateBtn"));
+    QVERIFY(promptInput != nullptr);
+    QVERIFY(generateBtn != nullptr);
+
+    // Verify auto-focus on showEvent
+    QCOMPARE(widget.focusWidget(), promptInput);
+
+    // Verify tab order chain from promptInput to generateBtn
+    QWidget *nextAfterPrompt = promptInput->nextInFocusChain();
+    while (nextAfterPrompt && !(nextAfterPrompt->focusPolicy() & Qt::TabFocus)) {
+        nextAfterPrompt = nextAfterPrompt->nextInFocusChain();
+    }
+    QCOMPARE(nextAfterPrompt, generateBtn);
+
+    // Test responsive prompt bar direction: LeftToRight at >= 540px, TopToBottom at < 540px
+    widget.resize(750, 700);
+    QCoreApplication::processEvents();
+    auto *promptBar = widget.findChild<QFrame *>(QStringLiteral("aiPromptOmnibarFrame"));
+    QVERIFY(promptBar != nullptr);
+    auto *promptLayout = qobject_cast<QBoxLayout *>(promptBar->layout());
+    QVERIFY(promptLayout != nullptr);
+    QCOMPARE(promptLayout->direction(), QBoxLayout::LeftToRight);
+
+    widget.resize(320, 700);
+    QCoreApplication::processEvents();
+    QCOMPARE(promptLayout->direction(), QBoxLayout::TopToBottom);
 }
 
 KISTEST_MAIN(KisAiStartPageTest)

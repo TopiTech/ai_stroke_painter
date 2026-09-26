@@ -20,6 +20,7 @@ private Q_SLOTS:
     void testBlendSoftLightValues();
     void testBlendColorDodgeValues();
     void testBlendLinearBurnValues();
+    void testBlendDarkenAndLightenValues();
     void testBlendAddValues();
     void testBlendPixelAddMode();
     void testBlendPixelOpaqueOverOpaque();

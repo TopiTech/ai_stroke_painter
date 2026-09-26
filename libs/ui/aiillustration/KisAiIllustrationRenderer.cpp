@@ -81,7 +81,12 @@ bool hasSensitiveUrlComponent(const QUrl &url)
     const QString decodedPath = url.path(QUrl::FullyDecoded);
     if (decodedPath.contains(QLatin1String("sk-"), Qt::CaseInsensitive)
         || decodedPath.contains(QLatin1String("sk_proj_"), Qt::CaseInsensitive)
-        || decodedPath.contains(QLatin1String("bearer"), Qt::CaseInsensitive)) {
+        || decodedPath.contains(QLatin1String("bearer"), Qt::CaseInsensitive)
+        || decodedPath.contains(QLatin1String("gsk_"), Qt::CaseInsensitive)
+        || decodedPath.contains(QLatin1String("pplx-"), Qt::CaseInsensitive)
+        || decodedPath.contains(QLatin1String("hf_"), Qt::CaseInsensitive)
+        || decodedPath.contains(QLatin1String("r8_"), Qt::CaseInsensitive)
+        || decodedPath.contains(QLatin1String("AIzaSy"), Qt::CaseInsensitive)) {
         return true;
     }
     QRegularExpression pathSecret(QStringLiteral("/(key|token|secret|password|api[_-]?key)/[^/\\s]+"),
@@ -122,7 +127,12 @@ bool hasSensitiveUrlComponent(const QUrl &url)
 
         const QString value = item.second.trimmed();
         if (value.startsWith(QLatin1String("sk-"), Qt::CaseInsensitive) ||
-            value.startsWith(QLatin1String("Bearer "), Qt::CaseInsensitive)) {
+            value.startsWith(QLatin1String("Bearer "), Qt::CaseInsensitive) ||
+            value.startsWith(QLatin1String("gsk_"), Qt::CaseInsensitive) ||
+            value.startsWith(QLatin1String("pplx-"), Qt::CaseInsensitive) ||
+            value.startsWith(QLatin1String("hf_"), Qt::CaseInsensitive) ||
+            value.startsWith(QLatin1String("r8_"), Qt::CaseInsensitive) ||
+            value.startsWith(QLatin1String("AIzaSy"), Qt::CaseInsensitive)) {
             return true;
         }
     }
@@ -280,7 +290,11 @@ QString KisAiIllustrationRenderer::displayEndpoint(const QString &endpoint)
         return QStringLiteral("API エンドポイント");
     }
 
-    return url.scheme().toLower() + QStringLiteral("://") + url.host();
+    QString out = url.scheme().toLower() + QStringLiteral("://") + url.host();
+    if (url.port() != -1) {
+        out += QStringLiteral(":") + QString::number(url.port());
+    }
+    return out;
 }
 
 bool KisAiIllustrationRenderer::isLoopbackEndpoint(const QString &endpoint)
@@ -390,6 +404,14 @@ QString KisAiIllustrationRenderer::redactCredentialText(const QString &text)
     static const QRegularExpression ghRe(
         QStringLiteral(R"((?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{16,})"));
     out.replace(ghRe, QStringLiteral("gh_***"));
+    static const QRegularExpression groqRe(QStringLiteral(R"(gsk_[A-Za-z0-9]{20,})"));
+    out.replace(groqRe, QStringLiteral("gsk_***"));
+    static const QRegularExpression pplxRe(QStringLiteral(R"(pplx-[A-Za-z0-9_\-]{16,})"));
+    out.replace(pplxRe, QStringLiteral("pplx-***"));
+    static const QRegularExpression headerSecretRe(
+        QStringLiteral(R"(((?:x-api-key|api-key|authorization)\s*:\s*(?!Bearer\b|bearer\b))[^\r\n\s]+)"),
+        QRegularExpression::CaseInsensitiveOption);
+    out.replace(headerSecretRe, QStringLiteral("\\1***"));
     static const QRegularExpression queryParamRe(
         QStringLiteral(R"(([?&](?:api_?key|key|token|access_token|auth_token|secret_key|client_secret|password|secret|auth)=)[^&\s]+)"),
         QRegularExpression::CaseInsensitiveOption);

@@ -94,6 +94,35 @@ void KisAiPhysicalRendererTest::testBlendLinearBurnValues()
     QVERIFY(std::abs(KisAiPhysicalRenderer::blendLinearBurn(0.7f, 0.6f) - 0.3f) < 1e-5f);
 }
 
+void KisAiPhysicalRendererTest::testBlendDarkenAndLightenValues()
+{
+    // blendDarken: min(cb, cs)
+    QCOMPARE(KisAiPhysicalRenderer::blendDarken(0.3f, 0.7f), 0.3f);
+    QCOMPARE(KisAiPhysicalRenderer::blendDarken(0.8f, 0.2f), 0.2f);
+    QCOMPARE(KisAiPhysicalRenderer::blendDarken(0.5f, 0.5f), 0.5f);
+
+    // blendLighten: max(cb, cs)
+    QCOMPARE(KisAiPhysicalRenderer::blendLighten(0.3f, 0.7f), 0.7f);
+    QCOMPARE(KisAiPhysicalRenderer::blendLighten(0.8f, 0.2f), 0.8f);
+    QCOMPARE(KisAiPhysicalRenderer::blendLighten(0.5f, 0.5f), 0.5f);
+
+    // blendPixel with "darken"
+    float dR = 0.8f, dG = 0.2f, dB = 0.5f, dA = 1.0f;
+    KisAiPhysicalRenderer::blendPixel(QStringLiteral("darken"), 0.3f, 0.6f, 0.1f, 1.0f, dR, dG, dB, dA);
+    QCOMPARE(dA, 1.0f);
+    QCOMPARE(dR, 0.3f); // min(0.8, 0.3)
+    QCOMPARE(dG, 0.2f); // min(0.2, 0.6)
+    QCOMPARE(dB, 0.1f); // min(0.5, 0.1)
+
+    // blendPixel with "lighten"
+    float dR2 = 0.2f, dG2 = 0.7f, dB2 = 0.4f, dA2 = 1.0f;
+    KisAiPhysicalRenderer::blendPixel(QStringLiteral("lighten"), 0.5f, 0.3f, 0.9f, 1.0f, dR2, dG2, dB2, dA2);
+    QCOMPARE(dA2, 1.0f);
+    QCOMPARE(dR2, 0.5f); // max(0.2, 0.5)
+    QCOMPARE(dG2, 0.7f); // max(0.7, 0.3)
+    QCOMPARE(dB2, 0.9f); // max(0.4, 0.9)
+}
+
 void KisAiPhysicalRendererTest::testBlendAddValues()
 {
     // min(1.0, cb + cs)
@@ -432,9 +461,19 @@ void KisAiPhysicalRendererTest::testBlendPixelNanAndInfProtection()
         line[1] = infVal;
         line[2] = 0.5f;
         line[3] = 1.0f;
+        // Test NaN in color channels produces transparent zero pixel
         const QImage ldr = KisAiPhysicalRenderer::toSrgbLdr(nanHdr);
         QVERIFY(!ldr.isNull());
         QCOMPARE(ldr.pixel(0, 0), 0u);
+
+        // Test NaN in alpha channel is handled safely
+        line[0] = 0.5f;
+        line[1] = 0.5f;
+        line[2] = 0.5f;
+        line[3] = nanVal;
+        const QImage ldrNanAlpha = KisAiPhysicalRenderer::toSrgbLdr(nanHdr);
+        QVERIFY(!ldrNanAlpha.isNull());
+        QCOMPARE(ldrNanAlpha.pixel(0, 0), 0u);
     }
 }
 

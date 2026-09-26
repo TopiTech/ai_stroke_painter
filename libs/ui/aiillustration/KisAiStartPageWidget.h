@@ -19,6 +19,7 @@ class QVBoxLayout;
 class QLineEdit;
 class QPushButton;
 class QResizeEvent;
+class QShowEvent;
 class QListView;
 class QLabel;
 class QStackedWidget;
@@ -54,6 +55,7 @@ public Q_SLOTS:
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void showEvent(QShowEvent *event) override;
     void keyPressEvent(QKeyEvent *event) override;
 
 private:
@@ -62,6 +64,7 @@ private:
     QWidget *createPrimaryActionsSection();
     QWidget *createPresetsSection();
     QWidget *createRecentAndGuideSection();
+    void setupTabOrder();
 
     KisAiIllustrationDocker *aiDocker() const;
     void showCanvasNotification(const QString &message);
@@ -73,6 +76,7 @@ private:
     bool m_isNarrowLayout {false};
     QVBoxLayout *m_heroLayout {nullptr};
     QBoxLayout *m_heroHeaderLayout {nullptr};
+    QBoxLayout *m_heroBadgesLayout {nullptr};
     QBoxLayout *m_promptBarLayout {nullptr};
     QBoxLayout *m_primaryCardsLayout {nullptr};
     QBoxLayout *m_recentAndGuideLayout {nullptr};
@@ -80,6 +84,9 @@ private:
     QList<QBoxLayout *> m_presetButtonLayouts;
     QLineEdit *m_promptInput {nullptr};
     QPushButton *m_promptSubmitBtn {nullptr};
+    QPushButton *m_focusDockerBtn {nullptr};
+    QList<QPushButton *> m_primaryActionButtons;
+    QList<QPushButton *> m_presetButtons;
     QListView *m_recentListView {nullptr};
     QLabel *m_emptyRecentLabel {nullptr};
     QStackedWidget *m_recentStack {nullptr};
