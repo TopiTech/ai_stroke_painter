@@ -121,6 +121,11 @@ float KisAiPhysicalRenderer::blendLinearBurn(float cb, float cs)
     return std::max(0.0f, cb + cs - 1.0f);
 }
 
+float KisAiPhysicalRenderer::blendAdd(float cb, float cs)
+{
+    return std::min(1.0f, cb + cs);
+}
+
 // ===========================================================================
 // 単一ピクセル物理ブレンド (Premultiplied RGBA 浮動小数点)
 // ===========================================================================
@@ -201,6 +206,10 @@ void KisAiPhysicalRenderer::blendPixel(const QString &blendMode,
         bR = blendLinearBurn(cbR, csR);
         bG = blendLinearBurn(cbG, csG);
         bB = blendLinearBurn(cbB, csB);
+    } else if (mode == QLatin1String("add") || mode == QLatin1String("plus") || mode == QLatin1String("linear_dodge") || mode == QLatin1String("lineardodge")) {
+        bR = blendAdd(cbR, csR);
+        bG = blendAdd(cbG, csG);
+        bB = blendAdd(cbB, csB);
     }
 
     // W3C Compositing & Blending formula:

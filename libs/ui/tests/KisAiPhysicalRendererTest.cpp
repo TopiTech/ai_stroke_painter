@@ -94,6 +94,33 @@ void KisAiPhysicalRendererTest::testBlendLinearBurnValues()
     QVERIFY(std::abs(KisAiPhysicalRenderer::blendLinearBurn(0.7f, 0.6f) - 0.3f) < 1e-5f);
 }
 
+void KisAiPhysicalRendererTest::testBlendAddValues()
+{
+    // min(1.0, cb + cs)
+    QCOMPARE(KisAiPhysicalRenderer::blendAdd(0.0f, 0.0f), 0.0f);
+    QVERIFY(std::abs(KisAiPhysicalRenderer::blendAdd(0.3f, 0.4f) - 0.7f) < 1e-5f);
+    QCOMPARE(KisAiPhysicalRenderer::blendAdd(0.7f, 0.6f), 1.0f);
+}
+
+void KisAiPhysicalRendererTest::testBlendPixelAddMode()
+{
+    // (0.4, 0.2, 0.1, 1.0) の上に (0.3, 0.5, 0.8, 1.0) を add / plus / linear_dodge 合成
+    float dR = 0.4f, dG = 0.2f, dB = 0.1f, dA = 1.0f;
+    KisAiPhysicalRenderer::blendPixel(QStringLiteral("add"), 0.3f, 0.5f, 0.8f, 1.0f, dR, dG, dB, dA);
+    QCOMPARE(dA, 1.0f);
+    QVERIFY(std::abs(dR - 0.7f) < 1e-5f);
+    QVERIFY(std::abs(dG - 0.7f) < 1e-5f);
+    QVERIFY(std::abs(dB - 0.9f) < 1e-5f);
+
+    // linear_dodge alias
+    float dR2 = 0.6f, dG2 = 0.7f, dB2 = 0.5f, dA2 = 1.0f;
+    KisAiPhysicalRenderer::blendPixel(QStringLiteral("linear_dodge"), 0.5f, 0.5f, 0.6f, 1.0f, dR2, dG2, dB2, dA2);
+    QCOMPARE(dA2, 1.0f);
+    QCOMPARE(dR2, 1.0f); // 0.6 + 0.5 clamped to 1.0
+    QCOMPARE(dG2, 1.0f); // 0.7 + 0.5 clamped to 1.0
+    QCOMPARE(dB2, 1.0f); // 0.5 + 0.6 clamped to 1.0
+}
+
 void KisAiPhysicalRendererTest::testBlendPixelOpaqueOverOpaque()
 {
     // 赤 (1,0,0,1) の上に青 (0,0,1,1) を normal 合成 -> 青 (0,0,1,1)

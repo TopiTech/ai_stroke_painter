@@ -79,6 +79,7 @@ public:
     static float blendSoftLight(float cb, float cs);
     static float blendColorDodge(float cb, float cs);
     static float blendLinearBurn(float cb, float cs);
+    static float blendAdd(float cb, float cs);
 
     /// 単一ピクセルの物理ブレンド (Premultiplied RGBA 浮動小数点)
     /// src (cs, as), dst (cb, ab) -> result dst

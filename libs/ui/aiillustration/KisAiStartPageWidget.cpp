@@ -354,9 +354,9 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     auto *pasteBtn = new QPushButton(container);
     pasteBtn->setProperty("class", "aiCardButton");
     pasteBtn->setCursor(Qt::PointingHandCursor);
-    pasteBtn->setAccessibleName(i18n("クリップボードから"));
+    pasteBtn->setAccessibleName(i18n("クリップボードから (Ctrl+V)"));
     pasteBtn->setAccessibleDescription(i18n("クリップボードにコピーした画像を新規キャンバスとして展開します。"));
-    pasteBtn->setToolTip(i18n("クリップボードの画像からキャンバスを作成"));
+    pasteBtn->setToolTip(i18n("クリップボードの画像からキャンバスを作成 (Ctrl+V)"));
     auto *pasteLayout = new QVBoxLayout(pasteBtn);
     pasteLayout->setSpacing(4);
     auto *pasteTop = new QHBoxLayout();
@@ -367,8 +367,9 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     pasteTop->addWidget(pasteIcon);
     pasteTop->addWidget(pasteTitle);
     pasteTop->addStretch(1);
-    // 実際には slotPasteFromClipboard 専用の Ctrl+V バインディングが無く (窓の
-    // edit_paste とは別アクション)、宣伝のみのバッジは嘘になるため表示しない。
+    auto *pasteShortcut = new QLabel(QStringLiteral("Ctrl+V"), pasteBtn);
+    pasteShortcut->setObjectName(QStringLiteral("aiCardShortcut"));
+    pasteTop->addWidget(pasteShortcut);
     pasteLayout->addLayout(pasteTop);
     auto *pasteDesc = new QLabel(i18n("コピーした画像を新規キャンバス化"), pasteBtn);
     pasteDesc->setObjectName(QStringLiteral("aiCardDesc"));
@@ -556,10 +557,12 @@ QWidget *KisAiStartPageWidget::createRecentAndGuideSection()
         {QStringLiteral("Ctrl + Enter"), i18n("プロンプトから作画を開始")},
         {QStringLiteral("Ctrl + N"), i18n("新規キャンバスダイアログ")},
         {QStringLiteral("Ctrl + O"), i18n("ファイルを開く")},
+        {QStringLiteral("Ctrl + V"), i18n("クリップボードからキャンバス作成")},
         {QStringLiteral("Space + ドラッグ"), i18n("キャンバスパン移動")},
     };
 
-    for (int i = 0; i < 5; ++i) {
+    const int shortcutCount = static_cast<int>(sizeof(shortcuts) / sizeof(shortcuts[0]));
+    for (int i = 0; i < shortcutCount; ++i) {
         auto *k = new QLabel(shortcuts[i].key, guidePanel);
         k->setObjectName(QStringLiteral("aiShortcutKey"));
         auto *d = new QLabel(shortcuts[i].desc, guidePanel);
@@ -652,6 +655,15 @@ void KisAiStartPageWidget::keyPressEvent(QKeyEvent *event)
     }
     if (event->key() == Qt::Key_O && (event->modifiers() & Qt::ControlModifier)) {
         slotOpenFile();
+        event->accept();
+        return;
+    }
+    if (event->key() == Qt::Key_V && (event->modifiers() & Qt::ControlModifier)) {
+        if (m_promptInput && m_promptInput->hasFocus()) {
+            QWidget::keyPressEvent(event);
+            return;
+        }
+        slotPasteFromClipboard();
         event->accept();
         return;
     }

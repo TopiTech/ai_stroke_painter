@@ -236,23 +236,31 @@ void KisAiStartPageTest::testKeyboardFocusAndShortcuts()
     QKeyEvent ctrlEnter(QEvent::KeyPress, Qt::Key_Enter, Qt::ControlModifier);
     QCoreApplication::sendEvent(&widget, &ctrlEnter);
 
-    // Test Ctrl+N and Ctrl+O shortcuts handle cleanly without main window
+    // Test Ctrl+N, Ctrl+O, and Ctrl+V shortcuts handle cleanly without main window
     QKeyEvent ctrlN(QEvent::KeyPress, Qt::Key_N, Qt::ControlModifier);
     QCoreApplication::sendEvent(&widget, &ctrlN);
 
     QKeyEvent ctrlO(QEvent::KeyPress, Qt::Key_O, Qt::ControlModifier);
     QCoreApplication::sendEvent(&widget, &ctrlO);
 
+    QKeyEvent ctrlV(QEvent::KeyPress, Qt::Key_V, Qt::ControlModifier);
+    QCoreApplication::sendEvent(&widget, &ctrlV);
+
     // Verify all primary cards and presets have TabFocus policy for keyboard navigation
     const QList<QPushButton *> buttons = widget.findChildren<QPushButton *>();
+    bool foundPasteCardWithShortcut = false;
     for (QPushButton *btn : buttons) {
         if (btn->isVisible()) {
             QVERIFY2(btn->focusPolicy() & Qt::TabFocus,
                      qPrintable(QStringLiteral("Button missing TabFocus: %1").arg(btn->accessibleName())));
             QVERIFY2(!btn->accessibleName().trimmed().isEmpty(),
                      qPrintable(QStringLiteral("Button missing accessibleName: %1").arg(btn->objectName())));
+            if (btn->accessibleName().contains(QStringLiteral("Ctrl+V"))) {
+                foundPasteCardWithShortcut = true;
+            }
         }
     }
+    QVERIFY(foundPasteCardWithShortcut);
 }
 
 KISTEST_MAIN(KisAiStartPageTest)

@@ -243,6 +243,57 @@ void KisAiIllustrationRendererTest::testPromptExpansionPayloadAndParsing()
     QVERIFY(!parsed.endsWith(QLatin1Char('"')));
     QVERIFY(parsed.contains(QStringLiteral("ツインテール")));
     QVERIFY(parsed.contains(QStringLiteral("紫の瞳")));
+
+    // Test Gemini candidate format parsing
+    const QByteArray geminiResponse = R"({
+        "candidates": [
+            {
+                "content": {
+                    "parts": [
+                        { "text": "サイバーパンク都市の雨夜、ネオンサインの反射" }
+                    ]
+                }
+            }
+        ]
+    })";
+    QString geminiErr;
+    const QString geminiParsed = KisAiPromptAnalyzer::parseExpandedPrompt(geminiResponse, &geminiErr);
+    QVERIFY(geminiErr.isEmpty());
+    QCOMPARE(geminiParsed, QStringLiteral("サイバーパンク都市の雨夜、ネオンサインの反射"));
+
+    // Test reasoning model <think> tag stripping
+    const QByteArray reasoningResponse = R"({
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "<think>\nUser wants an anime portrait.\nLet's add nice lighting details.\n</think>\n銀髪の少女、青い瞳、冬の制服、雪景色の背景"
+                }
+            }
+        ]
+    })";
+    QString reasoningErr;
+    const QString reasoningParsed = KisAiPromptAnalyzer::parseExpandedPrompt(reasoningResponse, &reasoningErr);
+    QVERIFY(reasoningErr.isEmpty());
+    QVERIFY(!reasoningParsed.contains(QStringLiteral("<think>")));
+    QVERIFY(!reasoningParsed.contains(QStringLiteral("User wants")));
+    QCOMPARE(reasoningParsed, QStringLiteral("銀髪の少女、青い瞳、冬の制服、雪景色の背景"));
+
+    // Test markdown code block stripping
+    const QByteArray markdownResponse = R"({
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "```markdown\n魔法使いの少年、輝く杖、星空の図書館\n```"
+                }
+            }
+        ]
+    })";
+    QString mdErr;
+    const QString mdParsed = KisAiPromptAnalyzer::parseExpandedPrompt(markdownResponse, &mdErr);
+    QVERIFY(mdErr.isEmpty());
+    QCOMPARE(mdParsed, QStringLiteral("魔法使いの少年、輝く杖、星空の図書館"));
 }
 
 void KisAiIllustrationRendererTest::testCityConceptImagePrecedence()
@@ -297,6 +348,12 @@ void KisAiIllustrationRendererTest::testFormatBearerAuthHeader()
              QByteArrayLiteral("Bearer clean-keyX-Injected: attack"));
     QCOMPARE(KisAiIllustrationRenderer::formatBearerAuthHeader(QStringLiteral("key\nwith\nnewlines")),
              QByteArrayLiteral("Bearer keywithnewlines"));
+
+    // Empty or whitespace-only keys return empty QByteArray
+    QCOMPARE(KisAiIllustrationRenderer::formatBearerAuthHeader(QString()), QByteArray());
+    QCOMPARE(KisAiIllustrationRenderer::formatBearerAuthHeader(QStringLiteral("   ")), QByteArray());
+    QCOMPARE(KisAiIllustrationRenderer::formatBearerAuthHeader(QStringLiteral("Bearer ")), QByteArray());
+    QCOMPARE(KisAiIllustrationRenderer::formatBearerAuthHeader(QStringLiteral("bearer \r\n")), QByteArray());
 }
 
 void KisAiIllustrationRendererTest::testRedactCredentialText()
@@ -309,6 +366,12 @@ void KisAiIllustrationRendererTest::testRedactCredentialText()
     const QString bearerOutput = KisAiIllustrationRenderer::redactCredentialText(bearerInput);
     QVERIFY(!bearerOutput.contains(QStringLiteral("my-secret-token")));
     QVERIFY(bearerOutput.contains(QStringLiteral("Bearer ***")));
+
+    // Case-insensitive bearer token
+    const QString lowerBearer = QStringLiteral("auth: bearer tok-12345-abcde");
+    const QString lowerBearerOut = KisAiIllustrationRenderer::redactCredentialText(lowerBearer);
+    QVERIFY(!lowerBearerOut.contains(QStringLiteral("tok-12345")));
+    QVERIFY(lowerBearerOut.contains(QStringLiteral("bearer ***")));
 
     // OpenAI / Anthropic sk- key redaction
     const QString skInput = QStringLiteral("Error: invalid key sk-proj-1234567890abcdef at line 1");
@@ -334,11 +397,24 @@ void KisAiIllustrationRendererTest::testRedactCredentialText()
     QVERIFY(!urlOut2.contains(QStringLiteral("xyz123")));
     QVERIFY(urlOut2.contains(QStringLiteral("key=***")));
 
+    const QString urlParam3 = QStringLiteral("https://api.example.com/v1?access_token=secret_val&client_secret=topsecret");
+    const QString urlOut3 = KisAiIllustrationRenderer::redactCredentialText(urlParam3);
+    QVERIFY(!urlOut3.contains(QStringLiteral("secret_val")));
+    QVERIFY(!urlOut3.contains(QStringLiteral("topsecret")));
+    QVERIFY(urlOut3.contains(QStringLiteral("access_token=***")));
+    QVERIFY(urlOut3.contains(QStringLiteral("client_secret=***")));
+
     // JSON response body containing credentials
     const QString jsonInput = QStringLiteral("{\"apiKey\": \"secret-api-key-999\", \"status\": \"ok\"}");
     const QString jsonOutput = KisAiIllustrationRenderer::redactCredentialText(jsonInput);
     QVERIFY(!jsonOutput.contains(QStringLiteral("secret-api-key-999")));
     QVERIFY(jsonOutput.contains(QStringLiteral("\"apiKey\": \"***\"")));
+
+    const QString jsonInput2 = QStringLiteral("{\"access_token\": \"token123\", \"clientSecret\": \"sec456\", \"authorization\": \"bearer-abc\"}");
+    const QString jsonOutput2 = KisAiIllustrationRenderer::redactCredentialText(jsonInput2);
+    QVERIFY(!jsonOutput2.contains(QStringLiteral("token123")));
+    QVERIFY(!jsonOutput2.contains(QStringLiteral("sec456")));
+    QVERIFY(!jsonOutput2.contains(QStringLiteral("bearer-abc")));
 
     // HuggingFace token redaction (hf_...)
     const QString hfInput = QStringLiteral("Connecting to HF inference endpoint with token hf_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789");
@@ -351,6 +427,13 @@ void KisAiIllustrationRendererTest::testRedactCredentialText()
     const QString repOutput = KisAiIllustrationRenderer::redactCredentialText(repInput);
     QVERIFY(!repOutput.contains(QStringLiteral("1234567890abcdefghijklmnopqrstuvwxyz")));
     QVERIFY(repOutput.contains(QStringLiteral("r8_***")));
+
+    // GitHub PAT redaction (ghp_... and github_pat_...)
+    const QString ghInput = QStringLiteral("Git clone failed: ghp_1234567890abcdefghijklmnopqrstuvwxyz and github_pat_11AAAAAAA000000000_BBBBBBBBBBBBBBBB");
+    const QString ghOutput = KisAiIllustrationRenderer::redactCredentialText(ghInput);
+    QVERIFY(!ghOutput.contains(QStringLiteral("1234567890abcdefghijklmnopqrstuvwxyz")));
+    QVERIFY(!ghOutput.contains(QStringLiteral("11AAAAAAA000000000_BBBBBBBBBBBBBBBB")));
+    QVERIFY(ghOutput.contains(QStringLiteral("gh_***")));
 }
 
 KISTEST_MAIN(KisAiIllustrationRendererTest)

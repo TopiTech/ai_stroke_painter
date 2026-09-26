@@ -1058,20 +1058,81 @@ QString KisAiPromptAnalyzer::parseExpandedPrompt(const QByteArray &responseBytes
         return QString();
     }
 
+    QString content;
     const QJsonArray choices = root.value(QStringLiteral("choices")).toArray();
-    if (choices.isEmpty()) {
+    if (!choices.isEmpty()) {
+        const QJsonObject firstChoice = choices.first().toObject();
+        if (firstChoice.contains(QStringLiteral("message"))) {
+            const QJsonObject message = firstChoice.value(QStringLiteral("message")).toObject();
+            const QJsonValue contentVal = message.value(QStringLiteral("content"));
+            if (contentVal.isString()) {
+                content = contentVal.toString();
+            } else if (contentVal.isArray()) {
+                const QJsonArray contentParts = contentVal.toArray();
+                for (const QJsonValue &partVal : contentParts) {
+                    if (partVal.isObject()) {
+                        const QJsonObject partObj = partVal.toObject();
+                        if (partObj.value(QStringLiteral("type")).toString() == QLatin1String("text")) {
+                            content.append(partObj.value(QStringLiteral("text")).toString());
+                        }
+                    }
+                }
+            }
+        } else if (firstChoice.contains(QStringLiteral("text"))) {
+            content = firstChoice.value(QStringLiteral("text")).toString();
+        }
+    } else if (root.contains(QStringLiteral("candidates"))) {
+        // Google Gemini API response format
+        const QJsonArray candidates = root.value(QStringLiteral("candidates")).toArray();
+        if (!candidates.isEmpty()) {
+            const QJsonObject firstCandidate = candidates.first().toObject();
+            const QJsonObject contentObj = firstCandidate.value(QStringLiteral("content")).toObject();
+            const QJsonArray parts = contentObj.value(QStringLiteral("parts")).toArray();
+            for (const QJsonValue &partVal : parts) {
+                if (partVal.isObject()) {
+                    content.append(partVal.toObject().value(QStringLiteral("text")).toString());
+                }
+            }
+        }
+    }
+
+    if (content.isEmpty()) {
         if (errorMessage) {
-            *errorMessage = QStringLiteral("応答にchoicesが含まれていません");
+            *errorMessage = QStringLiteral("応答に有効なテキストが含まれていません");
         }
         return QString();
     }
 
-    const QJsonObject firstChoice = choices.first().toObject();
-    const QJsonObject message = firstChoice.value(QStringLiteral("message")).toObject();
-    QString content = message.value(QStringLiteral("content")).toString().trimmed();
+    // Strip reasoning tags (<think>...</think>) from reasoning models
+    static const QRegularExpression thinkRe(
+        QStringLiteral(R"(<think>[\s\S]*?</think>)"),
+        QRegularExpression::CaseInsensitiveOption);
+    content.remove(thinkRe);
 
-    if (content.startsWith(QLatin1Char('"')) && content.endsWith(QLatin1Char('"')) && content.size() >= 2) {
-        content = content.mid(1, content.size() - 2).trimmed();
+    content = content.trimmed();
+
+    // Strip markdown code block fences if the model wrapped output in ```...```
+    if (content.startsWith(QLatin1String("```")) && content.endsWith(QLatin1String("```")) && content.size() >= 6) {
+        const int firstNewline = content.indexOf(QLatin1Char('\n'));
+        const int lastFence = content.lastIndexOf(QLatin1String("```"));
+        if (firstNewline != -1 && lastFence > firstNewline) {
+            content = content.mid(firstNewline + 1, lastFence - firstNewline - 1).trimmed();
+        }
+    }
+
+    // Strip enclosing quotation marks
+    if ((content.startsWith(QLatin1Char('"')) && content.endsWith(QLatin1Char('"'))) ||
+        (content.startsWith(QLatin1Char('\'')) && content.endsWith(QLatin1Char('\'')))) {
+        if (content.size() >= 2) {
+            content = content.mid(1, content.size() - 2).trimmed();
+        }
+    }
+
+    if (content.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("応答のテキストが空でした");
+        }
+        return QString();
     }
 
     return content;

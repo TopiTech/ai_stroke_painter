@@ -356,9 +356,14 @@ QByteArray KisAiIllustrationRenderer::formatBearerAuthHeader(const QString &apiK
     QString trimmed = apiKey.trimmed();
     if (trimmed.startsWith(QLatin1String("Bearer "), Qt::CaseInsensitive)) {
         trimmed = trimmed.mid(7).trimmed();
+    } else if (trimmed.compare(QLatin1String("Bearer"), Qt::CaseInsensitive) == 0) {
+        trimmed.clear();
     }
     trimmed.remove(QLatin1Char('\r'));
     trimmed.remove(QLatin1Char('\n'));
+    if (trimmed.isEmpty()) {
+        return QByteArray();
+    }
     return QByteArrayLiteral("Bearer ") + trimmed.toUtf8();
 }
 
@@ -367,10 +372,14 @@ QString KisAiIllustrationRenderer::redactCredentialText(const QString &text)
     if (text.isEmpty()) {
         return text;
     }
-    static const QRegularExpression bearerRe(QStringLiteral(R"((Bearer\s+)[A-Za-z0-9\-._~+/=]+)"));
+    static const QRegularExpression bearerRe(
+        QStringLiteral(R"((Bearer\s+)[A-Za-z0-9\-._~+/=]+)"),
+        QRegularExpression::CaseInsensitiveOption);
     QString out = text;
     out.replace(bearerRe, QStringLiteral("\\1***"));
-    static const QRegularExpression skRe(QStringLiteral(R"(sk-[A-Za-z0-9_\-]{6,})"));
+    static const QRegularExpression skRe(
+        QStringLiteral(R"(sk-[A-Za-z0-9_\-]{6,})"),
+        QRegularExpression::CaseInsensitiveOption);
     out.replace(skRe, QStringLiteral("sk-***"));
     static const QRegularExpression geminiRe(QStringLiteral(R"(AIzaSy[A-Za-z0-9_\-]{33})"));
     out.replace(geminiRe, QStringLiteral("AIzaSy***"));
@@ -378,12 +387,15 @@ QString KisAiIllustrationRenderer::redactCredentialText(const QString &text)
     out.replace(hfRe, QStringLiteral("hf_***"));
     static const QRegularExpression replicateRe(QStringLiteral(R"(r8_[A-Za-z0-9]{20,})"));
     out.replace(replicateRe, QStringLiteral("r8_***"));
+    static const QRegularExpression ghRe(
+        QStringLiteral(R"((?:ghp|gho|ghu|ghs|ghr|github_pat)_[A-Za-z0-9_]{16,})"));
+    out.replace(ghRe, QStringLiteral("gh_***"));
     static const QRegularExpression queryParamRe(
-        QStringLiteral(R"(([?&](?:api_key|key|token|password|secret|auth)=)[^&\s]+)"),
+        QStringLiteral(R"(([?&](?:api_?key|key|token|access_token|auth_token|secret_key|client_secret|password|secret|auth)=)[^&\s]+)"),
         QRegularExpression::CaseInsensitiveOption);
     out.replace(queryParamRe, QStringLiteral("\\1***"));
     static const QRegularExpression jsonRe(
-        QStringLiteral(R"raw(("(?:apiKey|api_key|access_token|token|password|client_secret)"\s*:\s*")[^"]+("))raw"),
+        QStringLiteral(R"raw(("(?:apiKey|api_key|api-key|accessToken|access_token|authToken|auth_token|token|password|clientSecret|client_secret|secretKey|secret_key|secret|authorization)"\s*:\s*")[^"]+("))raw"),
         QRegularExpression::CaseInsensitiveOption);
     out.replace(jsonRe, QStringLiteral("\\1***\\2"));
     return out;
