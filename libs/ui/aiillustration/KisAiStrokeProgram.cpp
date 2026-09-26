@@ -5735,6 +5735,7 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgramStep(const
     stepProg.seed = full.seed;
     stepProg.currentStep = step;
     stepProg.totalSteps = totalSteps;
+    stepProg.readinessScore = qBound(0.0, qreal(step) / qreal(qMax(1, totalSteps)), 1.0);
     stepProg.goalReached = (step >= totalSteps);
 
     for (const KisAiStrokeOperation &op : full.operations) {

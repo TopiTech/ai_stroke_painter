@@ -1899,6 +1899,10 @@ void KisAiIllustrationDocker::generateIllustration()
     const QString effectivePrompt = buildEffectivePrompt(prompt);
 
     const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
+    if (m_goalModeActive && m_waitingForUserStepAdvance) {
+        advanceGoalStep(true);
+        return;
+    }
     if (isGoalModeRequested()) {
         startGoalMode(effectivePrompt);
         return;
@@ -2596,8 +2600,9 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
 
     KisImageWSP targetImage = m_targetImage;
     m_targetImage = nullptr;
-    if (!targetImage && m_mainWindow && m_mainWindow->activeView()) {
-        targetImage = m_mainWindow->activeView()->image();
+    if (!targetImage) {
+        setStatus(i18n("対象のキャンバスが閉じられたため、ストロークの描画を中止しました。"), true);
+        return;
     }
 
     if (targetImage) {
@@ -3132,7 +3137,9 @@ void KisAiIllustrationDocker::refreshGenerateButtonLabel()
     // 判定は「非同期リトライ待ち/通信中」だけで足りる。
     const bool busy = !m_reply.isNull() || (m_retryTimer && m_retryTimer->isActive());
     if (m_goalModeActive) {
-        m_generateButton->setText(busy ? i18n("⏳ Goal作画中…") : i18n("🎯 Goal作画進行中"));
+        m_generateButton->setText(busy ? i18n("⏳ Goal作画中…")
+                                       : (m_waitingForUserStepAdvance ? i18n("🎯 次のステップへ進む")
+                                                                      : i18n("🎯 Goal作画進行中")));
     } else if (isGoalModeRequested()) {
         m_generateButton->setText(busy ? i18n("⏳ 生成中…") : i18n("🎯 Goal作画を開始"));
     } else {
@@ -3144,7 +3151,7 @@ void KisAiIllustrationDocker::setBusy(bool busy)
 {
     const bool allowGeneralInput = !busy && !m_goalModeActive;
     m_newCanvasButton->setEnabled(allowGeneralInput);
-    m_generateButton->setEnabled(allowGeneralInput);
+    m_generateButton->setEnabled(allowGeneralInput || (m_goalModeActive && m_waitingForUserStepAdvance && !busy));
     if (m_widthSpin) {
         m_widthSpin->setEnabled(allowGeneralInput);
     }
@@ -3257,14 +3264,11 @@ bool KisAiIllustrationDocker::addImageAsLayer(const QImage &sourceImage, const Q
     }
 
     KisImageWSP image = m_targetImage;
-    KisView *view = m_mainWindow->activeView();
-    if (!image && view) {
-        image = view->image();
-    }
     if (!image) {
-        setStatus(i18n("キャンバスが利用できないため、生成結果を追加できません。"), true);
+        setStatus(i18n("対象のキャンバスが閉じられたため、生成結果の追加を中止しました。"), true);
         return false;
     }
+    KisView *view = m_mainWindow ? m_mainWindow->activeView() : nullptr;
 
     const QRect bounds = image->bounds();
     if (bounds.isEmpty()) {
@@ -3633,6 +3637,10 @@ void KisAiIllustrationDocker::executeGoalStep()
             finishGoalMode(true);
         } else if (m_pausePerStepCheck && m_pausePerStepCheck->isChecked()) {
             m_waitingForUserStepAdvance = true;
+            if (m_generateButton) {
+                m_generateButton->setEnabled(!m_reply && !(m_retryTimer && m_retryTimer->isActive()));
+            }
+            refreshGenerateButtonLabel();
             if (m_nextStepButton) {
                 m_nextStepButton->setVisible(true);
                 m_nextStepButton->setEnabled(true);
@@ -3677,9 +3685,6 @@ void KisAiIllustrationDocker::executeGoalStep()
             }
             if (m_goalCurrentStep > 1) {
                 KisImageWSP targetImage = m_goalTargetImage;
-                if (!targetImage && m_mainWindow && m_mainWindow->activeView()) {
-                    targetImage = m_mainWindow->activeView()->image();
-                }
                 if (targetImage) {
 #ifndef AI_STROKE_STANDALONE
                     imageBase64 = KisAiStrokeRenderer::captureCanvasBase64(targetImage, 768);
@@ -4136,8 +4141,10 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     }
 
     KisImageWSP targetImage = m_goalTargetImage;
-    if (!targetImage && m_mainWindow && m_mainWindow->activeView()) {
-        targetImage = m_mainWindow->activeView()->image();
+    if (!targetImage) {
+        setStatus(i18n("対象のキャンバスが閉じられたため、Goalモードを中止しました。"), true);
+        finishGoalMode(false);
+        return;
     }
     if (targetImage) {
         QString statusMsg;
@@ -4211,6 +4218,10 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         finishGoalMode(true);
     } else if (m_pausePerStepCheck && m_pausePerStepCheck->isChecked()) {
         m_waitingForUserStepAdvance = true;
+        if (m_generateButton) {
+            m_generateButton->setEnabled(!m_reply && !(m_retryTimer && m_retryTimer->isActive()));
+        }
+        refreshGenerateButtonLabel();
         if (m_nextStepButton) {
             m_nextStepButton->setVisible(true);
             m_nextStepButton->setEnabled(true);
@@ -4641,23 +4652,26 @@ void KisAiIllustrationDocker::loadSettings()
         const QString storedKey = settings.value(QStringLiteral("AIIllustration/apiKey")).toString();
         if (!storedKey.isEmpty() && !unprotectApiKeyForCurrentUser(storedKey, &restoredKey)) {
 #if defined(Q_OS_WIN)
-            // Legacy value: either a plaintext key or its Base64 form. A blob that
-            // decrypts to garbage (for example a corrupt dpapi: payload or a key
-            // from another user/device) must be deleted rather than re-encrypted.
-            const QByteArray legacyBytes = storedKey.startsWith(QStringLiteral("sk-"))
-                ? storedKey.toUtf8()
-                : QByteArray::fromBase64(storedKey.toLatin1());
-            const QString legacyKey = QString::fromUtf8(legacyBytes);
-            const bool plausibleKey =
-                !legacyKey.isEmpty() && std::all_of(legacyKey.cbegin(), legacyKey.cend(), [](QChar c) {
-                    return c.isPrint() && !c.isSpace();
-                });
-            QString protectedKey;
-            if (plausibleKey && protectApiKeyForCurrentUser(legacyKey, &protectedKey)) {
-                settings.setValue(QStringLiteral("AIIllustration/apiKey"), protectedKey);
-                restoredKey = legacyKey;
-            } else {
+            if (storedKey.startsWith(kDpapiApiKeyPrefix)) {
+                // A corrupt dpapi: payload or a key from another user/device must be deleted rather than re-encrypted.
                 saveKey = false;
+            } else {
+                // Legacy value: either a plaintext key or its Base64 form.
+                const QByteArray legacyBytes = storedKey.startsWith(QStringLiteral("sk-"))
+                    ? storedKey.toUtf8()
+                    : QByteArray::fromBase64(storedKey.toLatin1());
+                const QString legacyKey = QString::fromUtf8(legacyBytes);
+                const bool plausibleKey =
+                    !legacyKey.isEmpty() && std::all_of(legacyKey.cbegin(), legacyKey.cend(), [](QChar c) {
+                        return c.isPrint() && !c.isSpace();
+                    });
+                QString protectedKey;
+                if (plausibleKey && protectApiKeyForCurrentUser(legacyKey, &protectedKey)) {
+                    settings.setValue(QStringLiteral("AIIllustration/apiKey"), protectedKey);
+                    restoredKey = legacyKey;
+                } else {
+                    saveKey = false;
+                }
             }
 #else
             saveKey = false;
@@ -5851,5 +5865,8 @@ void KisAiIllustrationDocker::pasteReferenceImageFromClipboard()
 
 bool KisAiIllustrationDocker::isGoalQualitySatisfied(const KisAiStrokeProgram &program) const
 {
-    return (program.readinessScore >= m_goalTargetReadiness && program.goalReached);
+    return (program.goalReached
+            && program.readinessScore >= m_goalTargetReadiness
+            && program.completionScore >= 0.60
+            && !program.operations.isEmpty());
 }

@@ -20,6 +20,7 @@
 #include "kis_group_layer.h"
 #include "kis_image.h"
 #include "kis_node_commands_adapter.h"
+#include "kis_node_manager.h"
 #include "kis_paint_layer.h"
 #include "kis_transaction.h"
 #include <KoCompositeOpRegistry.h>
@@ -644,6 +645,9 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
 
     KisNodeSP root = image->root();
     KisNodeSP aboveNode = root->lastChild();
+    KisNodeSP previousActiveNode = (viewManager && viewManager->nodeManager()) ? viewManager->nodeManager()->activeNode() : nullptr;
+    KisNodeSP lineartLayerNode = nullptr;
+    KisNodeSP fallbackLayerNode = nullptr;
     KisNodeCommandsAdapter adapter(viewManager);
     adapter.beginMacro(kundo2_i18n("AI Illustration"));
 
@@ -875,6 +879,11 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
             layer->setDirty(bounds);
             adapter.addNode(layer, group, childAboveNode);
         }
+        if (layerKey.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) == 0) {
+            lineartLayerNode = layer;
+        } else if (!fallbackLayerNode) {
+            fallbackLayerNode = layer;
+        }
         childAboveNode = layer;
         ++layersAdded;
     }
@@ -1022,6 +1031,16 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
     }
 
     adapter.endMacro();
+
+    if (viewManager && viewManager->nodeManager()) {
+        if (lineartLayerNode) {
+            viewManager->nodeManager()->slotNonUiActivatedNode(lineartLayerNode);
+        } else if (fallbackLayerNode) {
+            viewManager->nodeManager()->slotNonUiActivatedNode(fallbackLayerNode);
+        } else if (previousActiveNode && previousActiveNode->parent()) {
+            viewManager->nodeManager()->slotNonUiActivatedNode(previousActiveNode);
+        }
+    }
 
     image->refreshGraphAsync();
     if (viewManager) {

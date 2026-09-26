@@ -1981,7 +1981,31 @@ void KisAiStrokeRendererTest::testHairStrandsAndBangsBleedGeneration()
 
 void KisAiStrokeRendererTest::testShortStrokeTaperingEndpoints()
 {
-    // Verify that short fineliner strokes with 4 points render without crashing
+    // 1. Direct unit verification of short stroke entrance/exit tapering
+    const QVector<KisAiStrokePoint> twoPoints = {
+        KisAiStrokePoint(0.10, 0.10, 1.0),
+        KisAiStrokePoint(0.20, 0.20, 1.0)
+    };
+    const QVector<KisAiStrokePoint> taperedTwo = KisAiStrokeQualityUtils::stabilizeAndBeautifyStroke(twoPoints, false);
+    QVERIFY(taperedTwo.size() >= 2);
+    QVERIFY2(taperedTwo.first().pressure < 0.35, "Start of 2-pt stroke must receive entry taper");
+    QVERIFY2(taperedTwo.last().pressure < 0.35, "End of 2-pt stroke must receive exit taper");
+
+    const QVector<KisAiStrokePoint> fourPoints = {
+        KisAiStrokePoint(0.10, 0.10, 1.0),
+        KisAiStrokePoint(0.15, 0.15, 1.0),
+        KisAiStrokePoint(0.20, 0.20, 1.0),
+        KisAiStrokePoint(0.25, 0.25, 1.0)
+    };
+    const QVector<KisAiStrokePoint> taperedFour = KisAiStrokeQualityUtils::stabilizeAndBeautifyStroke(fourPoints, false);
+    QVERIFY(taperedFour.size() >= 4);
+    QVERIFY2(taperedFour.first().pressure < 0.35, "Start of 4-pt stroke must receive entry taper");
+    QVERIFY2(taperedFour.last().pressure < 0.35, "End of 4-pt stroke must receive exit taper");
+    const int midIdx = taperedFour.size() / 2;
+    QVERIFY2(taperedFour.at(midIdx).pressure > taperedFour.first().pressure,
+             "Body of stroke must have higher pressure than tapered tip");
+
+    // 2. Verify that short fineliner strokes with 4 points render without crashing
     // and correctly produce tapered ink without asymmetry.
     const QSize canvasSize(512, 512);
     KisAiStrokeOperation shortFine;

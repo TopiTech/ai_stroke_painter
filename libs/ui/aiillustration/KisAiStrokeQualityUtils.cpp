@@ -1842,18 +1842,20 @@ QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::stabilizeAndBeautifyStroke(co
     }
 
     // Step 4: Apply professional entrance & exit pressure tapering if not closed
-    if (!closed) {
+    if (!closed && resampled.size() >= 2) {
         const int n = resampled.size();
-        const int taperSpan = qMin(8, n / 3);
+        const int taperSpan = qBound(1, n / 3, 8);
         for (int i = 0; i < taperSpan; ++i) {
-            const qreal tIn = qreal(i + 1) / qreal(taperSpan);
+            const qreal tIn = (taperSpan <= 1) ? 0.0 : (qreal(i) / qreal(taperSpan));
             const qreal inScale = 0.20 + 0.80 * (tIn * tIn * (3.0 - 2.0 * tIn));
             resampled[i].pressure = qBound<qreal>(0.15, resampled[i].pressure * inScale, 1.0);
 
             const int exitIdx = n - 1 - i;
-            const qreal tOut = qreal(i + 1) / qreal(taperSpan);
-            const qreal outScale = 0.15 + 0.85 * (tOut * tOut * (3.0 - 2.0 * tOut));
-            resampled[exitIdx].pressure = qBound<qreal>(0.12, resampled[exitIdx].pressure * outScale, 1.0);
+            if (exitIdx > i) {
+                const qreal tOut = (taperSpan <= 1) ? 0.0 : (qreal(i) / qreal(taperSpan));
+                const qreal outScale = 0.15 + 0.85 * (tOut * tOut * (3.0 - 2.0 * tOut));
+                resampled[exitIdx].pressure = qBound<qreal>(0.12, resampled[exitIdx].pressure * outScale, 1.0);
+            }
         }
     }
 

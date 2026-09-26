@@ -5145,6 +5145,12 @@ void KisAiStrokeProgramTest::testDeterministicStepBoundsAreMonotonic()
             // The step controller, not the model, owns goalReached: it may only
             // become true at the configured final step.
             QCOMPARE(stepProg.goalReached, step >= totalSteps);
+            QVERIFY(stepProg.readinessScore >= 0.0 && stepProg.readinessScore <= 1.0);
+            const qreal expectedReadiness = qBound(0.0, qreal(step) / qreal(totalSteps), 1.0);
+            QVERIFY(qAbs(stepProg.readinessScore - expectedReadiness) < 1e-4);
+            if (step >= totalSteps) {
+                QCOMPARE(stepProg.readinessScore, 1.0);
+            }
             QVERIFY(!stepProg.operations.isEmpty());
         }
         // Past the ceiling the invariant must still hold for any extra-refine
@@ -5154,6 +5160,7 @@ void KisAiStrokeProgramTest::testDeterministicStepBoundsAreMonotonic()
             KisAiStrokeProgramCodec::createDeterministicProgramStep(prompt, canvasSize, totalSteps + 1, totalSteps);
         QVERIFY(extra.currentStep == totalSteps + 1);
         QVERIFY(extra.goalReached);
+        QCOMPARE(extra.readinessScore, 1.0);
         QVERIFY(!extra.operations.isEmpty());
     }
 }
