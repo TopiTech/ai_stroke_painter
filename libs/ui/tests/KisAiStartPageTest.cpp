@@ -300,4 +300,47 @@ void KisAiStartPageTest::testStartPageAutoFocusAndTabOrder()
     QCOMPARE(promptLayout->direction(), QBoxLayout::TopToBottom);
 }
 
+void KisAiStartPageTest::testCardAndPresetHeightAndNonOverlapping()
+{
+    KisAiStartPageWidget widget(nullptr);
+    widget.resize(1280, 800);
+    widget.show();
+    QCoreApplication::processEvents();
+
+    int cardCount = 0;
+    int presetCount = 0;
+
+    for (QPushButton *btn : widget.findChildren<QPushButton *>()) {
+        const QString className = btn->property("class").toString();
+        if (className == QStringLiteral("aiCardButton")) {
+            ++cardCount;
+            QVERIFY2(btn->height() >= 60, qPrintable(QStringLiteral("aiCardButton height too small: %1").arg(btn->height())));
+            auto *title = btn->findChild<QLabel *>(QStringLiteral("aiCardTitle"));
+            auto *desc = btn->findChild<QLabel *>(QStringLiteral("aiCardDesc"));
+            QVERIFY(title != nullptr);
+            QVERIFY(desc != nullptr);
+            QVERIFY(title->height() > 0);
+            QVERIFY(desc->height() > 0);
+            const QPoint titleBottom = title->mapTo(btn, QPoint(0, title->height()));
+            const QPoint descTop = desc->mapTo(btn, QPoint(0, 0));
+            QVERIFY2(titleBottom.y() <= descTop.y() + 1, "Card title and description are overlapping");
+        } else if (className == QStringLiteral("aiPresetBtn")) {
+            ++presetCount;
+            QVERIFY2(btn->height() >= 55, qPrintable(QStringLiteral("aiPresetBtn height too small: %1").arg(btn->height())));
+            auto *title = btn->findChild<QLabel *>(QStringLiteral("aiPresetTitle"));
+            auto *desc = btn->findChild<QLabel *>(QStringLiteral("aiPresetDesc"));
+            QVERIFY(title != nullptr);
+            QVERIFY(desc != nullptr);
+            QVERIFY(title->height() > 0);
+            QVERIFY(desc->height() > 0);
+            const QPoint titleBottom = title->mapTo(btn, QPoint(0, title->height()));
+            const QPoint descTop = desc->mapTo(btn, QPoint(0, 0));
+            QVERIFY2(titleBottom.y() <= descTop.y() + 1, "Preset title and description are overlapping");
+        }
+    }
+
+    QCOMPARE(cardCount, 4);
+    QCOMPARE(presetCount, 6);
+}
+
 KISTEST_MAIN(KisAiStartPageTest)

@@ -38,6 +38,70 @@
 #include <QUrl>
 #include <QVBoxLayout>
 
+namespace {
+
+/**
+ * Custom card button that calculates size hints based on its inner QLayout,
+ * avoiding the issue where standard QPushButton ignores child layouts and
+ * collapses to a 28px height, which causes child labels and badges to overlap.
+ */
+class KisAiCardButton : public QPushButton
+{
+public:
+    explicit KisAiCardButton(int minHeight, QWidget *parent = nullptr)
+        : QPushButton(parent)
+        , m_minHeight(minHeight)
+    {
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+        if (m_minHeight > 0) {
+            setMinimumHeight(m_minHeight);
+        }
+    }
+
+    QSize sizeHint() const override
+    {
+        if (layout()) {
+            QSize sz = layout()->totalSizeHint();
+            if (m_minHeight > 0 && sz.height() < m_minHeight) {
+                sz.setHeight(m_minHeight);
+            }
+            return sz;
+        }
+        return QPushButton::sizeHint();
+    }
+
+    QSize minimumSizeHint() const override
+    {
+        if (layout()) {
+            QSize sz = layout()->totalMinimumSize();
+            if (m_minHeight > 0 && sz.height() < m_minHeight) {
+                sz.setHeight(m_minHeight);
+            }
+            return sz;
+        }
+        return QPushButton::minimumSizeHint();
+    }
+
+    bool hasHeightForWidth() const override
+    {
+        return layout() ? layout()->hasHeightForWidth() : QPushButton::hasHeightForWidth();
+    }
+
+    int heightForWidth(int w) const override
+    {
+        if (layout() && layout()->hasHeightForWidth()) {
+            const int h = layout()->totalHeightForWidth(w);
+            return qMax(h, m_minHeight);
+        }
+        return QPushButton::heightForWidth(w);
+    }
+
+private:
+    int m_minHeight {0};
+};
+
+} // namespace
+
 KisAiStartPageWidget::KisAiStartPageWidget(KisMainWindow *mainWindow, QWidget *parent)
     : QWidget(parent)
     , m_mainWindow(mainWindow)
@@ -57,33 +121,36 @@ KisAiStartPageWidget::KisAiStartPageWidget(KisMainWindow *mainWindow, QWidget *p
         "QLabel#aiStatusBadgeGreen { background: rgba(16, 40, 32, 0.85); color: #6ee7b7; border: 1px solid rgba(52, 211, 153, 0.4); border-radius: 12px; font-size: 11px; font-weight: 600; padding: 4px 10px; }"
 
         /* Omnibar Prompt Container */
-        "QFrame#aiPromptOmnibarFrame { background: rgba(22, 30, 49, 0.9); border: 1px solid rgba(75, 110, 175, 0.4); border-radius: 12px; padding: 6px 10px; }"
+        "QFrame#aiPromptOmnibarFrame { background: rgba(22, 30, 49, 0.9); border: 1px solid rgba(75, 110, 175, 0.4); border-radius: 12px; padding: 0px; }"
         "QFrame#aiPromptOmnibarFrame:hover { border: 1px solid rgba(96, 165, 250, 0.7); background: rgba(26, 36, 58, 0.95); }"
-        "QLineEdit#aiPromptOmnibarInput { background: transparent; border: none; color: #f8fafc; font-size: 14px; padding: 6px 8px; }"
+        "QLineEdit#aiPromptOmnibarInput { background: transparent; border: none; color: #f8fafc; font-size: 14px; padding: 6px 8px; min-height: 24px; }"
         "QLineEdit#aiPromptOmnibarInput:focus { outline: none; border-bottom: 2px solid #60a5fa; }"
         "QPushButton#aiPromptGenerateBtn { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3b82f6, stop:1 #6366f1); color: #ffffff; border: none; border-radius: 8px; font-size: 13px; font-weight: 700; padding: 8px 18px; }"
         "QPushButton#aiPromptGenerateBtn:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #60a5fa, stop:1 #818cf8); }"
         "QPushButton#aiPromptGenerateBtn:pressed { background: #2563eb; }"
         "QPushButton#aiPromptGenerateBtn:focus { border: 2px solid #ffffff; outline: none; }"
 
-        /* Cards Base */
-        "QFrame.aiActionCard { background: rgba(20, 27, 43, 0.75); border: 1px solid rgba(51, 65, 85, 0.6); border-radius: 12px; }"
-        "QFrame.aiActionCard:hover { background: rgba(28, 38, 60, 0.9); border: 1px solid rgba(99, 102, 241, 0.55); }"
-        "QLabel#aiCardTitle { color: #f1f5f9; font-size: 14px; font-weight: 700; }"
-        "QLabel#aiCardDesc { color: #94a3b8; font-size: 12px; line-height: 1.3; }"
-        "QLabel#aiCardShortcut { background: rgba(15, 23, 42, 0.8); color: #64748b; border: 1px solid rgba(51, 65, 85, 0.5); border-radius: 4px; font-size: 10px; font-weight: 600; padding: 2px 6px; }"
-
         /* Clickable Card Buttons */
-        "QPushButton.aiCardButton { text-align: left; background: rgba(20, 27, 43, 0.75); border: 1px solid rgba(51, 65, 85, 0.6); border-radius: 10px; padding: 12px 14px; color: #edf3ff; }"
+        "QPushButton.aiCardButton { text-align: left; background: rgba(20, 27, 43, 0.75); border: 1px solid rgba(51, 65, 85, 0.6); border-radius: 10px; padding: 0px; color: #edf3ff; }"
         "QPushButton.aiCardButton:hover { background: rgba(30, 42, 66, 0.92); border: 1px solid rgba(99, 130, 240, 0.65); }"
+        "QPushButton.aiCardButton:hover QLabel#aiCardTitle { color: #ffffff; }"
         "QPushButton.aiCardButton:focus { background: rgba(30, 42, 66, 0.95); border: 2px solid #60a5fa; outline: none; }"
         "QPushButton.aiCardButton:pressed { background: rgba(15, 20, 32, 0.95); border-color: #3b82f6; }"
+        "QLabel#aiCardTitle { color: #f1f5f9; font-size: 14px; font-weight: 700; }"
+        "QLabel#aiCardDesc { color: #94a3b8; font-size: 12px; }"
+        "QLabel#aiCardShortcut { background: rgba(30, 41, 59, 0.9); color: #cbd5e1; border: 1px solid rgba(71, 85, 105, 0.6); border-radius: 4px; font-size: 10px; font-weight: 600; padding: 2px 6px; }"
 
         /* Presets */
-        "QPushButton.aiPresetBtn { text-align: left; background: rgba(22, 30, 48, 0.7); border: 1px solid rgba(45, 60, 85, 0.5); border-radius: 10px; padding: 10px 14px; }"
+        "QPushButton.aiPresetBtn { text-align: left; background: rgba(22, 30, 48, 0.7); border: 1px solid rgba(45, 60, 85, 0.5); border-radius: 10px; padding: 0px; }"
         "QPushButton.aiPresetBtn:hover { background: rgba(33, 46, 74, 0.85); border: 1px solid rgba(129, 140, 248, 0.6); }"
+        "QPushButton.aiPresetBtn:hover QLabel#aiPresetTitle { color: #ffffff; }"
+        "QPushButton.aiPresetBtn:hover QLabel#aiPresetArrow { color: #818cf8; }"
         "QPushButton.aiPresetBtn:focus { background: rgba(33, 46, 74, 0.95); border: 2px solid #818cf8; outline: none; }"
         "QPushButton.aiPresetBtn:pressed { background: rgba(18, 24, 38, 0.95); }"
+        "QLabel#aiPresetIcon { font-size: 22px; }"
+        "QLabel#aiPresetTitle { color: #f1f5f9; font-size: 13px; font-weight: 700; }"
+        "QLabel#aiPresetDesc { color: #94a3b8; font-size: 11px; }"
+        "QLabel#aiPresetArrow { color: #6366f1; font-weight: bold; font-size: 14px; }"
 
         /* Section Titles */
         "QLabel#aiSectionTitle { color: #cbd5e1; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.8px; }"
@@ -96,15 +163,15 @@ KisAiStartPageWidget::KisAiStartPageWidget(KisMainWindow *mainWindow, QWidget *p
         "QListView#aiRecentListView::item:selected { background: rgba(59, 130, 246, 0.4); color: #ffffff; }"
         "QListView#aiRecentListView:focus { border: 1px solid rgba(96, 165, 250, 0.7); border-radius: 6px; }"
 
-        "QLabel#aiEmptyStateLabel { color: #64748b; font-size: 12px; }"
+        "QLabel#aiEmptyStateLabel { color: #64748b; font-size: 12px; padding: 20px; }"
         "QPushButton#aiClearRecentBtn { background: transparent; color: #64748b; border: none; font-size: 11px; text-decoration: underline; }"
         "QPushButton#aiClearRecentBtn:hover { color: #94a3b8; }"
         "QPushButton#aiClearRecentBtn:focus { color: #93c5fd; outline: 1px dotted #93c5fd; }"
 
         /* Guide text */
         "QLabel#aiGuideHeading { color: #93c5fd; font-size: 12px; font-weight: 600; }"
-        "QLabel#aiGuideBody { color: #889bb8; font-size: 11px; line-height: 1.4; }"
-        "QLabel#aiShortcutKey { background: rgba(30, 41, 59, 0.9); color: #e2e8f0; border: 1px solid #334155; border-radius: 4px; font-family: monospace; font-size: 10px; padding: 2px 6px; }"
+        "QLabel#aiGuideBody { color: #889bb8; font-size: 11px; }"
+        "QLabel#aiShortcutKey { background: rgba(30, 41, 59, 0.9); color: #e2e8f0; border: 1px solid #334155; border-radius: 4px; font-family: monospace; font-size: 11px; font-weight: 600; padding: 3px 8px; }"
         "QLabel#aiShortcutDesc { color: #94a3b8; font-size: 11px; }"
     ));
 
@@ -182,10 +249,11 @@ QWidget *KisAiStartPageWidget::createHeroSection()
     m_heroHeaderLayout = new QBoxLayout(QBoxLayout::LeftToRight);
     m_heroHeaderLayout->setContentsMargins(0, 0, 0, 0);
     m_heroHeaderLayout->setSpacing(14);
+    m_heroHeaderLayout->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
 
     auto *title = new QLabel(i18n("AI Stroke Painter"), container);
     title->setObjectName(QStringLiteral("aiHeroTitle"));
-    m_heroHeaderLayout->addWidget(title);
+    m_heroHeaderLayout->addWidget(title, 0, Qt::AlignVCenter);
 
     // Status Badges (grouped in dedicated container to preserve pill row layout)
     auto *badgesContainer = new QWidget(container);
@@ -205,7 +273,7 @@ QWidget *KisAiStartPageWidget::createHeroSection()
     badgeHdr->setObjectName(QStringLiteral("aiStatusBadge"));
     m_heroBadgesLayout->addWidget(badgeHdr);
 
-    m_heroHeaderLayout->addWidget(badgesContainer);
+    m_heroHeaderLayout->addWidget(badgesContainer, 0, Qt::AlignVCenter);
     m_heroHeaderLayout->addStretch(1);
 
     // Quick focus button
@@ -217,7 +285,7 @@ QWidget *KisAiStartPageWidget::createHeroSection()
         "QPushButton { background: rgba(30, 41, 59, 0.8); color: #cbd5e1; border: 1px solid rgba(71, 85, 105, 0.5); border-radius: 6px; font-size: 12px; font-weight: 500; padding: 6px 14px; }"
         "QPushButton:hover { background: rgba(51, 65, 85, 0.9); color: #f8fafc; border-color: #64748b; }"));
     connect(m_focusDockerBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotFocusAiDocker);
-    m_heroHeaderLayout->addWidget(m_focusDockerBtn);
+    m_heroHeaderLayout->addWidget(m_focusDockerBtn, 0, Qt::AlignVCenter);
 
     m_heroLayout->addLayout(m_heroHeaderLayout);
 
@@ -234,13 +302,14 @@ QWidget *KisAiStartPageWidget::createPromptBarSection()
     frame->setObjectName(QStringLiteral("aiPromptOmnibarFrame"));
 
     m_promptBarLayout = new QBoxLayout(QBoxLayout::LeftToRight, frame);
-    m_promptBarLayout->setContentsMargins(10, 6, 8, 6);
+    m_promptBarLayout->setContentsMargins(12, 8, 10, 8);
     m_promptBarLayout->setSpacing(10);
+    m_promptBarLayout->setAlignment(Qt::AlignVCenter);
 
     auto *iconLabel = new QLabel(QStringLiteral("✨"), frame);
     iconLabel->setStyleSheet(QStringLiteral("font-size: 16px;"));
     iconLabel->setAccessibleName(QString());
-    m_promptBarLayout->addWidget(iconLabel);
+    m_promptBarLayout->addWidget(iconLabel, 0, Qt::AlignVCenter);
 
     m_promptInput = new QLineEdit(frame);
     m_promptInput->setObjectName(QStringLiteral("aiPromptOmnibarInput"));
@@ -257,7 +326,7 @@ QWidget *KisAiStartPageWidget::createPromptBarSection()
     m_promptSubmitBtn->setAccessibleName(i18n("生成して開く"));
     m_promptSubmitBtn->setToolTip(i18n("キャンバスを作成し、プロンプトを流し込んでAI生成を開始します (Enter)"));
     connect(m_promptSubmitBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotQuickPromptGenerate);
-    m_promptBarLayout->addWidget(m_promptSubmitBtn);
+    m_promptBarLayout->addWidget(m_promptSubmitBtn, 0, Qt::AlignVCenter);
 
     return frame;
 }
@@ -278,133 +347,98 @@ QWidget *KisAiStartPageWidget::createPrimaryActionsSection()
     m_primaryCardsLayout->setSpacing(14);
     m_primaryActionButtons.clear();
 
-    // 1. New Canvas Button
-    auto *newBtn = new QPushButton(container);
-    newBtn->setProperty("class", "aiCardButton");
-    newBtn->setCursor(Qt::PointingHandCursor);
-    newBtn->setAccessibleName(i18n("新しいキャンバス (Ctrl+N)"));
-    newBtn->setAccessibleDescription(i18n("サイズや色空間を指定して新規キャンバスを作成します。"));
-    newBtn->setToolTip(i18n("サイズや色空間を指定して新規キャンバスを作成 (Ctrl+N)"));
-    auto *newLayout = new QVBoxLayout(newBtn);
-    newLayout->setSpacing(4);
-    auto *newTop = new QHBoxLayout();
-    auto *newIcon = new QLabel(QStringLiteral("🎨"), newBtn);
-    newIcon->setStyleSheet(QStringLiteral("font-size: 20px;"));
-    newIcon->setAttribute(Qt::WA_TransparentForMouseEvents);
-    auto *newTitle = new QLabel(i18n("新しいキャンバス"), newBtn);
-    newTitle->setObjectName(QStringLiteral("aiCardTitle"));
-    newTitle->setAttribute(Qt::WA_TransparentForMouseEvents);
-    newTop->addWidget(newIcon);
-    newTop->addWidget(newTitle);
-    newTop->addStretch(1);
-    auto *newShortcut = new QLabel(QStringLiteral("Ctrl+N"), newBtn);
-    newShortcut->setObjectName(QStringLiteral("aiCardShortcut"));
-    newShortcut->setAttribute(Qt::WA_TransparentForMouseEvents);
-    newTop->addWidget(newShortcut);
-    newLayout->addLayout(newTop);
-    auto *newDesc = new QLabel(i18n("サイズや色空間を指定して作成"), newBtn);
-    newDesc->setObjectName(QStringLiteral("aiCardDesc"));
-    newDesc->setAttribute(Qt::WA_TransparentForMouseEvents);
-    newLayout->addWidget(newDesc);
-    connect(newBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotNewFile);
-    m_primaryCardsLayout->addWidget(newBtn, 1);
-    m_primaryActionButtons.append(newBtn);
+    const struct ActionCardInfo {
+        QString icon;
+        QString title;
+        QString shortcut;
+        QString desc;
+        QString accDesc;
+        QString tooltip;
+        void (KisAiStartPageWidget::*slot)();
+    } cards[] = {
+        {
+            QStringLiteral("🎨"),
+            i18n("新しいキャンバス"),
+            QStringLiteral("Ctrl+N"),
+            i18n("サイズや色空間を指定して作成"),
+            i18n("サイズや色空間を指定して新規キャンバスを作成します。"),
+            i18n("サイズや色空間を指定して新規キャンバスを作成 (Ctrl+N)"),
+            &KisAiStartPageWidget::slotNewFile
+        },
+        {
+            QStringLiteral("⚡"),
+            i18n("AI クイックキャンバス"),
+            QStringLiteral("1024x1024"),
+            i18n("最適解像度で即座にキャンバスを展開"),
+            i18n("最適解像度 1024x1024 で即座にキャンバスを作成します。"),
+            i18n("最適解像度 1024x1024 で即座にキャンバスを展開"),
+            &KisAiStartPageWidget::slotQuickCanvas1024
+        },
+        {
+            QStringLiteral("📂"),
+            i18n("画像・作品を開く"),
+            QStringLiteral("Ctrl+O"),
+            i18n("既存のKRA、PNG、PSDなどを開く"),
+            i18n("既存の KRA、PNG、PSD などのファイルを開きます。"),
+            i18n("既存の作品ファイルを開く (Ctrl+O)"),
+            &KisAiStartPageWidget::slotOpenFile
+        },
+        {
+            QStringLiteral("📋"),
+            i18n("クリップボードから"),
+            QStringLiteral("Ctrl+V"),
+            i18n("コピーした画像を新規キャンバス化"),
+            i18n("クリップボードにコピーした画像を新規キャンバスとして展開します。"),
+            i18n("クリップボードの画像からキャンバスを作成 (Ctrl+V)"),
+            &KisAiStartPageWidget::slotPasteFromClipboard
+        },
+    };
 
-    // 2. Quick 1024x1024 AI Canvas
-    auto *quickBtn = new QPushButton(container);
-    quickBtn->setProperty("class", "aiCardButton");
-    quickBtn->setCursor(Qt::PointingHandCursor);
-    quickBtn->setAccessibleName(i18n("AI クイックキャンバス (1024x1024)"));
-    quickBtn->setAccessibleDescription(i18n("最適解像度 1024x1024 で即座にキャンバスを作成します。"));
-    quickBtn->setToolTip(i18n("最適解像度 1024x1024 で即座にキャンバスを展開"));
-    auto *quickLayout = new QVBoxLayout(quickBtn);
-    quickLayout->setSpacing(4);
-    auto *quickTop = new QHBoxLayout();
-    auto *quickIcon = new QLabel(QStringLiteral("⚡"), quickBtn);
-    quickIcon->setStyleSheet(QStringLiteral("font-size: 20px;"));
-    quickIcon->setAttribute(Qt::WA_TransparentForMouseEvents);
-    auto *quickTitle = new QLabel(i18n("AI クイックキャンバス"), quickBtn);
-    quickTitle->setObjectName(QStringLiteral("aiCardTitle"));
-    quickTitle->setAttribute(Qt::WA_TransparentForMouseEvents);
-    quickTop->addWidget(quickIcon);
-    quickTop->addWidget(quickTitle);
-    quickTop->addStretch(1);
-    auto *quickBadge = new QLabel(QStringLiteral("1024x1024"), quickBtn);
-    quickBadge->setObjectName(QStringLiteral("aiCardShortcut"));
-    quickBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
-    quickTop->addWidget(quickBadge);
-    quickLayout->addLayout(quickTop);
-    auto *quickDesc = new QLabel(i18n("最適解像度で即座にキャンバスを展開"), quickBtn);
-    quickDesc->setObjectName(QStringLiteral("aiCardDesc"));
-    quickDesc->setAttribute(Qt::WA_TransparentForMouseEvents);
-    quickLayout->addWidget(quickDesc);
-    connect(quickBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotQuickCanvas1024);
-    m_primaryCardsLayout->addWidget(quickBtn, 1);
-    m_primaryActionButtons.append(quickBtn);
+    for (const auto &c : cards) {
+        auto *btn = new KisAiCardButton(72, container);
+        btn->setProperty("class", "aiCardButton");
+        btn->setCursor(Qt::PointingHandCursor);
+        btn->setAccessibleName(QStringLiteral("%1 (%2)").arg(c.title, c.shortcut));
+        btn->setAccessibleDescription(c.accDesc);
+        btn->setToolTip(c.tooltip);
 
-    // 3. Open Image / Project
-    auto *openBtn = new QPushButton(container);
-    openBtn->setProperty("class", "aiCardButton");
-    openBtn->setCursor(Qt::PointingHandCursor);
-    openBtn->setAccessibleName(i18n("画像・作品を開く (Ctrl+O)"));
-    openBtn->setAccessibleDescription(i18n("既存の KRA、PNG、PSD などのファイルを開きます。"));
-    openBtn->setToolTip(i18n("既存の作品ファイルを開く (Ctrl+O)"));
-    auto *openLayout = new QVBoxLayout(openBtn);
-    openLayout->setSpacing(4);
-    auto *openTop = new QHBoxLayout();
-    auto *openIcon = new QLabel(QStringLiteral("📂"), openBtn);
-    openIcon->setStyleSheet(QStringLiteral("font-size: 20px;"));
-    openIcon->setAttribute(Qt::WA_TransparentForMouseEvents);
-    auto *openTitle = new QLabel(i18n("画像・作品を開く"), openBtn);
-    openTitle->setObjectName(QStringLiteral("aiCardTitle"));
-    openTitle->setAttribute(Qt::WA_TransparentForMouseEvents);
-    openTop->addWidget(openIcon);
-    openTop->addWidget(openTitle);
-    openTop->addStretch(1);
-    auto *openShortcut = new QLabel(QStringLiteral("Ctrl+O"), openBtn);
-    openShortcut->setObjectName(QStringLiteral("aiCardShortcut"));
-    openShortcut->setAttribute(Qt::WA_TransparentForMouseEvents);
-    openTop->addWidget(openShortcut);
-    openLayout->addLayout(openTop);
-    auto *openDesc = new QLabel(i18n("既存のKRA、PNG、PSDなどを開く"), openBtn);
-    openDesc->setObjectName(QStringLiteral("aiCardDesc"));
-    openDesc->setAttribute(Qt::WA_TransparentForMouseEvents);
-    openLayout->addWidget(openDesc);
-    connect(openBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotOpenFile);
-    m_primaryCardsLayout->addWidget(openBtn, 1);
-    m_primaryActionButtons.append(openBtn);
+        auto *cardLayout = new QVBoxLayout(btn);
+        cardLayout->setContentsMargins(14, 12, 14, 12);
+        cardLayout->setSpacing(6);
 
-    // 4. Paste from Clipboard
-    auto *pasteBtn = new QPushButton(container);
-    pasteBtn->setProperty("class", "aiCardButton");
-    pasteBtn->setCursor(Qt::PointingHandCursor);
-    pasteBtn->setAccessibleName(i18n("クリップボードから (Ctrl+V)"));
-    pasteBtn->setAccessibleDescription(i18n("クリップボードにコピーした画像を新規キャンバスとして展開します。"));
-    pasteBtn->setToolTip(i18n("クリップボードの画像からキャンバスを作成 (Ctrl+V)"));
-    auto *pasteLayout = new QVBoxLayout(pasteBtn);
-    pasteLayout->setSpacing(4);
-    auto *pasteTop = new QHBoxLayout();
-    auto *pasteIcon = new QLabel(QStringLiteral("📋"), pasteBtn);
-    pasteIcon->setStyleSheet(QStringLiteral("font-size: 20px;"));
-    pasteIcon->setAttribute(Qt::WA_TransparentForMouseEvents);
-    auto *pasteTitle = new QLabel(i18n("クリップボードから"), pasteBtn);
-    pasteTitle->setObjectName(QStringLiteral("aiCardTitle"));
-    pasteTitle->setAttribute(Qt::WA_TransparentForMouseEvents);
-    pasteTop->addWidget(pasteIcon);
-    pasteTop->addWidget(pasteTitle);
-    pasteTop->addStretch(1);
-    auto *pasteShortcut = new QLabel(QStringLiteral("Ctrl+V"), pasteBtn);
-    pasteShortcut->setObjectName(QStringLiteral("aiCardShortcut"));
-    pasteShortcut->setAttribute(Qt::WA_TransparentForMouseEvents);
-    pasteTop->addWidget(pasteShortcut);
-    pasteLayout->addLayout(pasteTop);
-    auto *pasteDesc = new QLabel(i18n("コピーした画像を新規キャンバス化"), pasteBtn);
-    pasteDesc->setObjectName(QStringLiteral("aiCardDesc"));
-    pasteDesc->setAttribute(Qt::WA_TransparentForMouseEvents);
-    pasteLayout->addWidget(pasteDesc);
-    connect(pasteBtn, &QPushButton::clicked, this, &KisAiStartPageWidget::slotPasteFromClipboard);
-    m_primaryCardsLayout->addWidget(pasteBtn, 1);
-    m_primaryActionButtons.append(pasteBtn);
+        auto *topLayout = new QHBoxLayout();
+        topLayout->setContentsMargins(0, 0, 0, 0);
+        topLayout->setSpacing(8);
+
+        auto *icon = new QLabel(c.icon, btn);
+        icon->setStyleSheet(QStringLiteral("font-size: 20px;"));
+        icon->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+        auto *title = new QLabel(c.title, btn);
+        title->setObjectName(QStringLiteral("aiCardTitle"));
+        title->setAttribute(Qt::WA_TransparentForMouseEvents);
+
+        topLayout->addWidget(icon, 0, Qt::AlignVCenter);
+        topLayout->addWidget(title, 0, Qt::AlignVCenter);
+        topLayout->addStretch(1);
+
+        auto *shortcut = new QLabel(c.shortcut, btn);
+        shortcut->setObjectName(QStringLiteral("aiCardShortcut"));
+        shortcut->setAttribute(Qt::WA_TransparentForMouseEvents);
+        topLayout->addWidget(shortcut, 0, Qt::AlignVCenter);
+
+        cardLayout->addLayout(topLayout);
+
+        auto *desc = new QLabel(c.desc, btn);
+        desc->setObjectName(QStringLiteral("aiCardDesc"));
+        desc->setWordWrap(true);
+        desc->setAttribute(Qt::WA_TransparentForMouseEvents);
+        cardLayout->addWidget(desc);
+
+        connect(btn, &QPushButton::clicked, this, c.slot);
+        m_primaryCardsLayout->addWidget(btn, 1);
+        m_primaryActionButtons.append(btn);
+    }
 
     layout->addLayout(m_primaryCardsLayout);
     return container;
@@ -424,6 +458,8 @@ QWidget *KisAiStartPageWidget::createPresetsSection()
     m_presetsGrid = new QGridLayout();
     m_presetsGrid->setContentsMargins(0, 0, 0, 0);
     m_presetsGrid->setSpacing(12);
+    m_presetsGrid->setColumnStretch(0, 1);
+    m_presetsGrid->setColumnStretch(1, 1);
 
     struct PresetInfo {
         int id;
@@ -442,42 +478,49 @@ QWidget *KisAiStartPageWidget::createPresetsSection()
     };
 
     m_presetButtons.clear();
+    m_presetButtonLayouts.clear();
+
     for (int i = 0; i < presets.size(); ++i) {
         const auto &p = presets[i];
-        auto *btn = new QPushButton(container);
+        auto *btn = new KisAiCardButton(66, container);
         btn->setProperty("class", "aiPresetBtn");
         btn->setCursor(Qt::PointingHandCursor);
         btn->setAccessibleName(p.title);
         btn->setAccessibleDescription(p.desc);
         btn->setToolTip(QStringLiteral("%1 - %2").arg(p.title, p.desc));
 
-        auto *bLayout = new QBoxLayout(QBoxLayout::LeftToRight, btn);
-        bLayout->setContentsMargins(12, 10, 12, 10);
+        auto *bLayout = new QHBoxLayout(btn);
+        bLayout->setContentsMargins(14, 12, 14, 12);
         bLayout->setSpacing(12);
         m_presetButtonLayouts.append(bLayout);
 
         auto *icon = new QLabel(p.icon, btn);
-        icon->setStyleSheet(QStringLiteral("font-size: 22px;"));
+        icon->setObjectName(QStringLiteral("aiPresetIcon"));
         icon->setAttribute(Qt::WA_TransparentForMouseEvents);
-        bLayout->addWidget(icon);
+        bLayout->addWidget(icon, 0, Qt::AlignVCenter);
 
         auto *textLayout = new QVBoxLayout();
-        textLayout->setSpacing(2);
+        textLayout->setContentsMargins(0, 0, 0, 0);
+        textLayout->setSpacing(3);
+        textLayout->setAlignment(Qt::AlignVCenter);
+
         auto *title = new QLabel(p.title, btn);
-        title->setStyleSheet(QStringLiteral("color: #f1f5f9; font-size: 13px; font-weight: 700;"));
+        title->setObjectName(QStringLiteral("aiPresetTitle"));
         title->setAttribute(Qt::WA_TransparentForMouseEvents);
+
         auto *desc = new QLabel(p.desc, btn);
+        desc->setObjectName(QStringLiteral("aiPresetDesc"));
         desc->setWordWrap(true);
-        desc->setStyleSheet(QStringLiteral("color: #94a3b8; font-size: 11px;"));
         desc->setAttribute(Qt::WA_TransparentForMouseEvents);
+
         textLayout->addWidget(title);
         textLayout->addWidget(desc);
         bLayout->addLayout(textLayout, 1);
 
         auto *arrow = new QLabel(QStringLiteral("➔"), btn);
-        arrow->setStyleSheet(QStringLiteral("color: #6366f1; font-weight: bold; font-size: 14px;"));
+        arrow->setObjectName(QStringLiteral("aiPresetArrow"));
         arrow->setAttribute(Qt::WA_TransparentForMouseEvents);
-        bLayout->addWidget(arrow);
+        bLayout->addWidget(arrow, 0, Qt::AlignVCenter);
 
         const int presetId = p.id;
         connect(btn, &QPushButton::clicked, this, [this, presetId] {
@@ -522,6 +565,7 @@ QWidget *KisAiStartPageWidget::createRecentAndGuideSection()
     recentLayout->addLayout(recentHeader);
 
     m_recentStack = new QStackedWidget(recentPanel);
+    m_recentStack->setMinimumHeight(140);
 
     // Empty state
     m_emptyRecentLabel = new QLabel(i18n("最近開いた作品はありません。\n新規キャンバスまたはプロンプト入力からアートを作成しましょう。"), m_recentStack);
@@ -558,6 +602,7 @@ QWidget *KisAiStartPageWidget::createRecentAndGuideSection()
 
     // Tip 1
     auto *tip1 = new QVBoxLayout();
+    tip1->setContentsMargins(0, 0, 0, 0);
     tip1->setSpacing(2);
     auto *tip1H = new QLabel(i18n("💡 ストローク予算（Stroke Budget）の活用"), guidePanel);
     tip1H->setObjectName(QStringLiteral("aiGuideHeading"));
@@ -570,6 +615,7 @@ QWidget *KisAiStartPageWidget::createRecentAndGuideSection()
 
     // Tip 2
     auto *tip2 = new QVBoxLayout();
+    tip2->setContentsMargins(0, 0, 0, 0);
     tip2->setSpacing(2);
     auto *tip2H = new QLabel(i18n("🔄 自律 Goal Mode"), guidePanel);
     tip2H->setObjectName(QStringLiteral("aiGuideHeading"));
@@ -582,7 +628,10 @@ QWidget *KisAiStartPageWidget::createRecentAndGuideSection()
 
     // Shortcuts Grid
     auto *shortcutGrid = new QGridLayout();
-    shortcutGrid->setSpacing(6);
+    shortcutGrid->setContentsMargins(0, 0, 0, 0);
+    shortcutGrid->setSpacing(8);
+    shortcutGrid->setColumnStretch(0, 0);
+    shortcutGrid->setColumnStretch(1, 1);
 
     const struct {
         QString key;
@@ -600,10 +649,15 @@ QWidget *KisAiStartPageWidget::createRecentAndGuideSection()
     for (int i = 0; i < shortcutCount; ++i) {
         auto *k = new QLabel(shortcuts[i].key, guidePanel);
         k->setObjectName(QStringLiteral("aiShortcutKey"));
+        k->setSizePolicy(QSizePolicy::Maximum, QSizePolicy::Preferred);
+        k->setAlignment(Qt::AlignCenter);
+
         auto *d = new QLabel(shortcuts[i].desc, guidePanel);
         d->setObjectName(QStringLiteral("aiShortcutDesc"));
-        shortcutGrid->addWidget(k, i, 0);
-        shortcutGrid->addWidget(d, i, 1);
+        d->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+
+        shortcutGrid->addWidget(k, i, 0, Qt::AlignLeft | Qt::AlignVCenter);
+        shortcutGrid->addWidget(d, i, 1, Qt::AlignLeft | Qt::AlignVCenter);
     }
     guideLayout->addLayout(shortcutGrid);
 
@@ -678,6 +732,7 @@ void KisAiStartPageWidget::updateResponsiveLayout()
     m_contentLayout->setContentsMargins(narrow ? 16 : 40, narrow ? 20 : 36, narrow ? 16 : 40, narrow ? 24 : 40);
     if (m_heroHeaderLayout) {
         m_heroHeaderLayout->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
+        m_heroHeaderLayout->setAlignment(narrow ? Qt::AlignLeft : (Qt::AlignLeft | Qt::AlignVCenter));
     }
     if (m_promptBarLayout) {
         m_promptBarLayout->setDirection(compact ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
@@ -699,6 +754,8 @@ void KisAiStartPageWidget::updateResponsiveLayout()
         }
 
         const int presetColumns = narrow ? 1 : 2;
+        m_presetsGrid->setColumnStretch(0, 1);
+        m_presetsGrid->setColumnStretch(1, narrow ? 0 : 1);
         for (int i = 0; i < presetButtons.size(); ++i) {
             m_presetsGrid->addWidget(presetButtons[i], i / presetColumns, i % presetColumns);
         }
