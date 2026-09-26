@@ -316,7 +316,6 @@ QWidget *KisAiStartPageWidget::createPromptBarSection()
     m_promptInput->setPlaceholderText(i18n("描きたいイラストの指示（プロンプト）を入力... (例: 月夜に佇む銀髪の魔法使いのアニメ調イラスト)"));
     m_promptInput->setAccessibleName(i18n("イラストのプロンプト入力"));
     m_promptInput->setAccessibleDescription(i18n("生成したいイラストの指示を入力します。Enter で生成を開始します。"));
-    m_promptInput->installEventFilter(this);
     connect(m_promptInput, &QLineEdit::returnPressed, this, &KisAiStartPageWidget::slotQuickPromptGenerate);
     m_promptBarLayout->addWidget(m_promptInput, 1);
 
@@ -478,7 +477,6 @@ QWidget *KisAiStartPageWidget::createPresetsSection()
     };
 
     m_presetButtons.clear();
-    m_presetButtonLayouts.clear();
 
     for (int i = 0; i < presets.size(); ++i) {
         const auto &p = presets[i];
@@ -492,7 +490,6 @@ QWidget *KisAiStartPageWidget::createPresetsSection()
         auto *bLayout = new QHBoxLayout(btn);
         bLayout->setContentsMargins(14, 12, 14, 12);
         bLayout->setSpacing(12);
-        m_presetButtonLayouts.append(bLayout);
 
         auto *icon = new QLabel(p.icon, btn);
         icon->setObjectName(QStringLiteral("aiPresetIcon"));
@@ -768,13 +765,6 @@ bool KisAiStartPageWidget::eventFilter(QObject *watched, QEvent *event)
         updateResponsiveLayout();
     }
 
-    if (watched == m_promptInput && event->type() == QEvent::KeyPress) {
-        auto *ke = static_cast<QKeyEvent *>(event);
-        if (ke->key() == Qt::Key_Return || ke->key() == Qt::Key_Enter) {
-            slotQuickPromptGenerate();
-            return true;
-        }
-    }
     return QWidget::eventFilter(watched, event);
 }
 

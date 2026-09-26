@@ -23,6 +23,7 @@ private Q_SLOTS:
     void testIsLoopbackEndpoint();
     void testFormatBearerAuthHeader();
     void testRedactCredentialText();
+    void testEncodeReferenceImageBase64();
 };
 
 #endif // KIS_AI_ILLUSTRATION_RENDERER_TEST_H

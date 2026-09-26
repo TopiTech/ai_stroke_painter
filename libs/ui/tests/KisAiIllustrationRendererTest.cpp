@@ -485,4 +485,56 @@ void KisAiIllustrationRendererTest::testRedactCredentialText()
     QVERIFY(headerOutput.contains(QStringLiteral("x-api-key: ***")));
 }
 
+void KisAiIllustrationRendererTest::testEncodeReferenceImageBase64()
+{
+    QString errorMsg;
+
+    // 1. Null image must fail gracefully
+    QString b64 = KisAiIllustrationRenderer::encodeReferenceImageBase64(QImage(), &errorMsg);
+    QVERIFY(b64.isEmpty());
+    QVERIFY(!errorMsg.isEmpty());
+
+    // 2. Oversized image dimension must be rejected
+    QImage huge(16385, 10, QImage::Format_RGB32);
+    errorMsg.clear();
+    b64 = KisAiIllustrationRenderer::encodeReferenceImageBase64(huge, &errorMsg);
+    QVERIFY(b64.isEmpty());
+    QVERIFY(errorMsg.contains(QStringLiteral("大きすぎます")));
+
+    // 3. Normal RGB image produces valid base64 payload that decodes back to an image
+    QImage validImg(200, 200, QImage::Format_RGB32);
+    validImg.fill(Qt::blue);
+    errorMsg.clear();
+    b64 = KisAiIllustrationRenderer::encodeReferenceImageBase64(validImg, &errorMsg);
+    QVERIFY(!b64.isEmpty());
+    QVERIFY(errorMsg.isEmpty());
+
+    QImage decodedImg;
+    QVERIFY(decodedImg.loadFromData(QByteArray::fromBase64(b64.toLatin1())));
+    QCOMPARE(decodedImg.size(), QSize(200, 200));
+
+    // 4. Transparent image must be composited over white background (not black)
+    QImage transparentImg(100, 100, QImage::Format_ARGB32);
+    transparentImg.fill(Qt::transparent);
+    errorMsg.clear();
+    b64 = KisAiIllustrationRenderer::encodeReferenceImageBase64(transparentImg, &errorMsg);
+    QVERIFY(!b64.isEmpty());
+
+    QImage whiteDecoded;
+    QVERIFY(whiteDecoded.loadFromData(QByteArray::fromBase64(b64.toLatin1())));
+    const QColor centerPixel = whiteDecoded.pixelColor(50, 50);
+    QVERIFY(centerPixel.red() > 240 && centerPixel.green() > 240 && centerPixel.blue() > 240);
+
+    // 5. Downscaling to 1024 max edge
+    QImage largeImg(2000, 1000, QImage::Format_RGB32);
+    largeImg.fill(Qt::green);
+    b64 = KisAiIllustrationRenderer::encodeReferenceImageBase64(largeImg, &errorMsg);
+    QVERIFY(!b64.isEmpty());
+
+    QImage scaledDecoded;
+    QVERIFY(scaledDecoded.loadFromData(QByteArray::fromBase64(b64.toLatin1())));
+    QCOMPARE(scaledDecoded.width(), 1024);
+    QCOMPARE(scaledDecoded.height(), 512);
+}
+
 KISTEST_MAIN(KisAiIllustrationRendererTest)

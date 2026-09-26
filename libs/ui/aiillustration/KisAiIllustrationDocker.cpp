@@ -29,6 +29,9 @@
 #include "kis_node.h"
 #include "kis_node_commands_adapter.h"
 #include "kis_paint_layer.h"
+#ifndef AI_STROKE_STANDALONE
+#include "kis_clipboard.h"
+#endif
 
 #include <KoColor.h>
 #include <KoColorSpaceRegistry.h>
@@ -5719,34 +5722,22 @@ void KisAiIllustrationDocker::setReferenceImage(const QImage &image)
         return;
     }
 
-    if (image.width() > MAX_REFERENCE_IMAGE_EDGE || image.height() > MAX_REFERENCE_IMAGE_EDGE
-        || qint64(image.width()) * qint64(image.height()) > MAX_REFERENCE_IMAGE_PIXELS) {
-        setStatus(i18n("画像サイズが大きすぎます: %1×%2", image.width(), image.height()), true);
+    QString errorMsg;
+    const QString base64 = KisAiIllustrationRenderer::encodeReferenceImageBase64(image, &errorMsg);
+    if (base64.isEmpty()) {
+        m_referenceImage = QImage();
+        m_referenceImageBase64.clear();
+        updateReferenceImageUi();
+        setStatus(errorMsg.isEmpty() ? i18n("参照画像のエンコードに失敗しました。") : errorMsg, true);
         return;
     }
 
-    // Maximum dimension 1024px for efficient LLM vision API transmission
     QImage scaledImage = image;
     if (image.width() > 1024 || image.height() > 1024) {
         scaledImage = image.scaled(1024, 1024, Qt::KeepAspectRatio, Qt::SmoothTransformation);
     }
     m_referenceImage = scaledImage;
-
-    // Composite transparent regions onto a solid white background so that
-    // alpha channels in sketches, PNG cutouts, or transparent layers do not
-    // convert to solid black in JPEG encoding.
-    QImage rgb(scaledImage.size(), QImage::Format_RGB32);
-    rgb.fill(Qt::white);
-    {
-        QPainter p(&rgb);
-        p.drawImage(0, 0, scaledImage);
-    }
-
-    QByteArray bytes;
-    QBuffer buffer(&bytes);
-    buffer.open(QIODevice::WriteOnly);
-    rgb.save(&buffer, "JPEG", 85);
-    m_referenceImageBase64 = QString::fromLatin1(bytes.toBase64());
+    m_referenceImageBase64 = base64;
 
     updateReferenceImageUi();
     setStatus(i18n("参照画像を設定しました (%1×%2)。", image.width(), image.height()));
@@ -5838,12 +5829,19 @@ void KisAiIllustrationDocker::captureReferenceImageFromCanvas()
 
 void KisAiIllustrationDocker::pasteReferenceImageFromClipboard()
 {
-    QClipboard *clipboard = QGuiApplication::clipboard();
-    if (!clipboard) {
-        setStatus(i18n("クリップボードにアクセスできません。"), true);
-        return;
+    QImage clipImg;
+#ifndef AI_STROKE_STANDALONE
+    KisClipboard *kisClipboard = KisClipboard::instance();
+    if (kisClipboard) {
+        clipImg = kisClipboard->getImageWithFallback(nullptr, true);
     }
-    const QImage clipImg = clipboard->image();
+#endif
+    if (clipImg.isNull()) {
+        QClipboard *clipboard = QGuiApplication::clipboard();
+        if (clipboard) {
+            clipImg = clipboard->image();
+        }
+    }
     if (clipImg.isNull()) {
         setStatus(i18n("クリップボードに画像が見つかりません。"), true);
         return;

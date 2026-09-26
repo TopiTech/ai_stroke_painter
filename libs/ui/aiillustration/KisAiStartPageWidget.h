@@ -81,7 +81,6 @@ private:
     QBoxLayout *m_primaryCardsLayout {nullptr};
     QBoxLayout *m_recentAndGuideLayout {nullptr};
     QGridLayout *m_presetsGrid {nullptr};
-    QList<QBoxLayout *> m_presetButtonLayouts;
     QLineEdit *m_promptInput {nullptr};
     QPushButton *m_promptSubmitBtn {nullptr};
     QPushButton *m_focusDockerBtn {nullptr};

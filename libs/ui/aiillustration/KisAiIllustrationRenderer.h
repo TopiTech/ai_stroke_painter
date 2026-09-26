@@ -47,6 +47,10 @@ public:
 
     /** Mask Bearer tokens, API keys, and sensitive URL/JSON query credentials from status text or logs. */
     static QString redactCredentialText(const QString &text);
+
+    /** Encode a reference image to Base64 (composited on white, max dimension 1024px, JPEG/PNG fallback).
+     *  Returns empty string and sets errorMessage on failure. */
+    static QString encodeReferenceImageBase64(const QImage &image, QString *errorMessage = nullptr);
 };
 
 #endif // KIS_AI_ILLUSTRATION_RENDERER_H

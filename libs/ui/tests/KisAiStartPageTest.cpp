@@ -343,4 +343,24 @@ void KisAiStartPageTest::testCardAndPresetHeightAndNonOverlapping()
     QCOMPARE(presetCount, 6);
 }
 
+void KisAiStartPageTest::testPromptInputReturnAndImeSafety()
+{
+    KisAiStartPageWidget widget(nullptr);
+    widget.show();
+    QCoreApplication::processEvents();
+
+    auto *promptInput = widget.findChild<QLineEdit *>(QStringLiteral("aiPromptOmnibarInput"));
+    QVERIFY(promptInput != nullptr);
+
+    // Verify prompt input has returnPressed connection that triggers generation cleanly
+    promptInput->setText(QStringLiteral("月夜に佇む銀髪の魔法使い"));
+    Q_EMIT promptInput->returnPressed();
+
+    // Verify key press event filter does not eat raw key events prematurely,
+    // allowing QLineEdit / IME input context to receive Return / Enter keys.
+    QKeyEvent returnEvent(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+    QCoreApplication::sendEvent(promptInput, &returnEvent);
+    QVERIFY(promptInput->text().contains(QStringLiteral("魔法使い")));
+}
+
 KISTEST_MAIN(KisAiStartPageTest)

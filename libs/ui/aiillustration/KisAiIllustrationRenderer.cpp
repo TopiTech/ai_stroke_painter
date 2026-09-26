@@ -6,6 +6,7 @@
 #include "KisAiIllustrationRenderer.h"
 #include "KisAiStrokeProgram.h"
 
+#include <QBuffer>
 #include <QColor>
 #include <QFont>
 #include <QHostAddress>
@@ -421,5 +422,60 @@ QString KisAiIllustrationRenderer::redactCredentialText(const QString &text)
         QRegularExpression::CaseInsensitiveOption);
     out.replace(jsonRe, QStringLiteral("\\1***\\2"));
     return out;
+}
+
+QString KisAiIllustrationRenderer::encodeReferenceImageBase64(const QImage &image, QString *errorMessage)
+{
+    if (image.isNull()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("画像が無効です。");
+        }
+        return QString();
+    }
+
+    constexpr int maxEdge = 16384;
+    constexpr qint64 maxPixels = 24LL * 1024 * 1024;
+    if (image.width() > maxEdge || image.height() > maxEdge
+        || qint64(image.width()) * qint64(image.height()) > maxPixels) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("画像サイズが大きすぎます: %1×%2").arg(image.width()).arg(image.height());
+        }
+        return QString();
+    }
+
+    // Maximum dimension 1024px for efficient LLM vision API transmission
+    QImage scaledImage = image;
+    if (image.width() > 1024 || image.height() > 1024) {
+        scaledImage = image.scaled(1024, 1024, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+    }
+
+    // Composite transparent regions onto a solid white background so that
+    // alpha channels in sketches, PNG cutouts, or transparent layers do not
+    // convert to solid black in JPEG encoding.
+    QImage rgb(scaledImage.size(), QImage::Format_RGB32);
+    rgb.fill(Qt::white);
+    {
+        QPainter p(&rgb);
+        p.drawImage(0, 0, scaledImage);
+    }
+
+    QByteArray bytes;
+    QBuffer buffer(&bytes);
+    buffer.open(QIODevice::WriteOnly);
+    bool saved = rgb.save(&buffer, "JPEG", 85);
+    if (!saved || bytes.isEmpty()) {
+        buffer.seek(0);
+        bytes.clear();
+        saved = rgb.save(&buffer, "PNG");
+    }
+
+    if (!saved || bytes.isEmpty()) {
+        if (errorMessage) {
+            *errorMessage = QStringLiteral("画像のエンコードに失敗しました。");
+        }
+        return QString();
+    }
+
+    return QString::fromLatin1(bytes.toBase64());
 }
 

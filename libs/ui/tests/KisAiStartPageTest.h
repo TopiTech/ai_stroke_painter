@@ -25,6 +25,7 @@ private Q_SLOTS:
     void testKeyboardFocusAndShortcuts();
     void testStartPageAutoFocusAndTabOrder();
     void testCardAndPresetHeightAndNonOverlapping();
+    void testPromptInputReturnAndImeSafety();
 };
 
 #endif // KIS_AI_START_PAGE_TEST_H
