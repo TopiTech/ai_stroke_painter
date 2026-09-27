@@ -19,6 +19,7 @@ private Q_SLOTS:
     void testHatchBecomesPaths();
     void testLegacyAnimeEyeJsonStillPaints();
     void testZeroCoverageSkipped();
+    void testTransparentClipIsNotCommitted();
     void testSinglePointDabFollowsCatchlightPolicy();
     void testNeedsRepairSelfIntersectionFixed();
     void testLintRunsOnStabilized();

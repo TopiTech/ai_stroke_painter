@@ -50,6 +50,12 @@ if (NOT AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
     kis_add_test(KisAiCoverageRasterTest.cpp
         TEST_NAME KisAiCoverageRasterTest
         LINK_LIBRARIES kritaui kritatestsdk)
+    kis_add_test(KisAiImageGuidedSceneTest.cpp
+        TEST_NAME KisAiImageGuidedSceneTest
+        LINK_LIBRARIES kritaui kritatestsdk)
+    kis_add_test(KisAiFullStrokeTest.cpp
+        TEST_NAME KisAiFullStrokeTest
+        LINK_LIBRARIES kritaui kritatestsdk)
     kis_add_test(KisAiCrashGuardTest.cpp
         TEST_NAME KisAiCrashGuardTest
         LINK_LIBRARIES kritaui kritatestsdk)
@@ -71,6 +77,8 @@ if (NOT AI_STROKE_PAINTER_ENABLE_UPSTREAM_TESTS)
         libs-ui-KisAiStartPageTest
         libs-ui-KisAiLineartModeTest
         libs-ui-KisAiCoverageRasterTest
+        libs-ui-KisAiImageGuidedSceneTest
+        libs-ui-KisAiFullStrokeTest
         PROPERTIES
             LABELS "AIStroke"
             TIMEOUT 30
@@ -354,6 +362,14 @@ kis_add_test(KisAiCoverageRasterTest.cpp
     TEST_NAME KisAiCoverageRasterTest
     LINK_LIBRARIES kritaui kritatestsdk
 )
+kis_add_test(KisAiImageGuidedSceneTest.cpp
+    TEST_NAME KisAiImageGuidedSceneTest
+    LINK_LIBRARIES kritaui kritatestsdk
+)
+kis_add_test(KisAiFullStrokeTest.cpp
+    TEST_NAME KisAiFullStrokeTest
+    LINK_LIBRARIES kritaui kritatestsdk
+)
 set_tests_properties(
     libs-ui-KisAiStrokeProgramTest
     libs-ui-KisAiStrokeRendererTest
@@ -368,6 +384,8 @@ set_tests_properties(
     libs-ui-KisAiStartPageTest
     libs-ui-KisAiLineartModeTest
     libs-ui-KisAiCoverageRasterTest
+    libs-ui-KisAiImageGuidedSceneTest
+    libs-ui-KisAiFullStrokeTest
     libs-ui-KisAiPhysicalRendererTest
     libs-ui-KisAiAbstractOntologyTest
     libs-ui-KisAiQualityBenchGateTest

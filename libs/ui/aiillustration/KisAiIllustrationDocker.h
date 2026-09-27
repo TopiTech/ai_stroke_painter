@@ -77,6 +77,7 @@ private:
         LocalStrokes,  // Offline procedural coordinate strokes
         RemoteImage,   // Image generation model API (DALL-E)
         LocalConcept,  // Offline deterministic single concept image
+        FullStrokes,   // LLM-only full stroke program (no generated images)
     };
 
     void createCanvas();

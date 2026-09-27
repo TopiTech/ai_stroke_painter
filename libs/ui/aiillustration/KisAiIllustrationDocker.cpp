@@ -6,6 +6,7 @@
 #include "KisAiIllustrationDocker.h"
 
 #include "KisAiDeliberateStroke.h"
+#include "KisAiFullStroke.h"
 #include "KisAiIllustrationRenderer.h"
 #include "KisAiLayoutEngine.h"
 #include "KisAiModelRouter.h"
@@ -829,6 +830,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_modeCombo->setMinimumContentsLength(10);
     m_modeCombo->addItem(i18n("LLM 座標ストローク描画 (Chat Completions)"),
                          static_cast<int>(GenerationMode::LlmStrokes));
+    m_modeCombo->addItem(i18n("LLM 完全ストローク描画 (画像モデル不使用)"), static_cast<int>(GenerationMode::FullStrokes));
     m_modeCombo->addItem(i18n("ローカル座標ストローク描画"), static_cast<int>(GenerationMode::LocalStrokes));
     m_modeCombo->addItem(i18n("画像モデル API (DALL-E)"), static_cast<int>(GenerationMode::RemoteImage));
     m_modeCombo->addItem(i18n("ローカル・コンセプトスケッチ"), static_cast<int>(GenerationMode::LocalConcept));
@@ -1940,6 +1942,7 @@ void KisAiIllustrationDocker::generateIllustration()
 
     switch (mode) {
     case GenerationMode::LlmStrokes:
+    case GenerationMode::FullStrokes:
         generateLlmStrokes(effectivePrompt);
         break;
     case GenerationMode::LocalStrokes:
@@ -2155,7 +2158,14 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     // m_compositionPlanAttempted で1生成につき1回に限定する: フォールバック後の
     // 再入で条件が再び成立し続けると、計画POSTが無限ループする (HTTPエラー/タイム
     // アウト時、エラー処理より先に plan 分岐が走るためリトライ予算も発動しない)。
-    const bool useCompositionPlan = m_compositionPlanCheck && m_compositionPlanCheck->isChecked()
+    const bool fullStroke = m_currentMode == GenerationMode::FullStrokes;
+    if (fullStroke && !KisAiFullStroke::acceptsEndpoint(endpoint)) {
+        setStatus(i18n("完全ストローク描画にはChat Completionsエンドポイントが必要です。"), true);
+        clearInFlightApiKey();
+        setBusy(false);
+        return;
+    }
+    const bool useCompositionPlan = !fullStroke && m_compositionPlanCheck && m_compositionPlanCheck->isChecked()
         && !m_isSelfCorrectionRetry && !m_retryInFlight && m_compositionDirectives.isEmpty()
         && !m_waitingForCompositionPlan && !m_compositionPlanAttempted;
 
@@ -2214,7 +2224,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     }
 
     const int strokeProtocol = m_strokeProtocolCombo ? m_strokeProtocolCombo->currentData().toInt() : 0;
-    const bool useSceneSpec = (strokeProtocol == 0) && !useCompositionPlan && !m_isSelfCorrectionRetry;
+    const bool useSceneSpec = !fullStroke && strokeProtocol == 0 && !useCompositionPlan && !m_isSelfCorrectionRetry;
 
     const QJsonObject payload = useSceneSpec
         ? KisAiSceneSpecCodec::buildSceneSpecPayload(model,
@@ -2230,30 +2240,32 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
                                                      maxTokens,
                                                      forceJsonObjectOnly,
                                                      m_referenceImageBase64)
-        : KisAiStrokeProgramCodec::buildChatCompletionsPayload(model,
-                                                               effectivePrompt,
-                                                               canvasSize,
-                                                               strokeBudget,
-                                                               reasoningEffort,
-                                                               customInstructions,
-                                                               true, // enableStreaming
-                                                               enforceJson,
-                                                               temperature,
-                                                               topP,
-                                                               maxTokens,
-                                                               artStyle,
-                                                               forceJsonObjectOnly,
-                                                               m_referenceImageBase64);
+        : (fullStroke
+               ? KisAiFullStroke::buildPayload(model, effectivePrompt, canvasSize, strokeBudget, customInstructions)
+               : KisAiStrokeProgramCodec::buildChatCompletionsPayload(model,
+                                                                     effectivePrompt,
+                                                                     canvasSize,
+                                                                     strokeBudget,
+                                                                     reasoningEffort,
+                                                                     customInstructions,
+                                                                     true,
+                                                                     enforceJson,
+                                                                     temperature,
+                                                                     topP,
+                                                                     maxTokens,
+                                                                     artStyle,
+                                                                     forceJsonObjectOnly,
+                                                                     m_referenceImageBase64));
 
     logDebug(QStringLiteral("LLM_REQ"),
              QStringLiteral("POST %1 (model=%2, mode=%3, budget=%4, temp=%5, top_p=%6, withRefImg=%7, prompt=\"%8\")")
                  .arg(KisAiIllustrationRenderer::displayEndpoint(endpoint),
                       model,
-                      useSceneSpec ? QStringLiteral("v3_scenespec") : QStringLiteral("v2_strokeprog"),
+                      fullStroke ? QStringLiteral("full_stroke") : (useSceneSpec ? QStringLiteral("v3_scenespec") : QStringLiteral("v2_strokeprog")),
                       QString::number(strokeBudget),
                       QString::number(temperature, 'f', 2),
                       QString::number(topP, 'f', 2),
-                      m_referenceImageBase64.isEmpty() ? QStringLiteral("No") : QStringLiteral("Yes"),
+                      (fullStroke || m_referenceImageBase64.isEmpty()) ? QStringLiteral("No") : QStringLiteral("Yes"),
                       prompt.left(60)));
     // V6 W3/W6 telemetry: quality mode + N-best budget travel with the request.
     logDebug(QStringLiteral("SPEC_NBEST"),
@@ -2280,7 +2292,7 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     }
 
     setBusy(true);
-    const QString refTag = !m_referenceImageBase64.isEmpty() ? i18n(" (参照画像付)") : QString();
+    const QString refTag = fullStroke || m_referenceImageBase64.isEmpty() ? QString() : i18n(" (参照画像付)");
     setStatus(
         i18n("%1 に LLM 座標ストローク生成を依頼しています%2…", KisAiIllustrationRenderer::displayEndpoint(endpoint), refTag));
 
@@ -2507,7 +2519,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     // V6 W3: N-Best candidate selection wiring for SceneSpec payloads
     bool parsedViaNBest = false;
     const int strokeProtocol = m_strokeProtocolCombo ? m_strokeProtocolCombo->currentData().toInt() : 0;
-    if (strokeProtocol == 0) {
+    if (m_currentMode != GenerationMode::FullStrokes && strokeProtocol == 0) {
         const KisAiNBestResult nBest = KisAiRefinementLoop::selectBestSpecFromBodies(
             m_lastFailedPrompt.isEmpty() ? QStringLiteral("artwork") : m_lastFailedPrompt,
             effectiveCanvasSize(),
@@ -2540,6 +2552,13 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         return;
     }
 
+    if (m_currentMode == GenerationMode::FullStrokes) {
+        if (!KisAiFullStroke::acceptsProgram(program)) {
+            setStatus(i18n("完全ストローク描画の作画プログラムが無効です。"), true);
+            clearInFlightApiKey();
+            return;
+        }
+    }
     m_lastQualityReport = qualityReport;
 
     if (program.artisticPlan.isValid()) {
@@ -2632,7 +2651,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         snapshot.previewImage = preview;
         snapshot.artStyleIndex = m_artStyleCombo ? m_artStyleCombo->currentData().toInt() : 0;
         snapshot.styleName = m_artStyleCombo ? m_artStyleCombo->currentText() : QString();
-        snapshot.modeIndex = static_cast<int>(GenerationMode::LlmStrokes);
+        snapshot.modeIndex = static_cast<int>(m_currentMode);
         snapshot.strokeBudget = m_strokeBudgetSpin ? m_strokeBudgetSpin->value() : 500;
         addHistorySnapshot(snapshot);
     }
@@ -3065,7 +3084,7 @@ void KisAiIllustrationDocker::updateModeUi()
         m_currentMode = newMode;
     }
 
-    const bool isLlm = (newMode == GenerationMode::LlmStrokes);
+    const bool isLlm = (newMode == GenerationMode::LlmStrokes || newMode == GenerationMode::FullStrokes);
     const bool isRemoteImage = (newMode == GenerationMode::RemoteImage);
     const bool needsRemote = isLlm || isRemoteImage;
 
@@ -3113,6 +3132,14 @@ void KisAiIllustrationDocker::updateModeUi()
     }
 
     const bool isStrokeMode = (isLlm || newMode == GenerationMode::LocalStrokes);
+    if (newMode == GenerationMode::FullStrokes) {
+        m_remoteOptionsLabel->setText(i18n("オンラインLLMがストロークと塗りで描画します。画像モデルと参照画像は使用しません。"));
+        if (m_referenceImageCard) {
+            m_referenceImageCard->setVisible(false);
+        }
+    } else if (m_referenceImageCard) {
+        m_referenceImageCard->setVisible(true);
+    }
     if (m_remoteForm) {
         setFormRowVisible(m_remoteForm, m_endpointEditor, needsRemote);
         setFormRowVisible(m_remoteForm, m_modelEditor, needsRemote);
@@ -3131,8 +3158,8 @@ void KisAiIllustrationDocker::updateModeUi()
         setFormRowVisible(m_remoteForm, m_maxRetriesSpin, isLlm);
         setFormRowVisible(m_remoteForm, m_jsonModeCombo, isLlm);
         setFormRowVisible(m_remoteForm, m_visionQualityCombo, isLlm);
-        setFormRowVisible(m_remoteForm, m_strokeProtocolCombo, isLlm);
-        setFormRowVisible(m_remoteForm, m_compositionPlanCheck, isLlm);
+        setFormRowVisible(m_remoteForm, m_strokeProtocolCombo, isLlm && newMode != GenerationMode::FullStrokes);
+        setFormRowVisible(m_remoteForm, m_compositionPlanCheck, isLlm && newMode != GenerationMode::FullStrokes);
         setFormRowVisible(m_remoteForm, m_suppressParticlesCheck, isStrokeMode);
         setFormRowVisible(m_remoteForm, m_forceAdvancedStrokeLogicCheck, isStrokeMode);
         setFormRowVisible(m_remoteForm, m_reasoningEffortCombo, isLlm);
@@ -3203,7 +3230,8 @@ void KisAiIllustrationDocker::setBusy(bool busy)
     if (m_testConnectionButton) {
         m_testConnectionButton->setEnabled(
             allowGeneralInput
-            && (m_currentMode == GenerationMode::LlmStrokes || m_currentMode == GenerationMode::RemoteImage));
+            && (m_currentMode == GenerationMode::LlmStrokes || m_currentMode == GenerationMode::FullStrokes
+                || m_currentMode == GenerationMode::RemoteImage));
     }
     if (m_saveSettingsButton) {
         m_saveSettingsButton->setEnabled(allowGeneralInput);
@@ -4846,7 +4874,7 @@ void KisAiIllustrationDocker::loadSettings()
     }
 
     // 生成モード
-    const int genMode = readBoundedSetting(settings, QStringLiteral("AIIllustration/generationMode"), 0, 0, 3);
+    const int genMode = readBoundedSetting(settings, QStringLiteral("AIIllustration/generationMode"), 0, 0, 4);
     if (m_modeCombo) {
         int idx = m_modeCombo->findData(genMode);
         if (idx >= 0) {
@@ -5011,7 +5039,7 @@ void KisAiIllustrationDocker::saveSettingsForMode(GenerationMode mode)
             }
             settings.setValue(QStringLiteral("AIIllustration/imageEndpoint"), ep);
             settings.setValue(QStringLiteral("AIIllustration/imageModel"), mdl);
-        } else if (mode == GenerationMode::LlmStrokes) {
+        } else if (mode == GenerationMode::LlmStrokes || mode == GenerationMode::FullStrokes) {
             if (!safeEndpoint) {
                 settings.remove(QStringLiteral("AIIllustration/llmEndpoint"));
                 settings.remove(QStringLiteral("AIIllustration/endpoint"));

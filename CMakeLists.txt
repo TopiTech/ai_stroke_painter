@@ -17,6 +17,9 @@ if (AI_STROKE_STANDALONE_TESTS)
         libs/ui/aiillustration/KisAiStrokeProgram.cpp
         libs/ui/aiillustration/KisAiStrokeRenderer.cpp
         libs/ui/aiillustration/KisAiStrokeCoverageRaster.cpp
+        libs/ui/aiillustration/KisAiImageGuidedScene.cpp
+        libs/ui/aiillustration/KisAiFullStroke.cpp
+        libs/ui/aiillustration/KisAiFullStrokeScene.cpp
         libs/ui/aiillustration/KisAiIllustrationRenderer.cpp
         libs/ui/aiillustration/KisAiSceneSpec.cpp
         libs/ui/aiillustration/KisAiLayoutEngine.cpp
@@ -194,6 +197,26 @@ if (AI_STROKE_STANDALONE_TESTS)
     target_link_libraries(KisAiCoverageRasterTest PRIVATE ai_stroke_core Qt6::Test)
     add_test(NAME KisAiCoverageRasterTest COMMAND KisAiCoverageRasterTest)
 
+    add_executable(KisAiImageGuidedSceneTest
+        libs/ui/tests/KisAiImageGuidedSceneTest.cpp
+    )
+    target_include_directories(KisAiImageGuidedSceneTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiImageGuidedSceneTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiImageGuidedSceneTest COMMAND KisAiImageGuidedSceneTest)
+
+    add_executable(KisAiFullStrokeTest
+        libs/ui/tests/KisAiFullStrokeTest.cpp
+    )
+    target_include_directories(KisAiFullStrokeTest PRIVATE
+        libs/ui
+        libs/ui/tests
+    )
+    target_link_libraries(KisAiFullStrokeTest PRIVATE ai_stroke_core Qt6::Test)
+    add_test(NAME KisAiFullStrokeTest COMMAND KisAiFullStrokeTest)
+
     add_executable(KisAiCrashGuardTest
         libs/ui/tests/KisAiCrashGuardTest.cpp
     )
@@ -221,6 +244,8 @@ if (AI_STROKE_STANDALONE_TESTS)
         KisAiV10QualityTest
         KisAiLineartModeTest
         KisAiCoverageRasterTest
+        KisAiImageGuidedSceneTest
+        KisAiFullStrokeTest
     )
 
     set_tests_properties(

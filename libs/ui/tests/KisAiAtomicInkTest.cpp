@@ -5,9 +5,10 @@
 
 #include "KisAiAtomicInkTest.h"
 
+#include "KisAiTestCrashGuard.h"
 #include <QImage>
 #include <QPainter>
-#include "KisAiTestCrashGuard.h"
+
 #ifndef AI_STROKE_STANDALONE
 #include <testui.h>
 #else
@@ -152,6 +153,31 @@ void KisAiAtomicInkTest::testZeroCoverageSkipped()
     const KisAiStrokeCommitLog log = KisAiStrokeCommitter::lastLog();
     QVERIFY(log.skipped >= 1);
     QVERIFY(log.committed >= 1);
+}
+
+void KisAiAtomicInkTest::testTransparentClipIsNotCommitted()
+{
+    KisAiStrokeOperation fill;
+    fill.kind = KisAiStrokeOperation::Kind::Fill;
+    fill.id = QStringLiteral("mask_outside");
+    fill.layer = QStringLiteral("Flats");
+    fill.polygon << QPointF(0.0, 0.0) << QPointF(0.1, 0.0) << QPointF(0.1, 0.1) << QPointF(0.0, 0.1);
+    fill.brush.color = QColor(200, 100, 100);
+    KisAiStrokeOperation line;
+    line.kind = KisAiStrokeOperation::Kind::Path;
+    line.id = QStringLiteral("invisible_ink");
+    line.layer = QStringLiteral("Lineart");
+    line.clipToId = fill.id;
+    line.points = {KisAiStrokePoint(0.4, 0.4), KisAiStrokePoint(0.8, 0.8)};
+    line.brush.color = QColor(0, 0, 0);
+    line.brush.size = 0.01;
+    const QImage image = KisAiStrokeRenderer::renderOperationsToImage({line},
+                                                                      QSize(128, 128),
+                                                                      QPainterPath(),
+                                                                      {{fill.id, fill.polygon}});
+    QVERIFY(!image.isNull());
+    QCOMPARE(KisAiStrokeCommitter::lastLog().committed, 0);
+    QCOMPARE(KisAiStrokeCommitter::lastLog().skipped, 1);
 }
 
 void KisAiAtomicInkTest::testSinglePointDabFollowsCatchlightPolicy()
@@ -446,8 +472,7 @@ void KisAiAtomicInkTest::testReviewPixelsRejectsMismatchedImages()
     QVERIFY(!rev.committed);
     QVERIFY(rev.notes.contains(QStringLiteral("pixel-review-unavailable")));
 
-    const KisAiStrokeCommitReview emptyRev =
-        KisAiStrokeCommitter::reviewPixels(before, before, QRect());
+    const KisAiStrokeCommitReview emptyRev = KisAiStrokeCommitter::reviewPixels(before, before, QRect());
     QVERIFY(!emptyRev.committed);
     QVERIFY(emptyRev.notes.contains(QStringLiteral("pixel-review-unavailable")));
 }
@@ -460,8 +485,7 @@ void KisAiAtomicInkTest::testReviewPixelsMixedFormatsAndLargeRegion()
     QPainter painter(&after);
     painter.fillRect(100, 100, 300, 300, QColor(20, 20, 30, 255));
     painter.end();
-    const KisAiStrokeCommitReview rev =
-        KisAiStrokeCommitter::reviewPixels(before, after, QRect(0, 0, 512, 512));
+    const KisAiStrokeCommitReview rev = KisAiStrokeCommitter::reviewPixels(before, after, QRect(0, 0, 512, 512));
     QVERIFY(rev.committed);
     // opaqueDelta() early-exits at 2000 gained pixels, so coverage on a 512px
     // region is a small positive ratio, not the true painted fraction.
@@ -487,8 +511,8 @@ void KisAiAtomicInkTest::testPhysicalPathUsesCommitter()
     QVERIFY(!img.isNull());
     const KisAiStrokeCommitLog log = KisAiStrokeCommitter::lastLog();
     QVERIFY(log.committed >= 1);
-    QVERIFY2(KisAiStrokeCommitter::atomicStrokeRatio(KisAiStrokeCommitter::prepareAtomicOps(prog.operations,
-                                                                                           QSize(128, 128)))
+    QVERIFY2(KisAiStrokeCommitter::atomicStrokeRatio(
+                 KisAiStrokeCommitter::prepareAtomicOps(prog.operations, QSize(128, 128)))
                  >= 0.999,
              "physical path must stay atomic");
 }
@@ -510,8 +534,7 @@ void KisAiAtomicInkTest::testOrderOperationsForRenderingDefaultCanvasSize()
     QVector<KisAiStrokeOperation> ops = {op2, op1};
 
     // Test calling with 1 argument (using default canvasSize)
-    const QVector<KisAiStrokeOperation> orderedDefault =
-        KisAiDeliberateStroke::orderOperationsForRendering(ops);
+    const QVector<KisAiStrokeOperation> orderedDefault = KisAiDeliberateStroke::orderOperationsForRendering(ops);
     QCOMPARE(orderedDefault.size(), 2);
 
     // Test calling with 2 arguments (explicit canvasSize)

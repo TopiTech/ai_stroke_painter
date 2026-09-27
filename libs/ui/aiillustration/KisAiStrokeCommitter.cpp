@@ -48,16 +48,15 @@ int opaqueDelta(const QImage &before, const QImage &after, const QRect &region)
     const bool afterPremul = after.format() == QImage::Format_ARGB32_Premultiplied;
     const QImage a = beforePremul ? before : before.convertToFormat(QImage::Format_ARGB32_Premultiplied);
     const QImage b = afterPremul ? after : after.convertToFormat(QImage::Format_ARGB32_Premultiplied);
-    // ARGB32 (non-premultiplied) stores alpha in the same byte, so the raw
-    // scanlines are directly comparable once the formats match.
     int gained = 0;
     for (int y = r.top(); y <= r.bottom(); y += step) {
         const QRgb *rowA = reinterpret_cast<const QRgb *>(a.constScanLine(y));
         const QRgb *rowB = reinterpret_cast<const QRgb *>(b.constScanLine(y));
         for (int x = r.left(); x <= r.right(); x += step) {
-            const int a0 = qAlpha(rowA[x]);
-            const int a1 = qAlpha(rowB[x]);
-            if (a1 > a0 + 8) {
+            const QRgb a0 = rowA[x];
+            const QRgb a1 = rowB[x];
+            if (qAbs(qAlpha(a1) - qAlpha(a0)) > 8 || qAbs(qRed(a1) - qRed(a0)) > 8 || qAbs(qGreen(a1) - qGreen(a0)) > 8
+                || qAbs(qBlue(a1) - qBlue(a0)) > 8) {
                 gained += step * step;
                 if (gained >= 2000)
                     return gained;
@@ -121,16 +120,15 @@ KisAiStrokeOperation KisAiStrokeCommitter::stabilizeOperation(const KisAiStrokeO
         spinePts.reserve(raw.size());
         for (const QPointF &p : raw)
             spinePts.append(KisAiStrokePoint(p.x(), p.y(), 0.8));
-        const QVector<KisAiStrokePoint> stable =
-            advanced
+        const QVector<KisAiStrokePoint> stable = advanced
             ? KisAiDeliberateStroke::smoothFlagshipStroke(spinePts,
                                                           canvasSize,
                                                           false,
                                                           KisAiStrokeProgramCodec::stableSeed(op.id))
             : KisAiDeliberateStroke::stabilizeStroke(spinePts,
-                                                    canvasSize,
-                                                    false,
-                                                    KisAiStrokeProgramCodec::stableSeed(op.id));
+                                                     canvasSize,
+                                                     false,
+                                                     KisAiStrokeProgramCodec::stableSeed(op.id));
         out.spine.clear();
         out.points.clear();
         for (const KisAiStrokePoint &p : stable) {
@@ -198,7 +196,7 @@ KisAiStrokeCommitter::reviewPixels(const QImage &before, const QImage &after, co
 {
     KisAiStrokeCommitReview rev;
     rev.dirtyRect = QRectF(dirtyPx);
-    if (dirtyPx.isEmpty() || before.size() != after.size()) {
+    if (dirtyPx.isEmpty() || before.isNull() || after.isNull() || before.size() != after.size()) {
         rev.committed = false;
         rev.notes << QStringLiteral("pixel-review-unavailable");
         return rev;
@@ -298,15 +296,29 @@ QVector<KisAiStrokeOperation> KisAiStrokeCommitter::commitToPainter(QPainter &pa
             KisAiStrokeRenderer::rasterizeOperation(target, op, workingSize, supersampleScale, faceExclusionPath);
         };
 
-        bool accept = true;
-        paintOne(painter, candidate);
-        Q_UNUSED(dirty);
-
-        if (!accept) {
+        // Review a transparent offscreen tile before touching the target.
+        // Target QPainter may be backed by a Krita device, not a QImage: do not
+        // rely on reading or rolling back its pixels here.
+        if (dirty.isEmpty()) {
+            ++local.skipped;
+            local.lines << QStringLiteral("skip %1 (off-canvas)").arg(raw.id);
+            continue;
+        }
+        QImage tile(dirty.size(), QImage::Format_ARGB32_Premultiplied);
+        tile.fill(Qt::transparent);
+        QImage beforeTile = tile.copy();
+        {
+            QPainter dry(&tile);
+            dry.setRenderHint(QPainter::Antialiasing, true);
+            dry.translate(-dirty.topLeft());
+            paintOne(dry, candidate);
+        }
+        if (!reviewPixels(beforeTile, tile, QRect(QPoint(0, 0), dirty.size())).committed) {
             ++local.skipped;
             local.lines << QStringLiteral("skip %1 (pixel-review)").arg(raw.id);
             continue;
         }
+        paintOne(painter, candidate);
 
         ++local.committed;
         local.lines << QStringLiteral("commit %1").arg(candidate.id);

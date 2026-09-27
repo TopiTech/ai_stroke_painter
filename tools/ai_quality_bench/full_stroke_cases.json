@@ -1,0 +1,158 @@
+{
+    "version": 1,
+    "name": "LLM-only full-stroke evaluation manifest",
+    "baseline": "legacy_online_llm_strokes",
+    "candidate": "full_stroke_online_llm",
+    "no_image_generation_in_candidate": true,
+    "cases": [
+        {
+            "id": "portrait_prop",
+            "category": "character",
+            "prompt": "銀髪の騎士が革手袋で古い懐中時計を持ち、横顔で夕焼けを見ている",
+            "required_objects": [
+                "knight",
+                "gloved_hand",
+                "watch"
+            ],
+            "aspect": "portrait"
+        },
+        {
+            "id": "full_body",
+            "category": "pose",
+            "prompt": "雨上がりの駅のホームで片膝を曲げて走り出す旅人、全身が見える",
+            "required_objects": [
+                "traveler",
+                "legs",
+                "platform"
+            ],
+            "aspect": "portrait"
+        },
+        {
+            "id": "two_subjects",
+            "category": "multiple",
+            "prompt": "白猫と小さな黒犬が同じソファの上で眠る、窓から斜光",
+            "required_objects": [
+                "white_cat",
+                "black_dog",
+                "sofa"
+            ],
+            "aspect": "landscape"
+        },
+        {
+            "id": "clock_mechanism",
+            "category": "hard_surface",
+            "prompt": "透明な風防のある機械式懐中時計と開いた歯車、机上の斜め構図",
+            "required_objects": [
+                "watch",
+                "gears",
+                "glass"
+            ],
+            "aspect": "square"
+        },
+        {
+            "id": "street_perspective",
+            "category": "architecture",
+            "prompt": "二点透視の古い商店街、アーケードと人影、雨の反射",
+            "required_objects": [
+                "street",
+                "storefronts",
+                "arcade"
+            ],
+            "aspect": "landscape"
+        },
+        {
+            "id": "forest_lake",
+            "category": "landscape",
+            "prompt": "森の静かな湖に小舟が一艘、奥に山、朝霧の遠近感",
+            "required_objects": [
+                "lake",
+                "boat",
+                "mountains"
+            ],
+            "aspect": "landscape"
+        },
+        {
+            "id": "cafe_still_life",
+            "category": "still_life",
+            "prompt": "喫茶店の木のテーブルにコーヒーとパンケーキ、窓の自然光",
+            "required_objects": [
+                "coffee",
+                "pancakes",
+                "table"
+            ],
+            "aspect": "square"
+        },
+        {
+            "id": "botanical",
+            "category": "botanical",
+            "prompt": "ガラス花瓶の向日葵三輪、葉の重なりと茎の透け感",
+            "required_objects": [
+                "sunflowers",
+                "vase",
+                "leaves"
+            ],
+            "aspect": "portrait"
+        },
+        {
+            "id": "abstract_no_subject",
+            "category": "abstract",
+            "prompt": "青と金の抽象的な波形、焦点は中央、人物や文字は描かない",
+            "required_objects": [
+                "waves"
+            ],
+            "aspect": "square"
+        },
+        {
+            "id": "whale",
+            "category": "creature",
+            "prompt": "深海を泳ぐ巨大なクジラと数匹のクラゲ、体の前後関係",
+            "required_objects": [
+                "whale",
+                "jellyfish"
+            ],
+            "aspect": "landscape"
+        },
+        {
+            "id": "crowded_scene",
+            "category": "composition",
+            "prompt": "夜の祭りの屋台、二人の子供、提灯、遠景の神社、手前の通行人",
+            "required_objects": [
+                "stalls",
+                "two_children",
+                "lanterns",
+                "shrine"
+            ],
+            "aspect": "landscape"
+        },
+        {
+            "id": "no_text",
+            "category": "negative",
+            "prompt": "シンプルな星空と赤い気球を一つだけ、文字・ロゴ・人物なし",
+            "required_objects": [
+                "red_balloon",
+                "stars"
+            ],
+            "aspect": "square"
+        }
+    ],
+    "human_review": {
+        "reviewers_min": 3,
+        "randomize_left_right": true,
+        "dimensions": [
+            "prompt_adherence",
+            "composition",
+            "shape_and_anatomy",
+            "materials_and_light",
+            "line_quality",
+            "overall"
+        ],
+        "allowed_votes": [
+            "legacy",
+            "candidate",
+            "tie",
+            "both_fail"
+        ],
+        "major_regression_max_fraction": 0.05,
+        "wins_required_fraction_of_decisive_votes": 0.5
+    }
+}

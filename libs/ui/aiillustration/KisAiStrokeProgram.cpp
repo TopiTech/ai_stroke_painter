@@ -399,6 +399,8 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
                                                               QStringLiteral("form_shading"),
                                                               QStringLiteral("texture_hatch")}}};
     opProps[QStringLiteral("id")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    opProps[QStringLiteral("group_id")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    opProps[QStringLiteral("parent_id")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("layer")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("blend_mode")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")},
                                                         {QStringLiteral("enum"),
@@ -3455,6 +3457,8 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
             KisAiStrokeOperation op;
             op.kind = normalizeKind(findField(o, {QStringLiteral("kind"), QStringLiteral("type")}).toString());
             op.id = findField(o, {QStringLiteral("id"), QStringLiteral("name")}).toString();
+            op.groupId = o.value(QStringLiteral("group_id")).toString();
+            op.parentId = o.value(QStringLiteral("parent_id")).toString();
             op.layer = normalizeLayerName(
                 findField(o, {QStringLiteral("layer"), QStringLiteral("layer_name")}, QStringLiteral("Lineart"))
                     .toString(QStringLiteral("Lineart")));
