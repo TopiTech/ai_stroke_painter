@@ -1916,11 +1916,18 @@ QString KisAiStrokeRenderer::captureImageBase64(const QImage &image, int maxDime
     QByteArray bytes;
     QBuffer buffer(&bytes);
     buffer.open(QIODevice::WriteOnly);
-    if (!rgb.save(&buffer, "JPEG", boundedQuality) || bytes.isEmpty()) {
-        return QString();
+    if (rgb.save(&buffer, "JPEG", boundedQuality) && !bytes.isEmpty()) {
+        return QStringLiteral("data:image/jpeg;base64,") + QString::fromLatin1(bytes.toBase64());
     }
 
-    return QStringLiteral("data:image/jpeg;base64,") + QString::fromLatin1(bytes.toBase64());
+    // Fallback to PNG if JPEG encoder plugin is unavailable or fails
+    bytes.clear();
+    buffer.seek(0);
+    if (rgb.save(&buffer, "PNG") && !bytes.isEmpty()) {
+        return QStringLiteral("data:image/png;base64,") + QString::fromLatin1(bytes.toBase64());
+    }
+
+    return QString();
 }
 
 #ifndef AI_STROKE_STANDALONE

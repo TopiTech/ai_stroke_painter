@@ -653,14 +653,17 @@ void KisAiStrokeRendererTest::testCaptureImageBase64()
 
     const QString b64 = KisAiStrokeRenderer::captureImageBase64(testImg, 512, 75);
     QVERIFY(!b64.isEmpty());
-    QVERIFY(b64.startsWith(QStringLiteral("data:image/jpeg;base64,")));
+    QVERIFY(b64.startsWith(QStringLiteral("data:image/jpeg;base64,")) || b64.startsWith(QStringLiteral("data:image/png;base64,")));
 
-    const QString data = b64.mid(QStringLiteral("data:image/jpeg;base64,").length());
+    const QString header = b64.startsWith(QStringLiteral("data:image/jpeg;base64,"))
+        ? QStringLiteral("data:image/jpeg;base64,")
+        : QStringLiteral("data:image/png;base64,");
+    const QString data = b64.mid(header.length());
     const QByteArray decoded = QByteArray::fromBase64(data.toLatin1());
     QVERIFY(!decoded.isEmpty());
 
     QImage loaded;
-    QVERIFY(loaded.loadFromData(decoded, "JPEG"));
+    QVERIFY(loaded.loadFromData(decoded));
     QVERIFY(loaded.width() <= 512);
     QVERIFY(loaded.height() <= 512);
 }

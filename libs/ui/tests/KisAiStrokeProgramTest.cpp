@@ -56,6 +56,19 @@ void KisAiStrokeProgramTest::testSanitizeAndExtractJson()
     // Test 5: conversational preamble and postamble with full-width Japanese braces (｛ ｝) and without codeblock
     const QString fullWidthNoisy = QStringLiteral("はい、生成されたJSONプログラムです：\n｛\"schema_version\": 2, \"operations\": []｝\nご確認ください。");
     QCOMPARE(KisAiStrokeProgramCodec::sanitizeAndExtractJson(fullWidthNoisy), plain);
+
+    // Test 6: text inside JSON strings containing tags like <details> or <think> must not be truncated
+    const QString jsonWithTagInString = QStringLiteral("{\"schema_version\": 2, \"title\": \"Plan with <details> tag\", \"operations\": []}");
+    QCOMPARE(KisAiStrokeProgramCodec::sanitizeAndExtractJson(jsonWithTagInString), jsonWithTagInString);
+
+    // Test 7: backticks inside JSON strings must be preserved by repairJsonSyntax
+    const QString jsonWithBackticksInString = QStringLiteral("{\"schema_version\": 2, \"agent_critique\": \"Use `gpen` brush for lineart\", \"operations\": []}");
+    KisAiJsonDiagnostic diag;
+    const QString repairedBackticks = KisAiStrokeProgramCodec::repairJsonSyntax(jsonWithBackticksInString, &diag);
+    QJsonParseError parseErr;
+    const QJsonDocument backtickDoc = QJsonDocument::fromJson(repairedBackticks.toUtf8(), &parseErr);
+    QCOMPARE(parseErr.error, QJsonParseError::NoError);
+    QCOMPARE(backtickDoc.object().value(QStringLiteral("agent_critique")).toString(), QStringLiteral("Use `gpen` brush for lineart"));
 }
 
 void KisAiStrokeProgramTest::testParseValidProgram()
@@ -2474,6 +2487,53 @@ void KisAiStrokeProgramTest::testAgentCritiqueAndReadinessParsing()
     QVERIFY(qAbs(prog.readinessScore - 0.78) < 1e-4);
     QCOMPARE(prog.recommendedAction, QStringLiteral("add_strands_and_highlights"));
     QCOMPARE(prog.operations.size(), 1);
+
+    // Percentage normalization test: 95.0 should be parsed as 0.95
+    const QString percentageJson = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"readiness_score\": 95.0,\n"
+        "  \"completion_score\": 88.0,\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"points\": [[0.2, 0.3], [0.5, 0.6]],\n"
+        "      \"brush\": {\"color\": \"#333333\", \"size\": 0.01}\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+    KisAiStrokeProgram progPercent;
+    const QJsonDocument percentDoc = QJsonDocument::fromJson(percentageJson.toUtf8());
+    QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(percentDoc.object(), &progPercent, &err));
+    QVERIFY(qAbs(progPercent.readinessScore - 0.95) < 1e-4);
+    QVERIFY(qAbs(progPercent.completionScore - 0.88) < 1e-4);
+
+    // Also verify readinessScore passes through full parseResponse pipeline
+    KisAiStrokeProgram fullProgPercent;
+    QVERIFY2(KisAiStrokeProgramCodec::parseResponse(percentageJson.toUtf8(), &fullProgPercent, &err), qPrintable(err));
+    QVERIFY(qAbs(fullProgPercent.readinessScore - 0.95) < 1e-4);
+
+    // Negative and overflow clamping test
+    const QString clampedJson = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"readiness_score\": -0.5,\n"
+        "  \"completion_score\": 150.0,\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"points\": [[0.2, 0.3], [0.5, 0.6]],\n"
+        "      \"brush\": {\"color\": \"#333333\", \"size\": 0.01}\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+    KisAiStrokeProgram progClamped;
+    const QJsonDocument clampedDoc = QJsonDocument::fromJson(clampedJson.toUtf8());
+    QVERIFY(KisAiStrokeProgramCodec::parseProgramJson(clampedDoc.object(), &progClamped, &err));
+    QCOMPARE(progClamped.readinessScore, 0.0);
+    QCOMPARE(progClamped.completionScore, 1.0);
 }
 
 void KisAiStrokeProgramTest::testSanitizeUnescapedControlCharsInStrings()

@@ -1,6 +1,7 @@
 param(
     [string]$BuildDir = "",
-    [int]$TotalTimeoutSec = 120
+    [int]$TotalTimeoutSec = 120,
+    [int]$BuildTimeoutSec = 300
 )
 
 # Disable crash dialogs for this process and any child processes
@@ -36,8 +37,8 @@ $buildPsi.Arguments = "--build . --parallel"
 $buildPsi.WorkingDirectory = $buildDir
 $buildPsi.UseShellExecute = $false
 $buildProc = [System.Diagnostics.Process]::Start($buildPsi)
-if (-not $buildProc.WaitForExit(60000)) {
-    Write-Error "Build timed out after 60 seconds!"
+if (-not $buildProc.WaitForExit($BuildTimeoutSec * 1000)) {
+    Write-Error "Build timed out after $BuildTimeoutSec seconds!"
     try { $buildProc.Kill($true) } catch {}
     exit 1
 }

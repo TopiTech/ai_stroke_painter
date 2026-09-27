@@ -4251,25 +4251,20 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         finishGoalMode(false);
         return;
     }
-    if (targetImage) {
-        QString statusMsg;
-        if (KisAiStrokeRenderer::renderProgramToLayers(targetImage,
-                                                       m_mainWindow ? m_mainWindow->viewManager() : nullptr,
-                                                       m_goalAccumulatedProgram,
-                                                       &statusMsg,
-                                                       true,
-                                                       &m_goalAccumulatedProgram)) {
-            const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(m_goalAccumulatedProgram);
-            const int qualityPercent = qRound(qBound<qreal>(0.0, program.completionScore, 1.0) * 100.0);
-            const QString detailMsg = i18n("%1 (%2 / 構造品質 %3%)", statusMsg, summary, qualityPercent);
-            setStatus(detailMsg);
-        } else {
-            setStatus(statusMsg, true);
-        }
+
+    QString statusMsg;
+    if (KisAiStrokeRenderer::renderProgramToLayers(targetImage,
+                                                   m_mainWindow ? m_mainWindow->viewManager() : nullptr,
+                                                   m_goalAccumulatedProgram,
+                                                   &statusMsg,
+                                                   true,
+                                                   &m_goalAccumulatedProgram)) {
+        const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(m_goalAccumulatedProgram);
+        const int qualityPercent = qRound(qBound<qreal>(0.0, program.completionScore, 1.0) * 100.0);
+        const QString detailMsg = i18n("%1 (%2 / 構造品質 %3%)", statusMsg, summary, qualityPercent);
+        setStatus(detailMsg);
     } else {
-        setStatus(i18n("キャンバスが利用できないため、ストロークを描画できませんでした。"), true);
-        finishGoalMode(false);
-        return;
+        setStatus(statusMsg, true);
     }
 
     m_lastAgentThought = program.agentThought;
@@ -4318,16 +4313,28 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         }
     }
 
-    const bool agentDeclaredFinished = program.goalReached && (m_goalCurrentStep >= 2);
+    // The agent must not terminate early based solely on untrusted model-declared goalReached flag.
+    // Full quality verification (readinessScore >= target, completionScore >= 0.60, non-empty operations)
+    // is strictly required to consider the masterwork drawing completed.
     const bool qualitySatisfied = isGoalQualitySatisfied(program) && (m_goalCurrentStep >= 2);
     const bool reachedSafetyMax = (m_goalCurrentStep >= m_goalSafetyLimit);
 
-    if (agentDeclaredFinished || qualitySatisfied) {
-        logDebug(QStringLiteral("GOAL_AGENT_FINISHED"),
-                 QStringLiteral("Goal Agent finished autonomously (goalReached=%1, readiness=%2 >= %3).")
-                     .arg(program.goalReached ? QStringLiteral("true") : QStringLiteral("false"))
+    if (program.goalReached && !qualitySatisfied && (m_goalCurrentStep < m_goalTotalSteps)) {
+        logDebug(QStringLiteral("GOAL_AGENT_PREMATURE"),
+                 QStringLiteral("Agent declared goalReached at step %1/%2 but readiness %3 < %4 or quality not yet satisfied; continuing refinement...")
+                     .arg(m_goalCurrentStep)
+                     .arg(m_goalTotalSteps)
                      .arg(program.readinessScore)
                      .arg(m_goalTargetReadiness));
+    }
+
+    if (qualitySatisfied) {
+        logDebug(QStringLiteral("GOAL_AGENT_FINISHED"),
+                 QStringLiteral("Goal Agent finished autonomously with verified quality (goalReached=%1, readiness=%2 >= %3, completion=%4).")
+                     .arg(program.goalReached ? QStringLiteral("true") : QStringLiteral("false"))
+                     .arg(program.readinessScore)
+                     .arg(m_goalTargetReadiness)
+                     .arg(program.completionScore));
         finishGoalMode(true);
     } else if (reachedSafetyMax) {
         logDebug(QStringLiteral("GOAL_SAFETY_MAX"),

@@ -1275,10 +1275,9 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
     text.remove(QChar(0x2060)); // Word joiner
     text.replace(QChar(0x00A0), QLatin1Char(' ')); // Non-breaking space
 
-    // Normalize markdown codeblocks / backticks outside fences
+    // Normalize markdown codeblocks outside fences
     static const QRegularExpression tripleBacktick(QStringLiteral("```(?:json)?"));
     text.remove(tripleBacktick);
-    text.replace(QLatin1Char('`'), QLatin1Char('"'));
 
     // 1. Normalize smart quotes to standard quotes before string extraction
     text.replace(QChar(0x201C), QLatin1Char('"')); // “
@@ -1286,12 +1285,13 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
     text.replace(QChar(0x2018), QLatin1Char('\'')); // ‘
     text.replace(QChar(0x2019), QLatin1Char('\'')); // ’
 
-    // 2. Single quotes to double quotes when outside double-quoted strings
+    // 2. Single quotes and stray backticks to double quotes when outside double-quoted strings
     {
         QString quoteFixed;
         quoteFixed.reserve(text.size());
         bool inDouble = false;
         bool inSingle = false;
+        bool inBacktick = false;
         bool esc = false;
         for (int i = 0; i < text.size(); ++i) {
             const QChar ch = text.at(i);
@@ -1305,13 +1305,18 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
                 quoteFixed.append(ch);
                 continue;
             }
-            if (ch == QLatin1Char('"') && !inSingle) {
+            if (ch == QLatin1Char('"') && !inSingle && !inBacktick) {
                 inDouble = !inDouble;
                 quoteFixed.append(ch);
                 continue;
             }
-            if (ch == QLatin1Char('\'') && !inDouble) {
+            if (ch == QLatin1Char('\'') && !inDouble && !inBacktick) {
                 inSingle = !inSingle;
+                quoteFixed.append(QLatin1Char('"'));
+                continue;
+            }
+            if (ch == QLatin1Char('`') && !inDouble && !inSingle) {
+                inBacktick = !inBacktick;
                 quoteFixed.append(QLatin1Char('"'));
                 continue;
             }
@@ -1845,15 +1850,9 @@ QString KisAiStrokeProgramCodec::sanitizeAndExtractJson(const QString &rawText, 
 {
     QString text = rawText.trimmed();
 
-    // 1. Remove <think> ... </think> or thinking tags (including unclosed tags if truncated)
-    static const QRegularExpression thinkRe(QStringLiteral("(?s)<think>.*?(?:</think>|$)"));
-    text.remove(thinkRe);
-    static const QRegularExpression thoughtRe(QStringLiteral("(?s)<thought>.*?(?:</thought>|$)"));
-    text.remove(thoughtRe);
-    static const QRegularExpression detailsRe(QStringLiteral("(?s)<details>.*?(?:</details>|$)"));
-    text.remove(detailsRe);
-
-    // 2. Extract ```json ... ``` codeblocks and score candidates
+    // 1. First, search for ```json ... ``` codeblocks and score candidates.
+    // Extracting a valid codeblock directly avoids regex interference on <think> or <details>
+    // tags that may legitimately appear inside JSON string literals.
     static const QRegularExpression codeBlockRe(QStringLiteral("```(?:json)?\\s*([\\s\\S]*?)(?:```|$)"));
     auto it = codeBlockRe.globalMatch(text);
     QString bestBlock;
@@ -1883,6 +1882,24 @@ QString KisAiStrokeProgramCodec::sanitizeAndExtractJson(const QString &rawText, 
         text = bestBlock;
         if (diagnostic)
             diagnostic->appliedRepairs.append(QStringLiteral("BestCodeBlockExtracted"));
+    } else {
+        // 2. No valid codeblock found: strip reasoning tags before JSON root safely.
+        // Only strip closed tags globally, or unclosed reasoning tags that appear strictly before the first '{'.
+        static const QRegularExpression closedThinkRe(QStringLiteral("(?s)<think>.*?</think>"));
+        text.remove(closedThinkRe);
+        static const QRegularExpression closedThoughtRe(QStringLiteral("(?s)<thought>.*?</thought>"));
+        text.remove(closedThoughtRe);
+        static const QRegularExpression closedDetailsRe(QStringLiteral("(?s)<details>.*?</details>"));
+        text.remove(closedDetailsRe);
+
+        const int firstBrace = text.indexOf(QLatin1Char('{'));
+        if (firstBrace > 0) {
+            const QString prefix = text.left(firstBrace);
+            if (prefix.contains(QLatin1String("<think>"), Qt::CaseInsensitive)
+                || prefix.contains(QLatin1String("<thought>"), Qt::CaseInsensitive)) {
+                text = text.mid(firstBrace);
+            }
+        }
     }
 
     // 3. Find outermost { ... } or [ ... ]
@@ -3161,11 +3178,14 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
     outProgram->currentStep = toIntField(findField(rootObj, {QStringLiteral("current_step")}), 1);
     outProgram->totalSteps = toIntField(findField(rootObj, {QStringLiteral("total_steps")}), 1);
     outProgram->goalReached = toBoolField(findField(rootObj, {QStringLiteral("goal_reached")}), true);
-    outProgram->completionScore = toDoubleField(findField(rootObj, {QStringLiteral("completion_score")}), 1.0);
-    outProgram->readinessScore = clamp01(toDoubleField(
+    const qreal rawComp = toDoubleField(findField(rootObj, {QStringLiteral("completion_score")}), 1.0);
+    outProgram->completionScore = (rawComp > 1.0 && rawComp <= 100.0) ? (rawComp / 100.0) : clamp01(rawComp);
+
+    const qreal rawReadiness = toDoubleField(
         findField(rootObj,
                   {QStringLiteral("readiness_score"), QStringLiteral("readiness"), QStringLiteral("completion_score")}),
-        1.0));
+        1.0);
+    outProgram->readinessScore = (rawReadiness > 1.0 && rawReadiness <= 100.0) ? (rawReadiness / 100.0) : clamp01(rawReadiness);
     outProgram->recommendedAction =
         findField(rootObj, {QStringLiteral("recommended_action"), QStringLiteral("action")}).toString();
 
