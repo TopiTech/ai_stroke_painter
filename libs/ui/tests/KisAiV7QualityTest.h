@@ -33,6 +33,8 @@ private Q_SLOTS:
     void testCornerInkingFillet();
     void testLineartOcclusionWeighting();
     void testDraperyFoldsSynthesis();
+    void testBodyRigOpsStructure();
+    void testMediumPipelineResolution();
 };
 
 #endif // KIS_AI_V7_QUALITY_TEST_H

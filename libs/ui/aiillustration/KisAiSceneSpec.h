@@ -138,6 +138,19 @@ struct KRITAUI_EXPORT KisAiSceneNarrativeV2
 };
 
 /**
+ * V11: Multi-medium art direction. Meaning-only medium selection that the
+ * LayoutEngine/RigLibrary/LightRig resolve into brush, paper and finish
+ * behaviour. All fields optional; empty keeps legacy anime_cel behaviour.
+ */
+struct KRITAUI_EXPORT KisAiSceneMedium
+{
+    QString mediumId {QStringLiteral("anime_cel")}; // anime_cel, watercolor, impasto, ink_sketch, cyber_neon, fine_line, pencil
+    QString paper {QStringLiteral("smooth")}; // smooth, cold_press, rough, toned
+    QString brushwork {QStringLiteral("controlled")}; // controlled, loose_wash, palette_knife, dry_brush
+    qreal finishStrength {0.5}; // [0,1] masterwork finish intensity multiplier
+};
+
+/**
  * V5 R2: LLM-tunable rig parameters. Only known keys survive validation;
  * the RigLibrary clamps every value into its invariant-safe range.
  */
@@ -152,6 +165,12 @@ struct KRITAUI_EXPORT KisAiSceneRigOverrides
     int hairHighlightBands {1};      // [0,3] main/sub/counter light bands
     qreal mouthWidthScale {1.0};     // [0.6,1.4]
     bool hasBrows {true};
+    // V11 body rig tuning (validated + clamped by RigLibrary::clamped).
+    qreal bodyShoulderWidth {1.0};   // [0.7,1.5]
+    qreal bodyTorsoLength {1.0};     // [0.7,1.6]
+    qreal bodyArmLength {1.0};       // [0.7,1.4]
+    qreal bodyHandSize {1.0};        // [0.7,1.4]
+    QString bodyPose;                // neutral, reach, open_palm, touch_face
 };
 
 /**
@@ -193,6 +212,9 @@ struct KRITAUI_EXPORT KisAiSceneSpec
 
     // V10 additions
     KisAiSceneFinishV3 finish;
+
+    // V11 additions (backward compatible: empty medium keeps legacy behaviour)
+    KisAiSceneMedium medium;
 
     bool isCharacter() const { return subject.type == QLatin1String("character"); }
 };

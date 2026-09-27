@@ -40,6 +40,7 @@ private Q_SLOTS:
     void testPatchDecorativeAddRemove();
     void testRigPatchOutOfRangeNumberIsClamped();
     void testRejectedRigPatchKeepsBaseSpecRig();
+    void testPatchBodyRigAndMediumKeys();
 
     // F3b: Vision Critic
     void testCriticCropSelectionDeterministic();

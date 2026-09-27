@@ -84,10 +84,14 @@ KisAiStrokeProgram KisAiRefinementLoop::applyRigPatchesAndRelayout(const KisAiSt
     KisAiStrokeProgram patched = KisAiProgramPatchCodec::applyPatches(base, patches, &delta, &localRejected);
     if (rejected)
         rejected->append(localRejected);
+    // Keys whose apply failed: match applyPatches rejection formats.
+    // - "/rig/<key>: ..." for rig failures
+    // - "/medium/...: ..." for medium failures (informational in apply, but
+    //   the relayout below re-validates the raw patch value anyway)
     const auto rigKeyRejected = [&localRejected](const QString &key) {
-        const QString prefix = QStringLiteral("/rig/%1:").arg(key);
         for (const QString &reason : localRejected) {
-            if (reason.startsWith(prefix))
+            if (reason.startsWith(QStringLiteral("/rig/%1:").arg(key))
+                || reason.startsWith(QStringLiteral("/medium/%1:").arg(key)))
                 return true;
         }
         return false;
@@ -99,10 +103,12 @@ KisAiStrokeProgram KisAiRefinementLoop::applyRigPatchesAndRelayout(const KisAiSt
     KisAiSceneSpec relaid = baseSpec;
 
     for (const KisAiProgramPatch &patch : patches) {
-        if (!patch.path.startsWith(QLatin1String("/rig/"))) {
+        const bool isRigPath = patch.path.startsWith(QLatin1String("/rig/"));
+        const bool isMediumPath = patch.path.startsWith(QLatin1String("/medium/"));
+        if (!isRigPath && !isMediumPath) {
             continue;
         }
-        const QString key = patch.path.mid(5);
+        const QString key = isRigPath ? patch.path.mid(5) : patch.path.mid(8);
         if (rigKeyRejected(key)) {
             continue;
         }
@@ -135,6 +141,44 @@ KisAiStrokeProgram KisAiRefinementLoop::applyRigPatchesAndRelayout(const KisAiSt
         } else if (key == QLatin1String("has_brows")) {
             relaid.rig.hasBrows = delta.hasBrows;
             rigMoved = true;
+        } else if (key == QLatin1String("body_shoulder_width")) {
+            relaid.rig.bodyShoulderWidth = delta.bodyShoulderWidth;
+            rigMoved = true;
+        } else if (key == QLatin1String("body_torso_length")) {
+            relaid.rig.bodyTorsoLength = delta.bodyTorsoLength;
+            rigMoved = true;
+        } else if (key == QLatin1String("body_arm_length")) {
+            relaid.rig.bodyArmLength = delta.bodyArmLength;
+            rigMoved = true;
+        } else if (key == QLatin1String("body_hand_size")) {
+            relaid.rig.bodyHandSize = delta.bodyHandSize;
+            rigMoved = true;
+        } else if (key == QLatin1String("body_pose")) {
+            if (!delta.bodyPose.isEmpty()) {
+                relaid.rig.bodyPose = delta.bodyPose;
+                rigMoved = true;
+            }
+        } else if (key == QLatin1String("medium")) {
+            if (KisAiProgramPatchCodec::isMediumValueValid(key, patch.value)) {
+                relaid.medium.mediumId = patch.value.toString().trimmed().toLower();
+                relaid.style.artStyleId = relaid.medium.mediumId;
+                rigMoved = true;
+            }
+        } else if (key == QLatin1String("paper")) {
+            if (KisAiProgramPatchCodec::isMediumValueValid(key, patch.value)) {
+                relaid.medium.paper = patch.value.toString().trimmed().toLower();
+                rigMoved = true;
+            }
+        } else if (key == QLatin1String("brushwork")) {
+            if (KisAiProgramPatchCodec::isMediumValueValid(key, patch.value)) {
+                relaid.medium.brushwork = patch.value.toString().trimmed().toLower();
+                rigMoved = true;
+            }
+        } else if (key == QLatin1String("finish_strength")) {
+            if (KisAiProgramPatchCodec::isMediumValueValid(key, patch.value)) {
+                relaid.medium.finishStrength = qBound<qreal>(0.0, patch.value.toDouble(), 1.0);
+                rigMoved = true;
+            }
         }
     }
 
@@ -146,15 +190,17 @@ KisAiStrokeProgram KisAiRefinementLoop::applyRigPatchesAndRelayout(const KisAiSt
 
     const KisAiStrokeProgram fresh =
         KisAiLayoutEngine::generateProgram(relaid, canvasSize.isValid() ? canvasSize : base.canvasSize);
-    // Merge: fresh rig-driven face + hair bands replace their counterparts;
-    // every other op (background, clothing, shading) keeps the patched base.
+    // Merge: fresh rig-driven face + hair bands + body rig replace their
+    // counterparts; every other op (background, clothing, shading) keeps the
+    // patched base.
     KisAiStrokeProgram merged = patched;
     auto isRigFaceId = [](const QString &id) {
         const QString l = id.toLower();
         return l.startsWith(QLatin1String("rig_eye_")) || l.startsWith(QLatin1String("rig_brow_"))
             || l.startsWith(QLatin1String("rig_nose_")) || l == QLatin1String("rig_mouth")
             || l.startsWith(QLatin1String("rig_hair_band_")) || l.startsWith(QLatin1String("eyelid_shade_"))
-            || l.startsWith(QLatin1String("tear_trough_"));
+            || l.startsWith(QLatin1String("tear_trough_")) || l.startsWith(QLatin1String("rig_torso"))
+            || l.startsWith(QLatin1String("rig_arm_")) || l.startsWith(QLatin1String("rig_hand_"));
     };
     for (int i = merged.operations.size() - 1; i >= 0; --i) {
         if (isRigFaceId(merged.operations.at(i).id))
@@ -182,6 +228,16 @@ QJsonObject KisAiRefinementLoop::rigStateSnapshot(const KisAiSceneSpec &spec)
     rig.insert(QStringLiteral("hair_highlight_bands"), spec.rig.hairHighlightBands);
     rig.insert(QStringLiteral("mouth_width_scale"), spec.rig.mouthWidthScale);
     rig.insert(QStringLiteral("has_brows"), spec.rig.hasBrows);
+    // V11 body rig + medium snapshot so patch proposals see the full state.
+    rig.insert(QStringLiteral("body_shoulder_width"), spec.rig.bodyShoulderWidth);
+    rig.insert(QStringLiteral("body_torso_length"), spec.rig.bodyTorsoLength);
+    rig.insert(QStringLiteral("body_arm_length"), spec.rig.bodyArmLength);
+    rig.insert(QStringLiteral("body_hand_size"), spec.rig.bodyHandSize);
+    rig.insert(QStringLiteral("body_pose"), spec.rig.bodyPose);
+    rig.insert(QStringLiteral("medium"), spec.medium.mediumId);
+    rig.insert(QStringLiteral("paper"), spec.medium.paper);
+    rig.insert(QStringLiteral("brushwork"), spec.medium.brushwork);
+    rig.insert(QStringLiteral("finish_strength"), spec.medium.finishStrength);
     return rig;
 }
 

@@ -152,6 +152,13 @@ void KisAiStrokeProgramTest::testStrokeProgramJsonSchema()
     QVERIFY(opProps.contains(QStringLiteral("width_end")));
     QVERIFY(opProps.contains(QStringLiteral("smooth")));
     QCOMPARE(props.value(QStringLiteral("operations")).toObject().value(QStringLiteral("minItems")).toInt(), 1);
+    // V11 Rig-first contract guards: extended blend enum + hex format hint.
+    const QJsonArray blendEnum =
+        opProps.value(QStringLiteral("blend_mode")).toObject().value(QStringLiteral("enum")).toArray();
+    QVERIFY(blendEnum.contains(QJsonValue(QStringLiteral("soft_light"))));
+    QVERIFY(blendEnum.contains(QJsonValue(QStringLiteral("darken"))));
+    QVERIFY(blendEnum.contains(QJsonValue(QStringLiteral("lighten"))));
+    QVERIFY(opProps.contains(QStringLiteral("color_hex_format")));
 }
 
 void KisAiStrokeProgramTest::testTruncatedJsonRecovery()
@@ -3566,11 +3573,14 @@ void KisAiStrokeProgramTest::testLineartHierarchy()
 
 void KisAiStrokeProgramTest::testBrushPresetMapping()
 {
-    // V3 Phase 2.4: Profile to Krita preset mapping
-    QCOMPARE(KisAiStrokeQualityUtils::brushPresetName(QStringLiteral("gpen")), QStringLiteral("Pencil-2"));
+    // V3 Phase 2.4: Profile to Krita preset mapping (V11: 1:1 preset IDs).
+    QCOMPARE(KisAiStrokeQualityUtils::brushPresetName(QStringLiteral("gpen")), QStringLiteral("Ink_Gpen"));
     QCOMPARE(KisAiStrokeQualityUtils::brushPresetName(QStringLiteral("watercolor")), QStringLiteral("Watercolor Soft"));
     QCOMPARE(KisAiStrokeQualityUtils::brushPresetName(QStringLiteral("airbrush")), QStringLiteral("Airbrush Soft"));
     QCOMPARE(KisAiStrokeQualityUtils::brushPresetName(QStringLiteral("crayon")), QStringLiteral("Chalk Soft"));
+    QCOMPARE(KisAiStrokeQualityUtils::brushPresetName(QStringLiteral("charcoal")), QStringLiteral("Chalk_Charcoal"));
+    QCOMPARE(KisAiStrokeQualityUtils::brushPresetName(QStringLiteral("marker")), QStringLiteral("Marker"));
+    QCOMPARE(KisAiStrokeQualityUtils::brushPresetName(QStringLiteral("neon")), QStringLiteral("Glow_Neon"));
 
     KisAiStrokeProgram prog;
     prog.schemaVersion = 2;
@@ -3581,7 +3591,7 @@ void KisAiStrokeProgramTest::testBrushPresetMapping()
 
     const int assigned = KisAiStrokeQualityUtils::assignBrushPresetHints(prog);
     QCOMPARE(assigned, 1);
-    QCOMPARE(prog.operations[0].brush.presetHint, QStringLiteral("Pencil-2"));
+    QCOMPARE(prog.operations[0].brush.presetHint, QStringLiteral("Ink_Gpen"));
 }
 
 void KisAiStrokeProgramTest::testStructuredCritiqueParsing()
@@ -4855,6 +4865,7 @@ void KisAiStrokeProgramTest::testFlagshipDirectivesAndTokenScaling()
     QVERIFY(flagshipDirectives.contains(QStringLiteral("Master Deliberate Inking & Catmull-Rom Curvature")));
     QVERIFY(flagshipDirectives.contains(QStringLiteral("Hair Clump Architecture")));
     QVERIFY(flagshipDirectives.contains(QStringLiteral("clip_to_id")));
+    QVERIFY(flagshipDirectives.contains(QStringLiteral("Rig-First Contract")));
 
     // 2. Verify system prompt includes flagship directives when enabled (default is true)
     const QString sysPrompt = KisAiStrokeProgramCodec::buildSystemPrompt(QSize(1024, 1024), QStringLiteral("Anime girl"));

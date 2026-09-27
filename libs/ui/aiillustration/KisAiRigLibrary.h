@@ -62,6 +62,20 @@ struct KRITAUI_EXPORT KisAiHairRigParams {
     int highlightBands{1}; // [0,3] main / sub / counter-light
 };
 
+/**
+ * V11 body rig: deterministic torso/limb anchors derived from the head rig
+ * so hands, arms and the torso never float free of the head geometry.
+ * The LLM tunes these only through clamped SceneSpec values; all points
+ * stay in normalized [0,1] coordinates.
+ */
+struct KRITAUI_EXPORT KisAiBodyRigParams {
+    qreal shoulderWidthScale{1.0}; // [0.7,1.5] relative to headWidth
+    qreal torsoLengthScale{1.0}; // [0.7,1.6] relative to headHeight
+    qreal armLengthScale{1.0}; // [0.7,1.4] relative to torso length
+    qreal handSizeScale{1.0}; // [0.7,1.4] relative to canonical hand box
+    QString pose {QStringLiteral("neutral")}; // neutral, reach, open_palm, touch_face
+};
+
 struct KRITAUI_EXPORT KisAiBackdropRigParams {
     QString timeOfDay{QStringLiteral("day")}; // day, sunset, night
     QString weather{QStringLiteral("clear")}; // clear, cloudy, rain, snow
@@ -83,6 +97,7 @@ struct KRITAUI_EXPORT KisAiRigParameterSet {
     KisAiNoseRigParams nose;
     KisAiMouthRigParams mouth;
     KisAiHairRigParams hair;
+    KisAiBodyRigParams body;
     KisAiBackdropRigParams backdrop;
 
     // Colors derived from the spec (LightRig remains the single truth source).
@@ -182,6 +197,16 @@ public:
 
     /** Map free-form narrative.time onto the canonical timeOfDay enum. */
     static QString narrativeTimeToTimeOfDay(const QString &narrativeTime, const QString &fallback);
+
+    /**
+     * V11 body rig: deterministic torso + arm + hand assembly anchored on the
+     * head rig (shoulders derive from headCenter/headWidth, hands from the
+     * shoulder line). Guarantees limbs connect to the torso and stay inside
+     * the canvas.
+     */
+    static QVector<KisAiStrokeOperation> bodyRigOps(const KisAiRigParameterSet &params,
+                                                    const QSize &canvasSize,
+                                                    quint32 seed = 42);
 
     /**
      * Mountain rig (e.g. Mount Fuji / distant peaks):

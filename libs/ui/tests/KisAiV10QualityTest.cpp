@@ -23,6 +23,7 @@
 #include "aiillustration/KisAiLayoutEngine.h"
 #include "aiillustration/KisAiLightRig.h"
 #include "aiillustration/KisAiPromptAnalyzer.h"
+#include "aiillustration/KisAiQualityVector.h"
 #include "aiillustration/KisAiRigLibrary.h"
 #include "aiillustration/KisAiSceneSpec.h"
 #include "aiillustration/KisAiStrokeProgram.h"
@@ -384,6 +385,94 @@ void KisAiV10QualityTest::testSmoothCubicHairClumpsAndDrapery()
             QVERIFY2(op.polygon.size() >= 16, "Drapery fold shade must be smooth ribbon polygon");
         }
     }
+}
+
+void KisAiV10QualityTest::testBodyRigAnchoringAndSymmetry()
+{
+    KisAiRigParameterSet params;
+    params.headCenter = QPointF(0.5, 0.38);
+    params.headWidth = 0.32;
+    params.headHeight = 0.44;
+    params.skinTone = QColor(255, 224, 192);
+    params.lineColor = QColor(30, 28, 40);
+    params = KisAiRigLibrary::clamped(params);
+
+    const auto ops = KisAiRigLibrary::bodyRigOps(params, QSize(1024, 1024), 42);
+    QVERIFY(!ops.isEmpty());
+
+    // Torso mass must exist and sit below the chin.
+    bool hasTorso = false;
+    for (const auto &op : ops) {
+        if (op.id == QLatin1String("rig_torso_mass")) {
+            hasTorso = true;
+            QCOMPARE(op.kind, KisAiStrokeOperation::Kind::Fill);
+            for (const QPointF &p : op.polygon)
+                QVERIFY2(p.x() >= 0.02 && p.x() <= 0.98 && p.y() >= 0.02 && p.y() <= 0.98,
+                         "Body rig must stay inside the canvas");
+        }
+    }
+    QVERIFY2(hasTorso, "Body rig must emit a torso mass");
+
+    // Arms/hands must be symmetric pairs anchored on the shoulder line.
+    int armL = 0, armR = 0, handL = 0, handR = 0;
+    for (const auto &op : ops) {
+        if (op.id == QLatin1String("rig_arm_l"))
+            ++armL;
+        else if (op.id == QLatin1String("rig_arm_r"))
+            ++armR;
+        else if (op.id == QLatin1String("rig_hand_l"))
+            ++handL;
+        else if (op.id == QLatin1String("rig_hand_r"))
+            ++handR;
+    }
+    QCOMPARE(armL, 1);
+    QCOMPARE(armR, 1);
+    QCOMPARE(handL, 1);
+    QCOMPARE(handR, 1);
+
+    // Full-body program through the LayoutEngine must contain rig body ids.
+    KisAiSceneSpec spec;
+    spec.prompt = QStringLiteral("full body test");
+    spec.canvasSize = QSize(512, 512);
+    spec.composition.framing = QStringLiteral("full_body");
+    const KisAiStrokeProgram program = KisAiLayoutEngine::generateProgram(spec, QSize(512, 512));
+    bool hasBodyOp = false;
+    for (const auto &op : program.operations) {
+        if (op.id.startsWith(QLatin1String("rig_torso"))
+            || op.id.startsWith(QLatin1String("rig_arm_"))
+            || op.id.startsWith(QLatin1String("rig_hand_"))) {
+            hasBodyOp = true;
+            break;
+        }
+    }
+    QVERIFY2(hasBodyOp, "Full-body layout must include body rig ops");
+}
+
+void KisAiV10QualityTest::testMediumFinishAndQualityGates()
+{
+    // applyMediumFinish must accept a spec and keep image dimensions.
+    QImage image(64, 64, QImage::Format_ARGB32_Premultiplied);
+    image.fill(QColor(120, 90, 140));
+    KisAiSceneSpec spec;
+    spec.medium.mediumId = QStringLiteral("watercolor");
+    spec.medium.finishStrength = 0.5;
+    KisAiStrokeRenderer::applyMediumFinish(image, spec);
+    QCOMPARE(image.size(), QSize(64, 64));
+    QVERIFY(!image.isNull());
+
+    // Medium-aware degrade notes must differ per medium family.
+    const QString wash = KisAiStrokeRenderer::degradeNoteForMedium(QStringLiteral("watercolor"), true);
+    const QString glow = KisAiStrokeRenderer::degradeNoteForMedium(QStringLiteral("cyber_neon"), true);
+    QVERIFY(wash.contains(QStringLiteral("wash")));
+    QVERIFY(glow.contains(QStringLiteral("glow")));
+    QVERIFY(KisAiStrokeRenderer::degradeNoteForMedium(QStringLiteral("anime_cel"), false).isEmpty());
+
+    // Quality gates: watercolor lenient, neon strict vs base 0.40.
+    QVERIFY(KisAi::QualityProfile::gateThresholdForMedium(QStringLiteral("watercolor"), 0.40) < 0.40);
+    QVERIFY(KisAi::QualityProfile::gateThresholdForMedium(QStringLiteral("cyber_neon"), 0.40) >= 0.40);
+    QCOMPARE(KisAi::QualityProfile::forMedium(QStringLiteral("watercolor")).weights.value(
+                 QStringLiteral("perceptual.colorEntropy")),
+             KisAi::QualityProfile::watercolorSoft().weights.value(QStringLiteral("perceptual.colorEntropy")));
 }
 
 KISTEST_MAIN(KisAiV10QualityTest)

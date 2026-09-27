@@ -569,6 +569,49 @@ void KisAiV5EngineTest::testRejectedRigPatchKeepsBaseSpecRig()
     QCOMPARE(out.operations.size(), base.operations.size());
 }
 
+void KisAiV5EngineTest::testPatchBodyRigAndMediumKeys()
+{
+    // Body rig keys must parse, validate and survive a relayout round-trip.
+    QVERIFY(KisAiProgramPatchCodec::isRigKey(QStringLiteral("body_arm_length")));
+    QVERIFY(KisAiProgramPatchCodec::isRigKey(QStringLiteral("body_pose")));
+    QVERIFY(KisAiProgramPatchCodec::isMediumKey(QStringLiteral("medium")));
+    QVERIFY(KisAiProgramPatchCodec::isMediumValueValid(QStringLiteral("medium"), QJsonValue(QStringLiteral("watercolor"))));
+    QVERIFY(!KisAiProgramPatchCodec::isMediumValueValid(QStringLiteral("medium"), QJsonValue(QStringLiteral("oil"))));
+    QVERIFY(!KisAiProgramPatchCodec::isMediumValueValid(QStringLiteral("finish_strength"), QJsonValue(2.0)));
+
+    const QByteArray body = QByteArrayLiteral(
+        "{\"patches\": [{\"op\": \"replace\", \"path\": \"/rig/body_pose\", \"value\": \"reach\"}]}");
+    QVector<KisAiProgramPatch> parsed;
+    QStringList rejected;
+    QVERIFY(KisAiProgramPatchCodec::parsePatches(body, &parsed, &rejected));
+    QVERIFY(rejected.isEmpty());
+    QCOMPARE(parsed.size(), 1);
+
+    KisAiStrokeProgram base;
+    KisAiSceneSpec spec;
+    spec.composition.framing = QStringLiteral("full_body");
+    KisAiSceneRigOverrides outRig;
+    const KisAiStrokeProgram out =
+        KisAiRefinementLoop::applyRigPatchesAndRelayout(base, spec, QSize(256, 256), parsed, &outRig, &rejected);
+    QCOMPARE(outRig.bodyPose, QStringLiteral("reach"));
+
+    // Structural convergence: new regions keep the loop alive, stalled
+    // pixels with no new work converge.
+    QVERIFY(!KisAiVisionCritic::hasConvergedStructural(10.0, 10.2, 2, 4));
+    QVERIFY(KisAiVisionCritic::hasConvergedStructural(10.0, 10.2, 3, 2));
+
+    // Hand failure prediction crop must appear with budget headroom.
+    QImage canvas(256, 256, QImage::Format_ARGB32);
+    canvas.fill(QColor(240, 240, 245));
+    const QVector<KisAiCriticCrop> crops = KisAiVisionCritic::selectCrops(canvas, QRectF(), {}, 4);
+    bool hasHandPredict = false;
+    for (const KisAiCriticCrop &c : crops) {
+        if (c.reason == QLatin1String("hand_contour_predict"))
+            hasHandPredict = true;
+    }
+    QVERIFY(hasHandPredict);
+}
+
 void KisAiV5EngineTest::testCriticCropSelectionDeterministic()
 {
     QImage canvas(256, 256, QImage::Format_ARGB32);

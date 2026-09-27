@@ -21,6 +21,7 @@
 #include "aiillustration/KisAiLayoutEngine.h"
 #include "aiillustration/KisAiPhysicalRenderer.h"
 #include "aiillustration/KisAiPrimitiveExpander.h"
+#include "aiillustration/KisAiRigLibrary.h"
 #include "aiillustration/KisAiSceneSpec.h"
 #include "aiillustration/KisAiStrokeCommitter.h"
 #include "aiillustration/KisAiStrokeGraph.h"
@@ -544,6 +545,25 @@ void KisAiAtomicInkTest::testOrderOperationsForRenderingDefaultCanvasSize()
     // Background mass must come before facial detail
     QCOMPARE(orderedExplicit.first().id, QStringLiteral("bg_fill"));
     QCOMPARE(orderedExplicit.last().id, QStringLiteral("eye_iris"));
+}
+
+void KisAiAtomicInkTest::testBodyRigGroupsOrderTorsoFirst()
+{
+    KisAiRigParameterSet params;
+    params.headCenter = QPointF(0.5, 0.38);
+    params.headWidth = 0.32;
+    params.headHeight = 0.44;
+    params = KisAiRigLibrary::clamped(params);
+    QVector<KisAiStrokeOperation> ops = KisAiRigLibrary::bodyRigOps(params, QSize(256, 256), 11);
+    QVERIFY(!ops.isEmpty());
+    const QVector<KisAiStrokeOperation> ordered = KisAiStrokeGraph::orderForCommit(ops, QSize(256, 256));
+    const QStringList groups = KisAiStrokeGraph::groupIdsInOrder(ordered);
+    QVERIFY(groups.contains(QStringLiteral("torso")));
+    QVERIFY(groups.contains(QStringLiteral("arm_l")));
+    QVERIFY(groups.contains(QStringLiteral("hand_l")));
+    // Torso mass commits before limbs (connected assembly, no floating hands).
+    QVERIFY(groups.indexOf(QStringLiteral("torso")) < groups.indexOf(QStringLiteral("hand_l")));
+    QVERIFY(groups.indexOf(QStringLiteral("torso")) < groups.indexOf(QStringLiteral("hand_r")));
 }
 
 KISTEST_MAIN(KisAiAtomicInkTest)

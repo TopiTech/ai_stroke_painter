@@ -90,6 +90,15 @@ public:
         const KisAiSceneStyleV2 &style
     );
 
+    /**
+     * V11 medium-aware entry point: resolves SceneSpec::medium onto the
+     * legacy style pipeline (explicit medium wins, else artStyleId).
+     */
+    static void applyMediumPipeline(
+        QVector<KisAiStrokeOperation> &operations,
+        const KisAiSceneSpec &spec
+    );
+
 private:
     static QVector<KisAiStrokeOperation> characterProgram(
         const KisAiSceneSpec &spec,

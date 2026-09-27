@@ -14,6 +14,7 @@
 #include <QVector>
 
 #include "KisAiStrokeProgram.h"
+#include "KisAiSceneSpec.h"
 #ifndef AI_STROKE_STANDALONE
 #include "kis_types.h"
 #include "kritaui_export.h"
@@ -142,6 +143,18 @@ public:
     static void applyFinishingPostProcess(QImage &image);
 
     /**
+     * V11 medium-aware finish: FinishV3 strengths scaled by
+     * SceneSpec::medium.finishStrength and the medium id (watercolor hushes
+     * bloom, neon boosts it). Same pipeline as applyFinishingPostProcess
+     * with caller-owned coefficients.
+     */
+    static void applyMediumFinish(QImage &image,
+                                  const KisAiSceneSpec &spec,
+                                  qreal bloomStrength = -1.0,
+                                  qreal vignetteStrength = -1.0,
+                                  qreal grainIntensity = -1.0);
+
+    /**
      * Fast 2-pass separable box blur for form shading diffusion and organic transitions.
      */
     static void applySoftEdgeDiffusion(QImage &image, int radius);
@@ -157,6 +170,11 @@ public:
         QString note;
     };
     static RenderBudget renderBudgetFor(const QSize &size, int opCount);
+
+    /**
+     * V11 medium-aware degrade order note for telemetry/logs.
+     */
+    static QString degradeNoteForMedium(const QString &mediumId, bool degraded);
 
     /**
      * Render a subset of operations directly to an image (public for KisAiPhysicalRenderer).

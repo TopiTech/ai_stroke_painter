@@ -332,7 +332,6 @@ QJsonObject KisAiSceneSpecCodec::sceneSpecJsonSchema()
     narrative.insert(QStringLiteral("additionalProperties"), false);
     props.insert(QStringLiteral("narrative"), narrative);
 
-    // ---- V5 R2: rig parameter tuning ----
     QJsonObject rigBlock;
     rigBlock.insert(QStringLiteral("type"), QStringLiteral("object"));
     QJsonObject rigProps;
@@ -370,9 +369,65 @@ QJsonObject KisAiSceneSpecCodec::sceneSpecJsonSchema()
     mouth.insert(QStringLiteral("maximum"), 1.4);
     rigProps.insert(QStringLiteral("mouth_width_scale"), mouth);
     rigProps.insert(QStringLiteral("has_brows"), QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")}});
+    QJsonObject shoulderW;
+    shoulderW.insert(QStringLiteral("type"), QStringLiteral("number"));
+    shoulderW.insert(QStringLiteral("minimum"), 0.7);
+    shoulderW.insert(QStringLiteral("maximum"), 1.5);
+    rigProps.insert(QStringLiteral("body_shoulder_width"), shoulderW);
+    QJsonObject torsoL;
+    torsoL.insert(QStringLiteral("type"), QStringLiteral("number"));
+    torsoL.insert(QStringLiteral("minimum"), 0.7);
+    torsoL.insert(QStringLiteral("maximum"), 1.6);
+    rigProps.insert(QStringLiteral("body_torso_length"), torsoL);
+    QJsonObject armL;
+    armL.insert(QStringLiteral("type"), QStringLiteral("number"));
+    armL.insert(QStringLiteral("minimum"), 0.7);
+    armL.insert(QStringLiteral("maximum"), 1.4);
+    rigProps.insert(QStringLiteral("body_arm_length"), armL);
+    QJsonObject handS;
+    handS.insert(QStringLiteral("type"), QStringLiteral("number"));
+    handS.insert(QStringLiteral("minimum"), 0.7);
+    handS.insert(QStringLiteral("maximum"), 1.4);
+    rigProps.insert(QStringLiteral("body_hand_size"), handS);
+    rigProps.insert(QStringLiteral("body_pose"),
+                    strEnum({QStringLiteral("neutral"),
+                             QStringLiteral("reach"),
+                             QStringLiteral("open_palm"),
+                             QStringLiteral("touch_face")}));
     rigBlock.insert(QStringLiteral("properties"), rigProps);
     rigBlock.insert(QStringLiteral("additionalProperties"), false);
     props.insert(QStringLiteral("rig"), rigBlock);
+
+    // V11: multi-medium art direction (meaning only; geometry stays in code).
+    QJsonObject mediumBlock;
+    mediumBlock.insert(QStringLiteral("type"), QStringLiteral("object"));
+    QJsonObject mediumProps;
+    mediumProps.insert(QStringLiteral("medium"),
+                       strEnum({QStringLiteral("anime_cel"),
+                                QStringLiteral("watercolor"),
+                                QStringLiteral("impasto"),
+                                QStringLiteral("ink_sketch"),
+                                QStringLiteral("cyber_neon"),
+                                QStringLiteral("fine_line"),
+                                QStringLiteral("pencil")}));
+    mediumProps.insert(QStringLiteral("paper"),
+                       strEnum({QStringLiteral("smooth"),
+                                QStringLiteral("cold_press"),
+                                QStringLiteral("rough"),
+                                QStringLiteral("toned")}));
+    mediumProps.insert(QStringLiteral("brushwork"),
+                       strEnum({QStringLiteral("controlled"),
+                                QStringLiteral("loose_wash"),
+                                QStringLiteral("palette_knife"),
+                                QStringLiteral("dry_brush")}));
+    QJsonObject finishStrength;
+    finishStrength.insert(QStringLiteral("type"), QStringLiteral("number"));
+    finishStrength.insert(QStringLiteral("minimum"), 0.0);
+    finishStrength.insert(QStringLiteral("maximum"), 1.0);
+    mediumProps.insert(QStringLiteral("finish_strength"), finishStrength);
+    mediumBlock.insert(QStringLiteral("properties"), mediumProps);
+    mediumBlock.insert(QStringLiteral("additionalProperties"), false);
+    props.insert(QStringLiteral("medium"), mediumBlock);
 
     QJsonObject schema;
     schema.insert(QStringLiteral("type"), QStringLiteral("object"));
@@ -767,6 +822,66 @@ bool KisAiSceneSpecCodec::parseSceneSpecObject(const QJsonObject &rootObj,
         }
         if (rigObj.contains(QStringLiteral("has_brows")))
             spec.rig.hasBrows = rigObj.value(QStringLiteral("has_brows")).toBool(spec.rig.hasBrows);
+        if (rigObj.contains(QStringLiteral("body_shoulder_width"))) {
+            const double v = rigObj.value(QStringLiteral("body_shoulder_width")).toDouble(spec.rig.bodyShoulderWidth);
+            if (std::isfinite(v))
+                spec.rig.bodyShoulderWidth = qBound<qreal>(0.7, v, 1.5);
+        }
+        if (rigObj.contains(QStringLiteral("body_torso_length"))) {
+            const double v = rigObj.value(QStringLiteral("body_torso_length")).toDouble(spec.rig.bodyTorsoLength);
+            if (std::isfinite(v))
+                spec.rig.bodyTorsoLength = qBound<qreal>(0.7, v, 1.6);
+        }
+        if (rigObj.contains(QStringLiteral("body_arm_length"))) {
+            const double v = rigObj.value(QStringLiteral("body_arm_length")).toDouble(spec.rig.bodyArmLength);
+            if (std::isfinite(v))
+                spec.rig.bodyArmLength = qBound<qreal>(0.7, v, 1.4);
+        }
+        if (rigObj.contains(QStringLiteral("body_hand_size"))) {
+            const double v = rigObj.value(QStringLiteral("body_hand_size")).toDouble(spec.rig.bodyHandSize);
+            if (std::isfinite(v))
+                spec.rig.bodyHandSize = qBound<qreal>(0.7, v, 1.4);
+        }
+        if (rigObj.contains(QStringLiteral("body_pose"))) {
+            const QString v = rigObj.value(QStringLiteral("body_pose")).toString().trimmed().toLower();
+            if (v == QLatin1String("neutral") || v == QLatin1String("reach")
+                || v == QLatin1String("open_palm") || v == QLatin1String("touch_face"))
+                spec.rig.bodyPose = v;
+        }
+    }
+
+    const QJsonObject mediumObj = rootObj.value(QStringLiteral("medium")).toObject();
+    if (!mediumObj.isEmpty()) {
+        spec.medium.mediumId =
+            normalizeEnum(mediumObj.value(QStringLiteral("medium")).toString(spec.medium.mediumId),
+                          {QStringLiteral("anime_cel"),
+                           QStringLiteral("watercolor"),
+                           QStringLiteral("impasto"),
+                           QStringLiteral("ink_sketch"),
+                           QStringLiteral("cyber_neon"),
+                           QStringLiteral("fine_line"),
+                           QStringLiteral("pencil")},
+                          QStringLiteral("anime_cel"));
+        spec.medium.paper =
+            normalizeEnum(mediumObj.value(QStringLiteral("paper")).toString(spec.medium.paper),
+                          {QStringLiteral("smooth"),
+                           QStringLiteral("cold_press"),
+                           QStringLiteral("rough"),
+                           QStringLiteral("toned")},
+                          QStringLiteral("smooth"));
+        spec.medium.brushwork =
+            normalizeEnum(mediumObj.value(QStringLiteral("brushwork")).toString(spec.medium.brushwork),
+                          {QStringLiteral("controlled"),
+                           QStringLiteral("loose_wash"),
+                           QStringLiteral("palette_knife"),
+                           QStringLiteral("dry_brush")},
+                          QStringLiteral("controlled"));
+        if (mediumObj.contains(QStringLiteral("finish_strength"))) {
+            const double fs = mediumObj.value(QStringLiteral("finish_strength")).toDouble(spec.medium.finishStrength);
+            if (std::isfinite(fs)) {
+                spec.medium.finishStrength = qBound<qreal>(0.0, fs, 1.0);
+            }
+        }
     }
 
     if (rootObj.contains(QStringLiteral("prompt")) && rootObj.value(QStringLiteral("prompt")).isString())
@@ -1101,6 +1216,32 @@ KisAiSceneSpec KisAiSceneSpecCodec::defaultSpecForPrompt(const QString &prompt, 
         spec.clothing.style = QStringLiteral("kimono");
         spec.clothing.color = QColor(160, 48, 64);
     }
+    // V11: keyword-derived medium fallback so multi-style offline paths still
+    // paint in the requested medium without any LLM call.
+    if (lower.contains(QStringLiteral("watercolor")) || lower.contains(QStringLiteral("aquarelle"))) {
+        spec.medium.mediumId = QStringLiteral("watercolor");
+        spec.style.artStyleId = QStringLiteral("watercolor");
+        if (spec.medium.paper == QLatin1String("smooth"))
+            spec.medium.paper = QStringLiteral("cold_press");
+        spec.medium.brushwork = QStringLiteral("loose_wash");
+    } else if (lower.contains(QStringLiteral("impasto")) || lower.contains(QStringLiteral("oil painting"))
+               || lower.contains(QStringLiteral("thick paint"))) {
+        spec.medium.mediumId = QStringLiteral("impasto");
+        spec.style.artStyleId = QStringLiteral("impasto");
+        spec.medium.brushwork = QStringLiteral("palette_knife");
+        if (spec.medium.paper == QLatin1String("smooth"))
+            spec.medium.paper = QStringLiteral("rough");
+    } else if (lower.contains(QStringLiteral("pencil")) || lower.contains(QStringLiteral("graphite"))
+               || lower.contains(QStringLiteral("charcoal"))) {
+        spec.medium.mediumId =
+            lower.contains(QStringLiteral("charcoal")) ? QStringLiteral("ink_sketch") : QStringLiteral("pencil");
+        spec.medium.brushwork = QStringLiteral("dry_brush");
+        if (spec.medium.paper == QLatin1String("smooth"))
+            spec.medium.paper = QStringLiteral("rough");
+    } else if (lower.contains(QStringLiteral("neon")) || lower.contains(QStringLiteral("cyberpunk"))) {
+        spec.medium.mediumId = QStringLiteral("cyber_neon");
+        spec.style.artStyleId = QStringLiteral("cyber_neon");
+    }
     KisAi::OntologyApplier::apply(prompt, &spec);
     return spec;
 }
@@ -1201,6 +1342,14 @@ qreal intentMatchScore(const KisAiSceneSpec &spec)
         evidence.append(spec.style.artStyleId == QLatin1String("watercolor") ? QStringLiteral("t_wc") : QString());
     if (lower.contains(QStringLiteral("neon")) || lower.contains(QStringLiteral("cyber")))
         evidence.append(spec.style.artStyleId == QLatin1String("cyber_neon") ? QStringLiteral("t_neon") : QString());
+    if (lower.contains(QStringLiteral("impasto")) || lower.contains(QStringLiteral("oil"))
+        || lower.contains(QStringLiteral("thick paint")))
+        evidence.append(spec.medium.mediumId == QLatin1String("impasto") ? QStringLiteral("t_impasto") : QString());
+    if (lower.contains(QStringLiteral("ink")) || lower.contains(QStringLiteral("manga"))
+        || lower.contains(QStringLiteral("sketch")))
+        evidence.append(spec.medium.mediumId == QLatin1String("ink_sketch") ? QStringLiteral("t_ink") : QString());
+    if (lower.contains(QStringLiteral("pencil")) || lower.contains(QStringLiteral("graphite")))
+        evidence.append(spec.medium.mediumId == QLatin1String("pencil") ? QStringLiteral("t_pencil") : QString());
 
     int checked = 0;
     int matched = 0;

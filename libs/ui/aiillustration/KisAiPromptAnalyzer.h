@@ -81,6 +81,12 @@ public:
         QString eyeColor {QStringLiteral("#3884ff")};
         QVector<QString> skyGradientColors;
         QString domainGuidance;
+        // V11 medium/canvas intent: meaning-only medium selection resolved by
+        // the LayoutEngine/RigLibrary/LightRig (never coordinates).
+        QString mediumId {QStringLiteral("anime_cel")};
+        QString paper {QStringLiteral("smooth")};
+        QString brushwork {QStringLiteral("controlled")};
+        QString canvasIntent {QStringLiteral("portrait")};
     };
 
     /**

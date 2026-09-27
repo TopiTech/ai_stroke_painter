@@ -165,6 +165,8 @@ KisAiModelRouter::StagePlan KisAiModelRouter::planFor(Stage stage, const QString
 
 int KisAiModelRouter::specCandidateCount()
 {
+    // V11: multi-medium prompts earn the wider N-best net (intent coverage
+    // matters more than raw count); single-medium prompts keep the ladder.
     switch (s_qualityMode.load(std::memory_order_relaxed)) {
     case QualityMode::Fast:
         return 1;
@@ -175,6 +177,22 @@ int KisAiModelRouter::specCandidateCount()
     default:
         return 3;
     }
+}
+
+/**
+ * V11 medium-aware N-best width: watercolor/impasto/pencil prompts benefit
+ * from one extra candidate so the tournament can compare medium readings.
+ */
+int KisAiModelRouter::specCandidateCountForMedium(const QString &mediumId)
+{
+    const QString medium = mediumId.trimmed().toLower();
+    const int base = specCandidateCount();
+    if (s_qualityMode.load(std::memory_order_relaxed) == QualityMode::Fast)
+        return base;
+    if (medium == QLatin1String("watercolor") || medium == QLatin1String("impasto")
+        || medium == QLatin1String("pencil") || medium == QLatin1String("ink_sketch"))
+        return qMin(5, base + 1);
+    return base;
 }
 
 int KisAiModelRouter::critiqueRoundBudget()
@@ -189,6 +207,21 @@ int KisAiModelRouter::critiqueRoundBudget()
     default:
         return 2;
     }
+}
+
+/**
+ * V11 medium-aware critique budget: wash/impasto media hide defects in
+ * texture, so they earn their rounds; lineart keeps the ladder as-is.
+ */
+int KisAiModelRouter::critiqueRoundBudgetForMedium(const QString &mediumId)
+{
+    const QString medium = mediumId.trimmed().toLower();
+    const int base = critiqueRoundBudget();
+    if (s_qualityMode.load(std::memory_order_relaxed) == QualityMode::Fast)
+        return base;
+    if (medium == QLatin1String("watercolor") || medium == QLatin1String("impasto"))
+        return qMin(3, base + 1);
+    return base;
 }
 
 QString KisAiModelRouter::structuredStrategy(const QString &model, const QString &endpoint)

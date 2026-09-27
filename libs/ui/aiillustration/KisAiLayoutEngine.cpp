@@ -1356,6 +1356,12 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(const KisAiSce
     ops.append(KisAiRigLibrary::mouthOps(rigParams));
     ops.append(KisAiRigLibrary::hairHighlightOps(rigParams));
 
+    // V11 body rig: torso + arms + hands anchored on the head rig. Only for
+    // framings that show the body; bust_up keeps the legacy head portrait.
+    const QString charFraming = spec.composition.framing.trimmed().toLower();
+    if (charFraming == QLatin1String("upper_body") || charFraming == QLatin1String("full_body"))
+        ops.append(KisAiRigLibrary::bodyRigOps(rigParams, canvasSize, 0x626f6479u));
+
     // Accessory ornaments share Rig geometry; gated by the detail budget.
     // V6 W2: lid shadows derive from the rig so night/sunset shift their tone.
     const KisAiLightSettings ornamentRig = KisAiLightRig::fromSpec(spec);
@@ -1467,6 +1473,13 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(const KisAiSce
     ops.append(hairFrontMassForStyle(spec, hc, hw, hh));
 
     const quint32 layoutDynamicSeed = QRandomGenerator::global()->generate();
+
+    // V11 body rig: torso + arms + hands anchored on the head rig. Only for
+    // framings that show the body; bust_up keeps the legacy head portrait.
+    const QString framingLower = spec.composition.framing.trimmed().toLower();
+    if (framingLower == QLatin1String("upper_body") || framingLower == QLatin1String("full_body"))
+        ops.append(KisAiRigLibrary::bodyRigOps(rigParams, canvasSize, layoutDynamicSeed ^ 0x626f6479u));
+
     // V7: Hierarchical 3D hair clumps with ribbon flows, tapered tips & cast shadows
     ops.append(KisAiRigLibrary::hierarchicalHairClumpOps(rigParams, canvasSize, layoutDynamicSeed));
 
@@ -1641,7 +1654,8 @@ KisAiStrokeProgram KisAiLayoutEngine::generateProgram(const KisAiSceneSpec &spec
     }
 
     // V7: Apply Art Style Pipeline before final packaging
-    applyArtStylePipeline(ops, resolved.style);
+    // V11: medium-aware resolution (explicit medium wins, else artStyleId).
+    applyMediumPipeline(ops, resolved);
 
     program.operations = ops;
     KisAiStrokeQualityReport report;
@@ -1704,5 +1718,36 @@ void KisAiLayoutEngine::applyArtStylePipeline(QVector<KisAiStrokeOperation> &ope
                 op.brush.opacity = qMin<qreal>(1.0, op.brush.opacity * 1.35);
             }
         }
+    } else if (art == QLatin1String("pencil")) {
+        // V11 Pencil/Graphite: paper-grain fills, dry-brush hatching, delicate lineart.
+        for (KisAiStrokeOperation &op : operations) {
+            const QString lName = KisAiStrokeProgramCodec::normalizeLayerName(op.layer);
+            if (op.kind == KisAiStrokeOperation::Kind::Fill) {
+                op.brush.profile = QStringLiteral("pencil");
+                op.fillStyle = QStringLiteral("wash");
+                op.brush.opacity = qBound<qreal>(0.45, op.brush.opacity * 0.72, 0.85);
+            } else if (op.kind == KisAiStrokeOperation::Kind::Path && lName == QLatin1String("Lineart")) {
+                op.brush.profile = QStringLiteral("pencil");
+                op.brush.opacity = qBound<qreal>(0.65, op.brush.opacity * 0.9, 1.0);
+            }
+        }
     }
+}
+
+/**
+ * V11: medium-aware entry point. Resolves SceneSpec::medium onto the legacy
+ * style pipeline so Rig/Library/Light callers share one resolution rule:
+ * an explicit medium wins, otherwise the legacy artStyleId applies.
+ */
+void KisAiLayoutEngine::applyMediumPipeline(QVector<KisAiStrokeOperation> &operations,
+                                            const KisAiSceneSpec &spec)
+{
+    KisAiSceneStyleV2 style = spec.style;
+    const QString medium = spec.medium.mediumId.trimmed().toLower();
+    if (!medium.isEmpty()
+        && (style.artStyleId.trimmed().isEmpty()
+            || style.artStyleId.trimmed().compare(QLatin1String("anime_cel"), Qt::CaseInsensitive) == 0)) {
+        style.artStyleId = medium;
+    }
+    applyArtStylePipeline(operations, style);
 }

@@ -336,4 +336,57 @@ void KisAiV7QualityTest::testDraperyFoldsSynthesis()
     QVERIFY(hasShading);
 }
 
+void KisAiV7QualityTest::testBodyRigOpsStructure()
+{
+    KisAiRigParameterSet params;
+    params.headCenter = QPointF(0.5, 0.30);
+    params.headWidth = 0.30;
+    params.headHeight = 0.40;
+    params.skinTone = QColor(255, 224, 192);
+    params.lineColor = QColor(30, 28, 40);
+    params = KisAiRigLibrary::clamped(params);
+
+    const auto ops = KisAiRigLibrary::bodyRigOps(params, QSize(512, 512), 7);
+    QVERIFY(ops.size() >= 8); // torso + 2 arms + 2 palms + 6 finger separators
+
+    // Clamp torture: extreme scales must still land inside [0.02, 0.98].
+    KisAiRigParameterSet wild = params;
+    wild.body.shoulderWidthScale = 9.9;
+    wild.body.torsoLengthScale = -3.0;
+    wild.body.armLengthScale = 99.0;
+    wild.body.handSizeScale = 0.01;
+    const auto wildOps = KisAiRigLibrary::bodyRigOps(wild, QSize(512, 512), 7);
+    for (const auto &op : wildOps) {
+        for (const auto &sp : op.points)
+            QVERIFY2(sp.pos.x() >= 0.02 && sp.pos.x() <= 0.98 && sp.pos.y() >= 0.02 && sp.pos.y() <= 0.98,
+                     "Clamped body rig must stay inside the canvas");
+        for (const QPointF &p : op.polygon)
+            QVERIFY2(p.x() >= 0.02 && p.x() <= 0.98 && p.y() >= 0.02 && p.y() <= 0.98,
+                     "Clamped body rig polygons must stay inside the canvas");
+    }
+}
+
+void KisAiV7QualityTest::testMediumPipelineResolution()
+{
+    KisAiStrokeOperation fillOp;
+    fillOp.kind = KisAiStrokeOperation::Kind::Fill;
+    fillOp.layer = QStringLiteral("Flats");
+    fillOp.brush.profile = QStringLiteral("brush");
+    fillOp.brush.opacity = 1.0;
+
+    KisAiSceneSpec spec;
+    spec.medium.mediumId = QStringLiteral("watercolor");
+    QVector<KisAiStrokeOperation> ops = {fillOp};
+    KisAiLayoutEngine::applyMediumPipeline(ops, spec);
+    QCOMPARE(ops[0].brush.profile, QStringLiteral("watercolor"));
+
+    // Empty medium falls back to the legacy artStyleId.
+    KisAiSceneSpec legacy;
+    legacy.medium.mediumId = QString();
+    legacy.style.artStyleId = QStringLiteral("impasto");
+    QVector<KisAiStrokeOperation> legacyOps = {fillOp};
+    KisAiLayoutEngine::applyMediumPipeline(legacyOps, legacy);
+    QCOMPARE(legacyOps[0].brush.profile, QStringLiteral("brush"));
+}
+
 KISTEST_MAIN(KisAiV7QualityTest)

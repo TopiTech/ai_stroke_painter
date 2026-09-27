@@ -41,6 +41,21 @@ bool rigKeyToField(const QString &key, KisAiSceneRigOverrides &rig, const QJsonV
         rig.mouthWidthScale = qBound<qreal>(0.6, value.toDouble(rig.mouthWidthScale), 1.4);
     } else if (key == QLatin1String("has_brows")) {
         rig.hasBrows = value.toBool(rig.hasBrows);
+    } else if (key == QLatin1String("body_shoulder_width")) {
+        rig.bodyShoulderWidth = qBound<qreal>(0.7, value.toDouble(rig.bodyShoulderWidth), 1.5);
+    } else if (key == QLatin1String("body_torso_length")) {
+        rig.bodyTorsoLength = qBound<qreal>(0.7, value.toDouble(rig.bodyTorsoLength), 1.6);
+    } else if (key == QLatin1String("body_arm_length")) {
+        rig.bodyArmLength = qBound<qreal>(0.7, value.toDouble(rig.bodyArmLength), 1.4);
+    } else if (key == QLatin1String("body_hand_size")) {
+        rig.bodyHandSize = qBound<qreal>(0.7, value.toDouble(rig.bodyHandSize), 1.4);
+    } else if (key == QLatin1String("body_pose")) {
+        const QString v = value.toString().trimmed().toLower();
+        if (v == QLatin1String("neutral") || v == QLatin1String("reach")
+            || v == QLatin1String("open_palm") || v == QLatin1String("touch_face"))
+            rig.bodyPose = v;
+        else
+            return false;
     } else {
         return false;
     }
@@ -121,9 +136,54 @@ bool KisAiProgramPatchCodec::isRigKey(const QString &key)
         QStringLiteral("eye_highlight"), QStringLiteral("double_lid"),
         QStringLiteral("hair_strand_density"), QStringLiteral("hair_flyaway"),
         QStringLiteral("hair_highlight_bands"), QStringLiteral("mouth_width_scale"),
-        QStringLiteral("has_brows")
+        QStringLiteral("has_brows"),
+        // V11 body rig keys (mirrored in RefinementLoop::applyRigPatchesAndRelayout).
+        QStringLiteral("body_shoulder_width"), QStringLiteral("body_torso_length"),
+        QStringLiteral("body_arm_length"), QStringLiteral("body_hand_size"),
+        QStringLiteral("body_pose")
     };
     return keys.contains(key);
+}
+
+bool KisAiProgramPatchCodec::isMediumKey(const QString &key)
+{
+    static const QStringList keys = {
+        QStringLiteral("medium"), QStringLiteral("paper"),
+        QStringLiteral("brushwork"), QStringLiteral("finish_strength")
+    };
+    return keys.contains(key);
+}
+
+bool KisAiProgramPatchCodec::isMediumValueValid(const QString &key, const QJsonValue &value)
+{
+    if (key == QLatin1String("medium")) {
+        static const QStringList media = {
+            QStringLiteral("anime_cel"), QStringLiteral("watercolor"),
+            QStringLiteral("impasto"), QStringLiteral("ink_sketch"),
+            QStringLiteral("cyber_neon"), QStringLiteral("fine_line"),
+            QStringLiteral("pencil")
+        };
+        return media.contains(value.toString().trimmed().toLower());
+    }
+    if (key == QLatin1String("paper")) {
+        static const QStringList papers = {
+            QStringLiteral("smooth"), QStringLiteral("cold_press"),
+            QStringLiteral("rough"), QStringLiteral("toned")
+        };
+        return papers.contains(value.toString().trimmed().toLower());
+    }
+    if (key == QLatin1String("brushwork")) {
+        static const QStringList strokes = {
+            QStringLiteral("controlled"), QStringLiteral("loose_wash"),
+            QStringLiteral("palette_knife"), QStringLiteral("dry_brush")
+        };
+        return strokes.contains(value.toString().trimmed().toLower());
+    }
+    if (key == QLatin1String("finish_strength")) {
+        const qreal v = value.toDouble(-1.0);
+        return v >= 0.0 && v <= 1.0;
+    }
+    return false;
 }
 
 QString KisAiProgramPatchCodec::buildPatchSystemPrompt()
@@ -136,7 +196,10 @@ QString KisAiProgramPatchCodec::buildPatchSystemPrompt()
         "Patch forms:\n"
         "  {\"op\": \"replace\", \"path\": \"/rig/<key>\", \"value\": <number|bool|string>}  — rig keys: "
         "eye_aperture, iris_ratio, eye_highlight, double_lid, hair_strand_density, hair_flyaway, "
-        "hair_highlight_bands, mouth_width_scale, has_brows\n"
+        "hair_highlight_bands, mouth_width_scale, has_brows, "
+        "body_shoulder_width, body_torso_length, body_arm_length, body_hand_size, body_pose\n"
+        "  {\"op\": \"replace\", \"path\": \"/medium/<key>\", \"value\": <string|number>}  — medium keys: "
+        "medium, paper, brushwork, finish_strength (color-script and finish tuning, never geometry)\n"
         "  {\"op\": \"add\", \"path\": \"/ops/add\", \"value\": {<decorative op>}} — only FX / Highlights / Background "
         "layers, kinds: particles, gradient_fill. Example: {\"kind\": \"particles\", \"id\": \"fx_sparkle\", "
         "\"layer\": \"FX\", \"shape\": \"sparkle\", \"count\": 10, \"bounds\": {\"x\": 0.1, \"y\": 0.1, \"w\": 0.2, \"h\": 0.2}, "
@@ -298,6 +361,11 @@ bool KisAiProgramPatchCodec::parsePatches(
         bool valid = false;
         if (patch.path.startsWith(QLatin1String("/rig/"))) {
             valid = isRigKey(patch.path.mid(5));
+        } else if (patch.path.startsWith(QLatin1String("/medium/"))) {
+            const QString key = patch.path.mid(8);
+            valid = patch.op == KisAiProgramPatch::Op::Replace
+                && isMediumKey(key)
+                && (patch.value.isUndefined() || isMediumValueValid(key, patch.value));
         } else if (patch.path == QLatin1String("/ops/add")) {
             valid = patch.op == KisAiProgramPatch::Op::Add;
         } else if (patch.path.startsWith(QLatin1String("/ops/"))) {
@@ -336,6 +404,18 @@ KisAiStrokeProgram KisAiProgramPatchCodec::applyPatches(
     };
 
     for (const KisAiProgramPatch &patch : patches) {
+        if (patch.path.startsWith(QLatin1String("/medium/"))) {
+            // V11 medium patches never touch ops: the caller re-runs the
+            // medium pipeline (applyMediumPipeline) after applyPatches.
+            // Validated values are accepted silently so the relayout path can
+            // distinguish them from genuine rejections via localRejected.
+            const QString key = patch.path.mid(8);
+            if (patch.op != KisAiProgramPatch::Op::Replace || !isMediumValueValid(key, patch.value)) {
+                reject(QStringLiteral("%1: bad medium value").arg(patch.path));
+                continue;
+            }
+            continue;
+        }
         if (patch.path.startsWith(QLatin1String("/rig/"))) {
             const QString key = patch.path.mid(5);
             if (patch.op != KisAiProgramPatch::Op::Replace) {
@@ -357,6 +437,11 @@ KisAiStrokeProgram KisAiProgramPatchCodec::applyPatches(
                 else if (key == QLatin1String("hair_highlight_bands")) rigDelta->hairHighlightBands = localRig.hairHighlightBands;
                 else if (key == QLatin1String("mouth_width_scale")) rigDelta->mouthWidthScale = localRig.mouthWidthScale;
                 else if (key == QLatin1String("has_brows")) rigDelta->hasBrows = localRig.hasBrows;
+                else if (key == QLatin1String("body_shoulder_width")) rigDelta->bodyShoulderWidth = localRig.bodyShoulderWidth;
+                else if (key == QLatin1String("body_torso_length")) rigDelta->bodyTorsoLength = localRig.bodyTorsoLength;
+                else if (key == QLatin1String("body_arm_length")) rigDelta->bodyArmLength = localRig.bodyArmLength;
+                else if (key == QLatin1String("body_hand_size")) rigDelta->bodyHandSize = localRig.bodyHandSize;
+                else if (key == QLatin1String("body_pose")) rigDelta->bodyPose = localRig.bodyPose;
             }
             continue;
         }

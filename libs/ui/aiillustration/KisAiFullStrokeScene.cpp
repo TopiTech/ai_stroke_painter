@@ -164,7 +164,8 @@ QString KisAiFullStrokeScene::drawingInstructions() const
     }
     lines << QStringLiteral(
         "Draw required Flats silhouettes first. Tag operations with matching group_id values, then shade and ink with "
-        "the same ids. Never add source images.");
+        "the same ids. Rig-first: mirror paired features about the face axis, snap T-stops onto parent "
+        "contours, and clip shading/highlights via clip_to_id. Never add source images.");
     return lines.join(QLatin1Char('\n'));
 }
 

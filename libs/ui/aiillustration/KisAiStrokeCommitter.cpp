@@ -188,6 +188,16 @@ KisAiStrokeOperation KisAiStrokeCommitter::repairOperation(const KisAiStrokeOper
             out.points = KisAiStrokeQualityUtils::resampleEquidistant(rebuilt, 3.0 / minDim, out.closed);
         }
     }
+    // V11: detached limb repair — nudge sub-pixel arm/hand strokes back onto
+    // the canvas interior instead of dropping them outright; lint still drops
+    // zero-length stumps via the detached-limb guard.
+    if (lint.reasons.contains(QLatin1String("detached-limb"))
+        && out.kind == KisAiStrokeOperation::Kind::Path && out.points.size() >= 2) {
+        for (KisAiStrokePoint &p : out.points) {
+            p.pos.setX(qBound<qreal>(0.02, p.pos.x(), 0.98));
+            p.pos.setY(qBound<qreal>(0.02, p.pos.y(), 0.98));
+        }
+    }
     return out;
 }
 

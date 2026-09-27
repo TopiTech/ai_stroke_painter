@@ -284,6 +284,56 @@ KisAiPromptAnalyzer::SemanticSpec KisAiPromptAnalyzer::analyze(
                      (spec.domain == DomainType::Character) ? ArtStyle::AnimeCel : ArtStyle::General;
     }
 
+    // V11 medium/canvas intent: mirror the style classification into the
+    // meaning-only medium contract shared with SceneSpec::medium.
+    switch (spec.style) {
+    case ArtStyle::Watercolor:
+        spec.mediumId = QStringLiteral("watercolor");
+        spec.paper = QStringLiteral("cold_press");
+        spec.brushwork = QStringLiteral("loose_wash");
+        break;
+    case ArtStyle::Impasto:
+        spec.mediumId = QStringLiteral("impasto");
+        spec.paper = QStringLiteral("rough");
+        spec.brushwork = QStringLiteral("palette_knife");
+        break;
+    case ArtStyle::InkSketch:
+        spec.mediumId = QStringLiteral("ink_sketch");
+        spec.paper = QStringLiteral("smooth");
+        spec.brushwork = QStringLiteral("dry_brush");
+        break;
+    case ArtStyle::CyberNeon:
+        spec.mediumId = QStringLiteral("cyber_neon");
+        break;
+    case ArtStyle::FineLineart:
+    case ArtStyle::PureLineart:
+        spec.mediumId = QStringLiteral("fine_line");
+        spec.brushwork = QStringLiteral("controlled");
+        break;
+    case ArtStyle::AnimeCel:
+        spec.mediumId = QStringLiteral("anime_cel");
+        break;
+    default:
+        break;
+    }
+    if (text.contains(QStringLiteral("charcoal")) || text.contains(QStringLiteral("木炭"))) {
+        spec.mediumId = QStringLiteral("ink_sketch");
+        spec.brushwork = QStringLiteral("dry_brush");
+    } else if (text.contains(QStringLiteral("pencil")) || text.contains(QStringLiteral("graphite"))
+               || text.contains(QStringLiteral("鉛筆"))) {
+        spec.mediumId = QStringLiteral("pencil");
+        spec.paper = QStringLiteral("rough");
+        spec.brushwork = QStringLiteral("dry_brush");
+    }
+    if (spec.hasCharacter && spec.hasEnvironment)
+        spec.canvasIntent = QStringLiteral("character_in_environment");
+    else if (spec.hasCharacter)
+        spec.canvasIntent = QStringLiteral("portrait");
+    else if (spec.hasEnvironment)
+        spec.canvasIntent = QStringLiteral("environment");
+    else
+        spec.canvasIntent = QStringLiteral("general");
+
     // 6. Color Harmony Computation
     switch (spec.timeOfDay) {
     case TimeOfDay::Day:

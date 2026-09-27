@@ -1013,6 +1013,34 @@ QualityVector forName(const QString &name)
     return v;
 }
 
+qreal gateThresholdForMedium(const QString &mediumId, qreal baseThreshold)
+{
+    const QString medium = mediumId.trimmed().toLower();
+    if (medium == QLatin1String("watercolor"))
+        return qMax<qreal>(0.0, baseThreshold - 0.08);
+    if (medium == QLatin1String("impasto"))
+        return qMax<qreal>(0.0, baseThreshold - 0.05);
+    if (medium == QLatin1String("ink_sketch") || medium == QLatin1String("pencil"))
+        return qMax<qreal>(0.0, baseThreshold - 0.03);
+    if (medium == QLatin1String("cyber_neon"))
+        return qMin<qreal>(1.0, baseThreshold + 0.02);
+    return baseThreshold;
+}
+
+QualityVector forMedium(const QString &mediumId)
+{
+    const QString medium = mediumId.trimmed().toLower();
+    if (medium == QLatin1String("watercolor"))
+        return watercolorSoft();
+    if (medium == QLatin1String("impasto"))
+        return photorealistic();
+    if (medium == QLatin1String("ink_sketch") || medium == QLatin1String("pencil"))
+        return inkSketchBold();
+    if (medium == QLatin1String("cyber_neon") || medium == QLatin1String("fine_line"))
+        return animeLineartHeavy();
+    return animeLineartHeavy();
+}
+
 } // namespace QualityProfile
 
 } // namespace KisAi

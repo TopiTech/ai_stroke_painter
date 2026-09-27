@@ -364,6 +364,15 @@ KisAiStrokeLintReport KisAiDeliberateStroke::lintStroke(
             rep.needsRepair = true;
             rep.reasons << QStringLiteral("high-curvature-jitter");
         }
+        // V11 limb lint: arm/hand strokes must stay connected to the body rig
+        // vocabulary and inside the canvas; floating limbs are dropped.
+        const QString lintId = op.id.toLower();
+        if (lintId.contains(QLatin1String("rig_arm_")) || lintId.contains(QLatin1String("rig_hand_"))) {
+            if (rep.lengthPx < 0.3) {
+                rep.drop = true;
+                rep.reasons << QStringLiteral("detached-limb");
+            }
+        }
         return rep;
     }
     case KisAiStrokeOperation::Kind::Ribbon: {
@@ -721,17 +730,24 @@ int KisAiDeliberateStroke::adaptiveSupersampleScale(
 {
     const int maxEdge = qMax(canvasSize.width(), canvasSize.height());
     bool hasFaceWork = false;
+    // V11: medium-aware supersampling — wash media (watercolor) alias less and
+    // earn 1x sooner; linework keeps the legacy 3x ladder.
+    bool washMedium = false;
     for (const KisAiStrokeOperation &op : ops) {
         if (op.kind == KisAiStrokeOperation::Kind::AnimeEye || op.kind == KisAiStrokeOperation::Kind::AnimeMouth
             || isFaceDetail(op.id)
             || op.id.contains(QLatin1String("face_contour"))) {
             hasFaceWork = true;
-            break;
         }
+        const QString prof = op.brush.profile.toLower();
+        if (prof == QLatin1String("watercolor") || prof == QLatin1String("airbrush"))
+            washMedium = true;
+        if (hasFaceWork && washMedium)
+            break;
     }
     // Faces on modest canvases deserve 3x; keep memory bounded at 4096px.
     if (hasFaceWork && maxEdge <= 1024 && maxEdge * 3 <= 4096)
-        return 3;
+        return washMedium ? 2 : 3;
     if (maxEdge <= 1536)
         return 2;
     return 1;

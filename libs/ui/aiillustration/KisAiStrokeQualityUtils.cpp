@@ -498,6 +498,30 @@ qreal KisAiStrokeQualityUtils::calculateTaper(qreal globalT, const QString &prof
         return 1.0;
     }
 
+    if (p == QLatin1String("watercolor") || p == QLatin1String("airbrush")) {
+        // V11 wash media: pooling belly, soft feathered ends (no hard nib cut).
+        constexpr qreal IN_LEN = 0.16;
+        constexpr qreal OUT_LEN = 0.30;
+        if (t < IN_LEN) {
+            return 0.30 + 0.70 * std::sin((t / IN_LEN) * (PI * 0.5));
+        } else if (t > (1.0 - OUT_LEN)) {
+            const qreal progress = (1.0 - t) / OUT_LEN;
+            return 0.12 + 0.88 * std::sin(progress * (PI * 0.5));
+        }
+        return 1.0;
+    }
+
+    if (p == QLatin1String("neon")) {
+        // V11 neon tube: blunt even core so the glow reads as a light tube.
+        constexpr qreal TAPER_LEN = 0.06;
+        if (t < TAPER_LEN) {
+            return 0.55 + 0.45 * (t / TAPER_LEN);
+        } else if (t > (1.0 - TAPER_LEN)) {
+            return 0.55 + 0.45 * ((1.0 - t) / TAPER_LEN);
+        }
+        return 1.0;
+    }
+
     // Default universal smooth taper
     constexpr qreal TAPER_LEN = 0.12;
     if (t < TAPER_LEN) {
@@ -1104,17 +1128,31 @@ int KisAiStrokeQualityUtils::applyLineartHierarchy(QVector<KisAiStrokeOperation>
 QString KisAiStrokeQualityUtils::brushPresetName(const QString &profile)
 {
     const QString p = profile.trimmed().toLower();
-    if (p == QLatin1String("fineliner") || p == QLatin1String("maru_pen"))
+    // V11: 1:1 preset-ID mapping for the native rasterization path. Names must
+    // match plugins/paintops/defaultpresets/*.kpp bundle ids.
+    if (p == QLatin1String("fineliner") || p == QLatin1String("maru_pen")
+        || p == QLatin1String("maru-pen") || p == QLatin1String("ink"))
         return QStringLiteral("Ink_Fineliner");
-    if (p == QLatin1String("gpen") || p == QLatin1String("pencil") || p == QLatin1String("feathering"))
+    if (p == QLatin1String("gpen") || p == QLatin1String("g-pen"))
+        return QStringLiteral("Ink_Gpen");
+    if (p == QLatin1String("pencil") || p == QLatin1String("feathering"))
         return QStringLiteral("Pencil-2");
+    if (p == QLatin1String("charcoal"))
+        return QStringLiteral("Chalk_Charcoal");
     if (p == QLatin1String("airbrush"))
         return QStringLiteral("Airbrush Soft");
-    if (p == QLatin1String("crayon") || p == QLatin1String("charcoal") || p == QLatin1String("splatter")
-        || p == QLatin1String("stipple"))
+    if (p == QLatin1String("crayon") || p == QLatin1String("splatter") || p == QLatin1String("stipple"))
         return QStringLiteral("Chalk Soft");
     if (p == QLatin1String("watercolor"))
         return QStringLiteral("Watercolor Soft");
+    if (p == QLatin1String("brush") || p == QLatin1String("oil") || p == QLatin1String("impasto"))
+        return QStringLiteral("brush");
+    if (p == QLatin1String("marker"))
+        return QStringLiteral("Marker");
+    if (p == QLatin1String("neon") || p == QLatin1String("glow"))
+        return QStringLiteral("Glow_Neon");
+    if (p == QLatin1String("calligraphy"))
+        return QStringLiteral("Calligraphy");
     return QStringLiteral("Basic-5 Size");
 }
 

@@ -220,4 +220,28 @@ void KisAiAbstractOntologyTest::testDefaultSpecForPromptAppliesOntology()
     QVERIFY(spec.style.artStyleId == QStringLiteral("fine_line") || spec.colorScript.accentWeight > 0.0);
 }
 
+void KisAiAbstractOntologyTest::testMediumContractMapping()
+{
+    KisAiSceneSpec spec;
+    OntologyApplier::apply(QStringLiteral("thick oil painting portrait"), &spec);
+    QCOMPARE(spec.medium.mediumId, QStringLiteral("impasto"));
+
+    KisAiSceneSpec pencil;
+    OntologyApplier::apply(QStringLiteral("pencil sketch study"), &pencil);
+    QCOMPARE(pencil.medium.mediumId, QStringLiteral("pencil"));
+
+    // Custom finish-strength rule path.
+    OntologyRuleset custom;
+    OntologyRule r;
+    r.triggerWords = QStringList{QStringLiteral("gallery")};
+    r.specPath = QStringLiteral("medium.finishStrength");
+    r.kind = OntologyRule::SetNumber;
+    r.numberValue = 0.9;
+    r.weight = 1.0;
+    custom.rules.append(r);
+    KisAiSceneSpec gallery;
+    OntologyApplier::apply(QStringLiteral("gallery finish"), &gallery, custom);
+    QCOMPARE(gallery.medium.finishStrength, 0.9);
+}
+
 KISTEST_MAIN(KisAiAbstractOntologyTest)

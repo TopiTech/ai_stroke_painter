@@ -47,9 +47,13 @@ QJsonObject KisAiFullStroke::buildPayload(const QString &model,
     const QString fullInstructions =
         customInstructions
         + QStringLiteral(
-            "\n[FULL STROKE CONTRACT]\n"
+            "\n[FULL STROKE CONTRACT — RIG-FIRST]\n"
             "Construct all background, flats, shading, lineart and highlights from supported draw operations."
             " Assign every primary object an ASCII group_id. Draw required Flats silhouettes before details."
+            " Rig-first: the deterministic engine owns symmetry, T-stops and coverage — describe meaning and "
+            "rig intent (artistic_plan + rig values) first and keep coordinates inside silhouettes, symmetric, "
+            "and clipped via clip_to_id. Use hex colors and the schema blend_mode enum only; Unknown kinds and "
+            "empty ids are rejected."
             " Never request generated images or embed image pixels; return only a stroke program.");
     return KisAiStrokeProgramCodec::buildChatCompletionsPayload(model,
                                                                 prompt,

@@ -107,6 +107,17 @@ public:
      */
     static bool hasConverged(qreal psnrBefore, qreal psnrAfter, qreal minImprovementDb = 1.5);
 
+    /**
+     * V11 structural convergence: PSNR gain plus region-set shrinkage. The
+     * loop stops only when pixels stall AND the critic stopped finding new
+     * high-priority work (fewer open regions than before).
+     */
+    static bool hasConvergedStructural(qreal psnrBefore,
+                                       qreal psnrAfter,
+                                       int openRegionsBefore,
+                                       int openRegionsAfter,
+                                       qreal minImprovementDb = 1.5);
+
     /** Peak signal-to-noise ratio between two same-size images (dB, capped at 60). */
     static qreal psnr(const QImage &a, const QImage &b);
 

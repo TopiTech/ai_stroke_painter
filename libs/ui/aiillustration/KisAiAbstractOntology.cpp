@@ -482,10 +482,68 @@ QList<OntologyRule> buildDefaultRules()
                       QStringLiteral("anime_cel"),
                       QColor(),
                       0.0,
-                      QString(),
+                      QStringLiteral("anime_cel"),
                       1.0,
                       QStringLiteral("texture"),
                       QStringLiteral("Anime/cel shading → artStyle=anime_cel")));
+
+    // V11: multi-medium structural guards map abstract words onto the medium
+    // contract (kept in sync with SceneSpec::medium + style.artStyleId).
+    rules.append(make({QStringLiteral("watercolor"), QStringLiteral("aquarelle")},
+                      {QStringLiteral("水彩")},
+                      QStringLiteral("medium.mediumId"),
+                      OntologyRule::SetString,
+                      QStringLiteral("watercolor"),
+                      QColor(),
+                      0.0,
+                      QStringLiteral("watercolor"),
+                      1.0,
+                      QStringLiteral("texture"),
+                      QStringLiteral("Watercolor → medium=watercolor")));
+    rules.append(make({QStringLiteral("impasto"), QStringLiteral("oil painting"), QStringLiteral("thick paint")},
+                      {QStringLiteral("厚塗り"), QStringLiteral("油絵")},
+                      QStringLiteral("medium.mediumId"),
+                      OntologyRule::SetString,
+                      QStringLiteral("impasto"),
+                      QColor(),
+                      0.0,
+                      QStringLiteral("impasto"),
+                      1.0,
+                      QStringLiteral("texture"),
+                      QStringLiteral("Impasto/oil → medium=impasto")));
+    rules.append(make({QStringLiteral("pencil"), QStringLiteral("graphite")},
+                      {QStringLiteral("鉛筆"), QStringLiteral("鉛筆画")},
+                      QStringLiteral("medium.mediumId"),
+                      OntologyRule::SetString,
+                      QStringLiteral("pencil"),
+                      QColor(),
+                      0.0,
+                      QStringLiteral("pencil"),
+                      1.0,
+                      QStringLiteral("texture"),
+                      QStringLiteral("Pencil/graphite → medium=pencil")));
+    rules.append(make({QStringLiteral("charcoal"), QStringLiteral("ink sketch")},
+                      {QStringLiteral("木炭"), QStringLiteral("墨絵")},
+                      QStringLiteral("medium.mediumId"),
+                      OntologyRule::SetString,
+                      QStringLiteral("ink_sketch"),
+                      QColor(),
+                      0.0,
+                      QStringLiteral("ink_sketch"),
+                      1.0,
+                      QStringLiteral("texture"),
+                      QStringLiteral("Charcoal/ink → medium=ink_sketch")));
+    rules.append(make({QStringLiteral("cold press"), QStringLiteral("rough paper")},
+                      {QStringLiteral("荒目"), QStringLiteral("紙目")},
+                      QStringLiteral("medium.paper"),
+                      OntologyRule::SetString,
+                      QStringLiteral("cold_press"),
+                      QColor(),
+                      0.0,
+                      QString(),
+                      1.0,
+                      QStringLiteral("texture"),
+                      QStringLiteral("Cold-press/rough paper → paper=cold_press")));
 
     return rules;
 }
@@ -682,6 +740,36 @@ void applyRuleToSpec(const OntologyRule &rule, KisAiSceneSpec *spec)
     } else if (path == QStringLiteral("narrative.weather")) {
         if (rule.kind == OntologyRule::SetString) {
             spec->narrative.weather = rule.stringValue;
+        }
+    } else if (path == QStringLiteral("medium.mediumId") || path == QStringLiteral("style.artStyleId")) {
+        // V11: ontology drives the multi-medium contract; keep style.artStyleId
+        // and medium.mediumId in sync so Rig/Light/pipeline agree.
+        if (rule.kind == OntologyRule::SetString) {
+            if (path == QStringLiteral("medium.mediumId")) {
+                spec->medium.mediumId = rule.stringValue;
+                if (!rule.artStyleHint.isEmpty())
+                    spec->style.artStyleId = rule.artStyleHint;
+            } else {
+                spec->style.artStyleId = rule.stringValue;
+                if (!rule.artStyleHint.isEmpty())
+                    spec->medium.mediumId = rule.artStyleHint;
+            }
+        }
+    } else if (path == QStringLiteral("medium.paper")) {
+        if (rule.kind == OntologyRule::SetString) {
+            spec->medium.paper = rule.stringValue;
+        }
+    } else if (path == QStringLiteral("medium.brushwork")) {
+        if (rule.kind == OntologyRule::SetString) {
+            spec->medium.brushwork = rule.stringValue;
+        }
+    } else if (path == QStringLiteral("medium.finishStrength")) {
+        if (rule.kind == OntologyRule::AddNumber) {
+            const qreal weight = (rule.weight > 0.0 && std::isfinite(rule.weight)) ? rule.weight : 1.0;
+            spec->medium.finishStrength =
+                qBound<qreal>(0.0, spec->medium.finishStrength + rule.numberValue * weight, 1.0);
+        } else if (rule.kind == OntologyRule::SetNumber) {
+            spec->medium.finishStrength = qBound<qreal>(0.0, rule.numberValue, 1.0);
         }
     }
 }

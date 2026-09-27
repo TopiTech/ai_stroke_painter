@@ -18,6 +18,7 @@
 
 #include "aiillustration/KisAiStrokeCoverageRaster.h"
 #include "aiillustration/KisAiStrokeProgram.h"
+#include "aiillustration/KisAiStrokeQualityUtils.h"
 #include "aiillustration/KisAiStrokeRenderer.h"
 
 using KisAiStrokeCoverageRaster::StrokeSample;
@@ -425,6 +426,22 @@ void KisAiCoverageRasterTest::testPaintStrokeNullOrDegenerateBuffer()
         texture.style = style;
         KisAiStrokeCoverageRaster::paintStroke(painter, normalSamples, false, brush, texture, QColor(0, 128, 255), QSize(100, 100), 1);
     }
+}
+
+void KisAiCoverageRasterTest::testWashAndNeonTaperProfiles()
+{
+    // V11 wash/neon taper curves: ends feather but the belly stays wide.
+    const qreal washEntry = KisAiStrokeQualityUtils::calculateTaper(0.02, QStringLiteral("watercolor"), false);
+    const qreal washBelly = KisAiStrokeQualityUtils::calculateTaper(0.50, QStringLiteral("watercolor"), false);
+    const qreal washExit = KisAiStrokeQualityUtils::calculateTaper(0.99, QStringLiteral("watercolor"), false);
+    QVERIFY2(washBelly > washEntry, "Wash belly must exceed feathered entry");
+    QVERIFY2(washBelly > washExit, "Wash belly must exceed feathered exit");
+    QVERIFY2(washExit > 0.05, "Wash exit must not pinch to a hard nib cut");
+
+    const qreal neonEntry = KisAiStrokeQualityUtils::calculateTaper(0.01, QStringLiteral("neon"), false);
+    const qreal neonBelly = KisAiStrokeQualityUtils::calculateTaper(0.50, QStringLiteral("neon"), false);
+    QVERIFY2(neonEntry > 0.4, "Neon tube entry must stay blunt");
+    QVERIFY2(neonBelly >= 0.99, "Neon tube belly must stay even");
 }
 
 KISTEST_MAIN(KisAiCoverageRasterTest)

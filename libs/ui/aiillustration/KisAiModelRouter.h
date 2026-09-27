@@ -72,8 +72,14 @@ public:
     /** Number of SceneSpec candidates to request under the current mode. */
     static int specCandidateCount();
 
+    /** V11 medium-aware N-best width (watercolor/impasto/pencil earn +1). */
+    static int specCandidateCountForMedium(const QString &mediumId);
+
     /** Critique rounds budget under the current mode. */
     static int critiqueRoundBudget();
+
+    /** V11 medium-aware critique budget (wash/impasto media earn +1). */
+    static int critiqueRoundBudgetForMedium(const QString &mediumId);
 
     /**
      * Structured-output strategy for a model/endpoint pair.

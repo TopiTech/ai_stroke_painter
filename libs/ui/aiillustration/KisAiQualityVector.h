@@ -100,8 +100,15 @@ KRITAUI_EXPORT QualityVector photorealistic();
 /// Ink Sketch Bold: 構造メトリクスを高めに、線画ジッタを厳しく評価。
 KRITAUI_EXPORT QualityVector inkSketchBold();
 
+/// V11 medium-aware gate thresholds: anime is strict, watercolor lenient.
+/// Returns the per-axis threshold a medium earns under a base gate.
+KRITAUI_EXPORT qreal gateThresholdForMedium(const QString &mediumId, qreal baseThreshold = 0.40);
+
 /// 組み込みプロファイル名 → デフォルトベクトル。
 KRITAUI_EXPORT QualityVector forName(const QString &name);
+
+/// V11: medium id → quality profile (resolves SceneSpec::medium first).
+KRITAUI_EXPORT QualityVector forMedium(const QString &mediumId);
 
 } // namespace QualityProfile
 

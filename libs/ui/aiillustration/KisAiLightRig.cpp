@@ -72,6 +72,27 @@ KisAiLightSettings KisAiLightRig::fromSpec(const KisAiSceneSpec &spec)
     rig.timeOfDay = resolvedTime;
     rig.keyTint = keyTintFor(rig);
     rig.fillTint = fillTintFor(rig);
+    // V11: medium-driven material response; single light truth is preserved,
+    // only the surface response changes per medium.
+    const QString medium = spec.medium.mediumId.trimmed().toLower();
+    rig.mediumId = medium.isEmpty() ? QStringLiteral("anime_cel") : medium;
+    rig.sssStrength = qBound<qreal>(0.0, spec.light.sssStrength, 1.0);
+    rig.specularGain = 1.0;
+    rig.edgeDarkening = 0.0;
+    if (rig.mediumId == QLatin1String("watercolor")) {
+        rig.sssStrength = qMin<qreal>(1.0, rig.sssStrength * 0.6 + 0.15);
+        rig.specularGain = 0.55;
+        rig.edgeDarkening = 0.65;
+    } else if (rig.mediumId == QLatin1String("impasto")) {
+        rig.sssStrength = qMax<qreal>(0.15, rig.sssStrength * 0.5);
+        rig.specularGain = 1.45;
+    } else if (rig.mediumId == QLatin1String("cyber_neon")) {
+        rig.sssStrength = qMax<qreal>(0.1, rig.sssStrength * 0.4);
+        rig.specularGain = 1.8;
+    } else if (rig.mediumId == QLatin1String("ink_sketch") || rig.mediumId == QLatin1String("pencil")) {
+        rig.sssStrength = 0.1;
+        rig.specularGain = 0.35;
+    }
     return rig;
 }
 
@@ -705,11 +726,13 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeMaterialOptics(
                 sssOp.layer = QStringLiteral("Shading");
                 sssOp.polygon = fringePoly;
                 sssOp.brush.color = lut.sssTint;
-                sssOp.brush.opacity = 0.28;
+                // V11: medium-driven SSS gain; pencil/ink kill the fringe.
+                sssOp.brush.opacity = qBound<qreal>(0.0, 0.28 * rig.sssStrength * 2.0, 0.55);
                 sssOp.brush.profile = QStringLiteral("watercolor");
                 sssOp.fillStyle = QStringLiteral("wash");
                 sssOp.clipToId = op.id;
-                ops.append(sssOp);
+                if (sssOp.brush.opacity > 0.01)
+                    ops.append(sssOp);
             }
         }
 
@@ -745,7 +768,8 @@ QVector<KisAiStrokeOperation> KisAiLightRig::synthesizeMaterialOptics(
                 sheenOp.layer = QStringLiteral("Highlights");
                 sheenOp.polygon = clippedSheen;
                 sheenOp.brush.color = QColor(255, 255, 255);
-                sheenOp.brush.opacity = 0.40;
+                // V11: medium-driven specular gain (neon/impasto boost, watercolor hush).
+                sheenOp.brush.opacity = qBound<qreal>(0.05, 0.40 * rig.specularGain, 0.85);
                 sheenOp.brush.profile = QStringLiteral("airbrush");
                 sheenOp.fillStyle = QStringLiteral("wash");
                 sheenOp.blendMode = QStringLiteral("screen");

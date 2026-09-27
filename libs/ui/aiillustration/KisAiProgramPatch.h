@@ -33,7 +33,9 @@
  * Patch paths:
  *   "/rig/eye_aperture"            → SceneSpec rig override (applied to the
  *                                    spec, then the program is re-laid-out)
- *   "/rig/<any SceneRigOverrides>” → same
+ *   "/rig/<any SceneRigOverrides>” → same (V11 adds body_* keys)
+ *   "/medium/<key>"                → V11 medium/color-script/finish tuning
+ *                                    (medium, paper, brushwork, finish_strength)
  *   "/ops/add"                     → append a decorative operation (whitelist)
  *   "/ops/<id>/brush/opacity"      → adjust one existing op's opacity
  *   "/ops/<id>/brush/color"        → adjust one existing op's color
@@ -60,6 +62,15 @@ public:
 
     /** Whitelisted rig keys for /rig/... patches. */
     static bool isRigKey(const QString &key);
+
+    /** Whitelisted medium keys for /medium/... patches (never geometry). */
+    static bool isMediumKey(const QString &key);
+
+    /**
+     * Validate a /medium/... value without a spec: unknown medium ids and
+     * out-of-range finish strengths are rejected.
+     */
+    static bool isMediumValueValid(const QString &key, const QJsonValue &value);
 
     /**
      * Build the Chat Completions payload requesting patches: current composite

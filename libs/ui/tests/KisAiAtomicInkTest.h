@@ -41,6 +41,7 @@ private Q_SLOTS:
     void testPreviewCanvasParityPsnr();
     void testPhysicalPathUsesCommitter();
     void testOrderOperationsForRenderingDefaultCanvasSize();
+    void testBodyRigGroupsOrderTorsoFirst();
 };
 
 #endif // KIS_AI_ATOMIC_INK_TEST_H

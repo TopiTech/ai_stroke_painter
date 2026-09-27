@@ -27,6 +27,7 @@ private Q_SLOTS:
     void testPaintStrokeDegenerateSize();
     void testSingleSampleFrameComputation();
     void testPaintStrokeNullOrDegenerateBuffer();
+    void testWashAndNeonTaperProfiles();
 };
 
 #endif // KIS_AI_COVERAGE_RASTER_TEST_H

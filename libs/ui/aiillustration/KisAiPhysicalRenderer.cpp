@@ -590,7 +590,21 @@ QImage KisAiPhysicalRenderer::renderProgramToPhysicalImage(const KisAiStrokeProg
     }
 
     // スーパーサンプリング解像度 (2x または 4x)
+    // V11: wash media start one step lower (watercolor/airbrush alias less),
+    // glow media keep the requested factor for specular fidelity.
     int ssFactor = qBound(1, superSampleFactor, 4);
+    {
+        bool washMedium = false;
+        for (const KisAiStrokeOperation &op : program.operations) {
+            const QString prof = op.brush.profile.toLower();
+            if (prof == QLatin1String("watercolor") || prof == QLatin1String("airbrush")) {
+                washMedium = true;
+                break;
+            }
+        }
+        if (washMedium && ssFactor > 1)
+            ssFactor -= 1;
+    }
     QSize renderSize = baseSize * ssFactor;
     // RGBA16F/FP32 の作業バッファが爆発しないよう作業辺を制限する。
     // (例: 8k×4x は RGBA32FP で約16GBになる)

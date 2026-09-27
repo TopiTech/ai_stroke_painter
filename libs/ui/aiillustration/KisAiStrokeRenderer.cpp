@@ -2126,6 +2126,8 @@ KisAiStrokeRenderer::RenderBudget KisAiStrokeRenderer::renderBudgetFor(const QSi
     // V6 W6: degrade ladder. A 1024px Quality render carries roughly
     // size*ops cost; beyond the knee the caller halves blur, halves crops
     // and runs a single critique round. Deterministic, no wall clock.
+    // V11: wash media (watercolor/airbrush fills) cost less per op than
+    // neon/impasto glow stacks, so the knee shifts per medium.
     RenderBudget budget;
     const qint64 pixels = qint64(qMax(0, size.width())) * qint64(qMax(0, size.height()));
     const qint64 cost = pixels / 1024 * qMax(0, opCount);
@@ -2135,6 +2137,23 @@ KisAiStrokeRenderer::RenderBudget KisAiStrokeRenderer::renderBudgetFor(const QSi
         budget.note = QStringLiteral("degrade: halve blur, 2 crops max, single critic round");
     }
     return budget;
+}
+
+/**
+ * V11 medium-aware degrade order: wash media shed bloom/vignette first
+ * (cheap, low visual loss); glow media shed crops/rounds first.
+ */
+QString KisAiStrokeRenderer::degradeNoteForMedium(const QString &mediumId, bool degraded)
+{
+    if (!degraded)
+        return QString();
+    const QString medium = mediumId.trimmed().toLower();
+    if (medium == QLatin1String("watercolor") || medium == QLatin1String("pencil")
+        || medium == QLatin1String("ink_sketch"))
+        return QStringLiteral("degrade(wash): skip bloom, halve blur, 2 crops max, single critic round");
+    if (medium == QLatin1String("cyber_neon") || medium == QLatin1String("impasto"))
+        return QStringLiteral("degrade(glow): 2 crops max, single critic round, halve blur last");
+    return QStringLiteral("degrade: halve blur, 2 crops max, single critic round");
 }
 
 void KisAiStrokeRenderer::applyBloomEffect(QImage &image, qreal intensity, int radius)
@@ -2258,6 +2277,16 @@ void KisAiStrokeRenderer::applyVignette(QImage &image, qreal strength)
 
 void KisAiStrokeRenderer::applyFinishingPostProcess(QImage &image)
 {
+    KisAiSceneSpec defaultSpec;
+    applyMediumFinish(image, defaultSpec, 0.40, 0.14 * 0.70, 0.07);
+}
+
+void KisAiStrokeRenderer::applyMediumFinish(QImage &image,
+                                             const KisAiSceneSpec &spec,
+                                             qreal bloomStrength,
+                                             qreal vignetteStrength,
+                                             qreal grainIntensity)
+{
     if (image.isNull()) {
         return;
     }
@@ -2269,8 +2298,28 @@ void KisAiStrokeRenderer::applyFinishingPostProcess(QImage &image)
         return;
     }
 
-    // 1. Bloom glow matching layers (Screen 40%, radius 8)
-    applyBloomEffect(image, 0.40, 8);
+    const qreal finishScale = qBound<qreal>(0.0, spec.medium.finishStrength, 1.0);
+    const QString medium = spec.medium.mediumId.trimmed().toLower();
+    qreal bloom = bloomStrength >= 0.0 ? bloomStrength : spec.finish.bloomStrength;
+    qreal vignette = vignetteStrength >= 0.0 ? vignetteStrength : spec.finish.vignetteStrength;
+    qreal grain = grainIntensity >= 0.0 ? grainIntensity : spec.finish.grainIntensity;
+    // V11 medium response: watercolor hushes bloom (paper bloom looks dirty),
+    // neon/impasto earn stronger glow; pencil kills grain aliasing less.
+    if (medium == QLatin1String("watercolor"))
+        bloom *= 0.45;
+    else if (medium == QLatin1String("cyber_neon"))
+        bloom *= 1.6;
+    else if (medium == QLatin1String("impasto"))
+        bloom *= 1.25;
+    else if (medium == QLatin1String("pencil") || medium == QLatin1String("ink_sketch"))
+        bloom *= 0.6;
+    bloom = qBound<qreal>(0.0, bloom * (0.35 + 0.65 * finishScale), 1.0);
+    vignette = qBound<qreal>(0.0, vignette * (0.5 + 0.5 * finishScale), 0.4);
+    grain = qBound<qreal>(0.0, grain * (0.5 + 0.5 * finishScale), 0.25);
+
+    // 1. Bloom glow matching layers (Screen, radius 8)
+    if (bloom > 0.01)
+        applyBloomEffect(image, bloom, 8);
 
     // 2. Color grading gradient overlay (50% opacity, cool overhead / warm bounce)
     // Use SourceAtop to preserve transparency of unpainted canvas regions
@@ -2283,17 +2332,20 @@ void KisAiStrokeRenderer::applyFinishingPostProcess(QImage &image)
         pGrade.fillRect(image.rect(), grad);
     }
 
-    // 3. Cinematic vignette (0.14 strength at 70% opacity)
-    applyVignette(image, 0.14 * 0.70);
+    // 3. Cinematic vignette
+    if (vignette > 0.005)
+        applyVignette(image, vignette);
 
     // 4. Micro film grain texture overlay (25% opacity, seed 42)
     // Use SourceAtop to preserve transparency of unpainted canvas regions
-    const QImage grainImg = KisAiStrokeQualityUtils::generateFilmGrain(image.size(), 0.07, 42);
-    if (!grainImg.isNull()) {
-        QPainter pGrain(&image);
-        pGrain.setCompositionMode(QPainter::CompositionMode_SourceAtop);
-        pGrain.setOpacity(0.25);
-        pGrain.drawImage(0, 0, grainImg);
+    if (grain > 0.005) {
+        const QImage grainImg = KisAiStrokeQualityUtils::generateFilmGrain(image.size(), grain, 42);
+        if (!grainImg.isNull()) {
+            QPainter pGrain(&image);
+            pGrain.setCompositionMode(QPainter::CompositionMode_SourceAtop);
+            pGrain.setOpacity(0.25);
+            pGrain.drawImage(0, 0, grainImg);
+        }
     }
 }
 

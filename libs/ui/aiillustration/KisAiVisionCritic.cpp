@@ -31,7 +31,8 @@ QStringList allowedCritiqueAreas()
         QStringLiteral("mouth"), QStringLiteral("nose"),
         QStringLiteral("shading"), QStringLiteral("highlights"),
         QStringLiteral("background"), QStringLiteral("fx"),
-        QStringLiteral("clothing"), QStringLiteral("composition")
+        QStringLiteral("clothing"), QStringLiteral("composition"),
+        QStringLiteral("hands"), QStringLiteral("torso")
     };
 }
 
@@ -210,11 +211,36 @@ QVector<KisAiCriticCrop> KisAiVisionCritic::selectCrops(
             region = QRectF(0.30, 0.55, 0.40, 0.25);
         else if (r.area == QLatin1String("background"))
             region = QRectF(0.0, 0.0, 0.30, 0.30);
+        else if (r.area == QLatin1String("hands") || r.area.contains(QLatin1String("hand"))
+                 || r.area.contains(QLatin1String("arm")))
+            region = QRectF(0.15, 0.55, 0.70, 0.40);
         KisAiCriticCrop crop;
         crop.region = region;
         crop.reason = QStringLiteral("prior_critique:%1").arg(r.area);
         crop.image = cropAndUpscale(safeCanvas, region);
         crops.append(crop);
+    }
+
+    // 4. V11 hand/contour failure prediction crop: lower-body band where
+    // detached limbs and contour breaks concentrate. Appended last so face
+    // and edge-density crops keep priority under tight maxCrops budgets.
+    if (crops.size() < maxCrops && safeCanvas.width() >= 64 && safeCanvas.height() >= 64) {
+        const QRectF handBand(0.15, 0.55, 0.70, 0.40);
+        bool covered = false;
+        for (const KisAiCriticCrop &c : crops) {
+            if (c.region.intersects(handBand)
+                && c.reason.startsWith(QLatin1String("prior_critique"))) {
+                covered = true;
+                break;
+            }
+        }
+        if (!covered) {
+            KisAiCriticCrop hand;
+            hand.region = handBand;
+            hand.reason = QStringLiteral("hand_contour_predict");
+            hand.image = cropAndUpscale(safeCanvas, handBand);
+            crops.append(hand);
+        }
     }
 
     return crops.mid(0, maxCrops);
@@ -230,7 +256,7 @@ QString KisAiVisionCritic::buildCritiqueSystemPrompt(const KisAiLightSettings &r
         "(image 1 is the full canvas; later images are zoomed crops with their reason labelled). "
         "Answer STRICTLY as JSON: {\"readiness_score\": <0..1>, \"regions\": [...]}\n"
         "Each region: {\"area\": one of [left_eye, right_eye, hair, face_skin, mouth, nose, shading, "
-        "highlights, background, fx, clothing, composition], \"issue\": <one short sentence>, "
+        "highlights, background, fx, clothing, composition, hands, torso], \"issue\": <one short sentence>, "
         "\"action\": one of [repaint, soften, remove, keep], \"priority\": <1..5>, "
         "\"suggestion_patches\": [optional minimal patch objects]}\n"
         "Checklist (verify each item; do not invent defects that are not visible):\n"
@@ -244,6 +270,9 @@ QString KisAiVisionCritic::buildCritiqueSystemPrompt(const KisAiLightSettings &r
         "7. Background: no elements colliding with the character silhouette.\n"
         "8. Overexposure & Blowout: no massive pure-white saturated patches obliterating subject details (especially in FX/Bloom/Highlights).\n"
         "9. Geometric artifacts: no unnatural sharp rectangular box borders, flat cutoffs, or polygonal wireframe mesh lines.\n"
+        "10. Hands & torso: fingers connect to wrists, arms to shoulders, no floating or melted hands.\n"
+        "11. Medium fidelity — watercolor: wet-edge pooling and paper grain, not hard cel bands; "
+        "impasto: visible bristle direction, not flat wash; pencil/ink: dry grain, no airbrush blur.\n"
         "Only include regions for defects you can actually see. An empty regions list is valid.")
         .arg(dir);
 }
@@ -388,6 +417,12 @@ bool KisAiVisionCritic::parseCritiqueResponse(
             area = QStringLiteral("face_skin");
         if (area == QLatin1String("bg"))
             area = QStringLiteral("background");
+        if (area == QLatin1String("hand") || area == QLatin1String("arm") || area == QLatin1String("limb")
+            || area == QLatin1String("limbs") || area == QLatin1String("finger"))
+            area = QStringLiteral("hands");
+        if (area == QLatin1String("body") || area == QLatin1String("shoulder")
+            || area == QLatin1String("shoulders"))
+            area = QStringLiteral("torso");
         if (!areas.contains(area))
             continue;
         region.area = area;
@@ -449,6 +484,19 @@ QVector<KisAiProgramPatch> KisAiVisionCritic::extractSuggestedPatches(
 
 bool KisAiVisionCritic::hasConverged(qreal psnrBefore, qreal psnrAfter, qreal minImprovementDb)
 {
+    return (psnrAfter - psnrBefore) < minImprovementDb;
+}
+
+bool KisAiVisionCritic::hasConvergedStructural(qreal psnrBefore,
+                                               qreal psnrAfter,
+                                               int openRegionsBefore,
+                                               int openRegionsAfter,
+                                               qreal minImprovementDb)
+{
+    // Pixels stalled and no new high-priority work appeared: converged.
+    // New regions (after > before) always mean "keep refining".
+    if (openRegionsAfter > openRegionsBefore)
+        return false;
     return (psnrAfter - psnrBefore) < minImprovementDb;
 }
 

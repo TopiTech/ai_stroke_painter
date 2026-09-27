@@ -33,6 +33,12 @@ struct KRITAUI_EXPORT KisAiLightSettings
     QString timeOfDay {QStringLiteral("day")};
     QColor keyTint {QColor(255, 252, 240)};
     QColor fillTint {QColor(35, 40, 65)};
+    // V11 multi-medium material response. Resolved from SceneSpec::medium by
+    // fromSpec(); every synthesizer below reads these instead of branching.
+    qreal sssStrength {0.50}; // [0,1] skin subsurface scattering fringe gain
+    qreal specularGain {1.0}; // hair/metal specular multiplier
+    qreal edgeDarkening {0.0}; // [0,1] watercolor wet-edge concentration
+    QString mediumId {QStringLiteral("anime_cel")};
 };
 
 class KRITAUI_EXPORT KisAiLightRig

@@ -296,6 +296,37 @@ KisAiRigParameterSet KisAiRigLibrary::parametersFromSpec(const KisAiSceneSpec &s
     p.hair.flyaway = spec.rig.hairFlyaway;
     p.hair.highlightBands = spec.rig.hairHighlightBands;
 
+    // V11 body rig defaults: upper-body framing earns a torso, full-body earns
+    // longer limbs; pose id steers the hand pose vocabulary. Explicit rig
+    // overrides (patch path) win over framing-derived defaults.
+    p.body = KisAiBodyRigParams();
+    const QString framing = spec.composition.framing.trimmed().toLower();
+    if (framing == QLatin1String("full_body")) {
+        p.body.torsoLengthScale = 1.35;
+        p.body.armLengthScale = 1.15;
+    } else if (framing == QLatin1String("upper_body")) {
+        p.body.torsoLengthScale = 1.1;
+    }
+    const QString poseIdLower = spec.subject.poseId.toLower();
+    if (poseIdLower.contains(QLatin1String("touch")) || poseIdLower.contains(QLatin1String("face")))
+        p.body.pose = QStringLiteral("touch_face");
+    else if (poseIdLower.contains(QLatin1String("reach")) || poseIdLower.contains(QLatin1String("dynamic"))
+             || poseIdLower.contains(QLatin1String("action")))
+        p.body.pose = QStringLiteral("reach");
+    else if (poseIdLower.contains(QLatin1String("palm")) || poseIdLower.contains(QLatin1String("open")))
+        p.body.pose = QStringLiteral("open_palm");
+    // Explicit rig overrides win over framing/pose-derived defaults.
+    if (spec.rig.bodyShoulderWidth != 1.0)
+        p.body.shoulderWidthScale = spec.rig.bodyShoulderWidth;
+    if (spec.rig.bodyTorsoLength != 1.0)
+        p.body.torsoLengthScale = spec.rig.bodyTorsoLength;
+    if (spec.rig.bodyArmLength != 1.0)
+        p.body.armLengthScale = spec.rig.bodyArmLength;
+    if (spec.rig.bodyHandSize != 1.0)
+        p.body.handSizeScale = spec.rig.bodyHandSize;
+    if (!spec.rig.bodyPose.isEmpty())
+        p.body.pose = spec.rig.bodyPose;
+
     // V6 W1: narrative.time resolves the time of day when the light block
     // is still at its default; an explicit light.time stays authoritative.
     QString resolvedTime = spec.light.timeOfDay;
@@ -359,6 +390,13 @@ KisAiRigParameterSet KisAiRigLibrary::clamped(const KisAiRigParameterSet &params
     p.hair.strandDensity = clampRange(p.hair.strandDensity, 0.0, 1.0);
     p.hair.flyaway = clampRange(p.hair.flyaway, 0.0, 1.0);
     p.hair.highlightBands = qBound(0, p.hair.highlightBands, 3);
+    p.body.shoulderWidthScale = clampRange(p.body.shoulderWidthScale, 0.7, 1.5);
+    p.body.torsoLengthScale = clampRange(p.body.torsoLengthScale, 0.7, 1.6);
+    p.body.armLengthScale = clampRange(p.body.armLengthScale, 0.7, 1.4);
+    p.body.handSizeScale = clampRange(p.body.handSizeScale, 0.7, 1.4);
+    if (p.body.pose != QLatin1String("reach") && p.body.pose != QLatin1String("open_palm")
+        && p.body.pose != QLatin1String("touch_face"))
+        p.body.pose = QStringLiteral("neutral");
     return p;
 }
 
@@ -1643,5 +1681,95 @@ QVector<KisAiStrokeOperation> KisAiRigLibrary::draperyFoldOps(const QPointF &ori
     shOp.fillStyle = QStringLiteral("wash");
     ops.append(shOp);
 
+    return ops;
+}
+
+// V11 body rig: torso + arms + hands anchored on the head rig.
+QVector<KisAiStrokeOperation> KisAiRigLibrary::bodyRigOps(const KisAiRigParameterSet &params,
+                                                          const QSize &canvasSize,
+                                                          quint32 seed)
+{
+    Q_UNUSED(seed);
+    Q_UNUSED(canvasSize);
+    QVector<KisAiStrokeOperation> ops;
+    const KisAiRigParameterSet p = clamped(params);
+
+    auto clamp01Pt = [](QPointF v) {
+        v.setX(qBound<qreal>(0.02, v.x(), 0.98));
+        v.setY(qBound<qreal>(0.02, v.y(), 0.98));
+        return v;
+    };
+
+    // Shoulder line derives from the chin: shoulders sit below the jaw by a
+    // fraction of headHeight, spread by headWidth * shoulder scale.
+    const qreal chinY = p.headCenter.y() + p.headHeight * 0.48;
+    const qreal shoulderY = chinY + p.headHeight * 0.10 * p.body.torsoLengthScale;
+    const qreal halfSpread = p.headWidth * 0.62 * p.body.shoulderWidthScale;
+    const QPointF shoulderL = clamp01Pt(QPointF(p.headCenter.x() - halfSpread + p.shoulderSlope * 0.5, shoulderY));
+    const QPointF shoulderR = clamp01Pt(QPointF(p.headCenter.x() + halfSpread + p.shoulderSlope * 0.5,
+                                                shoulderY + p.shoulderSlope));
+    const QPointF neckTop = clamp01Pt(QPointF(p.headCenter.x(), chinY - p.headHeight * 0.06));
+
+    // Torso mass: neck -> shoulders -> waist. Waist width tapers to 78%.
+    const qreal torsoLen = p.headHeight * 0.85 * p.body.torsoLengthScale;
+    const QPointF waistC = clamp01Pt(QPointF(p.headCenter.x() + p.torsoTurn * 0.5, shoulderY + torsoLen));
+    QPolygonF torso;
+    torso << neckTop << shoulderL
+          << clamp01Pt(QPointF(waistC.x() - halfSpread * 0.78, waistC.y()))
+          << clamp01Pt(QPointF(waistC.x() + halfSpread * 0.78, waistC.y())) << shoulderR;
+    ops.append(makeFillOp(QStringLiteral("rig_torso_mass"), torso, p.skinTone, 1.0));
+
+    // Arms: shoulder -> elbow -> wrist. Elbow drops 45% of arm length, wrist
+    // reaches 100%. touch_face bends the wrist toward the cheek.
+    const qreal armLen = torsoLen * 0.95 * p.body.armLengthScale;
+    for (int side = 0; side < 2; ++side) {
+        const bool right = (side == 1);
+        const QPointF shoulder = right ? shoulderR : shoulderL;
+        const qreal dir = right ? 1.0 : -1.0;
+        QPointF elbow = clamp01Pt(QPointF(shoulder.x() + dir * halfSpread * 0.35, shoulder.y() + armLen * 0.45));
+        QPointF wrist = clamp01Pt(QPointF(shoulder.x() + dir * halfSpread * 0.55, shoulder.y() + armLen));
+        if (p.body.pose == QLatin1String("touch_face")) {
+            wrist = clamp01Pt(
+                QPointF(p.headCenter.x() + dir * p.headWidth * 0.30, p.headCenter.y() + p.headHeight * 0.28));
+            elbow = clamp01Pt(QPointF((shoulder.x() + wrist.x()) * 0.5 + dir * halfSpread * 0.30,
+                                      (shoulder.y() + wrist.y()) * 0.5));
+        }
+        QVector<KisAiStrokePoint> armPts;
+        armPts.append(pt(shoulder.x(), shoulder.y(), 0.4));
+        armPts.append(pt((shoulder.x() + elbow.x()) * 0.5, (shoulder.y() + elbow.y()) * 0.5, 0.8));
+        armPts.append(pt(elbow.x(), elbow.y(), 0.9));
+        armPts.append(pt((elbow.x() + wrist.x()) * 0.5, (elbow.y() + wrist.y()) * 0.5, 0.8));
+        armPts.append(pt(wrist.x(), wrist.y(), 0.4));
+        ops.append(makePathOp(right ? QStringLiteral("rig_arm_r") : QStringLiteral("rig_arm_l"),
+                              armPts,
+                              p.lineColor,
+                              lineWeightBase(p.lineWeight),
+                              1.0));
+
+        // Hand: palm box + 4 finger separators at the wrist. Deterministic
+        // and always connected to the wrist point (no floating hands).
+        const qreal handW = p.headWidth * 0.11 * p.body.handSizeScale;
+        const qreal handH = p.headHeight * 0.10 * p.body.handSizeScale;
+        QPolygonF palm;
+        palm << clamp01Pt(wrist + QPointF(-handW * 0.5, 0.0))
+             << clamp01Pt(wrist + QPointF(handW * 0.5, 0.0))
+             << clamp01Pt(wrist + QPointF(handW * 0.42, handH))
+             << clamp01Pt(wrist + QPointF(-handW * 0.42, handH));
+        ops.append(makeFillOp(right ? QStringLiteral("rig_hand_r") : QStringLiteral("rig_hand_l"),
+                              palm,
+                              p.skinTone,
+                              1.0));
+        for (int f = 1; f <= 3; ++f) {
+            const qreal fx = wrist.x() - handW * 0.5 + handW * qreal(f) / 4.0;
+            QVector<KisAiStrokePoint> finger;
+            finger.append(pt(fx, wrist.y() + handH * 0.15, 0.5));
+            finger.append(pt(fx + dir * handW * 0.02, wrist.y() + handH * 0.9, 0.5));
+            ops.append(makePathOp(QStringLiteral("rig_hand_%1_finger_%2").arg(right ? "r" : "l").arg(f),
+                                  finger,
+                                  p.lineColor,
+                                  lineWeightBase(p.lineWeight) * 0.6,
+                                  0.9));
+        }
+    }
     return ops;
 }

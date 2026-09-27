@@ -148,6 +148,20 @@ QString KisAiStrokeGraph::inferGroupId(const KisAiStrokeOperation &op)
     }
     if (id.contains(QLatin1String("mouth")) || id.contains(QLatin1String("lip")))
         return QStringLiteral("mouth");
+    // V11 body rig groups: torso first, then arms interleave L/R, then hands.
+    if (id.startsWith(QLatin1String("rig_torso")))
+        return QStringLiteral("torso");
+    if (id.startsWith(QLatin1String("rig_arm_l")) || id.contains(QLatin1String("arm_l")))
+        return QStringLiteral("arm_l");
+    if (id.startsWith(QLatin1String("rig_arm_r")) || id.contains(QLatin1String("arm_r")))
+        return QStringLiteral("arm_r");
+    if (id.startsWith(QLatin1String("rig_hand_l")) || id.contains(QLatin1String("hand_l")))
+        return QStringLiteral("hand_l");
+    if (id.startsWith(QLatin1String("rig_hand_r")) || id.contains(QLatin1String("hand_r")))
+        return QStringLiteral("hand_r");
+    if (id.contains(QLatin1String("torso")) || id.contains(QLatin1String("shoulder"))
+        || id.contains(QLatin1String("clavicle")))
+        return QStringLiteral("torso");
     if (id.contains(QLatin1String("brow"))) {
         if (parts.contains(QLatin1String("r")) || parts.contains(QLatin1String("right")))
             return QStringLiteral("brow_r");
@@ -225,6 +239,7 @@ QVector<KisAiStrokeOperation> KisAiStrokeGraph::orderForCommit(const QVector<Kis
         int side;
         bool face;
         qreal mass;
+        int bodyRank;
     };
     QHash<QString, int> byId;
     for (int i = 0; i < annotated.size(); ++i) {
@@ -252,6 +267,16 @@ QVector<KisAiStrokeOperation> KisAiStrokeGraph::orderForCommit(const QVector<Kis
 
     for (int i = 0; i < annotated.size(); ++i) {
         const KisAiStrokeOperation &op = annotated.at(i);
+        const QString group = op.groupId.isEmpty() ? inferGroupId(op) : op.groupId;
+        // V11 body assembly order: torso mass, then arms (L/R interleave),
+        // then hands. Sorts before the generic pair/side tie-breakers.
+        int bodyRank = 99;
+        if (group == QLatin1String("torso"))
+            bodyRank = 0;
+        else if (group == QLatin1String("arm_l") || group == QLatin1String("arm_r"))
+            bodyRank = 1;
+        else if (group == QLatin1String("hand_l") || group == QLatin1String("hand_r"))
+            bodyRank = 2;
         items.append({i,
                       layerRank(op.layer),
                       KisAiInkRole::rank(op.role),
@@ -259,13 +284,17 @@ QVector<KisAiStrokeOperation> KisAiStrokeGraph::orderForCommit(const QVector<Kis
                       pairKey(op.id),
                       sideRank(op.id),
                       KisAiDeliberateStroke::isFaceDetail(op.id),
-                      massRank.at(i)});
+                      massRank.at(i),
+                      bodyRank});
     }
     std::stable_sort(items.begin(), items.end(), [](const Item &a, const Item &b) {
         if (a.layer != b.layer)
             return a.layer < b.layer;
         if (a.role != b.role)
             return a.role < b.role;
+        // V11: body assembly order wins inside the same layer+role bucket.
+        if (a.bodyRank != b.bodyRank)
+            return a.bodyRank < b.bodyRank;
         // Jaw / hair masses before facial details, otherwise pair-key
         // lexicographic order puts "eye_*" lashes ahead of "face_contour".
         if (a.face != b.face)

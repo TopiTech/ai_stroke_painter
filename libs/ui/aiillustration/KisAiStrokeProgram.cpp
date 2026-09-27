@@ -410,7 +410,16 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
                                                                     QStringLiteral("color_dodge"),
                                                                     QStringLiteral("overlay"),
                                                                     QStringLiteral("linear_burn"),
-                                                                    QStringLiteral("add")}}};
+                                                                    QStringLiteral("add"),
+                                                                    QStringLiteral("soft_light"),
+                                                                    QStringLiteral("darken"),
+                                                                    QStringLiteral("lighten")}}};
+    // V11 Rig-first contract guard: advertise the enforced hex format so model
+    // drift fails fast at the schema layer; refineForRendering still repairs.
+    opProps[QStringLiteral("color_hex_format")] = QJsonObject{
+        {QStringLiteral("type"), QStringLiteral("string")},
+        {QStringLiteral("description"),
+         QStringLiteral("CSS hex color #RRGGBB or #RRGGBBAA; named colors are rejected by refineForRendering")}};
     opProps[QStringLiteral("clip_to_id")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("brush")] = brushSchema;
     opProps[QStringLiteral("points")] = controlPointListSchema;
@@ -804,7 +813,17 @@ QString KisAiStrokeProgramCodec::buildFlagshipDirectives()
 {
     return QStringLiteral(
         "=== ADVANCED FLAGSHIP & DELIBERATE ART DIRECTION ===\n"
-        "You are operating in High-Precision Flagship Mode. Maximize geometric nuance and painterly depth:\n"
+        "You are operating in High-Precision Flagship Mode with a Rig-first contract. The deterministic "
+        "LayoutEngine owns all coordinates, symmetry, T-stops and coverage guarantees; your job is meaning, "
+        "rig parameters and critique-driven patches, never raw geometry invention:\n"
+        "0. Rig-First Contract (HIGHEST STRUCTURAL PRIORITY):\n"
+        "   - Prefer meaning-only direction: describe WHAT/WHERE in words plus 'artistic_plan' and SceneSpec "
+        "'rig' values (eye_aperture, iris_ratio, hair_strand_density, mouth_width_scale, ...) over hand-placed "
+        "coordinates.\n"
+        "   - When coordinates are emitted (legacy path), keep them inside silhouettes, symmetric about the face "
+        "axis, and clipped via 'clip_to_id'; the engine clamps, de-duplicates and drops degenerate ops.\n"
+        "   - Never emit Unknown kinds, empty ids, named colors, or free-form blend modes: use hex colors and the "
+        "schema blend_mode enum only.\n"
         "1. Master Deliberate Inking & Catmull-Rom Curvature (Single-Stroke Craftsmanship):\n"
         "   - Treat every single stroke as an indispensable work of art. Never rush or output coarse approximations.\n"
         "   - Supply smooth, multi-point coordinate sequences (5 to 12 points) for organic curves rather than coarse 2-point lines.\n"
