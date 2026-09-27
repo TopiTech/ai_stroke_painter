@@ -522,6 +522,43 @@ StructuralMetrics QualityVectorEvaluator::evaluateStructural(const KisAiStrokePr
             totalPolygonArea += 0.02;
             break;
         }
+        case KisAiStrokeOperation::Kind::BezierPath: {
+            ++totalStrokes;
+            if (op.bezierControlPoints.size() >= 4 || op.points.size() >= 3)
+                ++continuousStrokes;
+            if (op.layer == QLatin1String("Lineart") || layer == QStringLiteral("Lineart")) {
+                pathOps.append(op);
+            }
+            break;
+        }
+        case KisAiStrokeOperation::Kind::ParametricShape: {
+            ++totalStrokes;
+            ++continuousStrokes;
+            const qreal area = qAbs(op.shapeSize.width() * op.shapeSize.height());
+            totalPolygonArea += (area > 0.0 ? area : 0.02);
+            if (layer == QStringLiteral("Flats") && op.shapeFilled) {
+                flatOps.append(op);
+            }
+            break;
+        }
+        case KisAiStrokeOperation::Kind::FormShading: {
+            ++totalStrokes;
+            if (!op.polygon.isEmpty()) {
+                totalPolygonArea += polygonAreaSigned(op.polygon);
+            } else {
+                totalPolygonArea += 0.05;
+            }
+            break;
+        }
+        case KisAiStrokeOperation::Kind::TextureHatch: {
+            ++totalStrokes;
+            if (op.points.size() >= 3 || !op.polygon.isEmpty())
+                ++continuousStrokes;
+            if (!op.polygon.isEmpty()) {
+                totalPolygonArea += polygonAreaSigned(op.polygon);
+            }
+            break;
+        }
         case KisAiStrokeOperation::Kind::Unknown:
             break;
         }

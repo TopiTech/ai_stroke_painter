@@ -2564,7 +2564,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     if (program.artisticPlan.isValid()) {
         logDebug(QStringLiteral("ARTISTIC_PLAN"),
                  QStringLiteral("自律構想策定: Concept='%1' | Strategy='%2' | Lighting='%3' | Palette='%4'")
-                     .arg(program.artisticPlan.concept,
+                     .arg(program.artisticPlan.artisticConcept,
                           program.artisticPlan.compositionStrategy,
                           program.artisticPlan.lightingSetup,
                           program.artisticPlan.colorHarmony));

@@ -146,7 +146,7 @@ KisAiModelRouter::StagePlan KisAiModelRouter::planFor(Stage stage, const QString
         break;
     }
 
-    if (s_qualityMode == QualityMode::Fast) {
+    if (qualityMode() == QualityMode::Fast) {
         // Fast mode trades a tier down for latency; the user-pinned model
         // still wins unless they left the field empty.
         if (model.isEmpty())
@@ -246,7 +246,7 @@ QStringList KisAiModelRouter::modelFallbackChain(Stage stage, const QString &pre
 
     // Fast mode stops the ladder one tier earlier but always ends with the
     // empty string sentinel meaning "offline deterministic path".
-    if (s_qualityMode != QualityMode::Fast) {
+    if (qualityMode() != QualityMode::Fast) {
         const QString mid = midTierModel();
         if (!chain.contains(mid))
             chain.append(mid);

@@ -230,6 +230,14 @@ KisAiStrokeProgram KisAiFullStrokeScene::prioritize(const KisAiStrokeProgram &pr
             used += group.operations.size();
         }
     }
+    if (selected.isEmpty() && !groups.isEmpty() && operationBudget > 0) {
+        // Fallback: the operationBudget is smaller than any complete group.
+        // Truncate the highest-priority group to fit the budget rather than dropping
+        // all operations and returning a blank canvas.
+        Group fallbackGroup = groups.first();
+        fallbackGroup.operations = fallbackGroup.operations.mid(0, operationBudget);
+        selected.append(fallbackGroup);
+    }
     std::sort(selected.begin(), selected.end(), [](const Group &a, const Group &b) {
         return a.firstIndex < b.firstIndex;
     });

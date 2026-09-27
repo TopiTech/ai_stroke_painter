@@ -169,7 +169,7 @@ struct KRITAUI_EXPORT KisAiCritiqueRegion {
  * Formulated by the LLM before generating stroke coordinates.
  */
 struct KRITAUI_EXPORT KisAiArtisticPlan {
-    QString concept;
+    QString artisticConcept;
     QString visualConcept;
     QString compositionStrategy;
     QString framing{QStringLiteral("standard")};
@@ -187,7 +187,7 @@ struct KRITAUI_EXPORT KisAiArtisticPlan {
 
     bool isValid() const
     {
-        return !concept.isEmpty() || !visualConcept.isEmpty() || !compositionStrategy.isEmpty();
+        return !artisticConcept.isEmpty() || !visualConcept.isEmpty() || !compositionStrategy.isEmpty();
     }
 };
 

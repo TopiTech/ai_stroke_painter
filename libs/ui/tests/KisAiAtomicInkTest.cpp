@@ -566,4 +566,57 @@ void KisAiAtomicInkTest::testBodyRigGroupsOrderTorsoFirst()
     QVERIFY(groups.indexOf(QStringLiteral("torso")) < groups.indexOf(QStringLiteral("hand_r")));
 }
 
+void KisAiAtomicInkTest::testReviewStrokeHighLevelPrimitives()
+{
+    const QSize canvasSize(512, 512);
+
+    // 1. ParametricShape
+    KisAiStrokeOperation shape;
+    shape.kind = KisAiStrokeOperation::Kind::ParametricShape;
+    shape.id = QStringLiteral("shape_eye");
+    shape.shapeType = QStringLiteral("ellipse");
+    shape.shapeCenter = QPointF(0.4, 0.4);
+    shape.shapeSize = QSizeF(0.1, 0.08);
+    shape.shapeFilled = true;
+    shape.brush.opacity = 1.0;
+    const KisAiStrokeCommitReview shapeRev = KisAiDeliberateStroke::reviewStroke(shape, canvasSize);
+    QVERIFY(shapeRev.committed);
+    QVERIFY(shapeRev.inkCoverage > 1.0e-7);
+    QVERIFY(!shapeRev.dirtyRect.isEmpty());
+
+    // 2. BezierPath
+    KisAiStrokeOperation bezier;
+    bezier.kind = KisAiStrokeOperation::Kind::BezierPath;
+    bezier.id = QStringLiteral("bezier_curve");
+    bezier.bezierControlPoints = {QPointF(0.1, 0.1), QPointF(0.2, 0.4), QPointF(0.3, 0.4), QPointF(0.4, 0.2)};
+    bezier.brush.size = 0.01;
+    bezier.brush.opacity = 1.0;
+    const KisAiStrokeCommitReview bezierRev = KisAiDeliberateStroke::reviewStroke(bezier, canvasSize);
+    QVERIFY(bezierRev.committed);
+    QVERIFY(bezierRev.inkCoverage > 1.0e-7);
+    QVERIFY(!bezierRev.dirtyRect.isEmpty());
+
+    // 3. FormShading
+    KisAiStrokeOperation shading;
+    shading.kind = KisAiStrokeOperation::Kind::FormShading;
+    shading.id = QStringLiteral("form_shade");
+    shading.polygon = QPolygonF{QPointF(0.2, 0.2), QPointF(0.6, 0.2), QPointF(0.4, 0.6)};
+    shading.brush.opacity = 0.8;
+    const KisAiStrokeCommitReview shadingRev = KisAiDeliberateStroke::reviewStroke(shading, canvasSize);
+    QVERIFY(shadingRev.committed);
+    QVERIFY(shadingRev.inkCoverage > 1.0e-7);
+    QVERIFY(!shadingRev.dirtyRect.isEmpty());
+
+    // 4. TextureHatch
+    KisAiStrokeOperation hatch;
+    hatch.kind = KisAiStrokeOperation::Kind::TextureHatch;
+    hatch.id = QStringLiteral("texture_hatch");
+    hatch.polygon = QPolygonF{QPointF(0.1, 0.1), QPointF(0.5, 0.1), QPointF(0.5, 0.5), QPointF(0.1, 0.5)};
+    hatch.brush.opacity = 0.7;
+    const KisAiStrokeCommitReview hatchRev = KisAiDeliberateStroke::reviewStroke(hatch, canvasSize);
+    QVERIFY(hatchRev.committed);
+    QVERIFY(hatchRev.inkCoverage > 1.0e-7);
+    QVERIFY(!hatchRev.dirtyRect.isEmpty());
+}
+
 KISTEST_MAIN(KisAiAtomicInkTest)

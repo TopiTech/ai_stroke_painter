@@ -122,15 +122,15 @@ cmake -S . -B build-ai -G Ninja `
 
 # アプリケーション本体と AI Stroke Painter の検証テストを並列ビルド
 # 実行ファイル名は ai-stroke-painter だが、CMake のアプリケーションターゲット名は krita。
-# テストターゲット一覧は build-ai-stroke-painter.ps1 と同梱 (全18本)。
-cmake --build build-ai --target krita KisAiCrashGuardTest KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest KisAiV5EngineTest KisAiV6WiringTest KisAiV7QualityTest KisAiQualityVectorTest KisAiPerceptualRepairerTest KisAiPhysicalRendererTest KisAiAbstractOntologyTest KisAiQualityBenchGateTest KisAiAtomicInkTest KisAiV10QualityTest KisAiStartPageTest KisAiLineartModeTest KisAiCoverageRasterTest KisAiImageGuidedSceneTest --parallel
+# テストターゲット一覧は build-ai-stroke-painter.ps1 と同梱 (全19本)。
+cmake --build build-ai --target krita KisAiCrashGuardTest KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest KisAiV5EngineTest KisAiV6WiringTest KisAiV7QualityTest KisAiQualityVectorTest KisAiPerceptualRepairerTest KisAiPhysicalRendererTest KisAiAbstractOntologyTest KisAiQualityBenchGateTest KisAiAtomicInkTest KisAiV10QualityTest KisAiStartPageTest KisAiLineartModeTest KisAiCoverageRasterTest KisAiImageGuidedSceneTest KisAiFullStrokeTest --parallel
 cmake --install build-ai --prefix "$craftRoot\ai-stroke-painter"
 ```
 
 ### 単体テストの実行（CI / ローカル）
 
 AI ストロークのパース・スキーマ生成・品質補正・Centripetal スプライン・筆圧テーパー・スーパーサンプリング・クリッピングマスク・代表作品の画素品質指標・クラッシュガードを回帰テストします。
-通常のAIビルドでは、プロジェクトの対象範囲に含まれないKrita上流テストの大半は登録せず、AI Stroke Painter の18本 (ラベル `AIStroke`) と、libs/image のコア画像テスト (ラベル `KritaCore`) のみを登録します。無指定の `ctest` はこの両方を実行し、`-L AIStroke` で AI 分だけに絞れます。
+通常のAIビルドでは、プロジェクトの対象範囲に含まれないKrita上流テストの大半は登録せず、AI Stroke Painter の19本 (ラベル `AIStroke`) と、libs/image のコア画像テスト (ラベル `KritaCore`) のみを登録します。無指定の `ctest` はこの両方を実行し、`-L AIStroke` で AI 分だけに絞れます。
 
 ```powershell
 # AI Stroke Painterの対象機能を全件実行（BUILD_TESTING=ONのbuild-ai）

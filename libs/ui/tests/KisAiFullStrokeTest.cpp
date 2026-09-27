@@ -88,4 +88,48 @@ void KisAiFullStrokeTest::testMissingProgramRejected()
     QVERIFY(KisAiFullStroke::acceptsProgram(program));
 }
 
+void KisAiFullStrokeTest::testPrioritizeBudgetSmallerThanGroup()
+{
+    KisAiFullStrokeScene scene;
+    QJsonObject heroObj{{QStringLiteral("id"), QStringLiteral("hero")},
+                        {QStringLiteral("type"), QStringLiteral("person")},
+                        {QStringLiteral("bounds"), QJsonArray{0.1, 0.1, 0.5, 0.5}},
+                        {QStringLiteral("focal_weight"), 0.9},
+                        {QStringLiteral("required"), true}};
+    QJsonObject bgObj{{QStringLiteral("id"), QStringLiteral("bg")},
+                      {QStringLiteral("type"), QStringLiteral("background")},
+                      {QStringLiteral("bounds"), QJsonArray{0.0, 0.0, 1.0, 1.0}},
+                      {QStringLiteral("focal_weight"), 0.1},
+                      {QStringLiteral("required"), false}};
+    QVERIFY(KisAiFullStrokeScene::parse(QJsonObject{{QStringLiteral("objects"), QJsonArray{heroObj, bgObj}}}, &scene));
+
+    KisAiStrokeProgram program;
+    // Hero has 3 operations
+    for (int i = 0; i < 3; ++i) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Path;
+        op.id = QStringLiteral("hero_stroke_%1").arg(i);
+        op.groupId = QStringLiteral("hero");
+        op.points = {KisAiStrokePoint(0.2, 0.2), KisAiStrokePoint(0.3, 0.3)};
+        program.operations.append(op);
+    }
+    // BG has 3 operations
+    for (int i = 0; i < 3; ++i) {
+        KisAiStrokeOperation op;
+        op.kind = KisAiStrokeOperation::Kind::Fill;
+        op.id = QStringLiteral("bg_fill_%1").arg(i);
+        op.groupId = QStringLiteral("bg");
+        op.polygon = QPolygonF{QPointF(0, 0), QPointF(1, 0), QPointF(1, 1)};
+        program.operations.append(op);
+    }
+
+    // Budget of 2 is smaller than hero (3) and bg (3).
+    // Previously, this would produce 0 operations (silent drop).
+    // Now it should safely retain 2 operations from the highest priority group (hero).
+    const KisAiStrokeProgram prioritized = scene.prioritize(program, 2);
+    QCOMPARE(prioritized.operations.size(), 2);
+    QCOMPARE(prioritized.operations.at(0).id, QStringLiteral("hero_stroke_0"));
+    QCOMPARE(prioritized.operations.at(1).id, QStringLiteral("hero_stroke_1"));
+}
+
 KISTEST_MAIN(KisAiFullStrokeTest)

@@ -42,6 +42,7 @@ private Q_SLOTS:
     void testPhysicalPathUsesCommitter();
     void testOrderOperationsForRenderingDefaultCanvasSize();
     void testBodyRigGroupsOrderTorsoFirst();
+    void testReviewStrokeHighLevelPrimitives();
 };
 
 #endif // KIS_AI_ATOMIC_INK_TEST_H

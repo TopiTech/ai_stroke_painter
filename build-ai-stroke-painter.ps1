@@ -43,7 +43,7 @@ if ($LASTEXITCODE -ne 0) {
 # 実行ファイル名は ai-stroke-painter ですが、CMake のアプリケーションターゲット名は krita です。
 Write-Host 'Building the application and AI Stroke Painter tests...' -ForegroundColor Cyan
 cmake --build $buildDir `
-    --target krita KisAiCrashGuardTest KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest KisAiV5EngineTest KisAiV6WiringTest KisAiV7QualityTest KisAiQualityVectorTest KisAiPerceptualRepairerTest KisAiPhysicalRendererTest KisAiAbstractOntologyTest KisAiQualityBenchGateTest KisAiAtomicInkTest KisAiV10QualityTest KisAiStartPageTest KisAiLineartModeTest KisAiCoverageRasterTest KisAiImageGuidedSceneTest `
+    --target krita KisAiCrashGuardTest KisAiStrokeProgramTest KisAiStrokeRendererTest KisAiIllustrationRendererTest KisAiV5EngineTest KisAiV6WiringTest KisAiV7QualityTest KisAiQualityVectorTest KisAiPerceptualRepairerTest KisAiPhysicalRendererTest KisAiAbstractOntologyTest KisAiQualityBenchGateTest KisAiAtomicInkTest KisAiV10QualityTest KisAiStartPageTest KisAiLineartModeTest KisAiCoverageRasterTest KisAiImageGuidedSceneTest KisAiFullStrokeTest `
     --parallel
 
 if ($LASTEXITCODE -ne 0) {

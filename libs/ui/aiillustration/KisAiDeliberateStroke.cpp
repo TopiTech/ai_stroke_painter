@@ -209,6 +209,30 @@ qreal opMassEstimate(const KisAiStrokeOperation &op, const QSize &canvas)
         return 1.0e-5 * qMax(0, op.particleCount);
     case KisAiStrokeOperation::Kind::MangaLines:
         return 1.0e-4 * qMax(0, op.density);
+    case KisAiStrokeOperation::Kind::BezierPath: {
+        QVector<KisAiStrokePoint> pts;
+        if (!op.points.isEmpty()) {
+            pts = op.points;
+        } else {
+            pts.reserve(op.bezierControlPoints.size());
+            for (const QPointF &p : op.bezierControlPoints)
+                pts.append(KisAiStrokePoint(p.x(), p.y(), 0.8));
+        }
+        const qreal lenPx = pathLengthPx(pts, canvas, op.closed);
+        const qreal base = qMin(canvas.width(), canvas.height());
+        const qreal wPx = op.brush.sizeMode == QLatin1String("px")
+            ? op.brush.size
+            : op.brush.size * base;
+        return (lenPx * qMax<qreal>(1.0, wPx)) / qMax<qreal>(1.0, base * base);
+    }
+    case KisAiStrokeOperation::Kind::ParametricShape: {
+        const qreal area = qAbs(op.shapeSize.width() * op.shapeSize.height());
+        return area > 0.0 ? area : 0.01;
+    }
+    case KisAiStrokeOperation::Kind::FormShading:
+        return !op.polygon.isEmpty() ? normalizedPolyArea(op.polygon) : 0.05;
+    case KisAiStrokeOperation::Kind::TextureHatch:
+        return !op.polygon.isEmpty() ? normalizedPolyArea(op.polygon) : 0.03;
     default:
         return 0.0;
     }
@@ -895,6 +919,59 @@ KisAiStrokeCommitReview KisAiDeliberateStroke::reviewStroke(
         const qreal h = op.mouthSize.height() * canvas.height();
         rev.dirtyRect = QRectF(c.x() - w * 0.75, c.y() - h * 0.75, w * 1.5, h * 1.5);
         rev.inkCoverage = op.mouthSize.width() * op.mouthSize.height();
+        break;
+    }
+    case KisAiStrokeOperation::Kind::BezierPath: {
+        QPolygonF px;
+        if (!op.bezierControlPoints.isEmpty()) {
+            px.reserve(op.bezierControlPoints.size());
+            for (const QPointF &p : op.bezierControlPoints)
+                px.append(QPointF(p.x() * canvas.width(), p.y() * canvas.height()));
+        } else {
+            px.reserve(op.points.size());
+            for (const KisAiStrokePoint &p : op.points)
+                px.append(QPointF(p.pos.x() * canvas.width(), p.pos.y() * canvas.height()));
+        }
+        rev.dirtyRect = px.boundingRect();
+        rev.inkCoverage = opMassEstimate(op, canvas);
+        break;
+    }
+    case KisAiStrokeOperation::Kind::ParametricShape: {
+        const QPointF c(op.shapeCenter.x() * canvas.width(), op.shapeCenter.y() * canvas.height());
+        const qreal w = qAbs(op.shapeSize.width()) * canvas.width();
+        const qreal h = qAbs(op.shapeSize.height()) * canvas.height();
+        rev.dirtyRect = QRectF(c.x() - w * 0.5, c.y() - h * 0.5, w, h);
+        rev.inkCoverage = opMassEstimate(op, canvas);
+        break;
+    }
+    case KisAiStrokeOperation::Kind::FormShading: {
+        if (!op.polygon.isEmpty()) {
+            QPolygonF px;
+            px.reserve(op.polygon.size());
+            for (const QPointF &p : op.polygon)
+                px.append(QPointF(p.x() * canvas.width(), p.y() * canvas.height()));
+            rev.dirtyRect = px.boundingRect();
+        } else {
+            rev.dirtyRect = QRectF(0, 0, canvas.width(), canvas.height());
+        }
+        rev.inkCoverage = opMassEstimate(op, canvas);
+        break;
+    }
+    case KisAiStrokeOperation::Kind::TextureHatch: {
+        if (!op.polygon.isEmpty()) {
+            QPolygonF px;
+            px.reserve(op.polygon.size());
+            for (const QPointF &p : op.polygon)
+                px.append(QPointF(p.x() * canvas.width(), p.y() * canvas.height()));
+            rev.dirtyRect = px.boundingRect();
+        } else {
+            QPolygonF px;
+            px.reserve(op.points.size());
+            for (const KisAiStrokePoint &p : op.points)
+                px.append(QPointF(p.pos.x() * canvas.width(), p.pos.y() * canvas.height()));
+            rev.dirtyRect = px.boundingRect();
+        }
+        rev.inkCoverage = opMassEstimate(op, canvas);
         break;
     }
     default:

@@ -325,6 +325,22 @@ void KisAiIllustrationRendererTest::testPromptExpansionPayloadAndParsing()
     const QString mdParsed = KisAiPromptAnalyzer::parseExpandedPrompt(markdownResponse, &mdErr);
     QVERIFY(mdErr.isEmpty());
     QCOMPARE(mdParsed, QStringLiteral("魔法使いの少年、輝く杖、星空の図書館"));
+
+    // Test markdown code block with conversational preamble and trailer
+    const QByteArray markdownWithPreamble = R"({
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "Here is the expanded prompt for you:\n```markdown\n蒼い炎を纏う竜騎士、黄昏の古城、シネマティックライティング\n```\nHope you find this inspiring!"
+                }
+            }
+        ]
+    })";
+    QString preambleErr;
+    const QString preambleParsed = KisAiPromptAnalyzer::parseExpandedPrompt(markdownWithPreamble, &preambleErr);
+    QVERIFY(preambleErr.isEmpty());
+    QCOMPARE(preambleParsed, QStringLiteral("蒼い炎を纏う竜騎士、黄昏の古城、シネマティックライティング"));
 }
 
 void KisAiIllustrationRendererTest::testCityConceptImagePrecedence()

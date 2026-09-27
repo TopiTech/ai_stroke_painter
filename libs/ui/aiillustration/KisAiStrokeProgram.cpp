@@ -3203,8 +3203,14 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
         rootObj, {QStringLiteral("artistic_plan"), QStringLiteral("artisticPlan"), QStringLiteral("plan")});
     if (planVal.isObject()) {
         const QJsonObject pObj = planVal.toObject();
-        outProgram->artisticPlan.concept =
-            findField(pObj, {QStringLiteral("concept"), QStringLiteral("idea"), QStringLiteral("theme")}).toString();
+        outProgram->artisticPlan.artisticConcept =
+            findField(pObj,
+                      {QStringLiteral("artistic_concept"),
+                       QStringLiteral("artisticConcept"),
+                       QStringLiteral("concept"),
+                       QStringLiteral("idea"),
+                       QStringLiteral("theme")})
+                .toString();
         outProgram->artisticPlan.compositionStrategy =
             findField(pObj,
                       {QStringLiteral("composition_strategy"),

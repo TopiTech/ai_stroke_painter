@@ -5239,7 +5239,7 @@ void KisAiStrokeProgramTest::testArtisticPlanParsingAndHighLevelPrimitives()
 
     // Verify artistic_plan parsed correctly
     QVERIFY(program.artisticPlan.isValid());
-    QCOMPARE(program.artisticPlan.concept, QStringLiteral("Sci-Fi Cybernetic Valkyrie In Flight"));
+    QCOMPARE(program.artisticPlan.artisticConcept, QStringLiteral("Sci-Fi Cybernetic Valkyrie In Flight"));
     QCOMPARE(program.artisticPlan.compositionStrategy, QStringLiteral("Dramatic low-angle cinematic diagonal"));
     QCOMPARE(program.artisticPlan.colorHarmony, QStringLiteral("Luminous cyan neon against deep obsidian chassis"));
     QCOMPARE(program.artisticPlan.lightingSetup, QStringLiteral("High-contrast dynamic rim light with celestial key"));

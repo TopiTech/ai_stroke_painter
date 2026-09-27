@@ -74,6 +74,9 @@ QVector<QPointF> simplifyClosed(const QVector<QPointF> &loop)
 
 QVector<QPointF> outerContour(const QImage &mask)
 {
+    if (mask.isNull() || (mask.format() != QImage::Format_Grayscale8 && mask.format() != QImage::Format_Alpha8))
+        return {};
+
     const int w = mask.width();
     const int h = mask.height();
     if (w < 12 || h < 12 || w > kMaxMaskEdge || h > kMaxMaskEdge)

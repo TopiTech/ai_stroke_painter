@@ -1245,13 +1245,13 @@ QString KisAiPromptAnalyzer::parseExpandedPrompt(const QByteArray &responseBytes
 
     content = content.trimmed();
 
-    // Strip markdown code block fences if the model wrapped output in ```...```
-    if (content.startsWith(QLatin1String("```")) && content.endsWith(QLatin1String("```")) && content.size() >= 6) {
-        const int firstNewline = content.indexOf(QLatin1Char('\n'));
-        const int lastFence = content.lastIndexOf(QLatin1String("```"));
-        if (firstNewline != -1 && lastFence > firstNewline) {
-            content = content.mid(firstNewline + 1, lastFence - firstNewline - 1).trimmed();
-        }
+    // Strip markdown code block fences if the model wrapped output in ```...``` (including conversational preamble/postscript)
+    static const QRegularExpression codeBlockRe(
+        QStringLiteral(R"(```(?:markdown|text|prompt)?\s*\n?([\s\S]*?)(?:```|$))"),
+        QRegularExpression::CaseInsensitiveOption);
+    const auto match = codeBlockRe.match(content);
+    if (match.hasMatch() && !match.captured(1).trimmed().isEmpty()) {
+        content = match.captured(1).trimmed();
     }
 
     // Strip enclosing quotation marks
