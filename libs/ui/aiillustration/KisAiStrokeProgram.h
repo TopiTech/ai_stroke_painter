@@ -150,6 +150,11 @@ struct KRITAUI_EXPORT KisAiStrokeOperation {
     // FormShading: curvature-following soft gradient
     QPointF lightSourcePos{0.5, 0.0};
     qreal featherWidth{0.05};
+    qreal shadingIntensity{0.6};
+    QString shadingType{QStringLiteral("spherical")};
+
+    // TextureHatch / Primitive style
+    QString style;
 };
 
 struct KRITAUI_EXPORT KisAiCritiqueRegion {
@@ -164,16 +169,44 @@ struct KRITAUI_EXPORT KisAiCritiqueRegion {
  * Formulated by the LLM before generating stroke coordinates.
  */
 struct KRITAUI_EXPORT KisAiArtisticPlan {
+    QString concept;
     QString visualConcept;
-    QPointF focalAnchor{0.5, 0.5};
+    QString compositionStrategy;
     QString framing{QStringLiteral("standard")};
+    QString colorHarmony;
+    QString lightingSetup;
+    QString silhouetteRhythm;
+    QStringList focalPoints;
+    QPointF focalAnchor{0.5, 0.5};
     QPointF keyLightDir{-0.5, -0.7};
     QColor keyColor{QColor(255, 250, 240)};
     QColor ambientShadowColor{QColor(35, 45, 70)};
     bool enableSssWarmth{true};
     QString layerStrategy;
     QStringList plannedHeroParts;
-    bool isValid{false};
+
+    bool isValid() const
+    {
+        return !concept.isEmpty() || !visualConcept.isEmpty() || !compositionStrategy.isEmpty();
+    }
+};
+
+/**
+ * Autonomous Drawing Agent Thought Process & Roadmap.
+ * Formulated by the LLM in each Goal Mode step.
+ */
+struct KRITAUI_EXPORT KisAiAgentThought {
+    QString observation;            // Visual observation of the canvas (what is drawn, what is missing/broken)
+    QString reasoning;              // Artistic reasoning, intent, and drawing strategy for this step
+    QString currentPhase;           // Agent-determined current phase name
+    QString plannedNextPhase;       // Planned next drawing phase / action
+    int estimatedRemainingSteps{1}; // Estimated steps remaining to reach target readiness
+    QString userFeedbackResponse;   // How user intervention / feedback was incorporated
+
+    bool isValid() const
+    {
+        return !observation.isEmpty() || !reasoning.isEmpty() || !currentPhase.isEmpty();
+    }
 };
 
 struct KRITAUI_EXPORT KisAiStrokeProgram {
@@ -182,6 +215,7 @@ struct KRITAUI_EXPORT KisAiStrokeProgram {
     int seed{42};
     QString title;
     KisAiArtisticPlan artisticPlan;
+    KisAiAgentThought agentThought; // Autonomous drawing agent thought process and plan
     int iteration{1};
     int currentStep{1};
     int totalSteps{1};
@@ -456,7 +490,8 @@ public:
                                             bool isRefinementExtraStep = false,
                                             qreal targetReadiness = 0.85,
                                             const QString &referenceImageBase64 = QString(),
-                                            qint64 seed = -1);
+                                            qint64 seed = -1,
+                                            const KisAiAgentThought *previousThought = nullptr);
 
     /**
      * Parse SSE (Server-Sent Events) chunks into accumulated text content.

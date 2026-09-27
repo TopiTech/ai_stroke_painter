@@ -142,6 +142,7 @@ private Q_SLOTS:
     void testDeterministicStepBoundsAreMonotonic();
     void testArtisticPlanParsingAndHighLevelPrimitives();
     void testPrimitiveExpanderNewPrimitivesAndPromptDomains();
+    void testGoalAgentThoughtParsingAndPayloadInjection();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

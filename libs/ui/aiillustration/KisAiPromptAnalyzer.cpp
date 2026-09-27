@@ -497,9 +497,11 @@ QString KisAiPromptAnalyzer::generateArtDirection(
             "3. Layer 'Lineart': High-impact radial focus lines (with open center), speed strokes, or geometric runic circles.\n"
             "4. Layer 'Highlights' & 'FX': Vibrant energy sparkles, crackling lightning arcs, and magical bloom particles.\n"
         );
+        break;
+    }
     case DomainType::SciFiMech: {
         out += QStringLiteral(
-            "[DOMAIN ART DIRECTION: Mecha, Sci-Fi Vehicle & Hard Surface Robotics]\n"
+            "[DOMAIN ART DIRECTION: Mecha, Sci-Fi Vehicle & Hard-Surface Robotics]\n"
             "1. Layer 'Flats': Planar armor plates, mechanical chassis, hydraulic joints, and cockpit canopy blocking (fill with wash/contour style).\n"
             "2. Layer 'Shading': Deep crevice ambient occlusion along armor panel seams and mechanical bevel form shadows (multiply blend).\n"
             "3. Layer 'Lineart': Crisp structural blueprint lines, precision panel cuts, and technical calligraphic contours (brush: 'gpen' or 'fineliner').\n"
@@ -568,6 +570,17 @@ QString KisAiPromptAnalyzer::generateGoalPhaseGuidance(int phase, const Semantic
         .arg(spec.harmony.accentColor.name());
 
     out += QStringLiteral(
+        "=== AUTONOMOUS DRAWING AGENT PROTOCOL (StrokeAgent) ===\n"
+        "- ROLE: You are an autonomous AI illustrator agent with full creative command over the drawing process.\n"
+        "- SELF-DIRECTED REASONING: Inspect the canvas, evaluate visual composition, and formulate your own milestone plan.\n"
+        "- AGENT THOUGHT SCHEMA: Always include an 'agent_thought' object with:\n"
+        "  * 'observation': Precise visual analysis of the canvas (what is drawn, what is missing/weak).\n"
+        "  * 'reasoning': Artistic rationale and drawing strategy for this specific step.\n"
+        "  * 'current_phase': Self-determined milestone name for this step.\n"
+        "  * 'planned_next_phase': What you plan to work on next.\n"
+        "  * 'estimated_remaining_steps': Estimated steps to complete the artwork (integer >= 0).\n"
+        "  * 'user_feedback_response': How user intervention/feedback was integrated (if provided).\n"
+        "- AUTONOMOUS COMPLETION: When the illustration satisfies artistic quality and reaches target readiness, set 'goal_reached': true.\n\n"
         "=== DELIBERATE STROKE CRAFTSMANSHIP & 1-HOUR WORKFLOW DIRECTIVE ===\n"
         "- PACING: This is a deep, 1-hour master-level drawing session. Do NOT rush or attempt to finish prematurely.\n"
         "- SINGLE STROKE DISCIPLINE: Draw every single line with deliberate craftsmanship, patience, and calligraphic precision.\n"

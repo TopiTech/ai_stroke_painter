@@ -516,6 +516,17 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
         QJsonObject{{QStringLiteral("type"), QStringLiteral("object")},
                     {QStringLiteral("properties"), artisticPlanProps}};
 
+    QJsonObject agentThoughtProps;
+    agentThoughtProps[QStringLiteral("observation")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    agentThoughtProps[QStringLiteral("reasoning")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    agentThoughtProps[QStringLiteral("current_phase")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    agentThoughtProps[QStringLiteral("planned_next_phase")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    agentThoughtProps[QStringLiteral("estimated_remaining_steps")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")}};
+    agentThoughtProps[QStringLiteral("user_feedback_response")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    rootProps[QStringLiteral("agent_thought")] =
+        QJsonObject{{QStringLiteral("type"), QStringLiteral("object")},
+                    {QStringLiteral("properties"), agentThoughtProps}};
+
     rootProps[QStringLiteral("visual_critique")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     rootProps[QStringLiteral("step_phase")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     rootProps[QStringLiteral("current_step")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")}};
@@ -618,7 +629,7 @@ QString KisAiStrokeProgramCodec::buildDrawingWorkflowSection()
     return QStringLiteral(
         "=== MASTER DRAWING WORKFLOW (MANDATORY) ===\n"
         "Direct your drawing like a master digital illustrator with artistic autonomy. "
-        "Audit the target composition, gesture dynamics, and focal hierarchy before laying down strokes:\n"
+        "Silently audit the target composition, gesture dynamics, and focal hierarchy before laying down strokes:\n"
         "0. Autonomous Cognitive Direction ('artistic_plan'): Formulate the illustration's core creative concept, "
         "composition_strategy (e.g. golden spiral, dynamic 3/4, atmospheric landscape vista, dramatic macro), "
         "lighting_setup (key light, rim, bounce), and color_harmony before generating coordinates.\n"
@@ -3136,6 +3147,36 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
         1.0));
     outProgram->recommendedAction =
         findField(rootObj, {QStringLiteral("recommended_action"), QStringLiteral("action")}).toString();
+
+    // Parse agent_thought (Autonomous Drawing Agent Reasoning & Roadmap)
+    const QJsonValue thoughtVal = findField(
+        rootObj, {QStringLiteral("agent_thought"), QStringLiteral("thought"), QStringLiteral("reasoning")});
+    if (thoughtVal.isObject()) {
+        const QJsonObject tObj = thoughtVal.toObject();
+        outProgram->agentThought.observation =
+            findField(tObj, {QStringLiteral("observation"), QStringLiteral("canvas_observation"), QStringLiteral("canvas_analysis")}).toString().trimmed();
+        outProgram->agentThought.reasoning =
+            findField(tObj, {QStringLiteral("reasoning"), QStringLiteral("artistic_reasoning"), QStringLiteral("thought"), QStringLiteral("intent")}).toString().trimmed();
+        outProgram->agentThought.currentPhase =
+            findField(tObj, {QStringLiteral("current_phase"), QStringLiteral("phase_name"), QStringLiteral("phase")}).toString().trimmed();
+        outProgram->agentThought.plannedNextPhase =
+            findField(tObj, {QStringLiteral("planned_next_phase"), QStringLiteral("next_phase"), QStringLiteral("next_action")}).toString().trimmed();
+        outProgram->agentThought.estimatedRemainingSteps =
+            toIntField(findField(tObj, {QStringLiteral("estimated_remaining_steps"), QStringLiteral("remaining_steps")}), 1);
+        outProgram->agentThought.userFeedbackResponse =
+            findField(tObj, {QStringLiteral("user_feedback_response"), QStringLiteral("feedback_response")}).toString().trimmed();
+    } else if (thoughtVal.isString()) {
+        outProgram->agentThought.reasoning = thoughtVal.toString().trimmed();
+    }
+
+    if (!outProgram->agentThought.currentPhase.isEmpty()) {
+        outProgram->stepPhase = outProgram->agentThought.currentPhase;
+    } else if (outProgram->agentThought.currentPhase.isEmpty() && !outProgram->stepPhase.isEmpty() && outProgram->stepPhase != QLatin1String("complete")) {
+        outProgram->agentThought.currentPhase = outProgram->stepPhase;
+    }
+    if (outProgram->agentThought.observation.isEmpty() && !outProgram->visualCritique.isEmpty()) {
+        outProgram->agentThought.observation = outProgram->visualCritique;
+    }
 
     const QJsonValue planVal = findField(
         rootObj, {QStringLiteral("artistic_plan"), QStringLiteral("artisticPlan"), QStringLiteral("plan")});
@@ -5743,7 +5784,8 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
                                                           bool isRefinementExtraStep,
                                                           qreal targetReadiness,
                                                           const QString &referenceImageBase64,
-                                                          qint64 seed)
+                                                          qint64 seed,
+                                                          const KisAiAgentThought *previousThought)
 {
     const bool reasoning = isReasoningModel(model);
     const bool vision = includeVision && isVisionModel(model)
@@ -5758,7 +5800,7 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
     if (!additionalInstruction.trimmed().isEmpty()) {
         if (!additionalInstruction.contains(phaseGuidance.trimmed())) {
             combinedInstructions +=
-                QStringLiteral("\n\n[USER ADDITIONAL FEEDBACK]\n") + additionalInstruction.trimmed();
+                QStringLiteral("\n\n[USER DIRECTIVE / FEEDBACK INTERVENTION]\n") + additionalInstruction.trimmed();
         } else {
             combinedInstructions = additionalInstruction.trimmed();
         }
@@ -5835,10 +5877,25 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
     userObj[QStringLiteral("current_step")] = step;
     userObj[QStringLiteral("total_steps")] = totalSteps;
     userObj[QStringLiteral("step_phase")] = phaseName;
+    userObj[QStringLiteral("suggested_phase_baseline")] = phaseName;
     userObj[QStringLiteral("operation_target")] = operationTarget;
     if (isExtraRefine) {
         userObj[QStringLiteral("is_refinement_mode")] = true;
         userObj[QStringLiteral("target_readiness")] = targetReadiness;
+    }
+
+    if (previousThought && previousThought->isValid()) {
+        QJsonObject ptObj;
+        ptObj[QStringLiteral("observation")] = previousThought->observation;
+        ptObj[QStringLiteral("reasoning")] = previousThought->reasoning;
+        ptObj[QStringLiteral("current_phase")] = previousThought->currentPhase;
+        ptObj[QStringLiteral("planned_next_phase")] = previousThought->plannedNextPhase;
+        ptObj[QStringLiteral("estimated_remaining_steps")] = previousThought->estimatedRemainingSteps;
+        userObj[QStringLiteral("previous_agent_thought")] = ptObj;
+    }
+
+    if (!additionalInstruction.trimmed().isEmpty()) {
+        userObj[QStringLiteral("user_intervention_directive")] = additionalInstruction.trimmed();
     }
 
     if (accumulatedProgram && !accumulatedProgram->operations.isEmpty()) {
@@ -5863,50 +5920,40 @@ QJsonObject KisAiStrokeProgramCodec::buildGoalStepPayload(const QString &model,
     if (isExtraRefine) {
         userObj[QStringLiteral("directive")] =
             QStringLiteral(
-                "Execute Autonomous Refinement Step %1 (Refinement Round %2) in Goal Mode for prompt: '%3'. "
+                "Execute Autonomous Refinement Step %1 (Refinement Round %2) as StrokeAgent for prompt: '%3'. "
                 "Baseline structural phases are complete, but quality is below target readiness (%4). "
-                "Perform surgical refinement with masterly single-stroke care: "
-                "1. [OBSERVE & CRITIQUE]: Inspect the canvas screenshot and accumulated geometry. "
-                "Provide concise 'agent_critique' and structured 'regions' array: "
-                "[{\"area\": \"left_eye|right_eye|hair|face_skin|shading|highlights|background|fx\", \"issue\": \"defect "
-                "description\", \"action\": \"repaint|soften|remove|keep\", \"priority\": 1-5}]. "
-                "2. [READINESS EVALUATION]: Accurately assess 'readiness_score' (0.0 to 1.0). If >= %4 and truly finished with no remaining defects, set 'goal_reached' to true. Otherwise keep 'goal_reached' false and state what needs work. "
-                "3. [SURGICAL POLISH & DELIBERATE INKING]: Do NOT redraw whole silhouettes. Emit high-impact corrective strokes: exquisite micro-linework, occlusion shading, highlights, or eraser strokes (is_eraser: true) to clean stray lines. "
-                "Set 'step_phase' to '%5', 'current_step' to %1. Output strictly valid RFC 8259 JSON.")
+                "Perform surgical refinement with deliberate single-stroke craftsmanship: "
+                "1. [OBSERVE & REASON]: Inspect the canvas screenshot and accumulated geometry. "
+                "Output an 'agent_thought' object: "
+                "{\"observation\": \"detailed canvas critique\", \"reasoning\": \"refinement strategy\", \"current_phase\": \"surgical polish\", \"planned_next_phase\": \"final touch\", \"estimated_remaining_steps\": 1}. "
+                "Provide structured 'regions' array: [{\"area\": \"left_eye|hair|face_skin|shading|highlights|...\", \"issue\": \"defect\", \"action\": \"repaint|soften|remove|keep\", \"priority\": 1-5}]. "
+                "2. [READINESS EVALUATION]: Accurately assess 'readiness_score' (0.0 to 1.0). If >= %4 and truly finished with no remaining defects, set 'goal_reached' to true. Otherwise keep 'goal_reached' false and continue. "
+                "3. [SURGICAL POLISH & INKING]: Do NOT redraw whole silhouettes. Emit high-impact corrective strokes: exquisite micro-linework, occlusion shading, highlights, or eraser strokes (is_eraser: true) to clean stray lines. "
+                "Output strictly valid RFC 8259 JSON without markdown fences.")
                 .arg(step)
                 .arg(qMax(1, step - totalSteps))
                 .arg(prompt)
-                .arg(QString::number(targetReadiness, 'f', 2))
-                .arg(phaseName);
+                .arg(QString::number(targetReadiness, 'f', 2));
     } else {
         userObj[QStringLiteral("directive")] =
             QStringLiteral(
-                "Execute Step %1 of %2 in Goal Mode for prompt: '%5'. "
+                "Execute Step %1 of %2 as Autonomous Drawing Agent (StrokeAgent) for prompt: '%3'. "
                 "Masterwork Directive (1-Hour Session): Treat this drawing step with profound care, patience, and deliberate craftsmanship. "
                 "Every single stroke must be executed with intentional curve design, smooth Catmull-Rom curvature, and dynamic line-weight tapering. "
-                "1. [OBSERVE & CRITIQUE]: Inspect the canvas screenshot (if attached) and accumulated geometry. "
-                "Provide concise 'agent_critique' and structured 'regions' array: "
-                "[{\"area\": \"left_eye|right_eye|hair|face_skin|shading|highlights|background|fx\", \"issue\": \"defect "
-                "description\", \"action\": \"repaint|soften|remove|keep\", \"priority\": 1-5}]. "
-                "2. [FOCUS]: Specify 'target_focus_area' (e.g. 'Face & Eyes Micro-Inking', 'Hair Strands & Curvature', 'Volumetric Shading & AO', 'Specular Accents'). "
-                "3. [READINESS EVALUATION]: Provide 'readiness_score' from 0.0 (bare outline) to 1.0 (finished "
-                "presentation). If >= %6 and presentation-ready, set 'goal_reached' to true. "
-                "4. [ACT & REFINE WITH SINGLE STROKE CRAFTSMANSHIP]: Generate the necessary high-precision operations for phase '%3'. "
+                "1. [OBSERVE & ANALYZE]: Inspect the canvas screenshot (if attached) and accumulated geometry. "
+                "2. [AGENT THOUGHT & REASONING]: Output a rich 'agent_thought' object: "
+                "{\"observation\": \"concise visual analysis of current canvas\", \"reasoning\": \"artistic intent and strategy for this step\", \"current_phase\": \"%4\", \"planned_next_phase\": \"what you will draw next\", \"estimated_remaining_steps\": %5, \"user_feedback_response\": \"how user directives were honored\"}. "
+                "3. [STRUCTURED CRITIQUE & FOCUS]: Provide 'agent_critique' and optional 'regions' array. Set 'target_focus_area'. "
+                "4. [READINESS EVALUATION]: Provide 'readiness_score' from 0.0 (bare outline) to 1.0 (finished presentation). If quality satisfies prompt and presentation-ready (target >= %6), set 'goal_reached' to true; otherwise false. "
+                "5. [ACT WITH SINGLE STROKE CRAFTSMANSHIP]: Generate the necessary high-precision operations for this step. "
                 "Dedicate your stroke budget to beautifully constructed, smooth strokes. Never rush or output coarse zigzag scribbles. "
-                "If previous critique regions identified defects (e.g. weak facial lines, missing cast shadows, misaligned "
-                "features), "
-                "actively emit targeted correction operations: refine those specific features with exquisite linework, add "
-                "localized directional shading, "
-                "or use is_eraser: true to clean up errant strokes. Set 'step_phase' to '%3', 'current_step' to %1, and "
-                "'goal_reached' to %4. "
-                "Your operations are cumulatively merged onto the canvas; do NOT redraw base silhouettes from scratch "
-                "unless correcting them. "
+                "Actively refine and layer onto the canvas. Do NOT redraw base silhouettes from scratch unless correcting them. "
                 "Output strictly valid RFC 8259 JSON without markdown fences.")
                 .arg(step)
                 .arg(totalSteps)
-                .arg(phaseName)
-                .arg(step >= totalSteps ? QStringLiteral("true") : QStringLiteral("false"))
                 .arg(prompt)
+                .arg(phaseName)
+                .arg(qMax(0, totalSteps - step))
                 .arg(QString::number(targetReadiness, 'f', 2));
     }
 
@@ -6213,6 +6260,15 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::createDeterministicProgramStep(const
     if (stepProg.operations.isEmpty() && !full.operations.isEmpty()) {
         stepProg.operations.append(full.operations.first());
     }
+
+    stepProg.agentThought.observation = stepProg.visualCritique;
+    stepProg.agentThought.currentPhase = stepProg.stepPhase;
+    stepProg.agentThought.reasoning =
+        QStringLiteral("Executing procedural drawing stage %1/%2 with deliberate geometric placement.").arg(step).arg(totalSteps);
+    stepProg.agentThought.plannedNextPhase = (step < totalSteps)
+        ? QStringLiteral("Subsequent enhancement stage")
+        : QStringLiteral("Masterwork presentation complete");
+    stepProg.agentThought.estimatedRemainingSteps = qMax(0, totalSteps - step);
 
     KisAiStrokeQualityReport report;
     return refineForRendering(stepProg, &report);

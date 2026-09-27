@@ -5348,7 +5348,106 @@ void KisAiStrokeProgramTest::testPrimitiveExpanderNewPrimitivesAndPromptDomains(
     QVERIFY(foodDir.contains(QStringLiteral("Still Life")) || foodDir.contains(QStringLiteral("Food")));
 }
 
+void KisAiStrokeProgramTest::testGoalAgentThoughtParsingAndPayloadInjection()
+{
+    // 1. Verify agent_thought JSON parsing
+    const QString agentJson = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"canvas_size\": [1024, 1024],\n"
+        "  \"readiness_score\": 0.65,\n"
+        "  \"goal_reached\": false,\n"
+        "  \"step_phase\": \"Shading & Ambient Occlusion\",\n"
+        "  \"agent_thought\": {\n"
+        "    \"observation\": \"Base silhouettes for hair and face are established cleanly, but eye pupils and neck shadow are missing.\",\n"
+        "    \"reasoning\": \"Apply two-tier ambient occlusion under the bangs and define iris contours before specular pass.\",\n"
+        "    \"current_phase\": \"Shading & Occlusion\",\n"
+        "    \"planned_next_phase\": \"Detailed Inking & Catchlights\",\n"
+        "    \"estimated_remaining_steps\": 2,\n"
+        "    \"user_feedback_response\": \"Adjusting chin contour as requested by user.\"\n"
+        "  },\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"path\",\n"
+        "      \"layer\": \"Lineart\",\n"
+        "      \"points\": [[0.5, 0.4], [0.5, 0.6]],\n"
+        "      \"brush\": {\"color\": \"#1a1020\", \"size\": 2.0}\n"
+        "    }\n"
+        "  ]\n"
+        "}");
+
+    QString parseError;
+    const QJsonObject rootObj = QJsonDocument::fromJson(agentJson.toUtf8()).object();
+    KisAiStrokeProgram parsed;
+    const bool parseOk = KisAiStrokeProgramCodec::parseProgramJson(rootObj, &parsed, &parseError);
+    QVERIFY2(parseOk, qPrintable(parseError));
+    QVERIFY(parsed.agentThought.isValid());
+    QCOMPARE(parsed.agentThought.observation, QStringLiteral("Base silhouettes for hair and face are established cleanly, but eye pupils and neck shadow are missing."));
+    QCOMPARE(parsed.agentThought.reasoning, QStringLiteral("Apply two-tier ambient occlusion under the bangs and define iris contours before specular pass."));
+    QCOMPARE(parsed.agentThought.currentPhase, QStringLiteral("Shading & Occlusion"));
+    QCOMPARE(parsed.agentThought.plannedNextPhase, QStringLiteral("Detailed Inking & Catchlights"));
+    QCOMPARE(parsed.agentThought.estimatedRemainingSteps, 2);
+    QCOMPARE(parsed.agentThought.userFeedbackResponse, QStringLiteral("Adjusting chin contour as requested by user."));
+
+    // 2. Verify payload injection with previousThought and userIntervention
+    KisAiAgentThought prevThought;
+    prevThought.observation = QStringLiteral("Canvas shows flat colors blocked in.");
+    prevThought.reasoning = QStringLiteral("Now moving to form shadows and occlusion.");
+    prevThought.currentPhase = QStringLiteral("Flats");
+    prevThought.plannedNextPhase = QStringLiteral("Shading");
+    prevThought.estimatedRemainingSteps = 3;
+
+    const QString userIntervention = QStringLiteral("Please make the lighting warmer and add highlights to the hair.");
+
+    const QJsonObject payload = KisAiStrokeProgramCodec::buildGoalStepPayload(
+        QStringLiteral("gpt-4o"),
+        QStringLiteral("cyberpunk maiden"),
+        QSize(1024, 1024),
+        2, // step
+        4, // totalSteps
+        QString(), // imageBase64
+        userIntervention, // additionalInstruction (userIntervention)
+        400, // strokeBudget
+        QStringLiteral("auto"), // reasoningEffort
+        false, // includeVision
+        false, // enableStreaming
+        true, // enforceJsonFormat
+        0.5, // temperature
+        1.0, // topP
+        0, // maxTokensOverride
+        0, // artStyle
+        nullptr, // accumulatedProgram
+        QStringLiteral("Flats were clean"), // previousCritique
+        QStringLiteral("auto"), // visionDetail
+        false, // forceJsonObjectOnly
+        false, // isRefinementExtraStep
+        0.85, // targetReadiness
+        QString(), // referenceImageBase64
+        -1, // seed
+        &prevThought // previousThought
+    );
+
+    const QJsonArray messages = payload.value(QStringLiteral("messages")).toArray();
+    QVERIFY(messages.size() >= 2);
+    const QString userJsonStr = messages.at(1).toObject().value(QStringLiteral("content")).toString();
+    const QJsonObject userObj = QJsonDocument::fromJson(userJsonStr.toUtf8()).object();
+
+    // Verify user intervention directive is injected
+    QVERIFY(userObj.contains(QStringLiteral("user_intervention_directive")));
+    QCOMPARE(userObj.value(QStringLiteral("user_intervention_directive")).toString(), userIntervention);
+
+    // Verify previous agent thought is preserved as context
+    QVERIFY(userObj.contains(QStringLiteral("previous_agent_thought")));
+    const QJsonObject injectedThought = userObj.value(QStringLiteral("previous_agent_thought")).toObject();
+    QCOMPARE(injectedThought.value(QStringLiteral("observation")).toString(), prevThought.observation);
+    QCOMPARE(injectedThought.value(QStringLiteral("reasoning")).toString(), prevThought.reasoning);
+    QCOMPARE(injectedThought.value(QStringLiteral("current_phase")).toString(), prevThought.currentPhase);
+    QCOMPARE(injectedThought.value(QStringLiteral("planned_next_phase")).toString(), prevThought.plannedNextPhase);
+    QCOMPARE(injectedThought.value(QStringLiteral("estimated_remaining_steps")).toInt(), 3);
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
+
 
 
 

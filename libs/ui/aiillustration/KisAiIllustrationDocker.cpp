@@ -1225,7 +1225,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
     layout->addWidget(goalCard.frame);
 
-    // Goal Inspector Card
+    // Goal Inspector Card (Autonomous Drawing Agent Control Center)
     m_goalInspectorCard = new QFrame(panel);
     m_goalInspectorCard->setProperty("class", "aiCard");
     m_goalInspectorCard->setFrameShape(QFrame::StyledPanel);
@@ -1233,25 +1233,50 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     inspectorLayout->setContentsMargins(10, 10, 10, 10);
     inspectorLayout->setSpacing(6);
 
-    auto *inspectorTitle = new QLabel(i18n("🎯 Goal作画インスペクター"), m_goalInspectorCard);
+    auto *inspectorTitle = new QLabel(i18n("🤖 自律描画エージェント (Goal Agent)"), m_goalInspectorCard);
     inspectorTitle->setProperty("class", "aiCardTitle");
     inspectorLayout->addWidget(inspectorTitle);
 
-    m_goalPhaseLabel = new QLabel(i18n("待機中"), m_goalInspectorCard);
-    // stepPhase / targetFocusArea come straight from the model response, so they
-    // must never be parsed as rich text. Keep parity with the other labels here.
+    m_goalPhaseLabel = new QLabel(i18n("🤖 エージェント待機中"), m_goalInspectorCard);
     m_goalPhaseLabel->setTextFormat(Qt::PlainText);
-    m_goalPhaseLabel->setAccessibleName(i18n("Goal phase"));
+    m_goalPhaseLabel->setAccessibleName(i18n("Goal agent phase"));
     m_goalPhaseLabel->setStyleSheet(QStringLiteral("font-weight: 700; color: #38bdf8; font-size: 13px;"));
     m_goalPhaseLabel->setWordWrap(true);
     inspectorLayout->addWidget(m_goalPhaseLabel);
 
-    m_agentFocusLabel = new QLabel(i18n("🎯 着目領域: 待機中"), m_goalInspectorCard);
+    m_agentFocusLabel = new QLabel(i18n("🎯 着目領域: 全体構想"), m_goalInspectorCard);
     m_agentFocusLabel->setTextFormat(Qt::PlainText);
     m_agentFocusLabel->setAccessibleName(i18n("Agent focus area"));
     m_agentFocusLabel->setStyleSheet(QStringLiteral("font-weight: 600; color: #a5b4fc; font-size: 11px;"));
     m_agentFocusLabel->setWordWrap(true);
     inspectorLayout->addWidget(m_agentFocusLabel);
+
+    // Agent Thought & Reasoning Box
+    auto *thoughtFrame = new QFrame(m_goalInspectorCard);
+    thoughtFrame->setStyleSheet(QStringLiteral("background: #0d1117; border: 1px solid #273142; border-radius: 6px; padding: 6px 8px;"));
+    auto *thoughtLayout = new QVBoxLayout(thoughtFrame);
+    thoughtLayout->setContentsMargins(4, 4, 4, 4);
+    thoughtLayout->setSpacing(4);
+
+    m_agentObservationLabel = new QLabel(i18n("👁️ 画面観察: 待機中…"), thoughtFrame);
+    m_agentObservationLabel->setTextFormat(Qt::PlainText);
+    m_agentObservationLabel->setWordWrap(true);
+    m_agentObservationLabel->setStyleSheet(QStringLiteral("color: #7dd3fc; font-size: 11px; font-weight: 500;"));
+    thoughtLayout->addWidget(m_agentObservationLabel);
+
+    m_agentReasoningLabel = new QLabel(i18n("💭 作画思考: 初期構図・作画戦略の策定を待機中…"), thoughtFrame);
+    m_agentReasoningLabel->setTextFormat(Qt::PlainText);
+    m_agentReasoningLabel->setWordWrap(true);
+    m_agentReasoningLabel->setStyleSheet(QStringLiteral("color: #cbd5e1; font-size: 11px; line-height: 1.4;"));
+    thoughtLayout->addWidget(m_agentReasoningLabel);
+
+    m_agentNextActionLabel = new QLabel(i18n("📋 次回予定: 待機中"), thoughtFrame);
+    m_agentNextActionLabel->setTextFormat(Qt::PlainText);
+    m_agentNextActionLabel->setWordWrap(true);
+    m_agentNextActionLabel->setStyleSheet(QStringLiteral("color: #c084fc; font-size: 11px; font-weight: 600;"));
+    thoughtLayout->addWidget(m_agentNextActionLabel);
+
+    inspectorLayout->addWidget(thoughtFrame);
 
     m_readinessBar = new QProgressBar(m_goalInspectorCard);
     m_readinessBar->setRange(0, 100);
@@ -1267,16 +1292,21 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
                        "stop:1 #818cf8); border-radius: 3px; }"));
     inspectorLayout->addWidget(m_readinessBar);
 
-    m_critiqueLabel = new QLabel(i18n("AIの視覚批評・自己分析がここに表示されます。"), m_goalInspectorCard);
+    m_critiqueLabel = new QLabel(i18n("👀 AI視覚批評がここに表示されます。"), m_goalInspectorCard);
     m_critiqueLabel->setWordWrap(true);
-    // Critique text comes from the model; render it as plain text so HTML in
-    // an untrusted response is never interpreted.
     m_critiqueLabel->setTextFormat(Qt::PlainText);
     m_critiqueLabel->setAccessibleName(i18n("AI visual critique"));
     m_critiqueLabel->setStyleSheet(
         QStringLiteral("background: #0d1117; color: #94a3b8; border: 1px solid #273142; border-left: 3px solid "
                        "#38bdf8; border-radius: 4px; padding: 6px 8px; font-size: 11px;"));
     inspectorLayout->addWidget(m_critiqueLabel);
+
+    // Human-in-the-loop: User feedback intervention
+    m_agentFeedbackEdit = new QLineEdit(m_goalInspectorCard);
+    m_agentFeedbackEdit->setPlaceholderText(i18n("💬 エージェントへの追加指示 / 修正要望（任意）"));
+    m_agentFeedbackEdit->setToolTip(i18n("作画途中でエージェントに指示を与えられます（例: 「瞳のハイライトを大きく」「髪に紫の反射光を入れて」）。"));
+    m_agentFeedbackEdit->setStyleSheet(QStringLiteral("background: #0b0f17; border: 1px solid #334155; border-radius: 4px; padding: 5px 8px; color: #f1f5f9; font-size: 11px;"));
+    inspectorLayout->addWidget(m_agentFeedbackEdit);
 
     auto *stepBtnRow = new QHBoxLayout();
     stepBtnRow->setSpacing(6);
@@ -1288,7 +1318,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_nextStepButton->setCursor(Qt::PointingHandCursor);
     m_nextStepButton->setVisible(false);
 
-    m_finishGoalButton = new QPushButton(i18n("🏁 ここで完成"), m_goalInspectorCard);
+    m_finishGoalButton = new QPushButton(i18n("🏁 ここで完成として確定"), m_goalInspectorCard);
     m_finishGoalButton->setObjectName(QStringLiteral("aiSecondaryButton"));
     m_finishGoalButton->setFocusPolicy(Qt::StrongFocus);
     m_finishGoalButton->setAccessibleName(i18n("Finish goal mode"));
@@ -3513,19 +3543,34 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
                  .arg(qRound(m_goalTargetReadiness * 100.0))
                  .arg(prompt.left(60)));
 
+    m_lastAgentThought = KisAiAgentThought();
+    m_lastUserGoalFeedback.clear();
+    if (m_agentFeedbackEdit) {
+        m_agentFeedbackEdit->clear();
+    }
+
     if (m_goalInspectorCard) {
         m_goalInspectorCard->setVisible(true);
         if (m_goalPhaseLabel) {
-            m_goalPhaseLabel->setText(i18n("🎯 工程 1/%1 開始準備中…", m_goalTotalSteps));
+            m_goalPhaseLabel->setText(i18n("🤖 自律描画エージェント起動中 (Step 1)…"));
         }
         if (m_agentFocusLabel) {
-            m_agentFocusLabel->setText(i18n("🎯 着目領域: 構図立案・キャンバスレイアウト"));
+            m_agentFocusLabel->setText(i18n("🎯 着目領域: 全体構想・キャンバスレイアウト"));
+        }
+        if (m_agentObservationLabel) {
+            m_agentObservationLabel->setText(i18n("👁️ 画面観察: キャンバスを観察中…"));
+        }
+        if (m_agentReasoningLabel) {
+            m_agentReasoningLabel->setText(i18n("💭 作画思考: 初期構図・作画戦略を自律策定中…"));
+        }
+        if (m_agentNextActionLabel) {
+            m_agentNextActionLabel->setText(i18n("📋 次回予定: 策定中…"));
         }
         if (m_readinessBar) {
             m_readinessBar->setValue(0);
         }
         if (m_critiqueLabel) {
-            m_critiqueLabel->setText(i18n("作画計画を策定中…"));
+            m_critiqueLabel->setText(i18n("👀 AI視覚批評: 初期観察中…"));
         }
         if (m_nextStepButton) {
             m_nextStepButton->setVisible(false);
@@ -3615,19 +3660,27 @@ void KisAiIllustrationDocker::executeGoalStep()
             return;
         }
 
+        m_lastAgentThought = program.agentThought;
+
         if (m_goalPhaseLabel) {
-            if (isExtraRefine) {
-                m_goalPhaseLabel->setText(
-                    i18n("🎯 自律ブラッシュアップ (ステップ %1 / 暴走防止上限 %2) 完了",
-                         m_goalCurrentStep,
-                         m_goalTotalSteps + m_goalMaxExtraSteps));
-            } else {
-                m_goalPhaseLabel->setText(
-                    i18n("🎯 工程 %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
-            }
+            const QString estRemaining = (program.agentThought.estimatedRemainingSteps > 0)
+                ? i18n(" (残推定 %1 手)", program.agentThought.estimatedRemainingSteps)
+                : QString();
+            m_goalPhaseLabel->setText(i18n("🤖 工程 %1: %2%3", m_goalCurrentStep, program.stepPhase, estRemaining));
         }
         if (m_agentFocusLabel) {
             m_agentFocusLabel->setText(i18n("🎯 着目領域: %1", program.stepPhase));
+        }
+        if (m_agentObservationLabel) {
+            m_agentObservationLabel->setText(i18n("👁️ 画面観察: %1", program.agentThought.observation));
+        }
+        if (m_agentReasoningLabel) {
+            m_agentReasoningLabel->setText(i18n("💭 作画思考: %1", program.agentThought.reasoning));
+        }
+        if (m_agentNextActionLabel) {
+            m_agentNextActionLabel->setText(i18n("📋 次回予定: %1 (残 %2 手)",
+                                                 program.agentThought.plannedNextPhase,
+                                                 program.agentThought.estimatedRemainingSteps));
         }
         if (m_readinessBar) {
             m_readinessBar->setValue(qRound(qreal(m_goalCurrentStep) / m_goalTotalSteps * 100.0));
@@ -3749,11 +3802,24 @@ void KisAiIllustrationDocker::executeGoalStep()
             forceJsonObjectOnly = true;
         }
 
-        const QString additionalInstruction = m_goalSelfCorrectionFeedback;
+        QString combinedFeedback = m_goalSelfCorrectionFeedback;
+        if (!m_lastUserGoalFeedback.isEmpty()) {
+            if (!combinedFeedback.isEmpty()) combinedFeedback += QStringLiteral("\n");
+            combinedFeedback += m_lastUserGoalFeedback;
+            m_lastUserGoalFeedback.clear();
+        } else if (m_agentFeedbackEdit && !m_agentFeedbackEdit->text().trimmed().isEmpty()) {
+            if (!combinedFeedback.isEmpty()) combinedFeedback += QStringLiteral("\n");
+            combinedFeedback += m_agentFeedbackEdit->text().trimmed();
+            m_agentFeedbackEdit->clear();
+        }
+
         const bool isExtraRefine = (m_goalCurrentStep > m_goalTotalSteps);
 
         const KisAiStrokeProgram *accumProg = (m_goalCurrentStep > 1 && !m_goalAccumulatedProgram.operations.isEmpty())
             ? &m_goalAccumulatedProgram
+            : nullptr;
+        const KisAiAgentThought *prevThought = (m_goalCurrentStep > 1 && m_lastAgentThought.isValid())
+            ? &m_lastAgentThought
             : nullptr;
         const QJsonObject payload = KisAiStrokeProgramCodec::buildGoalStepPayload(
             model,
@@ -3762,7 +3828,7 @@ void KisAiIllustrationDocker::executeGoalStep()
             m_goalCurrentStep,
             m_goalTotalSteps,
             imageBase64,
-            additionalInstruction,
+            combinedFeedback,
             strokeBudget,
             reasoningEffort,
             !m_goalVisionFallbackActive,
@@ -3778,7 +3844,9 @@ void KisAiIllustrationDocker::executeGoalStep()
             forceJsonObjectOnly,
             isExtraRefine,
             m_goalTargetReadiness,
-            referenceImageBase64);
+            referenceImageBase64,
+            -1,
+            prevThought);
 
         logDebug(QStringLiteral("GOAL_REQ"),
                  QStringLiteral(
@@ -4176,24 +4244,38 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         return;
     }
 
-    const bool isExtraRefine = (m_goalCurrentStep > m_goalTotalSteps);
+    m_lastAgentThought = program.agentThought;
+
     if (m_goalPhaseLabel) {
-        if (isExtraRefine) {
-            m_goalPhaseLabel->setText(
-                i18n("🎯 自律ブラッシュアップ (ステップ %1 / 暴走防止上限 %2) 完了",
-                     m_goalCurrentStep,
-                     m_goalTotalSteps + m_goalMaxExtraSteps));
-        } else {
-            m_goalPhaseLabel->setText(
-                i18n("🎯 工程 %1/%2 (%3) 完了", m_goalCurrentStep, m_goalTotalSteps, program.stepPhase));
-        }
+        const QString estRemaining = (program.agentThought.estimatedRemainingSteps > 0)
+            ? i18n(" (残推定 %1 手)", program.agentThought.estimatedRemainingSteps)
+            : QString();
+        m_goalPhaseLabel->setText(i18n("🤖 工程 %1: %2%3", m_goalCurrentStep, program.stepPhase, estRemaining));
     }
     if (m_agentFocusLabel) {
         if (!program.targetFocusArea.isEmpty()) {
             m_agentFocusLabel->setText(i18n("🎯 着目領域: %1", program.targetFocusArea));
         } else {
-            m_agentFocusLabel->setText(i18n("🎯 着目領域: 全体構成"));
+            m_agentFocusLabel->setText(i18n("🎯 着目領域: %1", program.stepPhase));
         }
+    }
+    if (m_agentObservationLabel) {
+        const QString obs = !program.agentThought.observation.isEmpty()
+            ? program.agentThought.observation
+            : program.visualCritique;
+        m_agentObservationLabel->setText(i18n("👁️ 画面観察: %1", obs));
+    }
+    if (m_agentReasoningLabel) {
+        const QString rsn = !program.agentThought.reasoning.isEmpty()
+            ? program.agentThought.reasoning
+            : (!program.agentCritique.isEmpty() ? program.agentCritique : i18n("作画計画に沿ってストロークを生成しました。"));
+        m_agentReasoningLabel->setText(i18n("💭 作画思考: %1", rsn));
+    }
+    if (m_agentNextActionLabel) {
+        const QString nextP = !program.agentThought.plannedNextPhase.isEmpty()
+            ? program.agentThought.plannedNextPhase
+            : (program.goalReached ? i18n("完成") : i18n("ブラッシュアップ継続"));
+        m_agentNextActionLabel->setText(i18n("📋 次回予定: %1", nextP));
     }
     if (m_readinessBar) {
         m_readinessBar->setValue(qRound(program.readinessScore * 100.0));
@@ -4208,22 +4290,22 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
         }
     }
 
-    const bool isInitialStepsEnded = (m_goalCurrentStep >= m_goalTotalSteps);
-    const bool qualitySatisfied = isGoalQualitySatisfied(program) && isInitialStepsEnded;
-    const bool reachedSafetyMax = (m_goalCurrentStep >= m_goalTotalSteps + m_goalMaxExtraSteps);
+    const bool agentDeclaredFinished = program.goalReached && (m_goalCurrentStep >= 2);
+    const bool qualitySatisfied = isGoalQualitySatisfied(program) && (m_goalCurrentStep >= 2);
+    const bool reachedSafetyMax = (m_goalCurrentStep >= m_goalSafetyLimit);
 
-    if (qualitySatisfied) {
-        logDebug(QStringLiteral("GOAL_QUALITY_MET"),
-                 QStringLiteral("Target readiness reached (%1 >= %2). Finishing Goal Mode.")
+    if (agentDeclaredFinished || qualitySatisfied) {
+        logDebug(QStringLiteral("GOAL_AGENT_FINISHED"),
+                 QStringLiteral("Goal Agent finished autonomously (goalReached=%1, readiness=%2 >= %3).")
+                     .arg(program.goalReached ? QStringLiteral("true") : QStringLiteral("false"))
                      .arg(program.readinessScore)
                      .arg(m_goalTargetReadiness));
         finishGoalMode(true);
     } else if (reachedSafetyMax) {
         logDebug(QStringLiteral("GOAL_SAFETY_MAX"),
-                 QStringLiteral("Reached safety maximum steps (%1 >= %2 + %3). Finishing Goal Mode.")
+                 QStringLiteral("Reached safety maximum steps (%1 >= %2). Finishing Goal Mode.")
                      .arg(m_goalCurrentStep)
-                     .arg(m_goalTotalSteps)
-                     .arg(m_goalMaxExtraSteps));
+                     .arg(m_goalSafetyLimit));
         finishGoalMode(true);
     } else if (m_pausePerStepCheck && m_pausePerStepCheck->isChecked()) {
         m_waitingForUserStepAdvance = true;
@@ -4239,22 +4321,16 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
             m_finishGoalButton->setVisible(true);
             m_finishGoalButton->setEnabled(true);
         }
-        if (isInitialStepsEnded) {
-            setStatus(i18n("全工程完了。完成度 %1% (目標 %2%)。さらに自律ブラッシュアップを進めるには「次のステップへ進む」を押してください。",
-                           qRound(program.readinessScore * 100.0),
-                           qRound(m_goalTargetReadiness * 100.0)));
-        } else {
-            setStatus(i18n("工程 %1 完了。キャンバスへの手動加筆・確認後、「次のステップへ進む」を押してください。",
-                           m_goalCurrentStep));
-        }
+        setStatus(i18n("工程 %1 完了 (自律完成度 %2%)。加筆や確認後、「次のステップへ進む」を押してください。",
+                       m_goalCurrentStep,
+                       qRound(program.readinessScore * 100.0)));
     } else {
-        if (isInitialStepsEnded) {
-            logDebug(QStringLiteral("GOAL_CONTINUE_REFINE"),
-                     QStringLiteral("Initial steps ended but readiness %1 < %2. Continuing autonomous polish (step %3)...")
-                         .arg(program.readinessScore)
-                         .arg(m_goalTargetReadiness)
-                         .arg(m_goalCurrentStep + 1));
-        }
+        logDebug(QStringLiteral("GOAL_CONTINUE_AUTONOMOUS"),
+                 QStringLiteral("Advancing autonomous goal agent (step %1 -> %2, readiness %3 < %4)...")
+                     .arg(m_goalCurrentStep)
+                     .arg(m_goalCurrentStep + 1)
+                     .arg(program.readinessScore)
+                     .arg(m_goalTargetReadiness));
         QTimer::singleShot(300, this, [this] {
             advanceGoalStep();
         });
@@ -4281,6 +4357,10 @@ void KisAiIllustrationDocker::advanceGoalStep(bool userInitiated)
     }
     if (userInitiated) {
         m_lastUserGoalAdvance.start();
+        if (m_agentFeedbackEdit && !m_agentFeedbackEdit->text().trimmed().isEmpty()) {
+            m_lastUserGoalFeedback = m_agentFeedbackEdit->text().trimmed();
+            m_agentFeedbackEdit->clear();
+        }
     }
     // Deactivate the trigger before running the step so a stray second click
     // that slips past the debounce lands on a disabled button instead.

@@ -1184,7 +1184,7 @@ void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter,
     case KisAiStrokeOperation::Kind::TextureHatch: {
         const QVector<KisAiStrokeOperation> expanded = KisAiPrimitiveExpander::expand(op, canvasSize);
         for (const KisAiStrokeOperation &subOp : expanded) {
-            renderOperation(painter, subOp, canvasSize, supersampleScale, faceExclusionPath);
+            rasterizeOperation(painter, subOp, canvasSize, supersampleScale, faceExclusionPath);
         }
         break;
     }

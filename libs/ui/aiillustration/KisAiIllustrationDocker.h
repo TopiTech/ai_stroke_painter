@@ -277,10 +277,16 @@ private:
     QFrame *m_goalInspectorCard {nullptr};
     QLabel *m_goalPhaseLabel {nullptr};
     QLabel *m_agentFocusLabel {nullptr};
+    QLabel *m_agentObservationLabel {nullptr};
+    QLabel *m_agentReasoningLabel {nullptr};
+    QLabel *m_agentNextActionLabel {nullptr};
+    QLineEdit *m_agentFeedbackEdit {nullptr};
     QLabel *m_critiqueLabel {nullptr};
     QProgressBar *m_readinessBar {nullptr};
     QPushButton *m_nextStepButton {nullptr};
     QPushButton *m_finishGoalButton {nullptr};
+    KisAiAgentThought m_lastAgentThought;
+    QString m_lastUserGoalFeedback;
 
     // Debug Mode UI Controls
     QCheckBox *m_debugModeCheck {nullptr};

@@ -905,7 +905,9 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandFormShading(const Ki
                                1.0),
                  QStringLiteral("form_shadow"),
                  op.clipToId);
-    shadowOp.blendMode = op.blendMode.isEmpty() ? QStringLiteral("multiply") : op.blendMode;
+    shadowOp.blendMode = (op.blendMode.isEmpty() || op.blendMode == QLatin1String("normal"))
+        ? QStringLiteral("multiply")
+        : op.blendMode;
     shadowOp.style = QStringLiteral("wash");
     return {shadowOp};
 }
