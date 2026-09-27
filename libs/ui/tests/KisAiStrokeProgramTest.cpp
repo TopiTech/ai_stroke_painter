@@ -28,6 +28,7 @@
 #include "aiillustration/KisAiLightRig.h"
 #include "aiillustration/KisAiRigLibrary.h"
 #include "aiillustration/KisAiStrokeQualityUtils.h"
+#include "aiillustration/KisAiPrimitiveExpander.h"
 #include "KisAiTestUtils.h"
 
 #include <algorithm>
@@ -5163,6 +5164,188 @@ void KisAiStrokeProgramTest::testDeterministicStepBoundsAreMonotonic()
         QCOMPARE(extra.readinessScore, 1.0);
         QVERIFY(!extra.operations.isEmpty());
     }
+}
+
+void KisAiStrokeProgramTest::testArtisticPlanParsingAndHighLevelPrimitives()
+{
+    const QString jsonText = QStringLiteral(
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"artistic_plan\": {\n"
+        "    \"concept\": \"Sci-Fi Cybernetic Valkyrie In Flight\",\n"
+        "    \"composition_strategy\": \"Dramatic low-angle cinematic diagonal\",\n"
+        "    \"color_harmony\": \"Luminous cyan neon against deep obsidian chassis\",\n"
+        "    \"lighting_setup\": \"High-contrast dynamic rim light with celestial key\",\n"
+        "    \"focal_points\": [\"glowing visor sensor\", \"unfolding thruster wings\"],\n"
+        "    \"silhouette_rhythm\": \"Sweeping angular armor facets\"\n"
+        "  },\n"
+        "  \"operations\": [\n"
+        "    {\n"
+        "      \"kind\": \"bezier_path\",\n"
+        "      \"id\": \"wing_sweep_curve\",\n"
+        "      \"layer\": \"Lineart\",\n"
+        "      \"bezier_control_points\": [[0.2, 0.3], [0.35, 0.15], [0.65, 0.25], [0.85, 0.4]],\n"
+        "      \"brush\": {\"profile\": \"gpen\", \"color\": \"#00f0ff\", \"size\": 0.004}\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"shape\",\n"
+        "      \"id\": \"chest_core_plate\",\n"
+        "      \"layer\": \"Flats\",\n"
+        "      \"shape_type\": \"capsule\",\n"
+        "      \"center\": [0.5, 0.45],\n"
+        "      \"size\": [0.15, 0.25],\n"
+        "      \"shape_angle_deg\": 15.0,\n"
+        "      \"shape_filled\": true,\n"
+        "      \"brush\": {\"profile\": \"flat\", \"color\": \"#1a1e29\", \"size\": 0.002}\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"form_shading\",\n"
+        "      \"id\": \"shoulder_volume_shade\",\n"
+        "      \"layer\": \"Shading\",\n"
+        "      \"polygon\": [[0.3, 0.35], [0.45, 0.35], [0.48, 0.55], [0.32, 0.55]],\n"
+        "      \"light_source_pos\": [0.2, 0.1],\n"
+        "      \"feather_width\": 0.03,\n"
+        "      \"shading_intensity\": 0.75,\n"
+        "      \"brush\": {\"profile\": \"brush\", \"color\": \"#080c14\", \"size\": 0.03}\n"
+        "    },\n"
+        "    {\n"
+        "      \"kind\": \"texture_hatch\",\n"
+        "      \"id\": \"armor_carbon_screentone\",\n"
+        "      \"layer\": \"Shading\",\n"
+        "      \"polygon\": [[0.55, 0.4], [0.7, 0.4], [0.68, 0.6], [0.53, 0.6]],\n"
+        "      \"angle_deg\": 60.0,\n"
+        "      \"spacing\": 0.01,\n"
+        "      \"brush\": {\"profile\": \"fineliner\", \"color\": \"#000000\", \"size\": 0.002}\n"
+        "    }\n"
+        "  ]\n"
+        "}"
+    );
+
+    KisAiStrokeProgram program;
+    QString error;
+    const QJsonObject root = QJsonDocument::fromJson(jsonText.toUtf8()).object();
+    QVERIFY2(KisAiStrokeProgramCodec::parseProgramJson(root, &program, &error), qPrintable(error));
+
+    // Verify artistic_plan parsed correctly
+    QVERIFY(program.artisticPlan.isValid());
+    QCOMPARE(program.artisticPlan.concept, QStringLiteral("Sci-Fi Cybernetic Valkyrie In Flight"));
+    QCOMPARE(program.artisticPlan.compositionStrategy, QStringLiteral("Dramatic low-angle cinematic diagonal"));
+    QCOMPARE(program.artisticPlan.colorHarmony, QStringLiteral("Luminous cyan neon against deep obsidian chassis"));
+    QCOMPARE(program.artisticPlan.lightingSetup, QStringLiteral("High-contrast dynamic rim light with celestial key"));
+    QCOMPARE(program.artisticPlan.focalPoints.size(), 2);
+    QCOMPARE(program.artisticPlan.focalPoints.at(0), QStringLiteral("glowing visor sensor"));
+
+    // Verify operations parsed correctly
+    QCOMPARE(program.operations.size(), 4);
+
+    QCOMPARE(program.operations[0].kind, KisAiStrokeOperation::Kind::BezierPath);
+    QCOMPARE(program.operations[0].bezierControlPoints.size(), 4);
+    QCOMPARE(program.operations[0].id, QStringLiteral("wing_sweep_curve"));
+
+    QCOMPARE(program.operations[1].kind, KisAiStrokeOperation::Kind::ParametricShape);
+    QCOMPARE(program.operations[1].shapeType, QStringLiteral("capsule"));
+    QCOMPARE(program.operations[1].shapeAngleDeg, 15.0);
+    QVERIFY(program.operations[1].shapeFilled);
+
+    QCOMPARE(program.operations[2].kind, KisAiStrokeOperation::Kind::FormShading);
+    QCOMPARE(program.operations[2].polygon.size(), 4);
+    QCOMPARE(program.operations[2].shadingIntensity, 0.75);
+
+    QCOMPARE(program.operations[3].kind, KisAiStrokeOperation::Kind::TextureHatch);
+    QCOMPARE(program.operations[3].polygon.size(), 4);
+    QCOMPARE(program.operations[3].angleDeg, 60.0);
+
+    // Verify refineForRendering retains all 4 operations
+    KisAiStrokeQualityReport report;
+    const KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(program, &report);
+    QCOMPARE(refined.operations.size(), 4);
+    QCOMPARE(report.droppedOperations, 0);
+
+    // Verify TypeChecker accepts and normalizes them
+    QJsonObject testRoot = root;
+    KisAiStrokeTypeCheckReport tcReport;
+    QVERIFY(KisAiStrokeTypeChecker::checkAndCoerceProgram(&testRoot, &tcReport));
+    QVERIFY(tcReport.isValid);
+}
+
+void KisAiStrokeProgramTest::testPrimitiveExpanderNewPrimitivesAndPromptDomains()
+{
+    const QSize canvasSize(1024, 1024);
+
+    // 1. isCompositeKind check
+    QVERIFY(KisAiPrimitiveExpander::isCompositeKind(KisAiStrokeOperation::Kind::BezierPath));
+    QVERIFY(KisAiPrimitiveExpander::isCompositeKind(KisAiStrokeOperation::Kind::ParametricShape));
+    QVERIFY(KisAiPrimitiveExpander::isCompositeKind(KisAiStrokeOperation::Kind::FormShading));
+    QVERIFY(KisAiPrimitiveExpander::isCompositeKind(KisAiStrokeOperation::Kind::TextureHatch));
+
+    // 2. Expand BezierPath -> atomic Path
+    KisAiStrokeOperation bezierOp;
+    bezierOp.kind = KisAiStrokeOperation::Kind::BezierPath;
+    bezierOp.id = QStringLiteral("curve_1");
+    bezierOp.layer = QStringLiteral("Lineart");
+    bezierOp.bezierControlPoints = {QPointF(0.1, 0.2), QPointF(0.3, 0.1), QPointF(0.7, 0.3), QPointF(0.9, 0.2)};
+    bezierOp.brush.color = QColor(0, 200, 255);
+    bezierOp.brush.size = 0.003;
+
+    const QVector<KisAiStrokeOperation> expandedBezier = KisAiPrimitiveExpander::expand(bezierOp, canvasSize);
+    QCOMPARE(expandedBezier.size(), 1);
+    QCOMPARE(expandedBezier[0].kind, KisAiStrokeOperation::Kind::Path);
+    QVERIFY(expandedBezier[0].points.size() > 10);
+
+    // 3. Expand ParametricShape -> Fill + Path
+    KisAiStrokeOperation shapeOp;
+    shapeOp.kind = KisAiStrokeOperation::Kind::ParametricShape;
+    shapeOp.id = QStringLiteral("shield_plate");
+    shapeOp.layer = QStringLiteral("Flats");
+    shapeOp.shapeType = QStringLiteral("ellipse");
+    shapeOp.shapeCenter = QPointF(0.5, 0.5);
+    shapeOp.shapeSize = QSizeF(0.2, 0.3);
+    shapeOp.shapeFilled = true;
+    shapeOp.brush.color = QColor(80, 100, 140);
+    shapeOp.brush.size = 0.003;
+
+    const QVector<KisAiStrokeOperation> expandedShape = KisAiPrimitiveExpander::expand(shapeOp, canvasSize);
+    QVERIFY(expandedShape.size() >= 2);
+    QCOMPARE(expandedShape[0].kind, KisAiStrokeOperation::Kind::Fill);
+    QCOMPARE(expandedShape[1].kind, KisAiStrokeOperation::Kind::Path);
+
+    // 4. Expand FormShading -> Fill with multiply blend
+    KisAiStrokeOperation formOp;
+    formOp.kind = KisAiStrokeOperation::Kind::FormShading;
+    formOp.id = QStringLiteral("torso_shade");
+    formOp.layer = QStringLiteral("Shading");
+    formOp.polygon = {QPointF(0.4, 0.3), QPointF(0.6, 0.3), QPointF(0.6, 0.6), QPointF(0.4, 0.6)};
+    formOp.brush.color = QColor(40, 20, 60);
+
+    const QVector<KisAiStrokeOperation> expandedForm = KisAiPrimitiveExpander::expand(formOp, canvasSize);
+    QCOMPARE(expandedForm.size(), 1);
+    QCOMPARE(expandedForm[0].kind, KisAiStrokeOperation::Kind::Fill);
+    QCOMPARE(expandedForm[0].blendMode, QStringLiteral("multiply"));
+
+    // 5. Expand TextureHatch -> multiple Path lines
+    KisAiStrokeOperation hatchOp;
+    hatchOp.kind = KisAiStrokeOperation::Kind::TextureHatch;
+    hatchOp.id = QStringLiteral("screentone_1");
+    hatchOp.layer = QStringLiteral("Shading");
+    hatchOp.polygon = {QPointF(0.2, 0.2), QPointF(0.5, 0.2), QPointF(0.5, 0.5), QPointF(0.2, 0.5)};
+    hatchOp.spacing = 0.02;
+
+    const QVector<KisAiStrokeOperation> expandedHatch = KisAiPrimitiveExpander::expand(hatchOp, canvasSize);
+    QVERIFY(expandedHatch.size() >= 3);
+    for (const auto &op : expandedHatch) {
+        QCOMPARE(op.kind, KisAiStrokeOperation::Kind::Path);
+    }
+
+    // 6. Test PromptAnalyzer for SciFiMech and StillLifeFood
+    const auto mechSpec = KisAiPromptAnalyzer::analyze(QStringLiteral("Gundam mecha robot pilot in futuristic space station"), canvasSize);
+    QCOMPARE(mechSpec.domain, KisAiPromptAnalyzer::DomainType::SciFiMech);
+    const QString mechDir = KisAiPromptAnalyzer::generateArtDirection(mechSpec, canvasSize);
+    QVERIFY(mechDir.contains(QStringLiteral("hard-surface")) || mechDir.contains(QStringLiteral("Hard-Surface")));
+
+    const auto foodSpec = KisAiPromptAnalyzer::analyze(QStringLiteral("Hot steaming delicious ramen bowl with pork and boiled egg"), canvasSize);
+    QCOMPARE(foodSpec.domain, KisAiPromptAnalyzer::DomainType::StillLifeFood);
+    const QString foodDir = KisAiPromptAnalyzer::generateArtDirection(foodSpec, canvasSize);
+    QVERIFY(foodDir.contains(QStringLiteral("Still Life")) || foodDir.contains(QStringLiteral("Food")));
 }
 
 KISTEST_MAIN(KisAiStrokeProgramTest)

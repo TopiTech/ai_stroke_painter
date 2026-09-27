@@ -428,7 +428,23 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
     }
 
     // Map common synonyms
-    if (kindStr == QLatin1String("stroke") || kindStr == QLatin1String("line") || kindStr == QLatin1String("curve") || kindStr == QLatin1String("contour")) {
+    if (kindStr == QLatin1String("bezier") || kindStr == QLatin1String("bezier_path") || kindStr == QLatin1String("spline")) {
+        kindStr = QStringLiteral("bezier_path");
+        (*opObj)[QStringLiteral("kind")] = kindStr;
+        if (report) ++report->coercedValues;
+    } else if (kindStr == QLatin1String("shape") || kindStr == QLatin1String("parametric_shape") || kindStr == QLatin1String("ellipse") || kindStr == QLatin1String("circle") || kindStr == QLatin1String("rectangle") || kindStr == QLatin1String("capsule") || kindStr == QLatin1String("star")) {
+        kindStr = QStringLiteral("shape");
+        (*opObj)[QStringLiteral("kind")] = kindStr;
+        if (report) ++report->coercedValues;
+    } else if (kindStr == QLatin1String("form_shading") || kindStr == QLatin1String("form_shad") || kindStr == QLatin1String("volumetric_shading")) {
+        kindStr = QStringLiteral("form_shading");
+        (*opObj)[QStringLiteral("kind")] = kindStr;
+        if (report) ++report->coercedValues;
+    } else if (kindStr == QLatin1String("texture_hatch") || kindStr == QLatin1String("screentone") || kindStr == QLatin1String("cross_hatch")) {
+        kindStr = QStringLiteral("texture_hatch");
+        (*opObj)[QStringLiteral("kind")] = kindStr;
+        if (report) ++report->coercedValues;
+    } else if (kindStr == QLatin1String("stroke") || kindStr == QLatin1String("line") || kindStr == QLatin1String("curve") || kindStr == QLatin1String("contour")) {
         kindStr = QStringLiteral("path");
         (*opObj)[QStringLiteral("kind")] = kindStr;
         if (report) ++report->coercedValues;
@@ -857,6 +873,41 @@ bool KisAiStrokeTypeChecker::checkAndCoerceOperation(
     } else if (kindStr == QLatin1String("cloth_drapery") || kindStr == QLatin1String("hair_flow_cluster")
                || kindStr == QLatin1String("hand_gesture") || kindStr == QLatin1String("dynamic_pose")) {
         // High-level macro primitives: geometry is expanded downstream in KisAiStrokeProgramCodec
+    } else if (kindStr == QLatin1String("bezier_path")) {
+        if (!opObj->contains(QStringLiteral("bezier_control_points")) && opObj->contains(QStringLiteral("control_points"))) {
+            (*opObj)[QStringLiteral("bezier_control_points")] = opObj->value(QStringLiteral("control_points"));
+            if (report) ++report->coercedValues;
+        } else if (!opObj->contains(QStringLiteral("bezier_control_points")) && opObj->contains(QStringLiteral("points"))) {
+            (*opObj)[QStringLiteral("bezier_control_points")] = opObj->value(QStringLiteral("points"));
+            if (report) ++report->coercedValues;
+        }
+        QJsonArray pts = opObj->value(QStringLiteral("bezier_control_points")).toArray();
+        int ptCoerced = 0;
+        if (checkPointsArray(&pts, nullptr, &ptCoerced) && pts.size() >= 2) {
+            (*opObj)[QStringLiteral("bezier_control_points")] = pts;
+            if (report) report->coercedValues += ptCoerced;
+        }
+    } else if (kindStr == QLatin1String("shape")) {
+        if (!opObj->contains(QStringLiteral("center")) && opObj->contains(QStringLiteral("shape_center"))) {
+            (*opObj)[QStringLiteral("center")] = opObj->value(QStringLiteral("shape_center"));
+            if (report) ++report->coercedValues;
+        }
+    } else if (kindStr == QLatin1String("form_shading") || kindStr == QLatin1String("texture_hatch")) {
+        if (!opObj->contains(QStringLiteral("polygon"))) {
+            if (opObj->contains(QStringLiteral("poly"))) {
+                (*opObj)[QStringLiteral("polygon")] = opObj->value(QStringLiteral("poly"));
+                if (report) ++report->coercedValues;
+            } else if (opObj->contains(QStringLiteral("points"))) {
+                (*opObj)[QStringLiteral("polygon")] = opObj->value(QStringLiteral("points"));
+                if (report) ++report->coercedValues;
+            }
+        }
+        int polyCoerced = 0;
+        QJsonArray poly = opObj->value(QStringLiteral("polygon")).toArray();
+        if (checkPolygonArray(&poly, nullptr, &polyCoerced) && poly.size() >= 3) {
+            (*opObj)[QStringLiteral("polygon")] = poly;
+            if (report) report->coercedValues += polyCoerced;
+        }
     } else {
         if (report) {
             ++report->typeErrors;

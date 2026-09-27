@@ -42,6 +42,10 @@ private:
     static QVector<KisAiStrokeOperation> expandHatch(const KisAiStrokeOperation &op, const QSize &canvasSize);
     static QVector<KisAiStrokeOperation> expandMangaLines(const KisAiStrokeOperation &op, const QSize &canvasSize);
     static QVector<KisAiStrokeOperation> expandParticles(const KisAiStrokeOperation &op, const QSize &canvasSize);
+    static QVector<KisAiStrokeOperation> expandBezierPath(const KisAiStrokeOperation &op, const QSize &canvasSize);
+    static QVector<KisAiStrokeOperation> expandParametricShape(const KisAiStrokeOperation &op, const QSize &canvasSize);
+    static QVector<KisAiStrokeOperation> expandFormShading(const KisAiStrokeOperation &op, const QSize &canvasSize);
+    static QVector<KisAiStrokeOperation> expandTextureHatch(const KisAiStrokeOperation &op, const QSize &canvasSize);
 
     static KisAiStrokeOperation makePath(const QString &id,
                                          const QString &groupId,

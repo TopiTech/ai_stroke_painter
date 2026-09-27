@@ -60,6 +60,10 @@ struct KRITAUI_EXPORT KisAiStrokeOperation {
         MangaLines,
         AnimeEye,
         AnimeMouth,
+        BezierPath,
+        ParametricShape,
+        FormShading,
+        TextureHatch,
         Unknown
     };
 
@@ -130,6 +134,22 @@ struct KRITAUI_EXPORT KisAiStrokeOperation {
     // V9 Atomic Ink annotations (copied onto InkStroke IR)
     QString groupId; // eye_l, jaw, hair_fringe_2
     QString parentId; // T-junction snap target
+
+    // V11 High-Level Primitives
+    // BezierPath: Control points for cubic Bézier splines
+    QVector<QPointF> bezierControlPoints;
+
+    // ParametricShape: ellipse, rounded_rect, capsule, petal, teardrop, crescent, star
+    QString shapeType;
+    QPointF shapeCenter{0.5, 0.5};
+    QSizeF shapeSize{0.1, 0.1};
+    qreal shapeRadius{0.0};
+    qreal shapeAngleDeg{0.0};
+    bool shapeFilled{true};
+
+    // FormShading: curvature-following soft gradient
+    QPointF lightSourcePos{0.5, 0.0};
+    qreal featherWidth{0.05};
 };
 
 struct KRITAUI_EXPORT KisAiCritiqueRegion {
@@ -139,11 +159,29 @@ struct KRITAUI_EXPORT KisAiCritiqueRegion {
     int priority{1}; // 1 (low) to 5 (critical)
 };
 
+/**
+ * V11: Autonomous AI Artistic Intent & Composition Blueprint.
+ * Formulated by the LLM before generating stroke coordinates.
+ */
+struct KRITAUI_EXPORT KisAiArtisticPlan {
+    QString visualConcept;
+    QPointF focalAnchor{0.5, 0.5};
+    QString framing{QStringLiteral("standard")};
+    QPointF keyLightDir{-0.5, -0.7};
+    QColor keyColor{QColor(255, 250, 240)};
+    QColor ambientShadowColor{QColor(35, 45, 70)};
+    bool enableSssWarmth{true};
+    QString layerStrategy;
+    QStringList plannedHeroParts;
+    bool isValid{false};
+};
+
 struct KRITAUI_EXPORT KisAiStrokeProgram {
     int schemaVersion{2};
     QString prompt;
     int seed{42};
     QString title;
+    KisAiArtisticPlan artisticPlan;
     int iteration{1};
     int currentStep{1};
     int totalSteps{1};

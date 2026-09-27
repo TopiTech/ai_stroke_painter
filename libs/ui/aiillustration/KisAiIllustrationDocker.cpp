@@ -2512,6 +2512,15 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
 
     m_lastQualityReport = qualityReport;
 
+    if (program.artisticPlan.isValid()) {
+        logDebug(QStringLiteral("ARTISTIC_PLAN"),
+                 QStringLiteral("自律構想策定: Concept='%1' | Strategy='%2' | Lighting='%3' | Palette='%4'")
+                     .arg(program.artisticPlan.concept,
+                          program.artisticPlan.compositionStrategy,
+                          program.artisticPlan.lightingSetup,
+                          program.artisticPlan.colorHarmony));
+    }
+
     // A1: Quality Feedback Self-Correction Loop
     // Trigger correction retry if Flats layer is missing, structural score is below 0.55,
     // or over half of the generated operations were dropped as invalid.

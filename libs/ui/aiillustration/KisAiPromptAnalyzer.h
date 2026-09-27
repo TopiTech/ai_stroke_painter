@@ -32,6 +32,8 @@ public:
         Creature,    // Animals, cats, dogs, birds, dragons
         Botanical,   // Flowers, roses, bouquets, petals, plants
         MangaFx,     // Focus lines, speed lines, magic circles, runes
+        SciFiMech,   // Robots, mecha, spaceships, cyberpunk machinery
+        StillLifeFood,// Food, drinks, cups, ramen, fruits, objects, instruments
         General      // General painting
     };
 

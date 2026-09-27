@@ -63,7 +63,9 @@ bool KisAiPrimitiveExpander::isCompositeKind(KisAiStrokeOperation::Kind kind)
 {
     return kind == KisAiStrokeOperation::Kind::AnimeEye || kind == KisAiStrokeOperation::Kind::AnimeMouth
         || kind == KisAiStrokeOperation::Kind::Hatch || kind == KisAiStrokeOperation::Kind::MangaLines
-        || kind == KisAiStrokeOperation::Kind::Particles;
+        || kind == KisAiStrokeOperation::Kind::Particles || kind == KisAiStrokeOperation::Kind::BezierPath
+        || kind == KisAiStrokeOperation::Kind::ParametricShape || kind == KisAiStrokeOperation::Kind::FormShading
+        || kind == KisAiStrokeOperation::Kind::TextureHatch;
 }
 
 int KisAiPrimitiveExpander::atomicPathCount(const QVector<KisAiStrokeOperation> &ops)
@@ -637,6 +639,336 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandParticles(const KisA
     return out;
 }
 
+QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandBezierPath(const KisAiStrokeOperation &op,
+                                                                       const QSize &canvasSize)
+{
+    Q_UNUSED(canvasSize);
+    QVector<QPointF> rawPts = op.bezierControlPoints;
+    if (rawPts.isEmpty()) {
+        for (const KisAiStrokePoint &p : op.points) {
+            rawPts.append(p.pos);
+        }
+    }
+    if (rawPts.size() < 2) {
+        return {op};
+    }
+
+    QVector<KisAiStrokePoint> sampledPts;
+    const int n = rawPts.size();
+
+    // Sample smooth cubic or piecewise quadratic segments
+    if (n == 4) {
+        // Single cubic Bézier: P0, P1, P2, P3
+        constexpr int kSteps = 24;
+        const QPointF p0 = rawPts[0];
+        const QPointF p1 = rawPts[1];
+        const QPointF p2 = rawPts[2];
+        const QPointF p3 = rawPts[3];
+        sampledPts.reserve(kSteps + 1);
+        for (int i = 0; i <= kSteps; ++i) {
+            const qreal t = qreal(i) / qreal(kSteps);
+            const qreal it = 1.0 - t;
+            const QPointF pt = it * it * it * p0 + 3.0 * it * it * t * p1 + 3.0 * it * t * t * p2 + t * t * t * p3;
+            const qreal pr = 0.25 + 0.65 * std::sin(t * PI);
+            sampledPts.append(KisAiStrokePoint(pt.x(), pt.y(), pr));
+        }
+    } else if (n >= 4 && (n - 1) % 3 == 0) {
+        // Multi-segment cubic Bézier: P0, C1, C2, P1, C3, C4, P2, ...
+        const int numSegments = (n - 1) / 3;
+        constexpr int kStepsPerSeg = 16;
+        sampledPts.reserve(numSegments * kStepsPerSeg + 1);
+        for (int s = 0; s < numSegments; ++s) {
+            const QPointF p0 = rawPts[s * 3];
+            const QPointF p1 = rawPts[s * 3 + 1];
+            const QPointF p2 = rawPts[s * 3 + 2];
+            const QPointF p3 = rawPts[s * 3 + 3];
+            for (int i = (s == 0 ? 0 : 1); i <= kStepsPerSeg; ++i) {
+                const qreal t = qreal(i) / qreal(kStepsPerSeg);
+                const qreal it = 1.0 - t;
+                const QPointF pt =
+                    it * it * it * p0 + 3.0 * it * it * t * p1 + 3.0 * it * t * t * p2 + t * t * t * p3;
+                const qreal globalT = (qreal(s) + t) / qreal(numSegments);
+                const qreal pr = 0.20 + 0.70 * std::sin(globalT * PI);
+                sampledPts.append(KisAiStrokePoint(pt.x(), pt.y(), pr));
+            }
+        }
+    } else {
+        // Arbitrary N control points: evaluate Catmull-Rom spline through points
+        constexpr int kStepsPerSeg = 12;
+        sampledPts.reserve((n - 1) * kStepsPerSeg + 1);
+        for (int i = 0; i < n - 1; ++i) {
+            const QPointF p0 = (i == 0) ? rawPts[0] : rawPts[i - 1];
+            const QPointF p1 = rawPts[i];
+            const QPointF p2 = rawPts[i + 1];
+            const QPointF p3 = (i + 2 < n) ? rawPts[i + 2] : rawPts[i + 1];
+            for (int s = (i == 0 ? 0 : 1); s <= kStepsPerSeg; ++s) {
+                const qreal t = qreal(s) / qreal(kStepsPerSeg);
+                const qreal t2 = t * t;
+                const qreal t3 = t2 * t;
+                const QPointF pt = 0.5
+                    * ((2.0 * p1) + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+                       + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3);
+                const qreal globalT = (qreal(i) + t) / qreal(n - 1);
+                const qreal pr = 0.20 + 0.70 * std::sin(globalT * PI);
+                sampledPts.append(KisAiStrokePoint(pt.x(), pt.y(), pr));
+            }
+        }
+    }
+
+    const QString group = op.groupId.isEmpty() ? KisAiStrokeGraph::inferGroupId(op) : op.groupId;
+    KisAiStrokeOperation pathOp = makePath(op.id.isEmpty() ? QStringLiteral("bezier_path") : op.id,
+                                           group,
+                                           op.layer.isEmpty() ? QStringLiteral("Lineart") : op.layer,
+                                           sampledPts,
+                                           op.brush.color,
+                                           op.brush.profile.isEmpty() ? QStringLiteral("gpen") : op.brush.profile,
+                                           op.brush.size > 0.0 ? op.brush.size : 0.0035,
+                                           op.brush.opacity > 0.0 ? op.brush.opacity : 1.0,
+                                           op.role.isEmpty() ? QStringLiteral("contour") : op.role,
+                                           op.parentId);
+    pathOp.blendMode = op.blendMode;
+    pathOp.clipToId = op.clipToId;
+    return {pathOp};
+}
+
+QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandParametricShape(const KisAiStrokeOperation &op,
+                                                                           const QSize &canvasSize)
+{
+    Q_UNUSED(canvasSize);
+    const QPointF center = op.shapeCenter;
+    const qreal w = op.shapeSize.isValid() && op.shapeSize.width() > 0.0
+        ? op.shapeSize.width()
+        : (op.shapeRadius > 0.0 ? op.shapeRadius * 2.0 : 0.10);
+    const qreal h = op.shapeSize.isValid() && op.shapeSize.height() > 0.0
+        ? op.shapeSize.height()
+        : (op.shapeRadius > 0.0 ? op.shapeRadius * 2.0 : 0.10);
+    const qreal angleRad = op.shapeAngleDeg * PI / 180.0;
+    const qreal cosA = std::cos(angleRad);
+    const qreal sinA = std::sin(angleRad);
+
+    const auto rotatePt = [center, cosA, sinA](const QPointF &pt) -> QPointF {
+        const qreal dx = pt.x() - center.x();
+        const qreal dy = pt.y() - center.y();
+        return QPointF(center.x() + dx * cosA - dy * sinA, center.y() + dx * sinA + dy * cosA);
+    };
+
+    QPolygonF poly;
+    const QString type = op.shapeType.toLower().trimmed();
+    if (type == QLatin1String("circle") || type == QLatin1String("ellipse") || type.isEmpty()) {
+        const qreal rx = w * 0.5;
+        const qreal ry = h * 0.5;
+        constexpr int kSteps = 32;
+        poly.reserve(kSteps);
+        for (int i = 0; i < kSteps; ++i) {
+            const qreal a = 2.0 * PI * qreal(i) / qreal(kSteps);
+            const QPointF rawPt(center.x() + std::cos(a) * rx, center.y() + std::sin(a) * ry);
+            poly.append(rotatePt(rawPt));
+        }
+    } else if (type == QLatin1String("rectangle") || type == QLatin1String("rect")) {
+        const qreal hx = w * 0.5;
+        const qreal hy = h * 0.5;
+        poly.append(rotatePt(QPointF(center.x() - hx, center.y() - hy)));
+        poly.append(rotatePt(QPointF(center.x() + hx, center.y() - hy)));
+        poly.append(rotatePt(QPointF(center.x() + hx, center.y() + hy)));
+        poly.append(rotatePt(QPointF(center.x() - hx, center.y() + hy)));
+    } else if (type == QLatin1String("capsule")) {
+        const qreal r = qMin(w, h) * 0.5;
+        const qreal hx = (w > h) ? (w * 0.5 - r) : 0.0;
+        const qreal hy = (h > w) ? (h * 0.5 - r) : 0.0;
+        constexpr int kHalfSteps = 16;
+        if (w >= h) {
+            for (int i = 0; i <= kHalfSteps; ++i) {
+                const qreal a = -PI * 0.5 + PI * qreal(i) / qreal(kHalfSteps);
+                poly.append(rotatePt(QPointF(center.x() + hx + std::cos(a) * r, center.y() + std::sin(a) * r)));
+            }
+            for (int i = 0; i <= kHalfSteps; ++i) {
+                const qreal a = PI * 0.5 + PI * qreal(i) / qreal(kHalfSteps);
+                poly.append(rotatePt(QPointF(center.x() - hx + std::cos(a) * r, center.y() + std::sin(a) * r)));
+            }
+        } else {
+            for (int i = 0; i <= kHalfSteps; ++i) {
+                const qreal a = 0.0 + PI * qreal(i) / qreal(kHalfSteps);
+                poly.append(rotatePt(QPointF(center.x() + std::cos(a) * r, center.y() + hy + std::sin(a) * r)));
+            }
+            for (int i = 0; i <= kHalfSteps; ++i) {
+                const qreal a = PI + PI * qreal(i) / qreal(kHalfSteps);
+                poly.append(rotatePt(QPointF(center.x() + std::cos(a) * r, center.y() - hy + std::sin(a) * r)));
+            }
+        }
+    } else if (type == QLatin1String("star")) {
+        constexpr int kPoints = 5;
+        const qreal rOuter = qMax(w, h) * 0.5;
+        const qreal rInner = rOuter * 0.45;
+        for (int i = 0; i < kPoints * 2; ++i) {
+            const qreal a = -PI * 0.5 + PI * qreal(i) / qreal(kPoints);
+            const qreal r = (i % 2 == 0) ? rOuter : rInner;
+            poly.append(rotatePt(QPointF(center.x() + std::cos(a) * r, center.y() + std::sin(a) * r)));
+        }
+    } else {
+        const qreal rx = w * 0.5;
+        const qreal ry = h * 0.5;
+        constexpr int kSteps = 16;
+        for (int i = 0; i < kSteps; ++i) {
+            const qreal a = 2.0 * PI * qreal(i) / qreal(kSteps);
+            poly.append(rotatePt(QPointF(center.x() + std::cos(a) * rx, center.y() + std::sin(a) * ry)));
+        }
+    }
+
+    QVector<KisAiStrokeOperation> result;
+    const QString group = op.groupId.isEmpty() ? KisAiStrokeGraph::inferGroupId(op) : op.groupId;
+    const QString baseId = op.id.isEmpty() ? QStringLiteral("shape") : op.id;
+
+    if (op.shapeFilled) {
+        KisAiStrokeOperation fillOp = makeFill(baseId,
+                                               group,
+                                               op.layer.isEmpty() ? QStringLiteral("Flats") : op.layer,
+                                               poly,
+                                               op.brush.color,
+                                               op.brush.opacity > 0.0 ? op.brush.opacity : 1.0,
+                                               QStringLiteral("shape_fill"),
+                                               op.clipToId);
+        fillOp.blendMode = op.blendMode;
+        result.append(fillOp);
+    }
+
+    if (op.brush.size > 0.001 || op.layer == QLatin1String("Lineart")) {
+        QVector<KisAiStrokePoint> strokePts;
+        strokePts.reserve(poly.size() + 1);
+        for (const QPointF &pt : poly) {
+            strokePts.append(KisAiStrokePoint(pt.x(), pt.y(), 0.8));
+        }
+        if (!poly.isEmpty()) {
+            strokePts.append(KisAiStrokePoint(poly.first().x(), poly.first().y(), 0.8));
+        }
+        KisAiStrokeOperation lineOp = makePath(baseId + QStringLiteral("_contour"),
+                                               group,
+                                               op.layer.isEmpty() ? QStringLiteral("Lineart") : op.layer,
+                                               strokePts,
+                                               op.brush.color,
+                                               QStringLiteral("gpen"),
+                                               op.brush.size > 0.0 ? op.brush.size : 0.003,
+                                               op.brush.opacity > 0.0 ? op.brush.opacity : 1.0,
+                                               QStringLiteral("contour"),
+                                               baseId);
+        lineOp.closed = true;
+        result.append(lineOp);
+    }
+
+    return result.isEmpty() ? QVector<KisAiStrokeOperation>{op} : result;
+}
+
+QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandFormShading(const KisAiStrokeOperation &op,
+                                                                       const QSize &canvasSize)
+{
+    Q_UNUSED(canvasSize);
+    if (op.polygon.size() < 3) {
+        return {op};
+    }
+
+    const QPointF lightPos = op.lightSourcePos.isNull() ? QPointF(0.25, 0.15) : op.lightSourcePos;
+    const QRectF bounds = op.polygon.boundingRect();
+    const QPointF polyCenter = bounds.center();
+    QPointF lightDir = polyCenter - lightPos;
+    const qreal dist = std::sqrt(lightDir.x() * lightDir.x() + lightDir.y() * lightDir.y());
+    if (dist > 1.0e-5) {
+        lightDir /= dist;
+    } else {
+        lightDir = QPointF(0.5, 0.866);
+    }
+
+    const qreal shadowOffsetMag = qBound<qreal>(0.005, op.featherWidth > 0.0 ? op.featherWidth : 0.02, 0.08);
+    const QPointF offset = lightDir * shadowOffsetMag;
+
+    QPolygonF coreShadowPoly;
+    coreShadowPoly.reserve(op.polygon.size());
+    for (const QPointF &pt : op.polygon) {
+        const QPointF fromCenter = pt - polyCenter;
+        const qreal dot = fromCenter.x() * lightDir.x() + fromCenter.y() * lightDir.y();
+        if (dot > 0.0) {
+            coreShadowPoly.append(pt);
+        } else {
+            coreShadowPoly.append(polyCenter + fromCenter * 0.4 + offset);
+        }
+    }
+
+    const QString group = op.groupId.isEmpty() ? KisAiStrokeGraph::inferGroupId(op) : op.groupId;
+    const QString baseId = op.id.isEmpty() ? QStringLiteral("form_shading") : op.id;
+
+    KisAiStrokeOperation shadowOp =
+        makeFill(baseId,
+                 group,
+                 op.layer.isEmpty() ? QStringLiteral("Shading") : op.layer,
+                 coreShadowPoly.size() >= 3 ? coreShadowPoly : op.polygon,
+                 op.brush.color,
+                 qBound<qreal>(0.05,
+                               op.shadingIntensity * (op.brush.opacity > 0.0 ? op.brush.opacity : 1.0),
+                               1.0),
+                 QStringLiteral("form_shadow"),
+                 op.clipToId);
+    shadowOp.blendMode = op.blendMode.isEmpty() ? QStringLiteral("multiply") : op.blendMode;
+    shadowOp.style = QStringLiteral("wash");
+    return {shadowOp};
+}
+
+QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandTextureHatch(const KisAiStrokeOperation &op,
+                                                                        const QSize &canvasSize)
+{
+    Q_UNUSED(canvasSize);
+    if (op.polygon.size() < 3) {
+        return {op};
+    }
+
+    const QRectF bounds = op.polygon.boundingRect();
+    const qreal spacing = qBound<qreal>(0.004, op.spacing > 0.0 ? op.spacing : 0.012, 0.08);
+    const qreal angleRad = op.angleDeg * PI / 180.0;
+    const qreal cosA = std::cos(angleRad);
+    const qreal sinA = std::sin(angleRad);
+
+    QVector<KisAiStrokeOperation> result;
+    const QString group = op.groupId.isEmpty() ? KisAiStrokeGraph::inferGroupId(op) : op.groupId;
+    const QString baseId = op.id.isEmpty() ? QStringLiteral("tex_hatch") : op.id;
+    const QColor color = op.brush.color.isValid() ? op.brush.color : QColor(30, 20, 40);
+    const qreal brushSize = op.brush.size > 0.0 ? op.brush.size : 0.0018;
+
+    const qreal diag = std::sqrt(bounds.width() * bounds.width() + bounds.height() * bounds.height());
+    const QPointF center = bounds.center();
+
+    int lineIdx = 0;
+    for (qreal d = -diag * 0.6; d <= diag * 0.6; d += spacing) {
+        const QPointF pMid(center.x() + d * -sinA, center.y() + d * cosA);
+        const QPointF p0(pMid.x() - diag * 0.6 * cosA, pMid.y() - diag * 0.6 * sinA);
+        const QPointF p1(pMid.x() + diag * 0.6 * cosA, pMid.y() + diag * 0.6 * sinA);
+
+        const qreal clampedX0 = qBound(bounds.left(), p0.x(), bounds.right());
+        const qreal clampedY0 = qBound(bounds.top(), p0.y(), bounds.bottom());
+        const qreal clampedX1 = qBound(bounds.left(), p1.x(), bounds.right());
+        const qreal clampedY1 = qBound(bounds.top(), p1.y(), bounds.bottom());
+
+        if (std::abs(clampedX1 - clampedX0) > 1.0e-4 || std::abs(clampedY1 - clampedY0) > 1.0e-4) {
+            QVector<KisAiStrokePoint> pts;
+            pts.append(KisAiStrokePoint(clampedX0, clampedY0, 0.7));
+            pts.append(KisAiStrokePoint(clampedX1, clampedY1, 0.7));
+
+            KisAiStrokeOperation lineOp = makePath(QStringLiteral("%1_%2").arg(baseId).arg(lineIdx++),
+                                                   group,
+                                                   op.layer.isEmpty() ? QStringLiteral("Shading") : op.layer,
+                                                   pts,
+                                                   color,
+                                                   QStringLiteral("fineliner"),
+                                                   brushSize,
+                                                   op.brush.opacity > 0.0 ? op.brush.opacity : 0.8,
+                                                   QStringLiteral("hatch_line"),
+                                                   baseId);
+            lineOp.clipToId = op.clipToId;
+            result.append(lineOp);
+        }
+        if (result.size() >= 80)
+            break;
+    }
+
+    return result.isEmpty() ? QVector<KisAiStrokeOperation>{op} : result;
+}
+
 QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expand(const KisAiStrokeOperation &op, const QSize &canvasSize)
 {
     switch (op.kind) {
@@ -650,6 +982,14 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expand(const KisAiStrokeOp
         return expandMangaLines(op, canvasSize);
     case KisAiStrokeOperation::Kind::Particles:
         return expandParticles(op, canvasSize);
+    case KisAiStrokeOperation::Kind::BezierPath:
+        return expandBezierPath(op, canvasSize);
+    case KisAiStrokeOperation::Kind::ParametricShape:
+        return expandParametricShape(op, canvasSize);
+    case KisAiStrokeOperation::Kind::FormShading:
+        return expandFormShading(op, canvasSize);
+    case KisAiStrokeOperation::Kind::TextureHatch:
+        return expandTextureHatch(op, canvasSize);
     default: {
         KisAiStrokeOperation annotated = op;
         if (annotated.groupId.isEmpty())

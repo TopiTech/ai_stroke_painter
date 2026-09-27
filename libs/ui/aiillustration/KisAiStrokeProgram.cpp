@@ -393,7 +393,11 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
                                                               QStringLiteral("hatch"),
                                                               QStringLiteral("manga_lines"),
                                                               QStringLiteral("anime_eye"),
-                                                              QStringLiteral("anime_mouth")}}};
+                                                              QStringLiteral("anime_mouth"),
+                                                              QStringLiteral("bezier_path"),
+                                                              QStringLiteral("shape"),
+                                                              QStringLiteral("form_shading"),
+                                                              QStringLiteral("texture_hatch")}}};
     opProps[QStringLiteral("id")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("layer")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     opProps[QStringLiteral("blend_mode")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")},
@@ -410,6 +414,20 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
     opProps[QStringLiteral("points")] = controlPointListSchema;
     opProps[QStringLiteral("polygon")] = controlPointListSchema;
     opProps[QStringLiteral("spine")] = controlPointListSchema;
+    opProps[QStringLiteral("bezier_control_points")] = controlPointListSchema;
+    opProps[QStringLiteral("shape_type")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    opProps[QStringLiteral("shape_center")] = pointSchema;
+    opProps[QStringLiteral("shape_size")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("array")},
+                                                        {QStringLiteral("items"), pointItem},
+                                                        {QStringLiteral("minItems"), 2},
+                                                        {QStringLiteral("maxItems"), 2}};
+    opProps[QStringLiteral("shape_radius")] =
+        QJsonObject{{QStringLiteral("type"), QStringLiteral("number")}, {QStringLiteral("exclusiveMinimum"), 0.0}};
+    opProps[QStringLiteral("shape_angle_deg")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("number")}};
+    opProps[QStringLiteral("shape_filled")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("boolean")}};
+    opProps[QStringLiteral("light_source_pos")] = pointSchema;
+    opProps[QStringLiteral("feather_width")] =
+        QJsonObject{{QStringLiteral("type"), QStringLiteral("number")}, {QStringLiteral("minimum"), 0.0}};
     opProps[QStringLiteral("colors")] =
         QJsonObject{{QStringLiteral("type"), QStringLiteral("array")},
                     {QStringLiteral("items"), QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}}}};
@@ -484,6 +502,20 @@ QJsonObject KisAiStrokeProgramCodec::strokeProgramJsonSchema()
     rootProps[QStringLiteral("schema_version")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")}};
     rootProps[QStringLiteral("prompt")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     rootProps[QStringLiteral("title")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+
+    QJsonObject artisticPlanProps;
+    artisticPlanProps[QStringLiteral("concept")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    artisticPlanProps[QStringLiteral("composition_strategy")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    artisticPlanProps[QStringLiteral("color_harmony")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    artisticPlanProps[QStringLiteral("lighting_setup")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    artisticPlanProps[QStringLiteral("focal_points")] =
+        QJsonObject{{QStringLiteral("type"), QStringLiteral("array")},
+                    {QStringLiteral("items"), QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}}}};
+    artisticPlanProps[QStringLiteral("silhouette_rhythm")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
+    rootProps[QStringLiteral("artistic_plan")] =
+        QJsonObject{{QStringLiteral("type"), QStringLiteral("object")},
+                    {QStringLiteral("properties"), artisticPlanProps}};
+
     rootProps[QStringLiteral("visual_critique")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     rootProps[QStringLiteral("step_phase")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("string")}};
     rootProps[QStringLiteral("current_step")] = QJsonObject{{QStringLiteral("type"), QStringLiteral("integer")}};
@@ -557,21 +589,22 @@ QString KisAiStrokeProgramCodec::buildLayerSemanticsSection()
 {
     return QStringLiteral(
         "=== LAYER ARCHITECTURE & COMPOSITION (Back-to-Front) ===\n"
+        "Direct any subject (characters, mecha, creatures, landscapes, still-life) using this cohesive layer stack:\n"
         "1. 'Background': Far distance, atmosphere, environment washes, and depth setting (rendered behind subjects; "
         "NOT clipped).\n"
-        "2. 'Flats': Volumetric subject mass & local color blocking (skin, hair, clothing, props). Establish solid 3D "
+        "2. 'Flats': Volumetric subject mass & local color blocking (skin, hair, armor plates, clothing, foliage, props). Establish solid 3D "
         "plane volumes, NOT flat paper silhouettes.\n"
         "3. 'Shading': True 3D volumetric shadows (Multiply blend, clipped to Flats).\n"
-        "   - Tier 1 Form Shadows: Soft curvature transitions across rounded forms (face planes, torso, fabric folds) "
+        "   - Tier 1 Form Shadows: Soft curvature transitions across rounded forms (face planes, torso, fabric folds, curved hull plates) "
         "using watercolor/brush with wash/directional style.\n"
-        "   - Tier 2 Cast Shadows: Crisp occlusion shadow edges under hair bangs, jawline, collar, and deep drapery.\n"
-        "   - Tier 3 Ambient Occlusion (AO): Deep crevice shading in overlapping corners and contact seams.\n"
+        "   - Tier 2 Cast Shadows: Crisp occlusion shadow edges under hair bangs, jawline, collar, deep drapery, armor overhangs, or terrain contours.\n"
+        "   - Tier 3 Ambient Occlusion (AO): Deep crevice shading in overlapping corners, panel gaps, and contact seams.\n"
         "4. 'Lineart': Exquisite master inking. Every line drawn with deliberate care, natural S/C-curve flow, and "
         "pressure nuance.\n"
         "   - Facial micro-contours (eyelashes, double eyelids, iris rims, subtle nose bridge, delicate lip "
         "contours).\n"
-        "   - Flowing hair strands, tapered locks, dynamic clothing seams, and anatomical contours.\n"
-        "5. 'Highlights': Specular glints, vital eye catchlights, hair halo luster, and rim lighting (Screen or Color "
+        "   - Flowing hair strands, tapered locks, dynamic clothing seams, mechanical panel lines, and anatomical contours.\n"
+        "5. 'Highlights': Specular glints, vital eye catchlights, hair halo luster, metallic reflections, and rim lighting (Screen or Color "
         "Dodge blend, clipped to Flats).\n"
         "   - Use 'blend_mode': 'color_dodge' for intense luminous specular accents, magical glows, eye glints, and "
         "hair luster rings.\n"
@@ -585,12 +618,15 @@ QString KisAiStrokeProgramCodec::buildDrawingWorkflowSection()
     return QStringLiteral(
         "=== MASTER DRAWING WORKFLOW (MANDATORY) ===\n"
         "Direct your drawing like a master digital illustrator with artistic autonomy. "
-        "Silently audit the target composition, gesture dynamics, and focal hierarchy before laying down strokes:\n"
+        "Audit the target composition, gesture dynamics, and focal hierarchy before laying down strokes:\n"
+        "0. Autonomous Cognitive Direction ('artistic_plan'): Formulate the illustration's core creative concept, "
+        "composition_strategy (e.g. golden spiral, dynamic 3/4, atmospheric landscape vista, dramatic macro), "
+        "lighting_setup (key light, rim, bounce), and color_harmony before generating coordinates.\n"
         "1. Dynamic Staging & Cinematic Framing: Never lock into a stiff, centered passport-photo bust! "
         "Embrace expressive camera angles (subtle dramatic tilt, 3/4 dynamic view, high/low angle, rule of thirds offset). "
         "Incorporate organic gestures (hand touching face, hair fluttering in wind, dynamic shoulder lean).\n"
-        "2. Sculpting 3D Form Masses: Establish confident, continuous anatomical silhouettes on 'Flats' (skin, sweeping hair masses, clothing folds). "
-        "Assign clean IDs ('face_skin', 'body_base', 'hair_back', 'hair_bangs') to enable strict silhouette clipping (clip_to_id).\n"
+        "2. Sculpting 3D Form Masses: Establish confident, continuous anatomical silhouettes on 'Flats' (skin, sweeping hair masses, clothing folds, mecha plates). "
+        "Assign clean IDs ('face_skin', 'body_base', 'hair_back', 'hair_bangs', 'armor_chassis') to enable strict silhouette clipping (clip_to_id).\n"
         "3. Multi-Tier Shading Depth (Multiply blend): Pair soft curvature form shadows (wash/directional) with crisp occlusion cast shadows "
         "under hair fringe, chin, and drapery seams. Let shadows breathe with warm peach/coral subsurface scattering (SSS) transitions.\n"
         "4. Exquisite Deliberate Inking: Inscribe lineart with organic calligraphic weight hierarchy! Outer structural contours use bold strokes (0.0035-0.0055), "
@@ -623,7 +659,11 @@ QString KisAiStrokeProgramCodec::buildArtisticGuidelinesSection()
         "- Exquisite Facial Landmarks: Dedicate delicate individual strokes for upper lash arcs, double eyelids, iris "
         "rings, pupil cores, and subtle lip creases.\n"
         "- Hair Volume & Strands: Group hair into primary masses, sculpt shadow planes beneath them, and finish with "
-        "flowing ribbon strands and tapered flyaways.");
+        "flowing ribbon strands and tapered flyaways.\n"
+        "- Mecha & Hard-Surface Excellence: Inscribe crisp panel seams, mechanical bevels, hydraulics, and glowing sensor accents using 'shape' and 'bezier_path'.\n"
+        "- Organic Creatures & Monsters: Sculpt expressive silhouettes with varied anatomy, muscular planes, scales/fur textures, and predatory or mystical eye catchlights.\n"
+        "- Scenic Landscapes & Environments: Establish atmospheric depth (aerial perspective wash on 'Background', structural geological/foliage masses on 'Flats', fine foliage linework on 'Lineart').\n"
+        "- Food & Culinary Still-Life: Build succulent, glossy volume with warm saturated local colors, soft ambient occlusions, and glistening specular catchlights.");
 }
 
 QString KisAiStrokeProgramCodec::buildOperationKindsSection()
@@ -643,6 +683,16 @@ QString KisAiStrokeProgramCodec::buildOperationKindsSection()
         "... ] (pressure: 0.1-1.0). "
         "brush { 'profile': 'gpen'/'pencil'/'fineliner'/'maru_pen'/'airbrush'/'watercolor'/'brush', 'color': '#hex', "
         "'size': 0.0015-0.008, opacity: 0.0-1.0 }.\n"
+        "- 'bezier_path': High-precision smooth Bézier spline. bezier_control_points [ [x, y], ... ] or points [ [x, y, p], ... ], "
+        "brush { 'profile': 'gpen'/'fineliner'/'brush', 'color': '#hex', 'size': 0.002-0.006 }. Ideal for long sweeping hair curves, "
+        "vehicle/mecha silhouettes, and elegant organic contours with fewer tokens.\n"
+        "- 'shape': Parametric geometric primitive (ellipse, circle, rectangle, capsule, star, polygon). shape_type "
+        "('ellipse'/'circle'/'rectangle'/'capsule'/'star'), center [cx, cy], size [w, h], radius, angle_deg, shape_filled (true/false), "
+        "brush { 'color': '#hex' }. Perfect for armor plates, wheels, pupils, decorative motifs, or architectural blocks.\n"
+        "- 'form_shading': Curvature-aware 3D form shading. polygon [ [x, y], ... ], light_source_pos [lx, ly], feather_width, "
+        "shading_intensity (0.0-1.0), shading_type ('spherical'/'cylindrical'/'planar'). Automatically computes soft core terminator and contact shadow transitions.\n"
+        "- 'texture_hatch': Architectural/manga screentone and mechanical cross-hatching. polygon [ [x, y], ... ], angle_deg (0-180), "
+        "spacing (0.004-0.02), cross_hatch (true/false), style ('screentone'/'cross_hatch'/'stipple').\n"
         "- 'ribbon': Tapered organic strokes (hair locks, drapery folds, limbs). Spine [ [x, y], ... ], width_start, "
         "width_mid, width_end (0.004-0.04). "
         "IMPORTANT: When brush.profile is 'hair' or id contains 'hair', the engine automatically procedurally "
@@ -680,6 +730,13 @@ QString KisAiStrokeProgramCodec::buildOutputSchemaExampleSection()
         "  \"schema_version\": 2,\n"
         "  \"prompt\": \"masterpiece illustration\",\n"
         "  \"title\": \"Harmonious Artwork\",\n"
+        "  \"artistic_plan\": {\n"
+        "    \"concept\": \"Dynamic high-contrast character illustration\",\n"
+        "    \"composition_strategy\": \"Rule-of-thirds dynamic diagonal framing\",\n"
+        "    \"color_harmony\": \"Warm amber key light with deep indigo rim shadows\",\n"
+        "    \"lighting_setup\": \"Directional key light from upper-left (0.25, 0.15)\",\n"
+        "    \"focal_points\": [\"expressive eye\", \"flowing hair ribbon\"]\n"
+        "  },\n"
         "  \"operations\": [\n"
         "    {\n"
         "      \"kind\": \"gradient_fill\",\n"
@@ -755,7 +812,10 @@ QString KisAiStrokeProgramCodec::buildFlagshipDirectives()
         "5. Hair Clump Architecture:\n"
         "   - Foundation mass on 'Flats' -> underside occlusion shading on 'Shading' -> ribbon spine clumps ('ribbon' with width_start/mid/end) -> delicate flyaways on 'Lineart'.\n"
         "6. Accurate Silhouette Anchoring:\n"
-        "   - Consistently specify 'clip_to_id' referencing base silhouette operations so shadows and highlights never bleed outside the target subject.");
+        "   - Consistently specify 'clip_to_id' referencing base silhouette operations so shadows and highlights never bleed outside the target subject.\n"
+        "7. Autonomous Cognitive Architecture & Primitive Leverage:\n"
+        "   - Formulate a clear 'artistic_plan' before stroke generation to unify color harmony, focal contrast, and lighting direction.\n"
+        "   - Freely deploy 'bezier_path' for sweeping organic curves, 'shape' for crisp geometric forms/plating, 'form_shading' for volumetric curved surfaces, and 'texture_hatch' for rich screentone depth.");
 }
 
 QVector<KisAiStrokeOperation> KisAiStrokeProgramCodec::expandMacroOperation(const QJsonObject &o,
@@ -3077,6 +3137,40 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
     outProgram->recommendedAction =
         findField(rootObj, {QStringLiteral("recommended_action"), QStringLiteral("action")}).toString();
 
+    const QJsonValue planVal = findField(
+        rootObj, {QStringLiteral("artistic_plan"), QStringLiteral("artisticPlan"), QStringLiteral("plan")});
+    if (planVal.isObject()) {
+        const QJsonObject pObj = planVal.toObject();
+        outProgram->artisticPlan.concept =
+            findField(pObj, {QStringLiteral("concept"), QStringLiteral("idea"), QStringLiteral("theme")}).toString();
+        outProgram->artisticPlan.compositionStrategy =
+            findField(pObj,
+                      {QStringLiteral("composition_strategy"),
+                       QStringLiteral("composition"),
+                       QStringLiteral("framing")})
+                .toString();
+        outProgram->artisticPlan.colorHarmony =
+            findField(pObj, {QStringLiteral("color_harmony"), QStringLiteral("palette"), QStringLiteral("colors")})
+                .toString();
+        outProgram->artisticPlan.lightingSetup =
+            findField(pObj, {QStringLiteral("lighting_setup"), QStringLiteral("lighting"), QStringLiteral("light")})
+                .toString();
+        outProgram->artisticPlan.silhouetteRhythm =
+            findField(pObj, {QStringLiteral("silhouette_rhythm"), QStringLiteral("rhythm"), QStringLiteral("silhouette")})
+                .toString();
+        const QJsonValue fpVal =
+            findField(pObj, {QStringLiteral("focal_points"), QStringLiteral("focalPoints"), QStringLiteral("focus")});
+        if (fpVal.isArray()) {
+            for (const QJsonValue &fp : fpVal.toArray()) {
+                if (fp.isString()) {
+                    outProgram->artisticPlan.focalPoints.append(fp.toString().trimmed());
+                }
+            }
+        } else if (fpVal.isString()) {
+            outProgram->artisticPlan.focalPoints.append(fpVal.toString().trimmed());
+        }
+    }
+
     const QJsonValue cVal = findField(rootObj, {QStringLiteral("canvas_size"), QStringLiteral("canvas")});
     if (!cVal.isUndefined()) {
         int cw = 0;
@@ -3140,12 +3234,26 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
             || k.contains(QLatin1String("sparkle"))) {
             return KisAiStrokeOperation::Kind::Particles;
         }
+        if (k.contains(QLatin1String("texture_hatch")) || k.contains(QLatin1String("screentone"))) {
+            return KisAiStrokeOperation::Kind::TextureHatch;
+        }
         if (k.contains(QLatin1String("hatch"))) {
             return KisAiStrokeOperation::Kind::Hatch;
+        }
+        if (k.contains(QLatin1String("form_shad")) || k.contains(QLatin1String("volumetric_shad"))) {
+            return KisAiStrokeOperation::Kind::FormShading;
+        }
+        if (k == QLatin1String("shape") || k.contains(QLatin1String("parametric_shape"))
+            || k.contains(QLatin1String("ellipse")) || k.contains(QLatin1String("circle"))
+            || k.contains(QLatin1String("rectangle")) || k.contains(QLatin1String("capsule"))) {
+            return KisAiStrokeOperation::Kind::ParametricShape;
         }
         if (k.contains(QLatin1String("fill")) || k.contains(QLatin1String("polygon"))
             || k.contains(QLatin1String("color_fill")) || k.contains(QLatin1String("solid_fill"))) {
             return KisAiStrokeOperation::Kind::Fill;
+        }
+        if (k.contains(QLatin1String("bezier")) || k.contains(QLatin1String("spline"))) {
+            return KisAiStrokeOperation::Kind::BezierPath;
         }
         // The eye check must precede the path check: ids like "eye_outline",
         // "eyeliner" and "eye_lineart" contain "line", so a later eye test would
@@ -3650,6 +3758,154 @@ bool KisAiStrokeProgramCodec::parseProgramJson(const QJsonObject &rootObj,
                 op.mouthHasHighlight =
                     toBoolField(findField(o, {QStringLiteral("has_highlight"), QStringLiteral("highlight")}, true),
                                 true);
+            } else if (op.kind == KisAiStrokeOperation::Kind::BezierPath) {
+                const QJsonArray bpts = findField(o,
+                                                  {QStringLiteral("bezier_control_points"),
+                                                   QStringLiteral("control_points"),
+                                                   QStringLiteral("bezier_points"),
+                                                   QStringLiteral("points"),
+                                                   QStringLiteral("pts")})
+                                            .toArray();
+                if (!reserveControlPoints(bpts))
+                    return false;
+                const int ptCount = bpts.size();
+                qreal maxCoord = 0.0;
+                for (int pi = 0; pi < ptCount; ++pi) {
+                    const auto pt = parsePoint(bpts.at(pi), 0.8);
+                    if (pt.second >= 0.0) {
+                        op.bezierControlPoints.append(pt.first);
+                        op.points.append(KisAiStrokePoint(pt.first.x(), pt.first.y(), pt.second));
+                        maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
+                    }
+                }
+                if (maxCoord > kPixelCoordinateThreshold) {
+                    for (QPointF &p : op.bezierControlPoints) {
+                        p = QPointF(p.x() / canvasW, p.y() / canvasH);
+                    }
+                    for (KisAiStrokePoint &p : op.points) {
+                        p.pos = QPointF(p.pos.x() / canvasW, p.pos.y() / canvasH);
+                    }
+                }
+            } else if (op.kind == KisAiStrokeOperation::Kind::ParametricShape) {
+                op.shapeType = findField(o,
+                                         {QStringLiteral("shape_type"),
+                                          QStringLiteral("shape"),
+                                          QStringLiteral("type")},
+                                         QStringLiteral("ellipse"))
+                                   .toString(QStringLiteral("ellipse"))
+                                   .toLower();
+                const QJsonValue centerVal = findField(o, {QStringLiteral("center"), QStringLiteral("shape_center")});
+                if (!centerVal.isUndefined() && !centerVal.isNull()) {
+                    const auto cp = parsePoint(centerVal);
+                    if (cp.second >= 0.0) {
+                        op.shapeCenter = cp.first;
+                        if (qMax(op.shapeCenter.x(), op.shapeCenter.y()) > kPixelCoordinateThreshold) {
+                            op.shapeCenter = QPointF(op.shapeCenter.x() / canvasW, op.shapeCenter.y() / canvasH);
+                        }
+                    }
+                } else {
+                    op.shapeCenter = QPointF(0.5, 0.5);
+                }
+                const QJsonArray szArr = findField(o, {QStringLiteral("size"), QStringLiteral("shape_size")}).toArray();
+                if (szArr.size() >= 2) {
+                    qreal sw = toDoubleField(szArr.at(0), 0.10);
+                    qreal sh = toDoubleField(szArr.at(1), 0.10);
+                    if (qMax(sw, sh) > kPixelCoordinateThreshold) {
+                        sw /= canvasW;
+                        sh /= canvasH;
+                    }
+                    op.shapeSize = QSizeF(qBound(0.001, sw, 2.0), qBound(0.001, sh, 2.0));
+                } else {
+                    op.shapeSize = QSizeF(0.10, 0.10);
+                }
+                op.shapeRadius =
+                    toDoubleField(findField(o, {QStringLiteral("radius"), QStringLiteral("shape_radius")}), 0.05);
+                if (op.shapeRadius > kPixelCoordinateThreshold) {
+                    op.shapeRadius /= qMin(canvasW, canvasH);
+                }
+                op.shapeAngleDeg = toDoubleField(
+                    findField(o,
+                              {QStringLiteral("angle_deg"),
+                               QStringLiteral("shape_angle_deg"),
+                               QStringLiteral("angle")}),
+                    0.0);
+                op.shapeFilled = toBoolField(
+                    findField(o,
+                              {QStringLiteral("shape_filled"),
+                               QStringLiteral("filled"),
+                               QStringLiteral("fill")},
+                              true),
+                    true);
+            } else if (op.kind == KisAiStrokeOperation::Kind::FormShading) {
+                const QJsonArray poly =
+                    findField(o, {QStringLiteral("polygon"), QStringLiteral("poly"), QStringLiteral("points")})
+                        .toArray();
+                if (!reserveControlPoints(poly))
+                    return false;
+                const int polyCount = poly.size();
+                qreal maxCoord = 0.0;
+                for (int pi = 0; pi < polyCount; ++pi) {
+                    const auto pt = parsePoint(poly.at(pi));
+                    if (pt.second >= 0.0) {
+                        op.polygon.append(pt.first);
+                        maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
+                    }
+                }
+                if (maxCoord > kPixelCoordinateThreshold) {
+                    for (QPointF &p : op.polygon) {
+                        p = QPointF(p.x() / canvasW, p.y() / canvasH);
+                    }
+                }
+                const QJsonValue lightVal = findField(
+                    o,
+                    {QStringLiteral("light_source_pos"), QStringLiteral("light_pos"), QStringLiteral("light")});
+                if (!lightVal.isUndefined() && !lightVal.isNull()) {
+                    const auto lp = parsePoint(lightVal);
+                    if (lp.second >= 0.0) {
+                        op.lightSourcePos = lp.first;
+                        if (qMax(op.lightSourcePos.x(), op.lightSourcePos.y()) > kPixelCoordinateThreshold) {
+                            op.lightSourcePos =
+                                QPointF(op.lightSourcePos.x() / canvasW, op.lightSourcePos.y() / canvasH);
+                        }
+                    }
+                } else {
+                    op.lightSourcePos = QPointF(0.25, 0.15);
+                }
+                op.featherWidth =
+                    toDoubleField(findField(o, {QStringLiteral("feather_width"), QStringLiteral("feather")}), 0.03);
+                op.shadingIntensity = toDoubleField(
+                    findField(o, {QStringLiteral("shading_intensity"), QStringLiteral("intensity")}), 0.6);
+                op.shadingType = findField(o,
+                                           {QStringLiteral("shading_type"), QStringLiteral("style")},
+                                           QStringLiteral("spherical"))
+                                     .toString(QStringLiteral("spherical"));
+            } else if (op.kind == KisAiStrokeOperation::Kind::TextureHatch) {
+                const QJsonArray poly =
+                    findField(o, {QStringLiteral("polygon"), QStringLiteral("poly"), QStringLiteral("points")})
+                        .toArray();
+                if (!reserveControlPoints(poly))
+                    return false;
+                const int polyCount = poly.size();
+                qreal maxCoord = 0.0;
+                for (int pi = 0; pi < polyCount; ++pi) {
+                    const auto pt = parsePoint(poly.at(pi));
+                    if (pt.second >= 0.0) {
+                        op.polygon.append(pt.first);
+                        maxCoord = qMax(maxCoord, qMax(qAbs(pt.first.x()), qAbs(pt.first.y())));
+                    }
+                }
+                if (maxCoord > kPixelCoordinateThreshold) {
+                    for (QPointF &p : op.polygon) {
+                        p = QPointF(p.x() / canvasW, p.y() / canvasH);
+                    }
+                }
+                op.angleDeg =
+                    toDoubleField(findField(o, {QStringLiteral("angle_deg"), QStringLiteral("angle")}), 45.0);
+                op.spacing = toDoubleField(findField(o, {QStringLiteral("spacing")}), 0.012);
+                op.crossHatch =
+                    toBoolField(findField(o, {QStringLiteral("cross_hatch"), QStringLiteral("crosshatch")}), false);
+                op.style = findField(o, {QStringLiteral("style")}, QStringLiteral("screentone"))
+                               .toString(QStringLiteral("screentone"));
             }
 
             if (op.kind != KisAiStrokeOperation::Kind::Unknown) {
@@ -4089,6 +4345,47 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             op.lineLengthJitter =
                 qBound<qreal>(0.0, std::isfinite(op.lineLengthJitter) ? op.lineLengthJitter : 0.20, 0.9);
             renderable = op.density > 0 && op.outerRadius > op.innerRadius;
+            break;
+        }
+        case KisAiStrokeOperation::Kind::BezierPath: {
+            for (QPointF &pt : op.bezierControlPoints) {
+                pt = clampedPoint(pt, &localReport.repairedValues);
+            }
+            for (KisAiStrokePoint &pt : op.points) {
+                pt.pos = clampedPoint(pt.pos, &localReport.repairedValues);
+            }
+            renderable = op.bezierControlPoints.size() >= 2 || op.points.size() >= 2;
+            break;
+        }
+        case KisAiStrokeOperation::Kind::ParametricShape: {
+            op.shapeCenter = clampedPoint(op.shapeCenter, &localReport.repairedValues);
+            qreal sw = op.shapeSize.isValid() ? op.shapeSize.width()
+                                              : (op.shapeRadius > 0.0 ? op.shapeRadius * 2.0 : 0.10);
+            qreal sh = op.shapeSize.isValid() ? op.shapeSize.height()
+                                              : (op.shapeRadius > 0.0 ? op.shapeRadius * 2.0 : 0.10);
+            sw = qBound<qreal>(0.002, sw, 1.0);
+            sh = qBound<qreal>(0.002, sh, 1.0);
+            op.shapeSize = QSizeF(sw, sh);
+            if (op.shapeRadius <= 0.0) {
+                op.shapeRadius = qMin(sw, sh) * 0.5;
+            }
+            renderable = sw > 0.001 && sh > 0.001;
+            break;
+        }
+        case KisAiStrokeOperation::Kind::FormShading: {
+            for (QPointF &pt : op.polygon) {
+                pt = clampedPoint(pt, &localReport.repairedValues);
+            }
+            op.lightSourcePos = clampedPoint(op.lightSourcePos, &localReport.repairedValues);
+            renderable = op.polygon.size() >= 3;
+            break;
+        }
+        case KisAiStrokeOperation::Kind::TextureHatch: {
+            for (QPointF &pt : op.polygon) {
+                pt = clampedPoint(pt, &localReport.repairedValues);
+            }
+            op.spacing = qBound<qreal>(0.002, std::isfinite(op.spacing) ? op.spacing : 0.015, 0.2);
+            renderable = op.polygon.size() >= 3;
             break;
         }
         case KisAiStrokeOperation::Kind::Unknown:

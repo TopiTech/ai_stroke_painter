@@ -161,14 +161,51 @@ KisAiPromptAnalyzer::SemanticSpec KisAiPromptAnalyzer::analyze(
                             text.contains(QStringLiteral("魔法陣")) ||
                             text.contains(QStringLiteral("効果線"));
 
+    const bool hasSciFiMech = containsWord(text, QStringLiteral("mecha")) ||
+                              containsWord(text, QStringLiteral("mech")) ||
+                              containsWord(text, QStringLiteral("robot")) ||
+                              containsWord(text, QStringLiteral("android")) ||
+                              containsWord(text, QStringLiteral("cyborg")) ||
+                              containsWord(text, QStringLiteral("spaceship")) ||
+                              containsWord(text, QStringLiteral("starship")) ||
+                              containsWord(text, QStringLiteral("gundam")) ||
+                              text.contains(QStringLiteral("ロボット")) ||
+                              text.contains(QStringLiteral("メカ")) ||
+                              text.contains(QStringLiteral("宇宙船")) ||
+                              text.contains(QStringLiteral("戦闘機"));
+
+    const bool hasStillLifeFood = containsWord(text, QStringLiteral("coffee")) ||
+                                  containsWord(text, QStringLiteral("tea")) ||
+                                  containsWord(text, QStringLiteral("cup")) ||
+                                  containsWord(text, QStringLiteral("ramen")) ||
+                                  containsWord(text, QStringLiteral("sushi")) ||
+                                  containsWord(text, QStringLiteral("food")) ||
+                                  containsWord(text, QStringLiteral("cake")) ||
+                                  containsWord(text, QStringLiteral("fruit")) ||
+                                  containsWord(text, QStringLiteral("apple")) ||
+                                  containsWord(text, QStringLiteral("dish")) ||
+                                  containsWord(text, QStringLiteral("still life")) ||
+                                  text.contains(QStringLiteral("珈琲")) ||
+                                  text.contains(QStringLiteral("コーヒー")) ||
+                                  text.contains(QStringLiteral("ラーメン")) ||
+                                  text.contains(QStringLiteral("料理")) ||
+                                  text.contains(QStringLiteral("食べ物")) ||
+                                  text.contains(QStringLiteral("静物")) ||
+                                  text.contains(QStringLiteral("果物")) ||
+                                  text.contains(QStringLiteral("ケーキ"));
+
     if (spec.hasCharacter) {
         spec.domain = DomainType::Character;
     } else if (hasCyber) {
         spec.domain = DomainType::Cyberpunk;
+    } else if (hasSciFiMech) {
+        spec.domain = DomainType::SciFiMech;
     } else if (hasCreature) {
         spec.domain = DomainType::Creature;
     } else if (hasBotanical) {
         spec.domain = DomainType::Botanical;
+    } else if (hasStillLifeFood) {
+        spec.domain = DomainType::StillLifeFood;
     } else if (hasMangaFx) {
         spec.domain = DomainType::MangaFx;
     } else if (spec.hasEnvironment) {
@@ -459,6 +496,24 @@ QString KisAiPromptAnalyzer::generateArtDirection(
             "2. Layer 'Shading': Dramatic contrast hatching and shadow cast accents.\n"
             "3. Layer 'Lineart': High-impact radial focus lines (with open center), speed strokes, or geometric runic circles.\n"
             "4. Layer 'Highlights' & 'FX': Vibrant energy sparkles, crackling lightning arcs, and magical bloom particles.\n"
+        );
+    case DomainType::SciFiMech: {
+        out += QStringLiteral(
+            "[DOMAIN ART DIRECTION: Mecha, Sci-Fi Vehicle & Hard Surface Robotics]\n"
+            "1. Layer 'Flats': Planar armor plates, mechanical chassis, hydraulic joints, and cockpit canopy blocking (fill with wash/contour style).\n"
+            "2. Layer 'Shading': Deep crevice ambient occlusion along armor panel seams and mechanical bevel form shadows (multiply blend).\n"
+            "3. Layer 'Lineart': Crisp structural blueprint lines, precision panel cuts, and technical calligraphic contours (brush: 'gpen' or 'fineliner').\n"
+            "4. Layer 'Highlights' & 'FX': High-gleam specular edge highlights, glowing power conduits/sensors (color_dodge), and thruster exhaust bloom.\n"
+        );
+        break;
+    }
+    case DomainType::StillLifeFood: {
+        out += QStringLiteral(
+            "[DOMAIN ART DIRECTION: Gourmet Food, Beverage & Still Life]\n"
+            "1. Layer 'Flats': Rich, appetizing local colors establishing tactile organic volumes (pastries, ramen broth, coffee, ceramic tableware).\n"
+            "2. Layer 'Shading': Soft ambient occlusion under dishes and bowls, warm form curvature on food surfaces, and cast shadows on table surfaces.\n"
+            "3. Layer 'Lineart': Delicate ceramic rims, organic food texture contours, and utensil silhouettes with subtle tapering.\n"
+            "4. Layer 'Highlights' & 'FX': Glistening moisture specular glints (soup, glaze, sauce), ceramic gloss shine, and delicate rising steam trails.\n"
         );
         break;
     }

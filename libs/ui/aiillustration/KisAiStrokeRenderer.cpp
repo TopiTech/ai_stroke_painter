@@ -1178,6 +1178,16 @@ void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter,
     case KisAiStrokeOperation::Kind::AnimeMouth:
         drawAnimeMouthOperation(painter, op, canvasSize, supersampleScale);
         break;
+    case KisAiStrokeOperation::Kind::BezierPath:
+    case KisAiStrokeOperation::Kind::ParametricShape:
+    case KisAiStrokeOperation::Kind::FormShading:
+    case KisAiStrokeOperation::Kind::TextureHatch: {
+        const QVector<KisAiStrokeOperation> expanded = KisAiPrimitiveExpander::expand(op, canvasSize);
+        for (const KisAiStrokeOperation &subOp : expanded) {
+            renderOperation(painter, subOp, canvasSize, supersampleScale, faceExclusionPath);
+        }
+        break;
+    }
     default:
         break;
     }
