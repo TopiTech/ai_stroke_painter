@@ -257,6 +257,7 @@ QWidget *KisAiStartPageWidget::createHeroSection()
 
     // Status Badges (grouped in dedicated container to preserve pill row layout)
     auto *badgesContainer = new QWidget(container);
+    badgesContainer->setObjectName(QStringLiteral("aiHeroBadgesContainer"));
     m_heroBadgesLayout = new QBoxLayout(QBoxLayout::LeftToRight, badgesContainer);
     m_heroBadgesLayout->setContentsMargins(0, 0, 0, 0);
     m_heroBadgesLayout->setSpacing(8);
@@ -723,8 +724,9 @@ void KisAiStartPageWidget::updateResponsiveLayout()
     const bool narrow = availableWidth > 0 && availableWidth < 1024;
     const bool compact = availableWidth > 0 && availableWidth < 540;
     const bool promptVertical = (m_promptBarLayout && m_promptBarLayout->direction() == QBoxLayout::TopToBottom);
+    const bool badgesVertical = (m_heroBadgesLayout && m_heroBadgesLayout->direction() == QBoxLayout::TopToBottom);
 
-    if (narrow == m_isNarrowLayout && compact == promptVertical) {
+    if (narrow == m_isNarrowLayout && compact == promptVertical && compact == badgesVertical) {
         return;
     }
     m_isNarrowLayout = narrow;
@@ -733,6 +735,9 @@ void KisAiStartPageWidget::updateResponsiveLayout()
     if (m_heroHeaderLayout) {
         m_heroHeaderLayout->setDirection(narrow ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
         m_heroHeaderLayout->setAlignment(narrow ? Qt::AlignLeft : (Qt::AlignLeft | Qt::AlignVCenter));
+    }
+    if (m_heroBadgesLayout) {
+        m_heroBadgesLayout->setDirection(compact ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
     }
     if (m_promptBarLayout) {
         m_promptBarLayout->setDirection(compact ? QBoxLayout::TopToBottom : QBoxLayout::LeftToRight);
@@ -745,20 +750,17 @@ void KisAiStartPageWidget::updateResponsiveLayout()
     }
 
     if (m_presetsGrid) {
-        QList<QWidget *> presetButtons;
         while (QLayoutItem *item = m_presetsGrid->takeAt(0)) {
-            if (QWidget *button = item->widget()) {
-                presetButtons.append(button);
-            }
             delete item;
         }
 
         const int presetColumns = narrow ? 1 : 2;
         m_presetsGrid->setColumnStretch(0, 1);
         m_presetsGrid->setColumnStretch(1, narrow ? 0 : 1);
-        for (int i = 0; i < presetButtons.size(); ++i) {
-            m_presetsGrid->addWidget(presetButtons[i], i / presetColumns, i % presetColumns);
+        for (int i = 0; i < m_presetButtons.size(); ++i) {
+            m_presetsGrid->addWidget(m_presetButtons[i], i / presetColumns, i % presetColumns);
         }
+        setupTabOrder();
     }
 }
 
@@ -804,6 +806,13 @@ void KisAiStartPageWidget::keyPressEvent(QKeyEvent *event)
         slotPasteFromClipboard();
         event->accept();
         return;
+    }
+    if (event->key() == Qt::Key_Escape) {
+        if (m_promptInput && m_promptInput->hasFocus()) {
+            m_promptInput->clearFocus();
+            event->accept();
+            return;
+        }
     }
     QWidget::keyPressEvent(event);
 }

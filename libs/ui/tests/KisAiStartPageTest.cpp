@@ -413,4 +413,56 @@ void KisAiStartPageTest::testPromptInputReturnAndImeSafety()
     QVERIFY(promptInput->text().contains(QStringLiteral("魔法使い")));
 }
 
+void KisAiStartPageTest::testResponsiveHeroBadgesAndEscapeKey()
+{
+    KisAiStartPageWidget widget(nullptr);
+    widget.show();
+    QCoreApplication::processEvents();
+
+    auto *promptInput = widget.findChild<QLineEdit *>(QStringLiteral("aiPromptOmnibarInput"));
+    QVERIFY(promptInput != nullptr);
+
+    // 1. Verify Escape key clears focus from prompt omnibar
+    promptInput->setFocus();
+    QVERIFY(promptInput->hasFocus());
+
+    QKeyEvent escEvent(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+    QCoreApplication::sendEvent(promptInput, &escEvent);
+    QVERIFY(!promptInput->hasFocus());
+
+    // 2. Verify responsive badges layout
+    auto *badgesContainer = widget.findChild<QWidget *>(QStringLiteral("aiHeroBadgesContainer"));
+    QVERIFY(badgesContainer != nullptr);
+    auto *badgesLayout = qobject_cast<QBoxLayout *>(badgesContainer->layout());
+    QVERIFY(badgesLayout != nullptr);
+
+    // Narrow viewport (< 540px) triggers vertical stacking
+    widget.resize(500, 700);
+    QCoreApplication::processEvents();
+    QCOMPARE(badgesLayout->direction(), QBoxLayout::TopToBottom);
+
+    // Wide viewport (>= 540px) triggers horizontal layout
+    widget.resize(900, 700);
+    QCoreApplication::processEvents();
+    QCOMPARE(badgesLayout->direction(), QBoxLayout::LeftToRight);
+
+    // 3. Verify preset buttons preserve canonical list order after resize transitions
+    const QStringList expectedPresetTitles = {
+        i18n("Anime & Manga Line Art"),
+        i18n("Anime Cel-Shading"),
+        i18n("Cyberpunk & Scifi"),
+        i18n("Watercolor & Atomic Ink"),
+        i18n("Vector Geometric Art"),
+        i18n("Surprise Me! (お題生成)")
+    };
+
+    QStringList actualPresetTitles;
+    for (QPushButton *btn : widget.findChildren<QPushButton *>()) {
+        if (btn->property("class").toString() == QStringLiteral("aiPresetBtn")) {
+            actualPresetTitles.append(btn->accessibleName());
+        }
+    }
+    QCOMPARE(actualPresetTitles, expectedPresetTitles);
+}
+
 KISTEST_MAIN(KisAiStartPageTest)

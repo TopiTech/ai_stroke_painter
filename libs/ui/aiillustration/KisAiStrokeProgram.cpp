@@ -1297,6 +1297,13 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
             const QChar ch = text.at(i);
             if (esc) {
                 esc = false;
+                if ((inSingle || inSingleCurly) && ch == QLatin1Char('\'')) {
+                    if (quoteFixed.endsWith(QLatin1Char('\\'))) {
+                        quoteFixed.chop(1);
+                    }
+                    quoteFixed.append(QLatin1Char('\''));
+                    continue;
+                }
                 quoteFixed.append(ch);
                 continue;
             }
@@ -1336,12 +1343,17 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
                 }
                 continue;
             }
-            if (ch == QLatin1Char('"') && !inSingle && !inBacktick
-                && (!inDouble || !inDoubleCurly)) {
-                inDouble = !inDouble;
-                inDoubleCurly = false;
-                quoteFixed.append(ch);
-                continue;
+            if (ch == QLatin1Char('"')) {
+                if (inSingle || inSingleCurly) {
+                    quoteFixed.append(QStringLiteral("\\\""));
+                    continue;
+                }
+                if (!inBacktick && (!inDouble || !inDoubleCurly)) {
+                    inDouble = !inDouble;
+                    inDoubleCurly = false;
+                    quoteFixed.append(ch);
+                    continue;
+                }
             }
             if (ch == QLatin1Char('\'') && !inDouble && !inBacktick) {
                 inSingle = !inSingle;
@@ -1416,6 +1428,7 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
                             cleanLiteral.append(sc);
                         }
                     }
+                    cleanLiteral.replace(QStringLiteral("\\'"), QStringLiteral("'"));
                     const int maskIndex = maskedStrings.size();
                     maskedStrings.append(cleanLiteral);
                     masked.append(stringMaskPlaceholder(maskIndex));
@@ -1453,6 +1466,29 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
                         // Strip ASCII control bytes
                     } else {
                         cleanLiteral.append(sc);
+                    }
+                }
+                // If the unclosed string at EOF ends with an incomplete \uXXXX escape (0-3 hex digits) or dangling \, strip it
+                if (cleanLiteral.endsWith(QLatin1Char('\\'))) {
+                    cleanLiteral.chop(1);
+                } else {
+                    for (int k = 1; k <= 4; ++k) {
+                        if (cleanLiteral.length() >= k + 1
+                            && cleanLiteral.at(cleanLiteral.length() - (k + 1)) == QLatin1Char('\\')
+                            && cleanLiteral.at(cleanLiteral.length() - k) == QLatin1Char('u')) {
+                            bool allHex = true;
+                            for (int h = cleanLiteral.length() - k + 1; h < cleanLiteral.length(); ++h) {
+                                const QChar hc = cleanLiteral.at(h);
+                                if (!((hc >= '0' && hc <= '9') || (hc >= 'a' && hc <= 'f') || (hc >= 'A' && hc <= 'F'))) {
+                                    allHex = false;
+                                    break;
+                                }
+                            }
+                            if (allHex) {
+                                cleanLiteral.chop(k + 1);
+                                break;
+                            }
+                        }
                     }
                 }
                 const int maskIndex = maskedStrings.size();
@@ -1810,6 +1846,28 @@ QString KisAiStrokeProgramCodec::repairTruncatedJson(const QString &jsonText, Ki
     }
 
     if (inString) {
+        if (result.endsWith(QLatin1Char('\\'))) {
+            result.chop(1);
+        } else {
+            // Strip trailing incomplete \u, \uX, \uXX, \uXXX escapes
+            for (int k = 1; k <= 4; ++k) {
+                if (result.length() >= k + 1 && result.at(result.length() - (k + 1)) == QLatin1Char('\\')
+                    && result.at(result.length() - k) == QLatin1Char('u')) {
+                    bool allHex = true;
+                    for (int h = result.length() - k + 1; h < result.length(); ++h) {
+                        const QChar hc = result.at(h);
+                        if (!((hc >= '0' && hc <= '9') || (hc >= 'a' && hc <= 'f') || (hc >= 'A' && hc <= 'F'))) {
+                            allHex = false;
+                            break;
+                        }
+                    }
+                    if (allHex) {
+                        result.chop(k + 1);
+                        break;
+                    }
+                }
+            }
+        }
         result.append(QLatin1Char('"'));
     }
 
@@ -2295,7 +2353,7 @@ QColor KisAiStrokeProgramCodec::calculateHueShiftedShadow(const QColor &baseColo
         h = 240;
 
     if (warmLight) {
-        if (h >= 60 && h < 240) {
+        if (h >= 60 && h <= 240) {
             h = qMin(240, h + 25);
         } else if (h < 60 || h > 240) {
             h = (h - 25 + 360) % 360;
@@ -2382,7 +2440,8 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::trimOperationsToBudget(const KisAiSt
 
     auto calcScore = [](const KisAiStrokeOperation &op) -> qreal {
         if (op.polygon.size() > 0) {
-            return polygonArea(op.polygon);
+            const qreal area = polygonArea(op.polygon);
+            return std::isfinite(area) ? qMax<qreal>(0.0, area) : 0.0;
         }
         if (!op.points.isEmpty()) {
             return op.points.size() * 0.01;
@@ -2391,7 +2450,11 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::trimOperationsToBudget(const KisAiSt
             return op.spine.size() * 0.01;
         }
         if (op.kind == KisAiStrokeOperation::Kind::Particles) {
-            return op.bounds.isValid() ? (op.bounds.width() * op.bounds.height() + op.particleCount * 0.001) : 0.05;
+            if (op.bounds.isValid() && std::isfinite(op.bounds.width()) && std::isfinite(op.bounds.height())) {
+                const qreal bArea = op.bounds.width() * op.bounds.height() + op.particleCount * 0.001;
+                return std::isfinite(bArea) ? qMax<qreal>(0.0, bArea) : 0.05;
+            }
+            return 0.05;
         }
         return 0.01;
     };
@@ -4483,6 +4546,7 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
         }
         case KisAiStrokeOperation::Kind::ParametricShape: {
             op.shapeCenter = clampedPoint(op.shapeCenter, &localReport.repairedValues);
+            op.shapeAngleDeg = std::isfinite(op.shapeAngleDeg) ? std::fmod(op.shapeAngleDeg, 360.0) : 0.0;
             qreal sw = op.shapeSize.isValid() ? op.shapeSize.width()
                                               : (op.shapeRadius > 0.0 ? op.shapeRadius * 2.0 : 0.10);
             qreal sh = op.shapeSize.isValid() ? op.shapeSize.height()
@@ -4501,6 +4565,8 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
                 pt = clampedPoint(pt, &localReport.repairedValues);
             }
             op.lightSourcePos = clampedPoint(op.lightSourcePos, &localReport.repairedValues);
+            op.featherWidth = qBound<qreal>(0.001, std::isfinite(op.featherWidth) ? op.featherWidth : 0.03, 0.5);
+            op.shadingIntensity = qBound<qreal>(0.0, std::isfinite(op.shadingIntensity) ? op.shadingIntensity : 0.5, 1.0);
             renderable = op.polygon.size() >= 3;
             break;
         }
@@ -4508,6 +4574,7 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             for (QPointF &pt : op.polygon) {
                 pt = clampedPoint(pt, &localReport.repairedValues);
             }
+            op.angleDeg = std::isfinite(op.angleDeg) ? std::fmod(op.angleDeg, 360.0) : 45.0;
             op.spacing = qBound<qreal>(0.002, std::isfinite(op.spacing) ? op.spacing : 0.015, 0.2);
             renderable = op.polygon.size() >= 3;
             break;

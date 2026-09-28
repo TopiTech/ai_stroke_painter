@@ -81,7 +81,9 @@ qreal effectiveBrushWidth(const KisAiStrokeBrush &brush,
     } else {
         sz = brush.size * baseDim;
     }
-    sz = qMax<qreal>(1.0, sz * qBound<qreal>(0.05, pressure, 1.0));
+    const qreal safePressure = std::isfinite(pressure) ? qBound<qreal>(0.05, pressure, 1.0) : 0.8;
+    const qreal safeSz = std::isfinite(sz) ? sz : 8.0;
+    sz = qMax<qreal>(1.0, safeSz * safePressure);
     return sz;
 }
 
@@ -121,9 +123,7 @@ QPointF centripetalPoint(const QPointF &p0, const QPointF &p1, const QPointF &p2
 QVector<QPointF>
 KisAiStrokeRenderer::generateCatmullRomSpline(const QVector<QPointF> &points, int subdivisions, bool closed)
 {
-    if (points.size() < 2)
-        return points;
-    if (points.size() == 2 && !closed)
+    if (points.size() < 2 || (points.size() == 2 && closed))
         return points;
 
     QVector<QPointF> result;
@@ -445,8 +445,14 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
                                  : renderOperationsToImage(ops, size, QPainterPath(), globalSilhouettes);
 
         if (isFlats) {
-            flatsImage = layerImage;
-            hasFlats = true;
+            if (hasFlats && !flatsImage.isNull()) {
+                QPainter fp(&flatsImage);
+                fp.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                fp.drawImage(0, 0, layerImage);
+            } else {
+                flatsImage = layerImage;
+                hasFlats = true;
+            }
         } else if (isShading) {
             // Dual shadow separation (Phase 3): separate sharp cast shadows and soft form shadows
             QVector<KisAiStrokeOperation> formOps;
@@ -759,8 +765,14 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
                                  : renderOperationsToImage(ops, canvasSize, QPainterPath(), globalSilhouettes);
 
         if (isFlats) {
-            flatsImage = layerImage;
-            hasFlats = true;
+            if (hasFlats && !flatsImage.isNull()) {
+                QPainter fp(&flatsImage);
+                fp.setCompositionMode(QPainter::CompositionMode_SourceOver);
+                fp.drawImage(0, 0, layerImage);
+            } else {
+                flatsImage = layerImage;
+                hasFlats = true;
+            }
         } else if (isShading) {
             // Dual shadow separation (Phase 3): separate sharp cast shadows and soft form shadows
             QVector<KisAiStrokeOperation> formOps;
@@ -1073,9 +1085,16 @@ QImage KisAiStrokeRenderer::renderOperationsToImage(const QVector<KisAiStrokeOpe
 
     // D0: meaning-aware supersampling — faces/eyes deserve 3x on modest
     // canvases while plain backgrounds stay cheap. Memory-bounded.
-    const int scale = KisAiDeliberateStroke::adaptiveSupersampleScale(operations, canvasSize);
+    int scale = KisAiDeliberateStroke::adaptiveSupersampleScale(operations, canvasSize);
     const QSize workingSize(canvasSize.width() * scale, canvasSize.height() * scale);
     QImage working(workingSize, QImage::Format_ARGB32_Premultiplied);
+    if (working.isNull() && scale > 1) {
+        scale = 1;
+        working = QImage(canvasSize, QImage::Format_ARGB32_Premultiplied);
+    }
+    if (working.isNull()) {
+        return QImage();
+    }
     working.fill(Qt::transparent);
 
     QPainterPath scaledFacePath = faceExclusionPath;
@@ -1113,6 +1132,10 @@ void KisAiStrokeRenderer::rasterizeOperation(QPainter &painter,
                                              int supersampleScale,
                                              const QPainterPath &faceExclusionPath)
 {
+    if (canvasSize.width() <= 0 || canvasSize.height() <= 0) {
+        return;
+    }
+
     painter.save();
 
     if (!faceExclusionPath.isEmpty() && op.kind == KisAiStrokeOperation::Kind::Fill
@@ -1670,9 +1693,12 @@ void KisAiStrokeRenderer::drawRibbonOperation(QPainter &painter,
         spineCurves = QVector<qreal>(n, 0.0);
     }
     qreal curveMax = 0.0;
-    for (qreal c : spineCurves)
-        curveMax = qMax(curveMax, qAbs(c));
-    const qreal curveScale = curveMax > 1.0e-9 ? curveMax : 1.0;
+    for (qreal c : spineCurves) {
+        if (std::isfinite(c)) {
+            curveMax = qMax(curveMax, qAbs(c));
+        }
+    }
+    const qreal curveScale = (std::isfinite(curveMax) && curveMax > 1.0e-9) ? curveMax : 1.0;
 
     QVector<KisAiStrokeCoverageRaster::StrokeSample> samples;
     samples.reserve(n);
@@ -1685,10 +1711,13 @@ void KisAiStrokeRenderer::drawRibbonOperation(QPainter &painter,
         } else {
             widthNorm = op.widthMid + (op.widthEnd - op.widthMid) * ((t - 0.5) * 2.0);
         }
-        const qreal curveT =
-            spineCurves.isEmpty() ? 0.0 : qAbs(spineCurves.at(qMin(i, spineCurves.size() - 1))) / curveScale;
+        if (!std::isfinite(widthNorm)) {
+            widthNorm = 0.02;
+        }
+        const qreal rawCurve = spineCurves.isEmpty() ? 0.0 : spineCurves.at(qMin(i, spineCurves.size() - 1));
+        const qreal curveT = std::isfinite(rawCurve) ? (qAbs(rawCurve) / curveScale) : 0.0;
         widthNorm *= (1.0 - 0.20 * qBound<qreal>(0.0, curveT, 1.0));
-        const qreal halfW = qMax<qreal>(0.5, widthNorm * baseDim * 0.5);
+        const qreal halfW = qMax<qreal>(0.5, (std::isfinite(widthNorm) ? widthNorm : 0.02) * baseDim * 0.5);
         samples.append({scaledSpine.at(i), halfW * 2.0});
     }
 
@@ -2225,14 +2254,21 @@ void KisAiStrokeRenderer::applyChromaticAberration(QImage &image, int shiftPx)
         for (int x = 0; x < w; ++x) {
             const int xR = qBound(0, x - boundedShift, w - 1);
             const int xB = qBound(0, x + boundedShift, w - 1);
+            const QRgb rawG = srcRow[x];
+            const QRgb rawR = srcRow[xR];
+            const QRgb rawB = srcRow[xB];
+            if (qAlpha(rawG) == 0 && qAlpha(rawR) == 0 && qAlpha(rawB) == 0) {
+                dstRow[x] = 0;
+                continue;
+            }
             // Each sample is premultiplied by its own alpha, so the channels must
             // be unpremultiplied before they are recombined with the centre
             // alpha. Storing raw premultiplied channels next to a different alpha
             // yields rgb > a, i.e. an invalid pixel that paints as an additive
             // fringe instead of a subtle lens shift.
-            const QRgb cR = qUnpremultiply(srcRow[xR]);
-            const QRgb cG = qUnpremultiply(srcRow[x]);
-            const QRgb cB = qUnpremultiply(srcRow[xB]);
+            const QRgb cR = qUnpremultiply(rawR);
+            const QRgb cG = qUnpremultiply(rawG);
+            const QRgb cB = qUnpremultiply(rawB);
             const int a = qAlpha(cG);
             dstRow[x] = qPremultiply(qRgba(qRed(cR), qGreen(cG), qBlue(cB), a));
         }
@@ -2365,8 +2401,10 @@ void KisAiStrokeRenderer::drawAnimeEyeOperation(QPainter &painter,
     const QPointF centerPt = scalePoint(op.eyeCenter, canvasSize);
     const qreal w = op.eyeSize.width() * canvasSize.width();
     const qreal h = op.eyeSize.height() * canvasSize.height();
-    if (w < 4.0 || h < 4.0)
+    if (!std::isfinite(w) || !std::isfinite(h) || w < 4.0 || h < 4.0
+        || !std::isfinite(centerPt.x()) || !std::isfinite(centerPt.y())) {
         return;
+    }
 
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -2622,8 +2660,10 @@ void KisAiStrokeRenderer::drawAnimeMouthOperation(QPainter &painter,
     const QPointF centerPt = scalePoint(op.mouthCenter, canvasSize);
     const qreal w = op.mouthSize.width() * canvasSize.width();
     const qreal h = op.mouthSize.height() * canvasSize.height();
-    if (w < 2.0 || h < 1.0)
+    if (!std::isfinite(w) || !std::isfinite(h) || w < 2.0 || h < 1.0
+        || !std::isfinite(centerPt.x()) || !std::isfinite(centerPt.y())) {
         return;
+    }
 
     painter.save();
     painter.setRenderHint(QPainter::Antialiasing, true);

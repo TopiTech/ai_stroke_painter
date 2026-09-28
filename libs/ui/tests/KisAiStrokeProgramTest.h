@@ -144,6 +144,10 @@ private Q_SLOTS:
     void testArtisticPlanParsingAndHighLevelPrimitives();
     void testPrimitiveExpanderNewPrimitivesAndPromptDomains();
     void testGoalAgentThoughtParsingAndPayloadInjection();
+    void testJsonRepairEscapedSingleQuoteAndInnerQuotes();
+    void testTrimOperationsToBudgetNonFiniteProtection();
+    void testHueShiftedShadowCalculationAchromaticBoundary();
+    void testRefineForRenderingNormalizesAttributes();
 };
 
 #endif // KIS_AI_STROKE_PROGRAM_TEST_H

@@ -1263,18 +1263,21 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_agentObservationLabel = new QLabel(i18n("👁️ 画面観察: 待機中…"), thoughtFrame);
     m_agentObservationLabel->setTextFormat(Qt::PlainText);
     m_agentObservationLabel->setWordWrap(true);
+    m_agentObservationLabel->setAccessibleName(i18n("画面観察結果"));
     m_agentObservationLabel->setStyleSheet(QStringLiteral("color: #7dd3fc; font-size: 11px; font-weight: 500;"));
     thoughtLayout->addWidget(m_agentObservationLabel);
 
     m_agentReasoningLabel = new QLabel(i18n("💭 作画思考: 初期構図・作画戦略の策定を待機中…"), thoughtFrame);
     m_agentReasoningLabel->setTextFormat(Qt::PlainText);
     m_agentReasoningLabel->setWordWrap(true);
+    m_agentReasoningLabel->setAccessibleName(i18n("作画思考プロセス"));
     m_agentReasoningLabel->setStyleSheet(QStringLiteral("color: #cbd5e1; font-size: 11px; line-height: 1.4;"));
     thoughtLayout->addWidget(m_agentReasoningLabel);
 
     m_agentNextActionLabel = new QLabel(i18n("📋 次回予定: 待機中"), thoughtFrame);
     m_agentNextActionLabel->setTextFormat(Qt::PlainText);
     m_agentNextActionLabel->setWordWrap(true);
+    m_agentNextActionLabel->setAccessibleName(i18n("次回作画予定"));
     m_agentNextActionLabel->setStyleSheet(QStringLiteral("color: #c084fc; font-size: 11px; font-weight: 600;"));
     thoughtLayout->addWidget(m_agentNextActionLabel);
 
@@ -1307,7 +1310,14 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
     m_agentFeedbackEdit = new QLineEdit(m_goalInspectorCard);
     m_agentFeedbackEdit->setPlaceholderText(i18n("💬 エージェントへの追加指示 / 修正要望（任意）"));
     m_agentFeedbackEdit->setToolTip(i18n("作画途中でエージェントに指示を与えられます（例: 「瞳のハイライトを大きく」「髪に紫の反射光を入れて」）。"));
+    m_agentFeedbackEdit->setAccessibleName(i18n("エージェントへの追加指示・修正要望"));
+    m_agentFeedbackEdit->setAccessibleDescription(i18n("Enterキーで指示を反映して次のステップへ進みます。"));
     m_agentFeedbackEdit->setStyleSheet(QStringLiteral("background: #0b0f17; border: 1px solid #334155; border-radius: 4px; padding: 5px 8px; color: #f1f5f9; font-size: 11px;"));
+    connect(m_agentFeedbackEdit, &QLineEdit::returnPressed, this, [this] {
+        if (m_goalModeActive && m_waitingForUserStepAdvance) {
+            advanceGoalStep(true);
+        }
+    });
     inspectorLayout->addWidget(m_agentFeedbackEdit);
 
     auto *stepBtnRow = new QHBoxLayout();
@@ -1697,6 +1707,7 @@ KisAiIllustrationDocker::KisAiIllustrationDocker(KisMainWindow *mainWindow)
 
         // Goal inspector card (アクションカードの上) → アクションカード。
         // 履歴サムネは updateHistoryUi() で cancel → copyLog の間に挿入する。
+        chainTab(m_agentFeedbackEdit);
         chainTab(m_nextStepButton);
         chainTab(m_finishGoalButton);
         chainTab(m_generateButton);
@@ -1744,6 +1755,9 @@ KisAiIllustrationDocker::~KisAiIllustrationDocker()
     if (!m_goalApiKey.isEmpty()) {
         m_goalApiKey.fill(QLatin1Char('\0'));
         m_goalApiKey.clear();
+    }
+    if (m_apiKeyEditor) {
+        m_apiKeyEditor->clear();
     }
     if (m_testReply) {
         m_testReply->disconnect(this);
@@ -1907,6 +1921,11 @@ void KisAiIllustrationDocker::createCanvas()
 
 void KisAiIllustrationDocker::generateIllustration()
 {
+    if (m_goalModeActive && m_waitingForUserStepAdvance) {
+        advanceGoalStep(true);
+        return;
+    }
+
     if (m_reply || m_goalModeActive || (m_retryTimer && m_retryTimer->isActive()) || m_retryInFlight) {
         return;
     }
@@ -2356,6 +2375,7 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
     // Capture before deleteLater(): reading from the reply afterwards is only
     // safe while it still lives on this stack frame.
     const QString replyErrorString = reply->errorString();
+    const QByteArray retryAfterHeader = reply->rawHeader("Retry-After");
     reply->deleteLater();
 
     if (requestWasCancelled) {
@@ -2469,7 +2489,6 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
         if (isRetryableHttp && m_currentRetryCount < maxRetries) {
             int retryAfterSec = 0;
-            const QByteArray retryAfterHeader = reply->rawHeader("Retry-After");
             if (!retryAfterHeader.isEmpty()) {
                 bool ok = false;
                 const int val = retryAfterHeader.trimmed().toInt(&ok);
@@ -2669,8 +2688,12 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
 
     if (targetImage) {
         QString statusMsg;
+        KisViewManager *effectiveViewManager = nullptr;
+        if (m_mainWindow && m_mainWindow->viewManager() && m_mainWindow->viewManager()->image() == targetImage) {
+            effectiveViewManager = m_mainWindow->viewManager();
+        }
         if (KisAiStrokeRenderer::renderProgramToLayers(targetImage,
-                                                       m_mainWindow ? m_mainWindow->viewManager() : nullptr,
+                                                       effectiveViewManager,
                                                        program,
                                                        &statusMsg,
                                                        true,
@@ -3389,7 +3412,7 @@ QString KisAiIllustrationDocker::promptForLayerName(const QString &prompt) const
 
 void KisAiIllustrationDocker::setStatus(const QString &message, bool isError)
 {
-    m_statusLabel->setText(message);
+    m_statusLabel->setText(KisAiIllustrationRenderer::redactCredentialText(message));
     m_statusLabel->setProperty("error", isError);
     m_statusLabel->style()->unpolish(m_statusLabel);
     m_statusLabel->style()->polish(m_statusLabel);
@@ -3561,7 +3584,10 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
             m_apiKeyEditor->clear();
         }
     } else {
-        m_goalApiKey.clear();
+        if (!m_goalApiKey.isEmpty()) {
+            m_goalApiKey.fill(QLatin1Char('\0'));
+            m_goalApiKey.clear();
+        }
     }
 
     m_goalTargetReadiness = m_goalTargetReadinessSpin ? (m_goalTargetReadinessSpin->value() / 100.0) : 0.85;
@@ -3620,6 +3646,11 @@ void KisAiIllustrationDocker::startGoalMode(const QString &prompt)
 void KisAiIllustrationDocker::executeGoalStep()
 {
     if (!m_goalModeActive) {
+        return;
+    }
+    if (!m_goalTargetImage || m_goalTargetImage.isNull()) {
+        finishGoalMode(false);
+        setStatus(i18n("対象のキャンバスが閉じられたため、自律作画を終了しました。"), true);
         return;
     }
     // Same re-entrancy guard as generateLlmStrokes(): an in-flight reply or a
@@ -4015,6 +4046,7 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     // Capture before deleteLater(): reading from the reply afterwards is only
     // safe while it still lives on this stack frame.
     const QString replyErrorString = reply->errorString();
+    const QByteArray retryAfterHeader = reply->rawHeader("Retry-After");
     reply->deleteLater();
 
     if (requestWasCancelled) {
@@ -4116,7 +4148,6 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
                                                                             m_goalVisionFallbackActive);
         if (errorAction == KisAiRefinementLoop::GoalStepErrorAction::Retry) {
             int retryAfterSec = 0;
-            const QByteArray retryAfterHeader = reply->rawHeader("Retry-After");
             if (!retryAfterHeader.isEmpty()) {
                 bool ok = false;
                 const int val = retryAfterHeader.trimmed().toInt(&ok);
@@ -4257,8 +4288,12 @@ void KisAiIllustrationDocker::finishGoalStepRequest()
     }
 
     QString statusMsg;
+    KisViewManager *effectiveViewManager = nullptr;
+    if (m_mainWindow && m_mainWindow->viewManager() && m_mainWindow->viewManager()->image() == targetImage) {
+        effectiveViewManager = m_mainWindow->viewManager();
+    }
     if (KisAiStrokeRenderer::renderProgramToLayers(targetImage,
-                                                   m_mainWindow ? m_mainWindow->viewManager() : nullptr,
+                                                   effectiveViewManager,
                                                    m_goalAccumulatedProgram,
                                                    &statusMsg,
                                                    true,
@@ -5633,15 +5668,17 @@ void KisAiIllustrationDocker::expandPromptWithAi()
         if (!m_expandPromptReply || m_expandPromptResponseTooLarge) {
             return;
         }
-        m_expandPromptResponseBuffer.append(m_expandPromptReply->readAll());
+        const QByteArray chunk = m_expandPromptReply->readAll();
         // The expansion response is plain JSON, not an image; a 32 MB ceiling
-        // is already generous. Stop reading past it instead of buffering a
-        // hostile peer's unbounded stream.
-        if (m_expandPromptResponseBuffer.size() > MAX_REMOTE_RESPONSE_BYTES) {
+        // is already generous. Check remaining capacity before buffering
+        // a hostile peer's unbounded stream.
+        if (chunk.size() > MAX_REMOTE_RESPONSE_BYTES - m_expandPromptResponseBuffer.size()) {
             m_expandPromptResponseBuffer.clear();
             m_expandPromptResponseTooLarge = true;
             m_expandPromptReply->abort();
+            return;
         }
+        m_expandPromptResponseBuffer.append(chunk);
     });
     connect(m_expandPromptReply.data(),
             &QNetworkReply::finished,

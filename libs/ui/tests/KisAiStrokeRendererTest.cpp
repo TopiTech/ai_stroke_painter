@@ -2782,4 +2782,71 @@ void KisAiStrokeRendererTest::testAnimeMouthRenderingAndFinishingSuite()
     }
 }
 
+void KisAiStrokeRendererTest::testRasterizeZeroCanvasProtection()
+{
+    KisAiStrokeOperation op;
+    op.kind = KisAiStrokeOperation::Kind::Path;
+    op.points = {KisAiStrokePoint(0.1, 0.1), KisAiStrokePoint(0.9, 0.9)};
+    op.brush.size = 5.0;
+    op.brush.color = QColor(255, 0, 0);
+
+    QImage dummy(10, 10, QImage::Format_ARGB32_Premultiplied);
+    QPainter painter(&dummy);
+
+    // Must not crash or divide by zero on zero or negative dimensions
+    KisAiStrokeRenderer::rasterizeOperation(painter, op, QSize(0, 0));
+    KisAiStrokeRenderer::rasterizeOperation(painter, op, QSize(-50, -50));
+    KisAiStrokeRenderer::rasterizeOperation(painter, op, QSize(0, 100));
+    KisAiStrokeRenderer::rasterizeOperation(painter, op, QSize(100, 0));
+}
+
+void KisAiStrokeRendererTest::testCatmullRomSplineTwoPointsClosed()
+{
+    const QVector<QPointF> points = {QPointF(10.0, 10.0), QPointF(50.0, 50.0)};
+    const QVector<QPointF> result = KisAiStrokeRenderer::generateCatmullRomSpline(points, 8, true);
+    QCOMPARE(result.size(), 2);
+    QCOMPARE(result, points);
+}
+
+void KisAiStrokeRendererTest::testClippingMaskRetentionAcrossSteps()
+{
+    KisAiStrokeProgram prevStep;
+    prevStep.canvasSize = QSize(200, 200);
+    KisAiStrokeOperation flat1;
+    flat1.kind = KisAiStrokeOperation::Kind::Fill;
+    flat1.layer = QStringLiteral("Flats");
+    // Box 1: (0.1, 0.1) to (0.3, 0.3) -> pixels (20,20) to (60,60)
+    flat1.polygon = QPolygonF{QPointF(0.1, 0.1), QPointF(0.3, 0.1), QPointF(0.3, 0.3), QPointF(0.1, 0.3)};
+    flat1.brush.color = QColor(255, 200, 200);
+    prevStep.operations.append(flat1);
+
+    KisAiStrokeProgram currStep;
+    currStep.canvasSize = QSize(200, 200);
+    KisAiStrokeOperation flat2;
+    flat2.kind = KisAiStrokeOperation::Kind::Fill;
+    flat2.layer = QStringLiteral("Flats");
+    // Box 2: (0.7, 0.7) to (0.9, 0.9) -> pixels (140,140) to (180,180)
+    flat2.polygon = QPolygonF{QPointF(0.7, 0.7), QPointF(0.9, 0.7), QPointF(0.9, 0.9), QPointF(0.7, 0.9)};
+    flat2.brush.color = QColor(200, 255, 200);
+    currStep.operations.append(flat2);
+
+    // Full screen shading
+    KisAiStrokeOperation shade;
+    shade.kind = KisAiStrokeOperation::Kind::Fill;
+    shade.layer = QStringLiteral("Shading");
+    shade.polygon = QPolygonF{QPointF(0.0, 0.0), QPointF(1.0, 0.0), QPointF(1.0, 1.0), QPointF(0.0, 1.0)};
+    shade.brush.color = QColor(50, 50, 100);
+    currStep.operations.append(shade);
+
+    const QImage rendered = KisAiStrokeRenderer::renderProgramToImage(currStep, QSize(200, 200), true, &prevStep);
+    QVERIFY(!rendered.isNull());
+
+    // Both Box 1 (from prevStep) and Box 2 (from currStep) should have shading rendered
+    QVERIFY(qAlpha(rendered.pixel(40, 40)) > 0);
+    QVERIFY(qAlpha(rendered.pixel(160, 160)) > 0);
+
+    // Outside both boxes (e.g. at (100, 100)) must be clipped out
+    QCOMPARE(qAlpha(rendered.pixel(100, 100)), 0);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

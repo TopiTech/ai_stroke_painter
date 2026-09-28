@@ -5556,6 +5556,120 @@ void KisAiStrokeProgramTest::testGoalAgentThoughtParsingAndPayloadInjection()
     QCOMPARE(injectedThought.value(QStringLiteral("estimated_remaining_steps")).toInt(), 3);
 }
 
+void KisAiStrokeProgramTest::testJsonRepairEscapedSingleQuoteAndInnerQuotes()
+{
+    // Test 1: Escaped single quotes within single-quoted string
+    const QString pythonDict = QStringLiteral("{'title': 'author\\'s note', 'count': 42}");
+    const QString repaired1 = KisAiStrokeProgramCodec::repairJsonSyntax(pythonDict);
+    QJsonParseError err1;
+    const QJsonDocument doc1 = QJsonDocument::fromJson(repaired1.toUtf8(), &err1);
+    QCOMPARE(err1.error, QJsonParseError::NoError);
+    QCOMPARE(doc1.object().value(QStringLiteral("title")).toString(), QStringLiteral("author's note"));
+
+    // Test 2: Double quotes inside single-quoted strings
+    const QString dictWithQuotes = QStringLiteral("{'description': 'A girl with \"blue\" ribbon', 'layer': 'Lineart'}");
+    const QString repaired2 = KisAiStrokeProgramCodec::repairJsonSyntax(dictWithQuotes);
+    QJsonParseError err2;
+    const QJsonDocument doc2 = QJsonDocument::fromJson(repaired2.toUtf8(), &err2);
+    QCOMPARE(err2.error, QJsonParseError::NoError);
+    QCOMPARE(doc2.object().value(QStringLiteral("description")).toString(), QStringLiteral("A girl with \"blue\" ribbon"));
+
+    // Test 3: Truncated unicode escape sequence
+    const QString truncatedUnicode = QStringLiteral("{\"status\": \"loading\", \"icon\": \"\\u26");
+    const QString repaired3 = KisAiStrokeProgramCodec::repairTruncatedJson(truncatedUnicode);
+    QJsonParseError err3;
+    const QJsonDocument doc3 = QJsonDocument::fromJson(repaired3.toUtf8(), &err3);
+    QCOMPARE(err3.error, QJsonParseError::NoError);
+    QVERIFY(doc3.isObject());
+    QCOMPARE(doc3.object().value(QStringLiteral("status")).toString(), QStringLiteral("loading"));
+}
+
+void KisAiStrokeProgramTest::testTrimOperationsToBudgetNonFiniteProtection()
+{
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(1024, 1024);
+
+    KisAiStrokeOperation op1;
+    op1.id = QStringLiteral("valid_stroke");
+    op1.kind = KisAiStrokeOperation::Kind::Path;
+    op1.layer = QStringLiteral("Lineart");
+    op1.points = {KisAiStrokePoint(0.1, 0.1), KisAiStrokePoint(0.9, 0.9)};
+    program.operations.append(op1);
+
+    KisAiStrokeOperation op2;
+    op2.id = QStringLiteral("nan_stroke");
+    op2.kind = KisAiStrokeOperation::Kind::Path;
+    op2.layer = QStringLiteral("Lineart");
+    op2.points = {KisAiStrokePoint(std::numeric_limits<double>::quiet_NaN(), 0.5), KisAiStrokePoint(0.8, 0.8)};
+    program.operations.append(op2);
+
+    KisAiStrokeOperation op3;
+    op3.id = QStringLiteral("inf_fill");
+    op3.kind = KisAiStrokeOperation::Kind::Fill;
+    op3.layer = QStringLiteral("Flats");
+    op3.polygon = {QPointF(0.0, 0.0), QPointF(std::numeric_limits<double>::infinity(), 1.0), QPointF(1.0, 1.0)};
+    program.operations.append(op3);
+
+    // Trimming with non-finite coordinates must not crash, throw UB or hang
+    KisAiStrokeProgram trimmed = KisAiStrokeProgramCodec::trimOperationsToBudget(program, 2);
+    QVERIFY(trimmed.operations.size() <= 2);
+}
+
+void KisAiStrokeProgramTest::testHueShiftedShadowCalculationAchromaticBoundary()
+{
+    // Hue 240 is pure blue / default blue-violet shadow anchor
+    const QColor pureBlue = QColor::fromHsv(240, 150, 200);
+    const QColor shadow = KisAiStrokeProgramCodec::calculateHueShiftedShadow(pureBlue);
+    QVERIFY(shadow.isValid());
+    // Should stay in the cool range and darken
+    QVERIFY(shadow.value() < pureBlue.value());
+    // Hue should be shifted towards purple/indigo or remain cool
+    QVERIFY(shadow.hue() >= 230 && shadow.hue() <= 270);
+}
+
+void KisAiStrokeProgramTest::testRefineForRenderingNormalizesAttributes()
+{
+    KisAiStrokeProgram program;
+    program.canvasSize = QSize(1000, 1000);
+
+    KisAiStrokeOperation shapeOp;
+    shapeOp.kind = KisAiStrokeOperation::Kind::ParametricShape;
+    shapeOp.layer = QStringLiteral("Flats");
+    shapeOp.shapeCenter = QPointF(0.5, 0.5);
+    shapeOp.shapeSize = QSizeF(0.2, 0.2);
+    shapeOp.shapeAngleDeg = std::numeric_limits<double>::quiet_NaN();
+    program.operations.append(shapeOp);
+
+    KisAiStrokeOperation formOp;
+    formOp.kind = KisAiStrokeOperation::Kind::FormShading;
+    formOp.layer = QStringLiteral("Shading");
+    formOp.polygon = {QPointF(0.2, 0.2), QPointF(0.8, 0.2), QPointF(0.8, 0.8)};
+    formOp.featherWidth = 999.0;
+    formOp.shadingIntensity = -5.0;
+    program.operations.append(formOp);
+
+    KisAiStrokeOperation hatchOp;
+    hatchOp.kind = KisAiStrokeOperation::Kind::TextureHatch;
+    hatchOp.layer = QStringLiteral("Shading");
+    hatchOp.polygon = {QPointF(0.1, 0.1), QPointF(0.5, 0.1), QPointF(0.5, 0.5)};
+    hatchOp.angleDeg = 720.0;
+    program.operations.append(hatchOp);
+
+    const KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(program);
+    QCOMPARE(refined.operations.size(), 3);
+
+    const auto &refinedShape = refined.operations.at(0);
+    QVERIFY(std::isfinite(refinedShape.shapeAngleDeg));
+    QCOMPARE(refinedShape.shapeAngleDeg, 0.0);
+
+    const auto &refinedForm = refined.operations.at(1);
+    QVERIFY(refinedForm.featherWidth <= 0.5);
+    QVERIFY(refinedForm.shadingIntensity >= 0.0 && refinedForm.shadingIntensity <= 1.0);
+
+    const auto &refinedHatch = refined.operations.at(2);
+    QVERIFY(refinedHatch.angleDeg >= -360.0 && refinedHatch.angleDeg <= 360.0);
+}
+
 KISTEST_MAIN(KisAiStrokeProgramTest)
 
 
