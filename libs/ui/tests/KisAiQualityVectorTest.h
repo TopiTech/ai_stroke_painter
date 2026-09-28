@@ -40,6 +40,8 @@ private Q_SLOTS:
     void testLineartJitterIgnoresEmptyTiles();
     void testEvaluatePerceptualFormatSafety();
     void testEdgeDensityBalanceBoundarySafety();
+    void testAggregateGuardsNonFinite();
+    void testMetricCalculationsSupportNonRgbFormats();
 };
 
 #endif // KIS_AI_QUALITY_VECTOR_TEST_H

@@ -16,6 +16,9 @@ namespace
 {
 qreal clampRange(qreal v, qreal lo, qreal hi)
 {
+    if (!std::isfinite(v)) {
+        return (lo + hi) * 0.5;
+    }
     return qBound<qreal>(lo, v, hi);
 }
 

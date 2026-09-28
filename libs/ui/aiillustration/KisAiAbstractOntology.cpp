@@ -725,10 +725,6 @@ void applyRuleToSpec(const OntologyRule &rule, KisAiSceneSpec *spec)
         if (rule.kind == OntologyRule::SetString) {
             spec->palette.mood = rule.stringValue;
         }
-    } else if (path == QStringLiteral("style.artStyleId")) {
-        if (rule.kind == OntologyRule::SetString) {
-            spec->style.artStyleId = rule.stringValue;
-        }
     } else if (path == QStringLiteral("style.lineWeight")) {
         if (rule.kind == OntologyRule::SetString) {
             spec->style.lineWeight = rule.stringValue;

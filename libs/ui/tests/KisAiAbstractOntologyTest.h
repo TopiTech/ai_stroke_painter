@@ -29,6 +29,7 @@ private Q_SLOTS:
     void testWordBoundaryMatching();
     void testDefaultSpecForPromptAppliesOntology();
     void testMediumContractMapping();
+    void testStyleArtStyleIdSyncsMediumId();
 };
 
 #endif // KIS_AI_ABSTRACT_ONTOLOGY_TEST_H

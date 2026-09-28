@@ -92,6 +92,7 @@ private Q_SLOTS:
     void testRasterizeZeroCanvasProtection();
     void testCatmullRomSplineTwoPointsClosed();
     void testClippingMaskRetentionAcrossSteps();
+    void testDeliberateStrokeOrderWithNanValues();
 };
 
 #endif // KIS_AI_STROKE_RENDERER_TEST_H

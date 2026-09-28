@@ -2849,4 +2849,30 @@ void KisAiStrokeRendererTest::testClippingMaskRetentionAcrossSteps()
     QCOMPARE(qAlpha(rendered.pixel(100, 100)), 0);
 }
 
+void KisAiStrokeRendererTest::testDeliberateStrokeOrderWithNanValues()
+{
+    const QSize canvas(512, 512);
+    KisAiStrokeOperation op1;
+    op1.id = QStringLiteral("op_nan_opacity");
+    op1.layer = QStringLiteral("Lineart");
+    op1.brush.opacity = std::numeric_limits<qreal>::quiet_NaN();
+    op1.points = QVector<KisAiStrokePoint>{KisAiStrokePoint(0.1, 0.1, 0.5), KisAiStrokePoint(0.2, 0.2, 0.5)};
+
+    KisAiStrokeOperation op2;
+    op2.id = QStringLiteral("op_normal");
+    op2.layer = QStringLiteral("Lineart");
+    op2.brush.opacity = 0.5;
+    op2.points = QVector<KisAiStrokePoint>{KisAiStrokePoint(0.3, 0.3, 0.5), KisAiStrokePoint(0.4, 0.4, 0.5)};
+
+    KisAiStrokeOperation op3;
+    op3.id = QStringLiteral("op_nan_coord");
+    op3.layer = QStringLiteral("Lineart");
+    op3.brush.opacity = 0.8;
+    op3.points = QVector<KisAiStrokePoint>{KisAiStrokePoint(std::numeric_limits<qreal>::quiet_NaN(), 0.0, 0.5)};
+
+    QVector<KisAiStrokeOperation> ops{op1, op2, op3};
+    const QVector<KisAiStrokeOperation> ordered = KisAiDeliberateStroke::orderOperationsForRendering(ops, canvas);
+    QCOMPARE(ordered.size(), 3);
+}
+
 KISTEST_MAIN(KisAiStrokeRendererTest)

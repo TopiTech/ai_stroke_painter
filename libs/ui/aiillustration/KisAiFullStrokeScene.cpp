@@ -208,7 +208,7 @@ KisAiStrokeProgram KisAiFullStrokeScene::prioritize(const KisAiStrokeProgram &pr
             g.firstIndex = i;
             for (const KisAiFullStrokeObject &object : objects) {
                 if (object.id == id) {
-                    g.priority = object.focalWeight;
+                    g.priority = std::isfinite(object.focalWeight) ? object.focalWeight : 0.0;
                     g.required = object.required;
                     break;
                 }
@@ -220,7 +220,9 @@ KisAiStrokeProgram KisAiFullStrokeScene::prioritize(const KisAiStrokeProgram &pr
     std::stable_sort(groups.begin(), groups.end(), [](const Group &a, const Group &b) {
         if (a.required != b.required)
             return a.required;
-        return a.priority > b.priority;
+        if (qAbs(a.priority - b.priority) > 1e-4)
+            return a.priority > b.priority;
+        return a.firstIndex < b.firstIndex;
     });
     QVector<Group> selected;
     int used = 0;

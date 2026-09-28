@@ -1950,10 +1950,6 @@ void KisAiIllustrationDocker::generateIllustration()
     const QString effectivePrompt = buildEffectivePrompt(prompt);
 
     const auto mode = static_cast<GenerationMode>(m_modeCombo->currentData().toInt());
-    if (m_goalModeActive && m_waitingForUserStepAdvance) {
-        advanceGoalStep(true);
-        return;
-    }
     if (isGoalModeRequested()) {
         startGoalMode(effectivePrompt);
         return;
@@ -2686,28 +2682,24 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
         return;
     }
 
-    if (targetImage) {
-        QString statusMsg;
-        KisViewManager *effectiveViewManager = nullptr;
-        if (m_mainWindow && m_mainWindow->viewManager() && m_mainWindow->viewManager()->image() == targetImage) {
-            effectiveViewManager = m_mainWindow->viewManager();
-        }
-        if (KisAiStrokeRenderer::renderProgramToLayers(targetImage,
-                                                       effectiveViewManager,
-                                                       program,
-                                                       &statusMsg,
-                                                       true,
-                                                       nullptr,
-                                                       trappingPx)) {
-            const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
-            const int qualityPercent = qRound(qBound<qreal>(0.0, program.completionScore, 1.0) * 100.0);
-            const QString detailMsg = i18n("%1 (%2 / 構造品質 %3%)", statusMsg, summary, qualityPercent);
-            setStatus(detailMsg);
-        } else {
-            setStatus(statusMsg, true);
-        }
+    QString statusMsg;
+    KisViewManager *effectiveViewManager = nullptr;
+    if (m_mainWindow && m_mainWindow->viewManager() && m_mainWindow->viewManager()->image() == targetImage) {
+        effectiveViewManager = m_mainWindow->viewManager();
+    }
+    if (KisAiStrokeRenderer::renderProgramToLayers(targetImage,
+                                                   effectiveViewManager,
+                                                   program,
+                                                   &statusMsg,
+                                                   true,
+                                                   nullptr,
+                                                   trappingPx)) {
+        const QString summary = KisAiStrokeProgramCodec::formatLayerSummary(program);
+        const int qualityPercent = qRound(qBound<qreal>(0.0, program.completionScore, 1.0) * 100.0);
+        const QString detailMsg = i18n("%1 (%2 / 構造品質 %3%)", statusMsg, summary, qualityPercent);
+        setStatus(detailMsg);
     } else {
-        setStatus(i18n("キャンバスが利用できないため、ストロークを描画できませんでした。"), true);
+        setStatus(statusMsg, true);
     }
 }
 

@@ -557,17 +557,20 @@ QVector<int> KisAiDeliberateStroke::planStrokeOrder(
     items.reserve(ops.size());
     for (int i = 0; i < ops.size(); ++i) {
         const KisAiStrokeOperation &op = ops.at(i);
-        items.append({i, layerRank(op.layer), opMassEstimate(op, canvasSize),
-                      op.brush.opacity, isFaceDetail(op.id), op.id});
+        const qreal rawMass = opMassEstimate(op, canvasSize);
+        const qreal mass = std::isfinite(rawMass) && rawMass >= 0.0 ? rawMass : 0.0;
+        const qreal rawOpacity = op.brush.opacity;
+        const qreal opacity = std::isfinite(rawOpacity) ? rawOpacity : 1.0;
+        items.append({i, layerRank(op.layer), mass, opacity, isFaceDetail(op.id), op.id});
     }
     std::stable_sort(items.begin(), items.end(), [](const Item &a, const Item &b) {
         if (a.rank != b.rank)
             return a.rank < b.rank;
         if (a.face != b.face)
             return !a.face && b.face; // non-face first, details last
-        if (!qFuzzyCompare(a.mass + 1.0, b.mass + 1.0))
+        if (qAbs(a.mass - b.mass) > 1e-4)
             return a.mass > b.mass; // large masses first
-        if (!qFuzzyCompare(a.opacity + 1.0, b.opacity + 1.0))
+        if (qAbs(a.opacity - b.opacity) > 1e-4)
             return a.opacity < b.opacity; // thin washes first
         return a.index < b.index;
     });

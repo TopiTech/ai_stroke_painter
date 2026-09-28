@@ -42,6 +42,7 @@ private Q_SLOTS:
     void testPhysicalRenderClampsDerivedOversizeCanvas();
     void testUnavailableHdrReturnsNullAndStandardRendererStillWorks();
     void testNullAndEmptySafety();
+    void testPremultipliedAlphaChannelsNeverExceedAlpha();
 };
 
 #endif // KIS_AI_PHYSICAL_RENDERER_TEST_H

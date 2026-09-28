@@ -637,4 +637,46 @@ void KisAiPhysicalRendererTest::testNullAndEmptySafety()
     }
 }
 
+void KisAiPhysicalRendererTest::testPremultipliedAlphaChannelsNeverExceedAlpha()
+{
+    if (!KisAiPhysicalRenderer::isHdrFormatSupported()) {
+        QSKIP("HDR format not supported on this platform/Qt version");
+    }
+
+    const int W = 16;
+    const int H = 16;
+    QImage hdr(W, H, QImage::Format_RGBA32FPx4_Premultiplied);
+    hdr.fill(Qt::transparent);
+
+    for (int y = 0; y < H; ++y) {
+        float *line = reinterpret_cast<float *>(hdr.scanLine(y));
+        for (int x = 0; x < W; ++x) {
+            const float a = static_cast<float>(y) / static_cast<float>(H);
+            const float c = static_cast<float>(x) / static_cast<float>(W);
+            line[x * 4 + 0] = c * a;
+            line[x * 4 + 1] = c * a;
+            line[x * 4 + 2] = c * a;
+            line[x * 4 + 3] = a;
+        }
+    }
+
+    const QImage ldr = KisAiPhysicalRenderer::toSrgbLdr(hdr);
+    QVERIFY(!ldr.isNull());
+    QCOMPARE(ldr.format(), QImage::Format_ARGB32_Premultiplied);
+
+    for (int y = 0; y < H; ++y) {
+        const QRgb *row = reinterpret_cast<const QRgb *>(ldr.constScanLine(y));
+        for (int x = 0; x < W; ++x) {
+            const QRgb px = row[x];
+            const int a = qAlpha(px);
+            const int r = qRed(px);
+            const int g = qGreen(px);
+            const int b = qBlue(px);
+            QVERIFY2(r <= a, qPrintable(QString("r (%1) > a (%2) at (%3, %4)").arg(r).arg(a).arg(x).arg(y)));
+            QVERIFY2(g <= a, qPrintable(QString("g (%1) > a (%2) at (%3, %4)").arg(g).arg(a).arg(x).arg(y)));
+            QVERIFY2(b <= a, qPrintable(QString("b (%1) > a (%2) at (%3, %4)").arg(b).arg(a).arg(x).arg(y)));
+        }
+    }
+}
+
 KISTEST_MAIN(KisAiPhysicalRendererTest)

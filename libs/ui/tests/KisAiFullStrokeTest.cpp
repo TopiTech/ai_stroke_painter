@@ -132,4 +132,36 @@ void KisAiFullStrokeTest::testPrioritizeBudgetSmallerThanGroup()
     QCOMPARE(prioritized.operations.at(1).id, QStringLiteral("hero_stroke_1"));
 }
 
+void KisAiFullStrokeTest::testPrioritizeWithNanFocalWeight()
+{
+    KisAiFullStrokeScene scene;
+
+    KisAiFullStrokeObject obj1;
+    obj1.id = QStringLiteral("obj1");
+    obj1.focalWeight = std::numeric_limits<qreal>::quiet_NaN();
+    obj1.required = false;
+
+    KisAiFullStrokeObject obj2;
+    obj2.id = QStringLiteral("obj2");
+    obj2.focalWeight = 0.8;
+    obj2.required = false;
+
+    scene.objects.append(obj1);
+    scene.objects.append(obj2);
+
+    KisAiStrokeProgram program;
+    KisAiStrokeOperation op1;
+    op1.id = QStringLiteral("op1");
+    op1.groupId = QStringLiteral("obj1");
+    program.operations.append(op1);
+
+    KisAiStrokeOperation op2;
+    op2.id = QStringLiteral("op2");
+    op2.groupId = QStringLiteral("obj2");
+    program.operations.append(op2);
+
+    const KisAiStrokeProgram prioritized = scene.prioritize(program, 2);
+    QCOMPARE(prioritized.operations.size(), 2);
+}
+
 KISTEST_MAIN(KisAiFullStrokeTest)

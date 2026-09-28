@@ -2252,15 +2252,16 @@ void KisAiStrokeRenderer::applyChromaticAberration(QImage &image, int shiftPx)
         const QRgb *srcRow = reinterpret_cast<const QRgb *>(copy.constScanLine(y));
         QRgb *dstRow = reinterpret_cast<QRgb *>(image.scanLine(y));
         for (int x = 0; x < w; ++x) {
-            const int xR = qBound(0, x - boundedShift, w - 1);
-            const int xB = qBound(0, x + boundedShift, w - 1);
             const QRgb rawG = srcRow[x];
-            const QRgb rawR = srcRow[xR];
-            const QRgb rawB = srcRow[xB];
-            if (qAlpha(rawG) == 0 && qAlpha(rawR) == 0 && qAlpha(rawB) == 0) {
+            const int a = qAlpha(rawG);
+            if (a == 0) {
                 dstRow[x] = 0;
                 continue;
             }
+            const int xR = qBound(0, x - boundedShift, w - 1);
+            const int xB = qBound(0, x + boundedShift, w - 1);
+            const QRgb rawR = srcRow[xR];
+            const QRgb rawB = srcRow[xB];
             // Each sample is premultiplied by its own alpha, so the channels must
             // be unpremultiplied before they are recombined with the centre
             // alpha. Storing raw premultiplied channels next to a different alpha
@@ -2269,7 +2270,6 @@ void KisAiStrokeRenderer::applyChromaticAberration(QImage &image, int shiftPx)
             const QRgb cR = qUnpremultiply(rawR);
             const QRgb cG = qUnpremultiply(rawG);
             const QRgb cB = qUnpremultiply(rawB);
-            const int a = qAlpha(cG);
             dstRow[x] = qPremultiply(qRgba(qRed(cR), qGreen(cG), qBlue(cB), a));
         }
     }

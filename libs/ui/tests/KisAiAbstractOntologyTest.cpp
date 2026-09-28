@@ -244,4 +244,23 @@ void KisAiAbstractOntologyTest::testMediumContractMapping()
     QCOMPARE(gallery.medium.finishStrength, 0.9);
 }
 
+void KisAiAbstractOntologyTest::testStyleArtStyleIdSyncsMediumId()
+{
+    OntologyRuleset ruleset;
+    OntologyRule r;
+    r.triggerWords = QStringList{QStringLiteral("watercolor_vibes")};
+    r.specPath = QStringLiteral("style.artStyleId");
+    r.kind = OntologyRule::SetString;
+    r.stringValue = QStringLiteral("watercolor");
+    r.artStyleHint = QStringLiteral("watercolor_wash");
+    r.weight = 1.0;
+    ruleset.rules.append(r);
+
+    KisAiSceneSpec spec;
+    const int count = OntologyApplier::apply(QStringLiteral("watercolor_vibes painting"), &spec, ruleset);
+    QCOMPARE(count, 1);
+    QCOMPARE(spec.style.artStyleId, QStringLiteral("watercolor"));
+    QCOMPARE(spec.medium.mediumId, QStringLiteral("watercolor_wash"));
+}
+
 KISTEST_MAIN(KisAiAbstractOntologyTest)

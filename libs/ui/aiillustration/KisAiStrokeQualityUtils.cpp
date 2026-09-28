@@ -176,44 +176,53 @@ QVector<KisAiStrokePoint> KisAiStrokeQualityUtils::resampleEquidistant(const QVe
 
 namespace
 {
-void rdpRecursive(const QVector<QPointF> &points, int start, int end, qreal epsilonSq, QVector<bool> *keep)
+void rdpIterative(const QVector<QPointF> &points, int totalStart, int totalEnd, qreal epsilonSq, QVector<bool> *keep)
 {
-    if (end <= start + 1) {
-        return;
-    }
+    QVector<QPair<int, int>> stack;
+    stack.reserve(64);
+    stack.append(qMakePair(totalStart, totalEnd));
 
-    const QPointF &pA = points.at(start);
-    const QPointF &pB = points.at(end);
-    const QPointF lineVec = pB - pA;
-    const qreal lineLenSq = lineVec.x() * lineVec.x() + lineVec.y() * lineVec.y();
-
-    qreal maxDistSq = 0.0;
-    int maxIdx = start;
-
-    for (int i = start + 1; i < end; ++i) {
-        const QPointF &pP = points.at(i);
-        qreal distSq = 0.0;
-
-        if (lineLenSq < 1.0e-8) {
-            distSq = pointDistance(pP, pA);
-            distSq = distSq * distSq;
-        } else {
-            const qreal t = qBound<qreal>(0.0, dotProduct(pP - pA, lineVec) / lineLenSq, 1.0);
-            const QPointF proj = pA + lineVec * t;
-            const QPointF diff = pP - proj;
-            distSq = diff.x() * diff.x() + diff.y() * diff.y();
+    while (!stack.isEmpty()) {
+        const QPair<int, int> seg = stack.takeLast();
+        const int start = seg.first;
+        const int end = seg.second;
+        if (end <= start + 1) {
+            continue;
         }
 
-        if (distSq > maxDistSq) {
-            maxDistSq = distSq;
-            maxIdx = i;
-        }
-    }
+        const QPointF &pA = points.at(start);
+        const QPointF &pB = points.at(end);
+        const QPointF lineVec = pB - pA;
+        const qreal lineLenSq = lineVec.x() * lineVec.x() + lineVec.y() * lineVec.y();
 
-    if (maxDistSq > epsilonSq) {
-        (*keep)[maxIdx] = true;
-        rdpRecursive(points, start, maxIdx, epsilonSq, keep);
-        rdpRecursive(points, maxIdx, end, epsilonSq, keep);
+        qreal maxDistSq = 0.0;
+        int maxIdx = start;
+
+        for (int i = start + 1; i < end; ++i) {
+            const QPointF &pP = points.at(i);
+            qreal distSq = 0.0;
+
+            if (lineLenSq < 1.0e-8) {
+                distSq = pointDistance(pP, pA);
+                distSq = distSq * distSq;
+            } else {
+                const qreal t = qBound<qreal>(0.0, dotProduct(pP - pA, lineVec) / lineLenSq, 1.0);
+                const QPointF proj = pA + lineVec * t;
+                const QPointF diff = pP - proj;
+                distSq = diff.x() * diff.x() + diff.y() * diff.y();
+            }
+
+            if (distSq > maxDistSq) {
+                maxDistSq = distSq;
+                maxIdx = i;
+            }
+        }
+
+        if (maxDistSq > epsilonSq) {
+            (*keep)[maxIdx] = true;
+            stack.append(qMakePair(start, maxIdx));
+            stack.append(qMakePair(maxIdx, end));
+        }
     }
 }
 } // namespace
@@ -229,7 +238,7 @@ QVector<QPointF> KisAiStrokeQualityUtils::simplifyRDP(const QVector<QPointF> &po
     keep[0] = true;
     keep[points.size() - 1] = true;
 
-    rdpRecursive(points, 0, points.size() - 1, epsilonSq, &keep);
+    rdpIterative(points, 0, points.size() - 1, epsilonSq, &keep);
 
     QVector<QPointF> simplified;
     simplified.reserve(points.size());

@@ -357,10 +357,10 @@ QImage KisAiPhysicalRenderer::toSrgbLdr(const QImage &hdrImage)
                 const float sG = linearToSrgb(straightLinG);
                 const float sB = linearToSrgb(straightLinB);
 
-                const int rInt = qBound(0, qRound(sR * a * 255.0f), 255);
-                const int gInt = qBound(0, qRound(sG * a * 255.0f), 255);
-                const int bInt = qBound(0, qRound(sB * a * 255.0f), 255);
                 const int aInt = qBound(0, qRound(a * 255.0f), 255);
+                const int rInt = qBound(0, qRound(sR * a * 255.0f), aInt);
+                const int gInt = qBound(0, qRound(sG * a * 255.0f), aInt);
+                const int bInt = qBound(0, qRound(sB * a * 255.0f), aInt);
 
                 dstLine[x] = qRgba(rInt, gInt, bInt, aInt);
             }

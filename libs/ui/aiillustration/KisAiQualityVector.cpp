@@ -111,14 +111,20 @@ qreal QualityVector::aggregate() const
     const QStringList names = allAxisNames();
     for (const QString &name : names) {
         const qreal w = axisWeight(name);
-        if (qFuzzyIsNull(w))
+        if (qFuzzyIsNull(w) || !std::isfinite(w))
             continue;
-        weightedSum += w * axisValue(name);
+        const qreal val = axisValue(name);
+        if (!std::isfinite(val))
+            continue;
+        weightedSum += w * val;
         weightSum += w;
     }
-    if (weightSum <= 0.0)
+    if (weightSum <= 0.0 || !std::isfinite(weightedSum))
         return 0.0;
-    return qBound<qreal>(0.0, weightedSum / weightSum, 1.0);
+    const qreal agg = weightedSum / weightSum;
+    if (!std::isfinite(agg))
+        return 0.0;
+    return qBound<qreal>(0.0, agg, 1.0);
 }
 
 QJsonObject QualityVector::toJson() const
@@ -177,14 +183,26 @@ qreal polygonAreaSigned(const QPolygonF &poly)
     return qAbs(area) * 0.5;
 }
 
+inline QImage ensure32BitRgb(const QImage &image)
+{
+    if (image.isNull() ||
+        image.format() == QImage::Format_ARGB32 ||
+        image.format() == QImage::Format_ARGB32_Premultiplied ||
+        image.format() == QImage::Format_RGB32) {
+        return image;
+    }
+    return image.convertToFormat(QImage::Format_ARGB32);
+}
+
 /// 16x16 タイルごとの平均輝度を返す。
 QVector<qreal> tilewiseLuminance(const QImage &image, int tileSize = 16)
 {
     QVector<qreal> tiles;
     if (image.isNull())
         return tiles;
-    const int W = image.width();
-    const int H = image.height();
+    const QImage safe = ensure32BitRgb(image);
+    const int W = safe.width();
+    const int H = safe.height();
     if (W <= 0 || H <= 0)
         return tiles;
     const int cols = (W / tileSize) + 1;
@@ -197,7 +215,7 @@ QVector<qreal> tilewiseLuminance(const QImage &image, int tileSize = 16)
             const int xmax = qMin(tx + tileSize, W);
             const int ymax = qMin(ty + tileSize, H);
             for (int y = ty; y < ymax; ++y) {
-                const QRgb *row = reinterpret_cast<const QRgb *>(image.constScanLine(y));
+                const QRgb *row = reinterpret_cast<const QRgb *>(safe.constScanLine(y));
                 for (int x = tx; x < xmax; ++x) {
                     const QRgb px = row[x];
                     const qreal r = qRed(px) / 255.0;
@@ -219,8 +237,9 @@ QVector<qreal> tilewiseEdgeDensity(const QImage &image, int tileSize = 16)
     QVector<qreal> tiles;
     if (image.isNull() || image.width() < 3 || image.height() < 3)
         return tiles;
-    const int W = image.width();
-    const int H = image.height();
+    const QImage safe = ensure32BitRgb(image);
+    const int W = safe.width();
+    const int H = safe.height();
     const int cols = (W / tileSize) + 1;
     const int rows = (H / tileSize) + 1;
     tiles.reserve(cols * rows);
@@ -231,9 +250,9 @@ QVector<qreal> tilewiseEdgeDensity(const QImage &image, int tileSize = 16)
             qreal magSum = 0.0;
             int count = 0;
             for (int y = ty + 1; y < ymax - 1; ++y) {
-                const QRgb *prev = reinterpret_cast<const QRgb *>(image.constScanLine(y - 1));
-                const QRgb *curr = reinterpret_cast<const QRgb *>(image.constScanLine(y));
-                const QRgb *next = reinterpret_cast<const QRgb *>(image.constScanLine(y + 1));
+                const QRgb *prev = reinterpret_cast<const QRgb *>(safe.constScanLine(y - 1));
+                const QRgb *curr = reinterpret_cast<const QRgb *>(safe.constScanLine(y));
+                const QRgb *next = reinterpret_cast<const QRgb *>(safe.constScanLine(y + 1));
                 for (int x = tx + 1; x < xmax - 1; ++x) {
                     const qreal tl = qRed(prev[x - 1]) / 255.0;
                     const qreal tc = qRed(prev[x]) / 255.0;
@@ -345,8 +364,9 @@ qreal skinBandSmoothnessMetric(const QImage &image, const QPointF &headCenter, q
 {
     if (image.isNull())
         return 0.0;
-    const int W = image.width();
-    const int H = image.height();
+    const QImage safe = ensure32BitRgb(image);
+    const int W = safe.width();
+    const int H = safe.height();
     const qreal top = (headCenter.y() - headHeight * 0.35) * H;
     const qreal bottom = (headCenter.y() + headHeight * 0.25) * H;
     const qreal left = (headCenter.x() - headHeight * 0.18) * W;
@@ -361,9 +381,9 @@ qreal skinBandSmoothnessMetric(const QImage &image, const QPointF &headCenter, q
     QVector<qreal> laplacians;
     laplacians.reserve((x1 - x0) * (y1 - y0));
     for (int y = y0 + 1; y < y1; ++y) {
-        const QRgb *prev = reinterpret_cast<const QRgb *>(image.constScanLine(y - 1));
-        const QRgb *curr = reinterpret_cast<const QRgb *>(image.constScanLine(y));
-        const QRgb *next = reinterpret_cast<const QRgb *>(image.constScanLine(y + 1));
+        const QRgb *prev = reinterpret_cast<const QRgb *>(safe.constScanLine(y - 1));
+        const QRgb *curr = reinterpret_cast<const QRgb *>(safe.constScanLine(y));
+        const QRgb *next = reinterpret_cast<const QRgb *>(safe.constScanLine(y + 1));
         for (int x = x0 + 1; x < x1; ++x) {
             const qreal c = qRed(curr[x]) / 255.0;
             const qreal l = qRed(prev[x]) / 255.0;
@@ -384,8 +404,9 @@ qreal lineartThicknessJitter(const QImage &lineartLayer)
 {
     if (lineartLayer.isNull() || lineartLayer.width() < 4 || lineartLayer.height() < 4)
         return 0.0;
-    const int W = lineartLayer.width();
-    const int H = lineartLayer.height();
+    const QImage safe = ensure32BitRgb(lineartLayer);
+    const int W = safe.width();
+    const int H = safe.height();
     // 空タイル (インクなし) を CV に含めると疎な線画が常に最大ジッタ扱いになる。
     // インクを含むタイルのみで太さのばらつきを測る。
     QVector<qreal> thickness;
@@ -397,7 +418,7 @@ qreal lineartThicknessJitter(const QImage &lineartLayer)
             const int xmax = qMin(tx + tile, W);
             const int ymax = qMin(ty + tile, H);
             for (int y = ty; y < ymax; ++y) {
-                const QRgb *row = reinterpret_cast<const QRgb *>(lineartLayer.constScanLine(y));
+                const QRgb *row = reinterpret_cast<const QRgb *>(safe.constScanLine(y));
                 for (int x = tx; x < xmax; ++x) {
                     sum += qAlpha(row[x]) / 255.0;
                     ++count;

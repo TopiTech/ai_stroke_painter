@@ -17,6 +17,7 @@ private Q_SLOTS:
     void testImageEndpointRejected();
     void testMissingProgramRejected();
     void testPrioritizeBudgetSmallerThanGroup();
+    void testPrioritizeWithNanFocalWeight();
 };
 
 #endif // KIS_AI_FULL_STROKE_TEST_H

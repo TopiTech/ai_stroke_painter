@@ -459,4 +459,31 @@ void KisAiQualityVectorTest::testEdgeDensityBalanceBoundarySafety()
     QVERIFY(mRight.edgeDensityBalance >= 0.0 && mRight.edgeDensityBalance <= 1.0);
 }
 
+void KisAiQualityVectorTest::testAggregateGuardsNonFinite()
+{
+    QualityVector qv = QualityProfile::animeLineartHeavy();
+    qv.structural.layerCoverage = std::numeric_limits<qreal>::quiet_NaN();
+    qv.perceptual.ssimAgainstReference = std::numeric_limits<qreal>::infinity();
+    qv.structural.silhouetteArea = 0.8;
+
+    const qreal agg = qv.aggregate();
+    QVERIFY(std::isfinite(agg));
+    QVERIFY(agg >= 0.0 && agg <= 1.0);
+}
+
+void KisAiQualityVectorTest::testMetricCalculationsSupportNonRgbFormats()
+{
+    QImage grayImg(64, 64, QImage::Format_Grayscale8);
+    grayImg.fill(128);
+
+    KisAiSceneSpec spec;
+    spec.composition.headCenter = QPointF(0.5, 0.4);
+    spec.composition.headHeight = 0.3;
+
+    const PerceptualMetrics m = QualityVectorEvaluator::evaluatePerceptual(grayImg, &spec, nullptr);
+    QVERIFY(std::isfinite(m.colorEntropy));
+    QVERIFY(std::isfinite(m.edgeDensityBalance));
+    QVERIFY(std::isfinite(m.skinBandSmoothness));
+}
+
 KISTEST_MAIN(KisAiQualityVectorTest)
