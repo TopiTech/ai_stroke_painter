@@ -1279,18 +1279,18 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
     static const QRegularExpression tripleBacktick(QStringLiteral("```(?:json)?"));
     text.remove(tripleBacktick);
 
-    // 1. Normalize smart quotes to standard quotes before string extraction
-    text.replace(QChar(0x201C), QLatin1Char('"')); // “
-    text.replace(QChar(0x201D), QLatin1Char('"')); // ”
-    text.replace(QChar(0x2018), QLatin1Char('\'')); // ‘
-    text.replace(QChar(0x2019), QLatin1Char('\'')); // ’
-
-    // 2. Single quotes and stray backticks to double quotes when outside double-quoted strings
+    // 1+2. Quote normalization that is aware of string context.
+    // Smart quotes must NOT be normalized globally before token masking:
+    // valid JSON whose string *content* contains “ ” ’ would become "" ''
+    // inside an already quoted string and break parsing. They are only
+    // treated as structural quotes below, when they appear outside strings.
     {
         QString quoteFixed;
         quoteFixed.reserve(text.size());
         bool inDouble = false;
+        bool inDoubleCurly = false; // 現在の文字列を “ で開いた
         bool inSingle = false;
+        bool inSingleCurly = false; // 現在の擬似文字列を ‘ で開いた
         bool inBacktick = false;
         bool esc = false;
         for (int i = 0; i < text.size(); ++i) {
@@ -1305,13 +1305,47 @@ QString KisAiStrokeProgramCodec::repairJsonSyntax(const QString &jsonText, KisAi
                 quoteFixed.append(ch);
                 continue;
             }
-            if (ch == QLatin1Char('"') && !inSingle && !inBacktick) {
+            // Structural smart quotes (context-aware; see step 1+2 above).
+            // A curly double quote only opens/closes a string it opened itself;
+            // “ ” appearing *inside* an existing string are content and stay
+            // masked (the old global replacement corrupted exactly that case).
+            if (ch == QChar(0x201C) && !inDouble && !inSingle && !inBacktick) {
+                inDouble = true;
+                inDoubleCurly = true;
+                quoteFixed.append(QLatin1Char('"'));
+                continue;
+            }
+            if (ch == QChar(0x201D) && inDouble && inDoubleCurly) {
+                inDouble = false;
+                inDoubleCurly = false;
+                quoteFixed.append(QLatin1Char('"'));
+                continue;
+            }
+            if ((ch == QChar(0x2018) || ch == QChar(0x2019)) && !inDouble && !inBacktick) {
+                if (!inSingle) {
+                    inSingle = true;
+                    inSingleCurly = true;
+                    quoteFixed.append(QLatin1Char('"'));
+                } else if (inSingleCurly) {
+                    inSingle = false;
+                    inSingleCurly = false;
+                    quoteFixed.append(QLatin1Char('"'));
+                } else {
+                    // ‘ ’ inside an ASCII '...' pseudo string: keep as content.
+                    quoteFixed.append(ch);
+                }
+                continue;
+            }
+            if (ch == QLatin1Char('"') && !inSingle && !inBacktick
+                && (!inDouble || !inDoubleCurly)) {
                 inDouble = !inDouble;
+                inDoubleCurly = false;
                 quoteFixed.append(ch);
                 continue;
             }
             if (ch == QLatin1Char('\'') && !inDouble && !inBacktick) {
                 inSingle = !inSingle;
+                inSingleCurly = false;
                 quoteFixed.append(QLatin1Char('"'));
                 continue;
             }

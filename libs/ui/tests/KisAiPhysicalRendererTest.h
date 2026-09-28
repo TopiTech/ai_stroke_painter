@@ -37,6 +37,7 @@ private Q_SLOTS:
     void testDownsampleBox();
     void testRenderProgramToPhysicalImage();
     void testCompositeLayerMismatchedSize();
+    void testLinearHdrLayerPreservesLinearValues();
     void testBlendPixelNanAndInfProtection();
     void testPhysicalRenderClampsDerivedOversizeCanvas();
     void testUnavailableHdrReturnsNullAndStandardRendererStillWorks();

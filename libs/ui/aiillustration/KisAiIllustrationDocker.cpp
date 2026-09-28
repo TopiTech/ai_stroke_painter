@@ -2015,7 +2015,11 @@ void KisAiIllustrationDocker::generateLlmStrokes(const QString &prompt)
     QString errorMessage;
     const QString endpoint = m_endpointEditor->text().trimmed();
     const QString model = m_modelEditor->text().trimmed();
-    const QString apiKey = !m_inFlightApiKey.isEmpty() ? m_inFlightApiKey : m_apiKeyEditor->text().trimmed();
+    // 入力欄が最新のユーザー意図。m_inFlightApiKey は保存OFF時の引き継ぎ用に
+    // すぎないので、ユーザーが新しいキーを打ち込んだ後は優先されない
+    // (接続テスト/プロンプト推敲と同じ規則)。
+    const QString apiKey = KisAiIllustrationRenderer::resolveApiKey(
+        m_apiKeyEditor ? m_apiKeyEditor->text() : QString(), m_inFlightApiKey);
 
     if (!KisAiIllustrationRenderer::validateImageEndpoint(endpoint, &errorMessage)) {
         // A validation failure here means executeRetry()'s m_retryInFlight flag
@@ -5165,10 +5169,8 @@ void KisAiIllustrationDocker::testLlmConnection()
 
     const QString endpoint = m_endpointEditor ? m_endpointEditor->text().trimmed() : QString();
     const QString model = m_modelEditor ? m_modelEditor->text().trimmed() : QString();
-    QString apiKey = m_apiKeyEditor ? m_apiKeyEditor->text().trimmed() : QString();
-    if (apiKey.isEmpty()) {
-        apiKey = m_inFlightApiKey;
-    }
+    QString apiKey = KisAiIllustrationRenderer::resolveApiKey(
+        m_apiKeyEditor ? m_apiKeyEditor->text() : QString(), m_inFlightApiKey);
     if (apiKey.isEmpty() && m_saveApiKeyCheck && m_saveApiKeyCheck->isChecked()) {
         QSettings s;
         unprotectApiKeyForCurrentUser(s.value(QStringLiteral("AIIllustration/apiKey")).toString(), &apiKey);
@@ -5280,6 +5282,15 @@ void KisAiIllustrationDocker::finishTestConnectionRequest()
 {
     QPointer<QNetworkReply> reply = m_testReply;
     m_testReply = nullptr;
+
+    // 接続テストでインフライトに入ったキーは不要になり次第ゼロクリアする
+    // (DEVELOPMENT.md §7.4)。保存OFF運用で生成リトライが唯一の鍵として
+    // 要求している場合のみ保持する。
+    const bool generationRequestActive = m_reply || (m_retryTimer && m_retryTimer->isActive());
+    if (KisAiIllustrationRenderer::shouldClearInFlightApiKey(
+            m_apiKeyEditor ? m_apiKeyEditor->text() : QString(), generationRequestActive)) {
+        clearInFlightApiKey();
+    }
 
     if (m_testConnectionButton) {
         m_testConnectionButton->setEnabled(true);
@@ -5518,10 +5529,8 @@ void KisAiIllustrationDocker::expandPromptWithAi()
 
     QString endpoint = m_endpointEditor ? m_endpointEditor->text().trimmed() : QString();
     QString model = m_modelEditor ? m_modelEditor->text().trimmed() : QStringLiteral("gpt-4o");
-    QString apiKey = m_apiKeyEditor ? m_apiKeyEditor->text().trimmed() : QString();
-    if (apiKey.isEmpty()) {
-        apiKey = m_inFlightApiKey;
-    }
+    QString apiKey = KisAiIllustrationRenderer::resolveApiKey(
+        m_apiKeyEditor ? m_apiKeyEditor->text() : QString(), m_inFlightApiKey);
     QSettings s;
     if (apiKey.isEmpty() && m_saveApiKeyCheck && m_saveApiKeyCheck->isChecked()) {
         unprotectApiKeyForCurrentUser(s.value(QStringLiteral("AIIllustration/apiKey")).toString(), &apiKey);
@@ -5655,6 +5664,14 @@ void KisAiIllustrationDocker::expandPromptWithAi()
 
 void KisAiIllustrationDocker::finishExpandPromptRequest()
 {
+    // 推敲リクエストのキーも終了時に方針に従ってゼロクリアする
+    // (DEVELOPMENT.md §7.4)。生成中・リトライ待機中のみ保持。
+    const bool generationRequestActive = m_reply || (m_retryTimer && m_retryTimer->isActive());
+    if (KisAiIllustrationRenderer::shouldClearInFlightApiKey(
+            m_apiKeyEditor ? m_apiKeyEditor->text() : QString(), generationRequestActive)) {
+        clearInFlightApiKey();
+    }
+
     if (m_expandPromptButton) {
         m_expandPromptButton->setEnabled(true);
         m_expandPromptButton->setText(i18n("✨ AI推敲"));

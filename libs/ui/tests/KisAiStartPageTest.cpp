@@ -9,14 +9,18 @@
 #include "utils/KisRecentDocumentsModelWrapper.h"
 
 #include <QBoxLayout>
+#include <QElapsedTimer>
 #include <QFrame>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QScrollBar>
+#include <QSignalSpy>
 #include <QStackedWidget>
 #include <QLabel>
 #include <QListView>
+#include <QStandardItemModel>
+#include <QUrl>
 
 #include "KisAiTestCrashGuard.h"
 #ifndef AI_STROKE_STANDALONE
@@ -210,6 +214,52 @@ void KisAiStartPageTest::testRecentDocumentsModelSignalConnection()
     auto *recentListView = widget.findChild<QListView *>(QStringLiteral("aiRecentListView"));
     QVERIFY(recentListView != nullptr);
     QVERIFY(recentListView->model() != nullptr);
+}
+
+void KisAiStartPageTest::testRecentDocumentDoubleClickOpensOnce()
+{
+    // スタックより先にモデルを宣言し、widget 破棄後にモデルが残るようにする。
+    QStandardItemModel fakeModel;
+    auto *firstItem = new QStandardItem(QStringLiteral("first.kra"));
+    firstItem->setData(QUrl::fromLocalFile(QStringLiteral("C:/tmp/first.kra")),
+                       Qt::UserRole + 1);
+    fakeModel.appendRow(firstItem);
+    auto *secondItem = new QStandardItem(QStringLiteral("second.kra"));
+    secondItem->setData(QUrl::fromLocalFile(QStringLiteral("C:/tmp/second.kra")),
+                        Qt::UserRole + 1);
+    fakeModel.appendRow(secondItem);
+
+    KisAiStartPageWidget widget(nullptr);
+    auto *recentListView = widget.findChild<QListView *>(QStringLiteral("aiRecentListView"));
+    QVERIFY(recentListView != nullptr);
+    recentListView->setModel(&fakeModel);
+
+    QSignalSpy spy(&widget, &KisAiStartPageWidget::recentDocumentOpenRequested);
+    QVERIFY(spy.isValid());
+
+    const QModelIndex first = fakeModel.index(0, 0);
+    const QModelIndex second = fakeModel.index(1, 0);
+    QVERIFY(first.isValid());
+    QVERIFY(second.isValid());
+
+    // clicked→activated の連続発火 (ダブルクリック相当) は1回だけ開く
+    widget.slotRecentDocumentClicked(first);
+    widget.slotRecentDocumentClicked(first);
+    QCOMPARE(spy.count(), 1);
+
+    // デバウンス窓を過ぎれば同じパスも再度開ける
+    QElapsedTimer waitTimer;
+    waitTimer.start();
+    while (waitTimer.elapsed() < 800) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+    }
+    widget.slotRecentDocumentClicked(first);
+    QCOMPARE(spy.count(), 2);
+
+    // 異なるパスはデバウンスされず即時に開ける
+    widget.slotRecentDocumentClicked(second);
+    QCOMPARE(spy.count(), 3);
+    QCOMPARE(spy.at(2).at(0).toString(), QStringLiteral("C:/tmp/second.kra"));
 }
 
 void KisAiStartPageTest::testKeyboardFocusAndShortcuts()

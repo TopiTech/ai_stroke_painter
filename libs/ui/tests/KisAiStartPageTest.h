@@ -22,6 +22,7 @@ private Q_SLOTS:
     void testQuickPromptEmptyDoesNotCrash();
     void testPasteEmptyClipboardDoesNotCrash();
     void testRecentDocumentsModelSignalConnection();
+    void testRecentDocumentDoubleClickOpensOnce();
     void testKeyboardFocusAndShortcuts();
     void testStartPageAutoFocusAndTabOrder();
     void testCardAndPresetHeightAndNonOverlapping();

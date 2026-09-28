@@ -501,6 +501,28 @@ void KisAiIllustrationRendererTest::testRedactCredentialText()
     QVERIFY(headerOutput.contains(QStringLiteral("x-api-key: ***")));
 }
 
+void KisAiIllustrationRendererTest::testResolveApiKeyAndInFlightClearPolicy()
+{
+    // 入力欄のキーが最新のユーザー意図 (in-flight より優先)。
+    QCOMPARE(KisAiIllustrationRenderer::resolveApiKey(QStringLiteral("editor-key"),
+                                                      QStringLiteral("stale-in-flight")),
+             QStringLiteral("editor-key"));
+    // 入力欄が空 (保存OFFでリクエスト後に消えた直後) のみ in-flight を引き継ぐ。
+    QCOMPARE(KisAiIllustrationRenderer::resolveApiKey(QString(), QStringLiteral("in-flight")),
+             QStringLiteral("in-flight"));
+    QCOMPARE(KisAiIllustrationRenderer::resolveApiKey(QStringLiteral("   "),
+                                                      QStringLiteral("in-flight")),
+             QStringLiteral("in-flight"));
+
+    // 入力欄にキーが残っていれば生成中であっても in-flight は必ずゼロクリア
+    // (DEVELOPMENT.md §7.4: メモリに二重の鍵を残さない)。
+    QVERIFY(KisAiIllustrationRenderer::shouldClearInFlightApiKey(QStringLiteral("key"), false));
+    QVERIFY(KisAiIllustrationRenderer::shouldClearInFlightApiKey(QStringLiteral("key"), true));
+    // 保存OFF: 生成中・リトライ待機中のみ保持 (その生成サイクルの唯一の鍵)。
+    QVERIFY(!KisAiIllustrationRenderer::shouldClearInFlightApiKey(QString(), true));
+    QVERIFY(KisAiIllustrationRenderer::shouldClearInFlightApiKey(QString(), false));
+}
+
 void KisAiIllustrationRendererTest::testEncodeReferenceImageBase64()
 {
     QString errorMsg;

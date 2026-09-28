@@ -579,6 +579,9 @@ QWidget *KisAiStartPageWidget::createRecentAndGuideSection()
     m_recentListView->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_recentListView->setAccessibleName(i18n("最近開いた作品の一覧"));
     m_recentListView->setAccessibleDescription(i18n("Enter キーでも作品を開けます。"));
+    // clicked(マウス) と activated(Enter/ダブルクリック) の両方を接続する。
+    // ダブルクリックでは両方が連続発火し、openDocument() 内の processEvents()
+    // 経由でも再入しうるため、slot 側で同一パスをデバウンスする。
     connect(m_recentListView, &QListView::clicked, this, &KisAiStartPageWidget::slotRecentDocumentClicked);
     connect(m_recentListView, &QListView::activated, this, &KisAiStartPageWidget::slotRecentDocumentClicked);
     m_recentStack->addWidget(m_recentListView);
@@ -982,7 +985,7 @@ void KisAiStartPageWidget::slotFocusAiDocker()
 
 void KisAiStartPageWidget::slotRecentDocumentClicked(const QModelIndex &index)
 {
-    if (!m_mainWindow || !index.isValid())
+    if (!index.isValid())
         return;
     const QUrl url = index.data(Qt::UserRole + 1).toUrl();
     QString filePath;
@@ -993,7 +996,23 @@ void KisAiStartPageWidget::slotRecentDocumentClicked(const QModelIndex &index)
     }
     if (filePath.isEmpty())
         return;
-    m_mainWindow->openDocument(filePath, KisMainWindow::None);
+
+    // clicked と activated はダブルクリックで連続発火し、openDocument() 内の
+    // processEvents() 中にも再入しうる。同一パスへの要求を短時間にデバウンス
+    // しないと同じ文書が複数回開かれる。
+    constexpr int kRecentOpenDebounceMs = 500;
+    if (filePath == m_lastRecentOpenPath
+        && m_lastRecentOpenTimer.isValid()
+        && !m_lastRecentOpenTimer.hasExpired(kRecentOpenDebounceMs)) {
+        return;
+    }
+    m_lastRecentOpenPath = filePath;
+    m_lastRecentOpenTimer.start();
+
+    Q_EMIT recentDocumentOpenRequested(filePath);
+    if (m_mainWindow) {
+        m_mainWindow->openDocument(filePath, KisMainWindow::None);
+    }
 }
 
 void KisAiStartPageWidget::showCanvasNotification(const QString &message)

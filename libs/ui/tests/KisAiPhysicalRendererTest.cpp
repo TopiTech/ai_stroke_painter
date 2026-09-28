@@ -364,6 +364,72 @@ void KisAiPhysicalRendererTest::testCompositeGraphFindLayer()
     QVERIFY(graph.findLayer(QStringLiteral("unknown")) == nullptr);
 }
 
+void KisAiPhysicalRendererTest::testLinearHdrLayerPreservesLinearValues()
+{
+    if (!KisAiPhysicalRenderer::isHdrFormatSupported()) {
+        QSKIP("Physical HDR rendering requires Qt 6.2 or newer");
+    }
+
+    // 線形 HDR レイヤー (RGBA16F / RGBA32F) は「線形値」として合成されるべき。
+    // toLinearHdr() (sRGB→線形) を通すとガンマが二重に適用され、線形 0.5 が
+    // sRGB 188 ではなく 128 に暗く化ける (回帰チェック)。
+    auto fillLinear = [](QImage &img) {
+        for (int y = 0; y < img.height(); ++y) {
+            float *line = reinterpret_cast<float *>(img.scanLine(y));
+            for (int x = 0; x < img.width(); ++x) {
+                line[x * 4 + 0] = 0.5f;
+                line[x * 4 + 1] = 0.5f;
+                line[x * 4 + 2] = 0.5f;
+                line[x * 4 + 3] = 1.0f;
+            }
+        }
+    };
+
+    QImage src32(8, 8, QImage::Format_RGBA32FPx4);
+    QVERIFY(!src32.isNull());
+    fillLinear(src32);
+    // レビュー対象の RGBA16F 版。0.5 は half 浮動小数でも正確に表現できる。
+    const QImage src16 = src32.convertToFormat(QImage::Format_RGBA16FPx4);
+    QVERIFY(!src16.isNull());
+
+    const QList<QImage> sources{src32, src16};
+    for (const QImage &src : sources) {
+        KisAiLayerImage lyr;
+        lyr.name = QStringLiteral("LinearLayer");
+        lyr.blendMode = QStringLiteral("normal");
+        lyr.opacityFactor = 1.0;
+        lyr.image = src;
+
+        // (a) compositeLayer 直接経路: 透明 dst へ normal 合成 → src のまま
+        QImage dst(8, 8, QImage::Format_RGBA32FPx4_Premultiplied);
+        dst.fill(Qt::transparent);
+        KisAiPhysicalRenderer::compositeLayer(dst, lyr, nullptr);
+        const QImage ldr = KisAiPhysicalRenderer::toSrgbLdr(dst);
+        QVERIFY(!ldr.isNull());
+        const QColor direct = ldr.pixelColor(4, 4);
+        QVERIFY2(std::abs(direct.red() - 188) <= 2,
+                 qPrintable(QStringLiteral(
+                                "format=%1 red=%2 (linear 0.5 must come out as "
+                                "sRGB ~188; ~128 would mean a double gamma)")
+                                .arg(static_cast<int>(src.format()))
+                                .arg(direct.red())));
+
+        // (b) CompositeGraph::evaluate 経路 (レイヤーマップ変換も同様)
+        KisAiCompositeGraph graph;
+        graph.size = QSize(8, 8);
+        graph.layers.append(lyr);
+        const QImage evaluated = graph.evaluate();
+        QVERIFY(!evaluated.isNull());
+        const QColor viaGraph = evaluated.pixelColor(4, 4);
+        QVERIFY2(std::abs(viaGraph.red() - 188) <= 2,
+                 qPrintable(QStringLiteral(
+                                "evaluate() format=%1 red=%2 (linear 0.5 must "
+                                "come out as sRGB ~188)")
+                                .arg(static_cast<int>(src.format()))
+                                .arg(viaGraph.red())));
+    }
+}
+
 void KisAiPhysicalRendererTest::testDownsampleBox()
 {
     QImage highRes(128, 128, QImage::Format_ARGB32_Premultiplied);

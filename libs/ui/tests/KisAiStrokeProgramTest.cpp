@@ -1755,6 +1755,45 @@ void KisAiStrokeProgramTest::testJsonSyntaxRepairVariousCases()
     QCOMPARE(prog3.operations.first().brush.isEraser, false);
 }
 
+void KisAiStrokeProgramTest::testRepairJsonSyntaxPreservesSmartQuotesInStrings()
+{
+    // 1. 正常な JSON 内の文字列コンテンツ (“ ” ’) は修復後もそのまま残る。
+    // スマートクォート正規化がトークンマスキング前に走ると "" '' に化けて
+    // JSON が壊れる (順序バグの回帰チェック)。
+    const QString validWithCurlyQuotes = QStringLiteral(
+        "{\"schema_version\": 2, \"note\": \"he said “hi” and ‘bye’\", \"operations\": []}");
+    const QString repaired =
+        KisAiStrokeProgramCodec::repairJsonSyntax(validWithCurlyQuotes, nullptr);
+    QJsonParseError parseError{};
+    const QJsonDocument doc = QJsonDocument::fromJson(repaired.toUtf8(), &parseError);
+    QVERIFY2(parseError.error == QJsonParseError::NoError, qPrintable(repaired));
+    QCOMPARE(doc.object().value(QStringLiteral("note")).toString(),
+             QStringLiteral("he said “hi” and ‘bye’"));
+
+    // 2. 文字列の外に置かれた構造的スマートクォートは従来どおり ASCII へ正規化
+    const QString structural = QStringLiteral("{“schema_version”: 2, “operations”: []}");
+    const QString structuralRepaired =
+        KisAiStrokeProgramCodec::repairJsonSyntax(structural, nullptr);
+    QJsonParseError structuralError{};
+    const QJsonDocument structuralDoc =
+        QJsonDocument::fromJson(structuralRepaired.toUtf8(), &structuralError);
+    QVERIFY2(structuralError.error == QJsonParseError::NoError,
+             qPrintable(structuralRepaired));
+    QCOMPARE(structuralDoc.object().value(QStringLiteral("schema_version")).toInt(), 2);
+
+    // 3. 損傷 JSON (末尾カンマ) + 文字列内 curly quotes: 修復されても内容は保護される
+    const QString damaged = QStringLiteral(
+        "{\"schema_version\": 2, \"note\": \"“x”\", \"operations\": [],}");
+    const QString damagedRepaired =
+        KisAiStrokeProgramCodec::repairJsonSyntax(damaged, nullptr);
+    QJsonParseError damagedError{};
+    const QJsonDocument damagedDoc =
+        QJsonDocument::fromJson(damagedRepaired.toUtf8(), &damagedError);
+    QVERIFY2(damagedError.error == QJsonParseError::NoError, qPrintable(damagedRepaired));
+    QCOMPARE(damagedDoc.object().value(QStringLiteral("note")).toString(),
+             QStringLiteral("“x”"));
+}
+
 void KisAiStrokeProgramTest::testExtractOperationsFromTruncatedEnvelope()
 {
     const QString truncatedResponse = QStringLiteral(

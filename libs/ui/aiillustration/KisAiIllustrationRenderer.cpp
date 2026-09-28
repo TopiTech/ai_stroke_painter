@@ -284,6 +284,25 @@ bool KisAiIllustrationRenderer::validateImageEndpoint(const QString &endpoint, Q
     return true;
 }
 
+QString KisAiIllustrationRenderer::resolveApiKey(const QString &editorText, const QString &inFlightKey)
+{
+    const QString editorKey = editorText.trimmed();
+    return editorKey.isEmpty() ? inFlightKey : editorKey;
+}
+
+bool KisAiIllustrationRenderer::shouldClearInFlightApiKey(const QString &editorText, bool generationRequestActive)
+{
+    if (!editorText.trimmed().isEmpty()) {
+        // The editor still carries a key; keeping a second copy in memory only
+        // widens the exposure window (DEVELOPMENT.md §7.4).
+        return true;
+    }
+    // Save-off flow: while a generation (or a scheduled retry of it) is still
+    // running, the in-flight key is the only copy left after the editor was
+    // cleared; zeroing it would abort the retry cycle.
+    return !generationRequestActive;
+}
+
 QString KisAiIllustrationRenderer::displayEndpoint(const QString &endpoint)
 {
     const QUrl url = QUrl::fromUserInput(endpoint.trimmed());

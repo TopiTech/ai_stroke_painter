@@ -11,6 +11,7 @@
 #include <QWidget>
 #include <QPointer>
 #include <QModelIndex>
+#include <QElapsedTimer>
 #include <QList>
 
 class QBoxLayout;
@@ -52,6 +53,15 @@ public Q_SLOTS:
     void slotClearRecentFiles();
     void slotUpdateRecentFiles();
 
+Q_SIGNALS:
+    /**
+     * Emitted when a recent document should be opened. The same path is
+     * emitted at most once per debounce window so the clicked+activated
+     * double delivery of a double-click (and re-entry through
+     * openDocument()'s processEvents()) cannot open it twice.
+     */
+    void recentDocumentOpenRequested(const QString &filePath);
+
 protected:
     bool eventFilter(QObject *watched, QEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
@@ -90,6 +100,8 @@ private:
     QLabel *m_emptyRecentLabel {nullptr};
     QStackedWidget *m_recentStack {nullptr};
     QPushButton *m_clearRecentBtn {nullptr};
+    QElapsedTimer m_lastRecentOpenTimer;
+    QString m_lastRecentOpenPath;
 };
 
 #endif // KIS_AI_START_PAGE_WIDGET_H

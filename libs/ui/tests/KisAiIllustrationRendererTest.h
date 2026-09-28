@@ -23,6 +23,7 @@ private Q_SLOTS:
     void testIsLoopbackEndpoint();
     void testFormatBearerAuthHeader();
     void testRedactCredentialText();
+    void testResolveApiKeyAndInFlightClearPolicy();
     void testEncodeReferenceImageBase64();
 };
 

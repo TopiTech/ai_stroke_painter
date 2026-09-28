@@ -48,6 +48,24 @@ public:
     /** Mask Bearer tokens, API keys, and sensitive URL/JSON query credentials from status text or logs. */
     static QString redactCredentialText(const QString &text);
 
+    /**
+     * Choose the API key for an outgoing request. The settings editor holds
+     * the current user intent and wins; the in-flight fallback (used by the
+     * save-off flow, which clears the editor after each request) is only
+     * consulted when the editor is empty.
+     */
+    static QString resolveApiKey(const QString &editorText, const QString &inFlightKey);
+
+    /**
+     * Lifetime policy for the in-flight API key (DEVELOPMENT.md §7.4).
+     * Returns true when the fallback must be zeroed now: always while the
+     * settings editor still holds a key (the fallback is a redundant second
+     * copy), and also after standalone requests (connection test / prompt
+     * expand) unless a generation request or its retry cycle is still running
+     * — in the save-off flow that cycle would otherwise lose the only copy.
+     */
+    static bool shouldClearInFlightApiKey(const QString &editorText, bool generationRequestActive);
+
     /** Encode a reference image to Base64 (composited on white, max dimension 1024px, JPEG/PNG fallback).
      *  Returns empty string and sets errorMessage on failure. */
     static QString encodeReferenceImageBase64(const QImage &image, QString *errorMessage = nullptr);

@@ -370,6 +370,38 @@ QImage KisAiPhysicalRenderer::toSrgbLdr(const QImage &hdrImage)
 #endif
 }
 
+namespace {
+/**
+ * 合成用の線形 HDR フォーマットへ入力を用意する。
+ *
+ * - 既に線形 HDR の入力 (RGBA16F / RGBA32F) は値をそのまま
+ *   Format_RGBA32FPx4_Premultiplied へ再パックする。toLinearHdr() を通すと
+ *   sRGB→線形のガンマが二重に適用され、線形レイヤーが暗く化ける。
+ * - LDR (sRGB) 入力のみ従来どおり toLinearHdr() で sRGB→線形変換する。
+ */
+QImage toLinearBlendFormat(const QImage &image)
+{
+#if QT_VERSION < QT_VERSION_CHECK(6, 2, 0)
+    Q_UNUSED(image);
+    return QImage();
+#else
+    if (image.isNull()) {
+        return QImage();
+    }
+    switch (image.format()) {
+    case QImage::Format_RGBA32FPx4_Premultiplied:
+        return image;
+    case QImage::Format_RGBA32FPx4:
+    case QImage::Format_RGBA16FPx4_Premultiplied:
+    case QImage::Format_RGBA16FPx4:
+        return image.convertToFormat(QImage::Format_RGBA32FPx4_Premultiplied);
+    default:
+        return KisAiPhysicalRenderer::toLinearHdr(image);
+    }
+#endif
+}
+} // namespace
+
 // ===========================================================================
 // レイヤー間物理合成 (dstImage 上に srcLayer を物理ブレンドで重ねる)
 // ===========================================================================
@@ -392,24 +424,15 @@ void KisAiPhysicalRenderer::compositeLayer(QImage &dstImage, const KisAiLayerIma
         return;
     }
 
-    QImage srcFp = srcLayer.image;
-    if (srcFp.format() != QImage::Format_RGBA32FPx4_Premultiplied) {
-        srcFp = toLinearHdr(srcFp);
-    }
-    if (dstImage.format() != QImage::Format_RGBA32FPx4_Premultiplied) {
-        dstImage = toLinearHdr(dstImage);
-    }
+    QImage srcFp = toLinearBlendFormat(srcLayer.image);
+    dstImage = toLinearBlendFormat(dstImage);
     if (srcFp.isNull() || dstImage.isNull()) {
         return;
     }
 
     QImage maskFp;
     if (clipMask && !clipMask->isNull()) {
-        if (clipMask->format() != QImage::Format_RGBA32FPx4_Premultiplied) {
-            maskFp = toLinearHdr(*clipMask);
-        } else {
-            maskFp = *clipMask;
-        }
+        maskFp = toLinearBlendFormat(*clipMask);
     }
 
     if (srcFp.size() != dstImage.size()) {
@@ -499,7 +522,7 @@ QImage KisAiCompositeGraph::evaluate() const
     composite.fill(Qt::transparent);
 
     if (!backgroundImage.isNull()) {
-        const QImage bgHdr = KisAiPhysicalRenderer::toLinearHdr(
+        const QImage bgHdr = toLinearBlendFormat(
             backgroundImage.scaled(size, Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
         if (!bgHdr.isNull()) {
             composite = bgHdr;
@@ -510,10 +533,7 @@ QImage KisAiCompositeGraph::evaluate() const
     QMap<QString, QImage> layerMap;
     for (const KisAiLayerImage &layer : layers) {
         if (layer.isValid()) {
-            QImage lyrHdr = layer.image;
-            if (lyrHdr.format() != QImage::Format_RGBA32FPx4_Premultiplied) {
-                lyrHdr = KisAiPhysicalRenderer::toLinearHdr(lyrHdr);
-            }
+            const QImage lyrHdr = toLinearBlendFormat(layer.image);
             if (!lyrHdr.isNull()) {
                 layerMap[layer.name.toLower()] = lyrHdr;
             }
