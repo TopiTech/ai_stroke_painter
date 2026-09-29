@@ -306,7 +306,7 @@ QVector<KisAiStrokeOperation> KisAiStrokeCommitter::commitToPainter(QPainter &pa
             KisAiStrokeRenderer::rasterizeOperation(target, op, workingSize, supersampleScale, faceExclusionPath);
         };
 
-        // Review a transparent offscreen tile before touching the target.
+        // Review an offscreen tile before touching the target.
         // Target QPainter may be backed by a Krita device, not a QImage: do not
         // rely on reading or rolling back its pixels here.
         if (dirty.isEmpty()) {
@@ -315,15 +315,34 @@ QVector<KisAiStrokeOperation> KisAiStrokeCommitter::commitToPainter(QPainter &pa
             continue;
         }
         QImage tile(dirty.size(), QImage::Format_ARGB32_Premultiplied);
-        tile.fill(Qt::transparent);
-        QImage beforeTile = tile.copy();
-        {
-            QPainter dry(&tile);
-            dry.setRenderHint(QPainter::Antialiasing, true);
-            dry.translate(-dirty.topLeft());
-            paintOne(dry, candidate);
+        bool pixelReviewPassed = false;
+        if (tile.isNull()) {
+            // Extreme bounds or low memory: cannot allocate review tile.
+            // Since geometric review (geom.committed) already passed, allow commit to proceed.
+            pixelReviewPassed = true;
+            local.lines << QStringLiteral("pixel-review-bypass %1 (oom)").arg(raw.id);
+        } else {
+            // Subtractive operations (erasers, destination_out, clear) have zero effect
+            // on an initially transparent tile (0 - 0 = 0). Initialize with opaque white
+            // so pixel subtraction creates measurable delta.
+            const bool isSubtractive = candidate.brush.isEraser
+                || candidate.blendMode == QLatin1String("destination_out")
+                || candidate.blendMode == QLatin1String("clear");
+            if (isSubtractive) {
+                tile.fill(QColor(255, 255, 255, 255));
+            } else {
+                tile.fill(Qt::transparent);
+            }
+            QImage beforeTile = tile.copy();
+            {
+                QPainter dry(&tile);
+                dry.setRenderHint(QPainter::Antialiasing, true);
+                dry.translate(-dirty.topLeft());
+                paintOne(dry, candidate);
+            }
+            pixelReviewPassed = reviewPixels(beforeTile, tile, QRect(QPoint(0, 0), dirty.size())).committed;
         }
-        if (!reviewPixels(beforeTile, tile, QRect(QPoint(0, 0), dirty.size())).committed) {
+        if (!pixelReviewPassed) {
             ++local.skipped;
             local.lines << QStringLiteral("skip %1 (pixel-review)").arg(raw.id);
             continue;

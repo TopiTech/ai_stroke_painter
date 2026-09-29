@@ -2573,7 +2573,20 @@ void KisAiIllustrationDocker::finishLlmStrokesRequest()
 
     if (m_currentMode == GenerationMode::FullStrokes) {
         if (!KisAiFullStroke::acceptsProgram(program)) {
-            setStatus(i18n("完全ストローク描画の作画プログラムが無効です。"), true);
+            const QString err = i18n("完全ストローク描画の作画プログラムが無効です。");
+            logDebug(QStringLiteral("FULLSTROKE_REJECT"), err);
+            m_lastJsonDiagnostic = KisAiJsonDiagnostic();
+            m_lastJsonDiagnostic.errorMessage =
+                QStringLiteral("FullStrokes rejected: program has no operations, or contains operations with Unknown kind or empty id.");
+            const int maxRetries = m_maxRetriesSpin ? m_maxRetriesSpin->value() : 2;
+            if (m_currentRetryCount < maxRetries) {
+                scheduleRetry(err, true);
+                return;
+            }
+            setStatus(err, true);
+            m_currentRetryCount = 0;
+            m_isSelfCorrectionRetry = false;
+            m_isQualityCorrectionRetry = false;
             clearInFlightApiKey();
             return;
         }
@@ -4630,6 +4643,7 @@ void KisAiIllustrationDocker::scheduleRetry(const QString &reasonMessage, bool i
         setStatus(reasonMessage, true);
         m_currentRetryCount = 0;
         m_isSelfCorrectionRetry = false;
+        m_isQualityCorrectionRetry = false;
         clearInFlightApiKey();
         return;
     }

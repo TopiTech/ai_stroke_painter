@@ -43,6 +43,7 @@ private Q_SLOTS:
     void testOrderOperationsForRenderingDefaultCanvasSize();
     void testBodyRigGroupsOrderTorsoFirst();
     void testReviewStrokeHighLevelPrimitives();
+    void testEraserStrokeCommittedViaAtomicInk();
 };
 
 #endif // KIS_AI_ATOMIC_INK_TEST_H

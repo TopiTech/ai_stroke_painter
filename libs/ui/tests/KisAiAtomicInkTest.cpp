@@ -619,4 +619,45 @@ void KisAiAtomicInkTest::testReviewStrokeHighLevelPrimitives()
     QVERIFY(!hatchRev.dirtyRect.isEmpty());
 }
 
+void KisAiAtomicInkTest::testEraserStrokeCommittedViaAtomicInk()
+{
+    // A base fill to erase from
+    KisAiStrokeOperation fill;
+    fill.kind = KisAiStrokeOperation::Kind::Fill;
+    fill.id = QStringLiteral("base_fill");
+    fill.layer = QStringLiteral("Flats");
+    fill.polygon << QPointF(0.1, 0.1) << QPointF(0.9, 0.1) << QPointF(0.9, 0.9) << QPointF(0.1, 0.9);
+    fill.brush.color = QColor(200, 50, 50);
+    fill.brush.opacity = 1.0;
+
+    // An eraser path stroke cutting across the fill
+    KisAiStrokeOperation eraser;
+    eraser.kind = KisAiStrokeOperation::Kind::Path;
+    eraser.id = QStringLiteral("eraser_cut");
+    eraser.layer = QStringLiteral("Flats");
+    eraser.points = {KisAiStrokePoint(0.2, 0.5, 1.0), KisAiStrokePoint(0.8, 0.5, 1.0)};
+    eraser.brush.size = 0.08;
+    eraser.brush.isEraser = true;
+    eraser.brush.opacity = 1.0;
+
+    KisAiStrokeProgram prog;
+    prog.operations = {fill, eraser};
+
+    const QImage img = KisAiStrokeRenderer::renderProgramToImage(prog, QSize(128, 128));
+    QVERIFY(!img.isNull());
+
+    const KisAiStrokeCommitLog log = KisAiStrokeCommitter::lastLog();
+    // Prior to the fix, eraser strokes were unconditionally rejected as zero-coverage-skip
+    // because dry-run evaluated on a transparent tile. With the fix, both fill and eraser commit!
+    QCOMPARE(log.committed, 2);
+    QCOMPARE(log.skipped, 0);
+
+    // Verify that the eraser actually erased pixels in the middle (0.5, 0.5)
+    // The pixel at (64, 64) should be erased (alpha < 50), while (64, 25) should still be red (alpha > 200).
+    const QRgb erasedPx = img.pixel(64, 64);
+    const QRgb solidPx = img.pixel(64, 25);
+    QVERIFY(qAlpha(erasedPx) < 50);
+    QVERIFY(qAlpha(solidPx) > 200);
+}
+
 KISTEST_MAIN(KisAiAtomicInkTest)

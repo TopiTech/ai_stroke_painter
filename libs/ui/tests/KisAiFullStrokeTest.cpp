@@ -86,6 +86,22 @@ void KisAiFullStrokeTest::testMissingProgramRejected()
     op.points = {KisAiStrokePoint(0.2, 0.2), KisAiStrokePoint(0.7, 0.7)};
     program.operations.append(op);
     QVERIFY(KisAiFullStroke::acceptsProgram(program));
+
+    // Unknown operation kind is rejected
+    KisAiStrokeOperation unknownOp;
+    unknownOp.kind = KisAiStrokeOperation::Kind::Unknown;
+    unknownOp.id = QStringLiteral("mystery");
+    KisAiStrokeProgram progUnknown;
+    progUnknown.operations.append(unknownOp);
+    QVERIFY(!KisAiFullStroke::acceptsProgram(progUnknown));
+
+    // Empty ID is rejected
+    KisAiStrokeOperation emptyIdOp;
+    emptyIdOp.kind = KisAiStrokeOperation::Kind::Path;
+    emptyIdOp.id = QString();
+    KisAiStrokeProgram progEmptyId;
+    progEmptyId.operations.append(emptyIdOp);
+    QVERIFY(!KisAiFullStroke::acceptsProgram(progEmptyId));
 }
 
 void KisAiFullStrokeTest::testPrioritizeBudgetSmallerThanGroup()
