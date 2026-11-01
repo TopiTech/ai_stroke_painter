@@ -26,7 +26,7 @@ KisAiNBestResult KisAiRefinementLoop::selectBestSpecFromBodies(const QString &pr
             ++parsed;
         }
     }
-    result.candidateCount = bodies.size();
+    result.candidateCount = static_cast<int>(bodies.size());
     result.spec = KisAiSceneSpecCodec::selectBestSpec(prompt, canvasSize, candidates);
     result.score = KisAiSceneSpecCodec::scoreSceneSpec(result.spec);
     result.logLines.append(QStringLiteral("parsed=%1/of=%2 score=%3")

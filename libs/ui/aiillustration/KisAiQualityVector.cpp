@@ -171,11 +171,11 @@ namespace
 /// 多角形の符号付き絶対面積 (shoelace formula)。穴判定用。
 qreal polygonAreaSigned(const QPolygonF &poly)
 {
-    const int n = poly.size();
+    const qsizetype n = poly.size();
     if (n < 3)
         return 0.0;
     qreal area = 0.0;
-    for (int i = 0; i < n; ++i) {
+    for (qsizetype i = 0; i < n; ++i) {
         const QPointF a = poly.at(i);
         const QPointF b = poly.at((i + 1) % n);
         area += a.x() * b.y() - b.x() * a.y();
@@ -207,7 +207,7 @@ QVector<qreal> tilewiseLuminance(const QImage &image, int tileSize = 16)
         return tiles;
     const int cols = (W / tileSize) + 1;
     const int rows = (H / tileSize) + 1;
-    tiles.reserve(cols * rows);
+    tiles.reserve(static_cast<qsizetype>(cols) * static_cast<qsizetype>(rows));
     for (int ty = 0; ty < H; ty += tileSize) {
         for (int tx = 0; tx < W; tx += tileSize) {
             qreal sum = 0.0;
@@ -945,7 +945,7 @@ PerceptualMetrics QualityVectorEvaluator::evaluatePerceptual(const QImage &rende
             if (layer != QStringLiteral("Lineart"))
                 continue;
             QColor c = op.brush.color;
-            c.setAlphaF(qBound<qreal>(0.0, op.brush.opacity, 1.0));
+            c.setAlphaF(static_cast<float>(qBound<qreal>(0.0, op.brush.opacity, 1.0)));
             QPen pen(c);
             const qreal sizePx = (op.brush.sizeMode == QStringLiteral("px"))
                 ? op.brush.size

@@ -93,7 +93,7 @@ QImage rasterizeFlatsMask(const KisAiStrokeProgram &program, int W, int H)
         if (layer != QStringLiteral("Flats"))
             continue;
         QColor c(Qt::white);
-        c.setAlphaF(qBound<qreal>(0.0, op.brush.opacity, 1.0));
+        c.setAlphaF(static_cast<float>(qBound<qreal>(0.0, op.brush.opacity, 1.0)));
         QBrush brush(c);
         painter.setBrush(brush);
         painter.setPen(Qt::NoPen);
@@ -127,7 +127,7 @@ QImage rasterizeLineartMask(const KisAiStrokeProgram &program, int W, int H)
         if (op.points.size() < 2)
             continue;
         QColor c(Qt::white);
-        c.setAlphaF(qBound<qreal>(0.0, op.brush.opacity, 1.0));
+        c.setAlphaF(static_cast<float>(qBound<qreal>(0.0, op.brush.opacity, 1.0)));
         QPen pen(c);
         const qreal sizePx = (op.brush.sizeMode == QStringLiteral("px")) ? op.brush.size : op.brush.size * qMin(W, H);
         pen.setWidthF(qMax<qreal>(1.0, sizePx));
@@ -157,7 +157,7 @@ QImage rasterizeShadingMask(const KisAiStrokeProgram &program, int W, int H)
         if (layer != QStringLiteral("Shading"))
             continue;
         QColor c(Qt::white);
-        c.setAlphaF(qBound<qreal>(0.0, op.brush.opacity, 1.0));
+        c.setAlphaF(static_cast<float>(qBound<qreal>(0.0, op.brush.opacity, 1.0)));
         QBrush brush(c);
         painter.setBrush(brush);
         painter.setPen(Qt::NoPen);

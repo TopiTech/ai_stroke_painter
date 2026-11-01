@@ -649,7 +649,7 @@ OntologyRuleset OntologyRuleset::loadCustom(const QString &path)
     const QFileInfo info(path);
     if (info.isRelative() || !info.isFile() || !info.isReadable())
         return r;
-    constexpr qint64 maxCustomBytes = 1024 * 1024;
+    constexpr qint64 maxCustomBytes = 1024LL * 1024LL;
     if (info.size() <= 0 || info.size() > maxCustomBytes)
         return r;
     QFile file(info.absoluteFilePath());
@@ -662,7 +662,7 @@ OntologyRuleset OntologyRuleset::loadCustom(const QString &path)
         return r;
     const OntologyRuleset custom = fromJson(doc.array());
     constexpr int maxCustomRules = 512;
-    const int accepted = qMin(custom.rules.size(), maxCustomRules);
+    const int accepted = qMin(static_cast<int>(custom.rules.size()), maxCustomRules);
     // カスタムルールを末尾に append (デフォルトより優先したい場合は別途ロジック追加可能)
     for (int i = 0; i < accepted; ++i) {
         r.rules.append(custom.rules.at(i));

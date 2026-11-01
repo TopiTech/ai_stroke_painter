@@ -41,11 +41,12 @@ QColor darkerWarm(const QColor &c, qreal factor = 0.82)
 
 QColor mixToward(const QColor &base, const QColor &target, qreal t)
 {
-    const qreal k = qBound<qreal>(0.0, t, 1.0);
-    return QColor::fromRgbF(base.redF() * (1.0 - k) + target.redF() * k,
-                            base.greenF() * (1.0 - k) + target.greenF() * k,
-                            base.blueF() * (1.0 - k) + target.blueF() * k,
-                            base.alphaF() * (1.0 - k) + target.alphaF() * k);
+    const float k = static_cast<float>(qBound<qreal>(0.0, t, 1.0));
+    const float invK = 1.0f - k;
+    return QColor::fromRgbF(base.redF() * invK + target.redF() * k,
+                            base.greenF() * invK + target.greenF() * k,
+                            base.blueF() * invK + target.blueF() * k,
+                            base.alphaF() * invK + target.alphaF() * k);
 }
 
 // V6 W1: resolve narrative.time fallback + colorScript midtone blend once,

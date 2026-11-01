@@ -107,7 +107,7 @@ constexpr int ACTIVITY_TIMEOUT_MS = 60'000;
 constexpr int MAX_REQUEST_TIMEOUT_MS = 600'000;
 constexpr int REMOTE_IMAGE_TIMEOUT_MS = 180'000;
 
-const QString kDpapiApiKeyPrefix = QStringLiteral("dpapi:");
+constexpr QLatin1StringView kDpapiApiKeyPrefix{"dpapi:"};
 
 // QFormLayout::setRowVisible() only exists since Qt 6.4, while this project
 // still declares Qt 5.15 as its minimum. Hide the label/field widgets directly
@@ -196,7 +196,7 @@ bool protectApiKeyForCurrentUser(const QString &apiKey, QString *protectedValue)
                                     static_cast<int>(encrypted.cbData));
     SecureZeroMemory(encrypted.pbData, encrypted.cbData);
     LocalFree(encrypted.pbData);
-    *protectedValue = kDpapiApiKeyPrefix + QString::fromLatin1(protectedBytes.toBase64());
+    *protectedValue = QString(kDpapiApiKeyPrefix) + QString::fromLatin1(protectedBytes.toBase64());
     return true;
 #else
     Q_UNUSED(apiKey);

@@ -333,13 +333,13 @@ bool KisAiProgramPatchCodec::parsePatches(
         patchArray = doc.array();
     }
 
-    for (const QJsonValue &v : patchArray) {
+    for (const auto patchVal : patchArray) {
         if (outPatches->size() >= MAX_PATCHES_PER_RESPONSE) {
             if (rejected)
                 rejected->append(QStringLiteral("patch limit (%1) reached").arg(MAX_PATCHES_PER_RESPONSE));
             break;
         }
-        const QJsonObject obj = v.toObject();
+        const QJsonObject obj = patchVal.toObject();
         const QString opStr = obj.value(QStringLiteral("op")).toString(QStringLiteral("replace")).toLower();
         const QString path = obj.value(QStringLiteral("path")).toString().trimmed();
 
@@ -472,7 +472,7 @@ KisAiStrokeProgram KisAiProgramPatchCodec::applyPatches(
 
         // /ops/<id>/... adjustments
         const QString rest = patch.path.mid(5); // after "/ops/"
-        const int slash = rest.indexOf(QLatin1Char('/'));
+        const qsizetype slash = rest.indexOf(QLatin1Char('/'));
         const QString opId = slash > 0 ? rest.left(slash) : rest;
         const QString tail = slash > 0 ? rest.mid(slash + 1) : QString();
 

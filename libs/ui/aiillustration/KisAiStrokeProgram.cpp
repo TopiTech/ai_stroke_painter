@@ -135,7 +135,7 @@ QString extractContentStringFromMessage(const QJsonObject &messageObj, const QJs
     } else if (contentVal.isArray()) {
         QString combined;
         const QJsonArray arr = contentVal.toArray();
-        for (const QJsonValue &item : arr) {
+        for (const auto item : arr) {
             if (item.isObject()) {
                 const QJsonObject obj = item.toObject();
                 const QString type = obj.value(QStringLiteral("type")).toString();
@@ -2045,7 +2045,7 @@ QString KisAiStrokeProgramCodec::sanitizeAndExtractJson(const QString &rawText, 
                 QJsonParseError rErr;
                 const QJsonDocument rDoc = QJsonDocument::fromJson(repairedCand.toUtf8(), &rErr);
                 if (rErr.error == QJsonParseError::NoError && !rDoc.isNull()) {
-                    text = candidate;
+                    text = repairedCand;
                 } else {
                     text = text.mid(startPos).trimmed();
                 }

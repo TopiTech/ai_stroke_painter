@@ -54,7 +54,7 @@ bool KisAiFullStrokeScene::parse(const QJsonObject &json, KisAiFullStrokeScene *
         return fail(QStringLiteral("invalid object count"));
     KisAiFullStrokeScene candidate;
     QSet<QString> ids;
-    for (const QJsonValue &value : entries) {
+    for (const auto &value : entries) {
         if (!value.isObject())
             return fail(QStringLiteral("object must be a map"));
         const QJsonObject item = value.toObject();
@@ -71,7 +71,7 @@ bool KisAiFullStrokeScene::parse(const QJsonObject &json, KisAiFullStrokeScene *
             || object.focalWeight < 0.0 || object.focalWeight > 1.0)
             return fail(QStringLiteral("invalid object fields"));
         const QJsonArray coords = boundsValue.toArray();
-        for (const QJsonValue &v : coords) {
+        for (const auto &v : coords) {
             if (!v.isDouble() || !std::isfinite(v.toDouble()) || v.toDouble() < 0.0 || v.toDouble() > 1.0)
                 return fail(QStringLiteral("invalid bounds"));
         }
@@ -105,7 +105,8 @@ bool KisAiFullStrokeScene::parse(const QJsonObject &json, KisAiFullStrokeScene *
 
 bool KisAiFullStrokeScene::parseResponse(const QByteArray &response, KisAiFullStrokeScene *out, QString *error)
 {
-    if (response.size() > 1024 * 1024) {
+    constexpr qint64 maxSceneBytes = 1024LL * 1024LL;
+    if (response.size() > maxSceneBytes) {
         if (error)
             *error = QStringLiteral("scene response too large");
         return false;
@@ -131,7 +132,7 @@ bool KisAiFullStrokeScene::parseResponse(const QByteArray &response, KisAiFullSt
                                     .toObject()
                                     .value(QStringLiteral("content"))
                                     .toString();
-        if (content.size() > 1024 * 1024) {
+        if (content.size() > maxSceneBytes) {
             if (error)
                 *error = QStringLiteral("scene content too large");
             return false;

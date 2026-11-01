@@ -90,9 +90,9 @@ QVector<QPointF> outerContour(const QImage &mask)
     QHash<quint64, QVector<int>> outgoing;
     int filled = 0;
     auto addEdge = [&](int x0, int y0, int x1, int y1, int direction) {
-        const int index = edges.size();
+        const qsizetype index = edges.size();
         edges.append({QPoint(x0, y0), QPoint(x1, y1), direction, false});
-        outgoing[vertexKey(QPoint(x0, y0), w)].append(index);
+        outgoing[vertexKey(QPoint(x0, y0), w)].append(static_cast<int>(index));
     };
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
@@ -173,7 +173,8 @@ QRectF KisAiImageGuidedScene::imageRectPx() const
         return {};
     const QSize scaled = source.size().scaled(canvasSize, Qt::KeepAspectRatio);
     // Match the integer QPoint placement used by the actual image layer.
-    return QRectF(QPointF((canvasSize.width() - scaled.width()) / 2, (canvasSize.height() - scaled.height()) / 2),
+    return QRectF(QPointF(static_cast<qreal>((canvasSize.width() - scaled.width()) / 2),
+                          static_cast<qreal>((canvasSize.height() - scaled.height()) / 2)),
                   QSizeF(scaled));
 }
 

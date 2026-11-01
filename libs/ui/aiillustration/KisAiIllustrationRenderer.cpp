@@ -42,7 +42,7 @@ bool isLoopbackHost(const QString &host)
     if (normalized.startsWith(QLatin1Char('[')) && normalized.endsWith(QLatin1Char(']'))) {
         normalized = normalized.mid(1, normalized.length() - 2);
     }
-    const int percentIndex = normalized.indexOf(QLatin1Char('%'));
+    const qsizetype percentIndex = normalized.indexOf(QLatin1Char('%'));
     if (percentIndex >= 0) {
         normalized = normalized.left(percentIndex);
     }

@@ -69,6 +69,22 @@ void KisAiStrokeProgramTest::testSanitizeAndExtractJson()
     const QJsonDocument backtickDoc = QJsonDocument::fromJson(repairedBackticks.toUtf8(), &parseErr);
     QCOMPARE(parseErr.error, QJsonParseError::NoError);
     QCOMPARE(backtickDoc.object().value(QStringLiteral("agent_critique")).toString(), QStringLiteral("Use `gpen` brush for lineart"));
+
+    // Test 8: candidate enclosed in conversational preamble and postamble with trailing comma
+    // Verifies that repairedCand is adopted instead of raw un-repaired candidate
+    const QString noisyWithTrailingComma = QStringLiteral(
+        "Here is the program:\n"
+        "{\n"
+        "  \"schema_version\": 2,\n"
+        "  \"operations\": [],\n"
+        "}\n"
+        "Please check it."
+    );
+    const QString extractedRepaired = KisAiStrokeProgramCodec::sanitizeAndExtractJson(noisyWithTrailingComma);
+    QJsonParseError parseErrCandidate;
+    const QJsonDocument candDoc = QJsonDocument::fromJson(extractedRepaired.toUtf8(), &parseErrCandidate);
+    QCOMPARE(parseErrCandidate.error, QJsonParseError::NoError);
+    QCOMPARE(candDoc.object().value(QStringLiteral("schema_version")).toInt(), 2);
 }
 
 void KisAiStrokeProgramTest::testParseValidProgram()

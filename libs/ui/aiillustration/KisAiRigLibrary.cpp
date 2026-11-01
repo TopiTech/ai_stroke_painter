@@ -24,11 +24,12 @@ qreal clampRange(qreal v, qreal lo, qreal hi)
 
 QColor mixColor(const QColor &a, const QColor &b, qreal t)
 {
-    t = clampRange(t, 0.0, 1.0);
-    return QColor::fromRgbF(a.redF() * (1.0 - t) + b.redF() * t,
-                            a.greenF() * (1.0 - t) + b.greenF() * t,
-                            a.blueF() * (1.0 - t) + b.blueF() * t,
-                            a.alphaF() * (1.0 - t) + b.alphaF() * t);
+    const float tf = static_cast<float>(clampRange(t, 0.0, 1.0));
+    const float invT = 1.0f - tf;
+    return QColor::fromRgbF(a.redF() * invT + b.redF() * tf,
+                            a.greenF() * invT + b.greenF() * tf,
+                            a.blueF() * invT + b.blueF() * tf,
+                            a.alphaF() * invT + b.alphaF() * tf);
 }
 
 QColor lighten(const QColor &c, qreal t)

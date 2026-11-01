@@ -1308,7 +1308,7 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter,
         return;
 
     QColor color = op.brush.color;
-    color.setAlphaF(qBound<qreal>(0.0, op.brush.opacity * color.alphaF(), 1.0));
+    color.setAlphaF(static_cast<float>(qBound<qreal>(0.0, op.brush.opacity * color.alphaF(), 1.0)));
 
     // Single point: render as crisp dab / dot
     if (op.points.size() == 1) {
@@ -1431,14 +1431,14 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
     }
 
     QColor color = op.brush.color;
-    color.setAlphaF(qBound<qreal>(0.0, op.brush.opacity * color.alphaF(), 1.0));
+    color.setAlphaF(static_cast<float>(qBound<qreal>(0.0, op.brush.opacity * color.alphaF(), 1.0)));
 
     // Phase 1: Special treatment for Blush: soft radial wash instead of harsh circular boundary
     if (isBlush) {
         const QRectF b = poly.boundingRect();
         QRadialGradient blushGrad(b.center(), qMax(b.width(), b.height()) * 0.55);
         QColor core = color;
-        core.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.35, 0.45));
+        core.setAlphaF(static_cast<float>(qBound<qreal>(0.0, color.alphaF() * 0.35, 0.45)));
         QColor edge = color;
         edge.setAlphaF(0.0);
         blushGrad.setColorAt(0.0, core);
@@ -1548,7 +1548,7 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
             || (op.fillStyle.compare(QLatin1String("wash"), Qt::CaseInsensitive) == 0);
         if (isWatercolor && !isBlush && !isShading) {
             QColor fringe = color.darker(115);
-            fringe.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.75, 1.0));
+            fringe.setAlphaF(static_cast<float>(qBound<qreal>(0.0, color.alphaF() * 0.75, 1.0)));
             QPen fringePen(fringe, 1.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
             painter.setPen(fringePen);
             painter.setBrush(Qt::NoBrush);
@@ -1560,7 +1560,7 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
                 QRandomGenerator grain(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/fill_paper")));
                 painter.setPen(Qt::NoPen);
                 QColor grainDot = color.darker(120);
-                grainDot.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.08, 0.20));
+                grainDot.setAlphaF(static_cast<float>(qBound<qreal>(0.0, color.alphaF() * 0.08, 0.20)));
                 painter.setBrush(grainDot);
                 const int grainCount =
                     qBound(12, qRound(std::hypot(washBounds.width(), washBounds.height()) * 0.8), 120);
@@ -1576,7 +1576,7 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
         } else if (!isHair && !isSkin && !isBlush && !isShading
                    && op.fillStyle.compare(QLatin1String("wash"), Qt::CaseInsensitive) == 0) {
             QColor fringe = color;
-            fringe.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.85, 1.0));
+            fringe.setAlphaF(static_cast<float>(qBound<qreal>(0.0, color.alphaF() * 0.85, 1.0)));
             QPen fringePen(fringe, 0.8, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin);
             painter.setPen(fringePen);
             painter.setBrush(Qt::NoBrush);
@@ -1594,7 +1594,7 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
                 QRandomGenerator grain(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/fill_paper_flat")));
                 painter.setPen(Qt::NoPen);
                 QColor grainDot = color.darker(115);
-                grainDot.setAlphaF(qBound<qreal>(0.0, color.alphaF() * 0.08, 0.18));
+                grainDot.setAlphaF(static_cast<float>(qBound<qreal>(0.0, color.alphaF() * 0.08, 0.18)));
                 painter.setBrush(grainDot);
                 const int grainCount =
                     qBound(10, qRound(std::hypot(washBounds.width(), washBounds.height()) * 0.6), 80);
@@ -1643,17 +1643,17 @@ void KisAiStrokeRenderer::drawGradientFillOperation(QPainter &painter,
             for (int i = 0; i < count; ++i) {
                 const qreal pos = (count > 1) ? qreal(i) / (count - 1) : 0.0;
                 QColor col = op.gradientColors.at(i);
-                col.setAlphaF(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0));
+                col.setAlphaF(static_cast<float>(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0)));
                 radGrad.setColorAt(pos, col);
             }
             if (count == 1) {
                 QColor col = op.gradientColors.at(0);
-                col.setAlphaF(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0));
+                col.setAlphaF(static_cast<float>(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0)));
                 radGrad.setColorAt(1.0, col);
             }
         } else {
             QColor col = op.brush.color;
-            col.setAlphaF(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0));
+            col.setAlphaF(static_cast<float>(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0)));
             radGrad.setColorAt(0.0, col);
             radGrad.setColorAt(1.0, Qt::transparent);
         }
@@ -1682,17 +1682,17 @@ void KisAiStrokeRenderer::drawGradientFillOperation(QPainter &painter,
         for (int i = 0; i < count; ++i) {
             const qreal pos = (count > 1) ? qreal(i) / (count - 1) : 0.0;
             QColor col = op.gradientColors.at(i);
-            col.setAlphaF(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0));
+            col.setAlphaF(static_cast<float>(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0)));
             grad.setColorAt(pos, col);
         }
         if (count == 1) {
             QColor col = op.gradientColors.at(0);
-            col.setAlphaF(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0));
+            col.setAlphaF(static_cast<float>(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0)));
             grad.setColorAt(1.0, col);
         }
     } else {
         QColor col = op.brush.color;
-        col.setAlphaF(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0));
+        col.setAlphaF(static_cast<float>(qBound<qreal>(0.0, col.alphaF() * brushOpacity, 1.0)));
         grad.setColorAt(0.0, col);
         grad.setColorAt(1.0, Qt::transparent);
     }
@@ -1830,7 +1830,7 @@ void KisAiStrokeRenderer::drawRibbonOperation(QPainter &painter,
     }
 
     QColor color = op.brush.color;
-    color.setAlphaF(qBound<qreal>(0.0, op.brush.opacity * color.alphaF(), 1.0));
+    color.setAlphaF(static_cast<float>(qBound<qreal>(0.0, op.brush.opacity * color.alphaF(), 1.0)));
 
     // V10 Coverage Ink: one coverage mask + one color composite, so tight
     // bends and self-overlaps never accumulate alpha along the run.
@@ -1859,7 +1859,7 @@ void KisAiStrokeRenderer::drawParticlesOperation(QPainter &painter,
 
     painter.setPen(Qt::NoPen);
     QColor partColor = op.brush.color;
-    partColor.setAlphaF(qBound<qreal>(0.0, partColor.alphaF() * op.brush.opacity * 0.85, 0.90));
+    partColor.setAlphaF(static_cast<float>(qBound<qreal>(0.0, partColor.alphaF() * op.brush.opacity * 0.85, 0.90)));
     painter.setBrush(partColor);
 
     const qreal baseDiameter = effectiveBrushWidth(op.brush, 0.8, canvasSize, supersampleScale);
@@ -1930,7 +1930,7 @@ void KisAiStrokeRenderer::drawHatchOperation(QPainter &painter,
     painter.setClipPath(clipPath);
 
     QColor color = op.brush.color;
-    color.setAlphaF(qBound<qreal>(0.0, op.brush.opacity * color.alphaF() * 0.70, 1.0));
+    color.setAlphaF(static_cast<float>(qBound<qreal>(0.0, op.brush.opacity * color.alphaF() * 0.70, 1.0)));
 
     const qreal minDim = qMin(canvasSize.width(), canvasSize.height());
     // Use delicate, fine linework instead of heavy wireframe bars
@@ -1996,7 +1996,7 @@ void KisAiStrokeRenderer::drawMangaLinesOperation(QPainter &painter,
     QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id + QStringLiteral("/manga")));
 
     QColor lineColor = op.brush.color;
-    lineColor.setAlphaF(qBound<qreal>(0.0, op.brush.opacity * lineColor.alphaF(), 1.0));
+    lineColor.setAlphaF(static_cast<float>(qBound<qreal>(0.0, op.brush.opacity * lineColor.alphaF(), 1.0)));
 
     const qreal lineWidth = effectiveBrushWidth(op.brush, 0.8, canvasSize, supersampleScale);
 

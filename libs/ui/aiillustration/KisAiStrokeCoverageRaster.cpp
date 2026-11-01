@@ -65,7 +65,7 @@ void computeFrames(const QVector<StrokeSample> &samples,
                    QVector<QPointF> &tangents,
                    QVector<QPointF> &normals)
 {
-    const int n = samples.size();
+    const qsizetype n = samples.size();
     tangents.resize(n);
     normals.resize(n);
     // at(1) 参照を含むため 1点未満では接線計算不能 (paintStroke は n==0 のみ弾く)。
@@ -76,7 +76,7 @@ void computeFrames(const QVector<StrokeSample> &samples,
         }
         return;
     }
-    for (int i = 0; i < n; ++i) {
+    for (qsizetype i = 0; i < n; ++i) {
         QPointF t;
         if (closed && n > 2) {
             t = samples.at((i + 1) % n).pos - samples.at((i - 1 + n) % n).pos;

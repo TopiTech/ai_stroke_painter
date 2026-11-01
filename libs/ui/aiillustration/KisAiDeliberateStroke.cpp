@@ -18,8 +18,8 @@ namespace
 qreal normalizedPolyArea(const QPolygonF &poly)
 {
     qreal twice = 0.0;
-    const int n = poly.size();
-    for (int i = 0; i < n; ++i) {
+    const qsizetype n = poly.size();
+    for (qsizetype i = 0; i < n; ++i) {
         const QPointF &a = poly.at(i);
         const QPointF &b = poly.at((i + 1) % n);
         twice += a.x() * b.y() - b.x() * a.y();
@@ -32,9 +32,9 @@ qreal pathLengthPx(const QVector<KisAiStrokePoint> &pts, const QSize &canvas, bo
     if (pts.size() < 2)
         return 0.0;
     qreal len = 0.0;
-    const int n = pts.size();
-    const int segs = closed ? n : (n - 1);
-    for (int i = 0; i < segs; ++i) {
+    const qsizetype n = pts.size();
+    const qsizetype segs = closed ? n : (n - 1);
+    for (qsizetype i = 0; i < segs; ++i) {
         const QPointF a(pts.at(i).pos.x() * canvas.width(),
                         pts.at(i).pos.y() * canvas.height());
         const QPointF b(pts.at((i + 1) % n).pos.x() * canvas.width(),

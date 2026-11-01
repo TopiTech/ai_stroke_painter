@@ -608,10 +608,10 @@ bool KisAiSceneSpecCodec::parseSceneSpecObject(const QJsonObject &rootObj,
             spec.palette.mood = pal.value(QStringLiteral("mood")).toString(spec.palette.mood);
         spec.palette.keyColor = parseColorField(pal, QStringLiteral("key"), spec.palette.keyColor);
         const QJsonArray accents = pal.value(QStringLiteral("accents")).toArray();
-        for (const QJsonValue &v : accents) {
-            if (!v.isString())
+        for (const auto accentVal : accents) {
+            if (!accentVal.isString())
                 continue;
-            const QColor c = KisAiStrokeProgramCodec::parseColor(v.toString(), QColor());
+            const QColor c = KisAiStrokeProgramCodec::parseColor(accentVal.toString(), QColor());
             if (c.isValid() && spec.palette.accents.size() < 4)
                 spec.palette.accents.append(c);
         }

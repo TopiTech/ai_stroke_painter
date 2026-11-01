@@ -11,6 +11,8 @@
 #include <QUrl>
 #include <QtGlobal>
 
+#include <algorithm>
+
 QJsonObject KisAiFullStroke::buildScenePayload(const QString &model, const QString &prompt, const QSize &canvasSize)
 {
     const QString instruction = QStringLiteral(
@@ -83,9 +85,7 @@ bool KisAiFullStroke::acceptsProgram(const KisAiStrokeProgram &program)
 {
     if (program.operations.isEmpty())
         return false;
-    for (const KisAiStrokeOperation &op : program.operations) {
-        if (op.kind == KisAiStrokeOperation::Kind::Unknown || op.id.isEmpty())
-            return false;
-    }
-    return true;
+    return std::all_of(program.operations.cbegin(), program.operations.cend(), [](const KisAiStrokeOperation &op) {
+        return op.kind != KisAiStrokeOperation::Kind::Unknown && !op.id.isEmpty();
+    });
 }
