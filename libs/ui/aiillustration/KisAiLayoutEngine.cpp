@@ -1474,11 +1474,8 @@ QVector<KisAiStrokeOperation> KisAiLayoutEngine::characterProgram(const KisAiSce
 
     const quint32 layoutDynamicSeed = QRandomGenerator::global()->generate();
 
-    // V11 body rig: torso + arms + hands anchored on the head rig. Only for
-    // framings that show the body; bust_up keeps the legacy head portrait.
-    const QString framingLower = spec.composition.framing.trimmed().toLower();
-    if (framingLower == QLatin1String("upper_body") || framingLower == QLatin1String("full_body"))
-        ops.append(KisAiRigLibrary::bodyRigOps(rigParams, canvasSize, layoutDynamicSeed ^ 0x626f6479u));
+    // Note: bodyRigOps is already emitted once at line 1363 and anatomically Z-sorted
+    // by KisAiStrokeGraph::orderForCommit (torso/arms behind face, foreground hands in front).
 
     // V7: Hierarchical 3D hair clumps with ribbon flows, tapered tips & cast shadows
     ops.append(KisAiRigLibrary::hierarchicalHairClumpOps(rigParams, canvasSize, layoutDynamicSeed));

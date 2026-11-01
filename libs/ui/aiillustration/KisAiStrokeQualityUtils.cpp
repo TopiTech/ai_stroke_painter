@@ -2757,3 +2757,208 @@ QImage KisAiStrokeQualityUtils::applyAtmosphericFinish(
     return result;
 }
 
+
+QImage KisAiStrokeQualityUtils::renderVolumetricPolygonWash(
+    const QPolygonF &pixelPoly,
+    const QColor &baseColor,
+    const QPointF &lightDir,
+    qreal volumeStrength,
+    qreal sssStrength,
+    QPoint *outTopLeft)
+{
+    if (pixelPoly.size() < 3 || !baseColor.isValid()) {
+        return QImage();
+    }
+
+    const QRect box = pixelPoly.boundingRect().toAlignedRect().adjusted(-1, -1, 1, 1);
+    const int w = box.width();
+    const int h = box.height();
+    if (w < 4 || h < 4 || w > 2500 || h > 2500 || (w * h) > 3000000) {
+        return QImage();
+    }
+
+    if (outTopLeft) {
+        *outTopLeft = box.topLeft();
+    }
+
+    // 1. Rasterize antialiased polygon silhouette into local 8-bit grayscale mask
+    QImage mask(w, h, QImage::Format_Grayscale8);
+    mask.fill(0);
+    {
+        QPainter mp(&mask);
+        mp.setRenderHint(QPainter::Antialiasing, true);
+        mp.translate(-box.left(), -box.top());
+        mp.setPen(Qt::NoPen);
+        mp.setBrush(Qt::white);
+        mp.drawPolygon(pixelPoly);
+    }
+
+    // 2. Two-pass Chamfer 3-4-5 Distance Transform inside polygon mask
+    constexpr int INF_DIST = 1000000;
+    QVector<int> dist(w * h, 0);
+    for (int y = 0; y < h; ++y) {
+        const uchar *mRow = mask.constScanLine(y);
+        int *dRow = dist.data() + y * w;
+        for (int x = 0; x < w; ++x) {
+            if (mRow[x] == 0) {
+                dRow[x] = 0;
+                continue;
+            }
+            int d = INF_DIST;
+            if (x > 0)
+                d = qMin(d, dRow[x - 1] + 3);
+            if (y > 0) {
+                const int *prevRow = dist.data() + (y - 1) * w;
+                d = qMin(d, prevRow[x] + 3);
+                if (x > 0)
+                    d = qMin(d, prevRow[x - 1] + 4);
+                if (x + 1 < w)
+                    d = qMin(d, prevRow[x + 1] + 4);
+            } else {
+                d = 3;
+            }
+            if (x == 0 || x == w - 1 || y == h - 1)
+                d = qMin(d, 3);
+            dRow[x] = d;
+        }
+    }
+
+    int maxDist = 9;
+    for (int y = h - 1; y >= 0; --y) {
+        const uchar *mRow = mask.constScanLine(y);
+        int *dRow = dist.data() + y * w;
+        for (int x = w - 1; x >= 0; --x) {
+            if (mRow[x] == 0)
+                continue;
+            int d = dRow[x];
+            if (x + 1 < w)
+                d = qMin(d, dRow[x + 1] + 3);
+            if (y + 1 < h) {
+                const int *nextRow = dist.data() + (y + 1) * w;
+                d = qMin(d, nextRow[x] + 3);
+                if (x + 1 < w)
+                    d = qMin(d, nextRow[x + 1] + 4);
+                if (x > 0)
+                    d = qMin(d, nextRow[x - 1] + 4);
+            }
+            dRow[x] = d;
+            if (d > maxDist)
+                maxDist = d;
+        }
+    }
+
+    // 3. Prepare harmonic colors (Shadow, Base, SSS Terminator, Highlight)
+    const qreal vol = qBound<qreal>(0.0, volumeStrength, 0.85);
+    const qreal sss = qBound<qreal>(0.0, sssStrength, 0.65);
+    const QColor shadowCol = calculateHueShiftedShadow(baseColor, QColor(36, 40, 68), 0.32 + vol * 0.25);
+    const QColor hiCol = calculateHueShiftedHighlight(baseColor, QColor(255, 252, 240), 0.28 + vol * 0.22);
+
+    // Warm saturated subsurface scattering tint
+    float bh = 0.0f, bs = 0.0f, bl = 0.0f;
+    baseColor.getHslF(&bh, &bs, &bl);
+    QColor sssCol = baseColor;
+    if (bh >= 0.0f && bs > 0.04f) {
+        const float sssHue = (bh < 0.16f || bh > 0.88f) ? 0.03f : qBound(0.0f, bh - 0.04f, 0.999f);
+        sssCol.setHslF(sssHue, qMin(1.0f, bs * 1.45f + 0.12f), qBound(0.15f, bl * 0.92f, 0.82f));
+    }
+
+    const qreal lLen = std::hypot(lightDir.x(), lightDir.y());
+    const qreal ux = (lLen > 1e-4) ? (lightDir.x() / lLen) : -0.5735;
+    const qreal uy = (lLen > 1e-4) ? (lightDir.y() / lLen) : -0.8192;
+
+    const qreal invEffRadius = 1.0 / qMax<qreal>(6.0, maxDist * 0.68);
+    const qreal cx = w * 0.5;
+    const qreal cy = h * 0.5;
+    const qreal invRx = 1.0 / qMax<qreal>(4.0, w * 0.50);
+    const qreal invRy = 1.0 / qMax<qreal>(4.0, h * 0.50);
+
+    // 4. Evaluate volumetric shading per pixel into Premultiplied ARGB32 output
+    QImage out(w, h, QImage::Format_ARGB32_Premultiplied);
+    out.fill(Qt::transparent);
+
+    const qreal baseAlpha = baseColor.alphaF();
+
+    for (int y = 0; y < h; ++y) {
+        const uchar *mRow = mask.constScanLine(y);
+        const int *dRow = dist.data() + y * w;
+        const int *dPrev = dist.data() + qMax(0, y - 1) * w;
+        const int *dNext = dist.data() + qMin(h - 1, y + 1) * w;
+        QRgb *outRow = reinterpret_cast<QRgb *>(out.scanLine(y));
+
+        for (int x = 0; x < w; ++x) {
+            const uchar cov = mRow[x];
+            if (cov == 0)
+                continue;
+
+            const int d = dRow[x];
+            const qreal u = qBound<qreal>(0.0, d * invEffRadius, 1.0);
+
+            // Outward SDF gradient (pointing toward nearest contour edge)
+            const int xm = qMax(0, x - 1);
+            const int xp = qMin(w - 1, x + 1);
+            const qreal sdfNx = (dRow[xm] - dRow[xp]) / 6.0;
+            const qreal sdfNy = (dPrev[x] - dNext[x]) / 6.0;
+
+            // Smooth global cushion dome normal
+            const qreal domeNx = (x - cx) * invRx;
+            const qreal domeNy = (y - cy) * invRy;
+
+            // Blend contour SDF normal (50%) with low-frequency dome normal (50%)
+            qreal nx = sdfNx * (1.0 - u * 0.55) * 0.50 + domeNx * 0.50;
+            qreal ny = sdfNy * (1.0 - u * 0.55) * 0.50 + domeNy * 0.50;
+            const qreal n2 = nx * nx + ny * ny;
+            if (n2 > 0.88) {
+                const qreal scale = std::sqrt(0.88 / n2);
+                nx *= scale;
+                ny *= scale;
+            }
+
+            // Directional light incidence relative to the canvas normal:
+            // > 0 on the key-lit side, 0 at the crown/terminator, < 0 on the shadow side.
+            const qreal dirDot = nx * ux + ny * uy;
+
+            qreal r = baseColor.redF();
+            qreal g = baseColor.greenF();
+            qreal b = baseColor.blueF();
+
+            if (dirDot < 0.0) {
+                const qreal shadeT = qBound<qreal>(0.0, (-dirDot) * vol * 1.45, 0.85);
+                r = r * (1.0 - shadeT) + shadowCol.redF() * shadeT;
+                g = g * (1.0 - shadeT) + shadowCol.greenF() * shadeT;
+                b = b * (1.0 - shadeT) + shadowCol.blueF() * shadeT;
+            } else {
+                const qreal hiT = qBound<qreal>(0.0, (dirDot * 0.85 + u * 0.20) * vol * 0.95, 0.70);
+                r = r * (1.0 - hiT) + hiCol.redF() * hiT;
+                g = g * (1.0 - hiT) + hiCol.greenF() * hiT;
+                b = b * (1.0 - hiT) + hiCol.blueF() * hiT;
+            }
+
+            // Subsurface Scattering (SSS) warm band along terminator (dirDot near -0.06)
+            if (sss > 0.01) {
+                const qreal dTerm = dirDot + 0.06;
+                const qreal sssWeight = std::exp(-18.0 * dTerm * dTerm) * sss;
+                r = r * (1.0 - sssWeight) + sssCol.redF() * sssWeight;
+                g = g * (1.0 - sssWeight) + sssCol.greenF() * sssWeight;
+                b = b * (1.0 - sssWeight) + sssCol.blueF() * sssWeight;
+            }
+
+            // Contour Ambient Occlusion near silhouette boundary (softly grounds overlapping shapes)
+            if (u < 0.24 && dirDot < 0.15) {
+                const qreal aoT = (1.0 - u / 0.24);
+                const qreal aoWeight = aoT * aoT * vol * 0.38;
+                r = r * (1.0 - aoWeight) + shadowCol.redF() * aoWeight;
+                g = g * (1.0 - aoWeight) + shadowCol.greenF() * aoWeight;
+                b = b * (1.0 - aoWeight) + shadowCol.blueF() * aoWeight;
+            }
+
+            const qreal a = (cov / 255.0) * baseAlpha;
+            const int pmA = qBound(0, qRound(a * 255.0), 255);
+            const int pmR = qBound(0, qRound(r * pmA), pmA);
+            const int pmG = qBound(0, qRound(g * pmA), pmA);
+            const int pmB = qBound(0, qRound(b * pmA), pmA);
+            outRow[x] = qRgba(pmR, pmG, pmB, pmA);
+        }
+    }
+
+    return out;
+}

@@ -427,18 +427,20 @@ void KisAiStrokeCoverageRaster::paintStroke(QPainter &painter,
 
         switch (texture.style) {
         case TextureStyle::Airbrush: {
-            // Smooth radial falloff tube; overlapping gradient disks combine
-            // with max, so the falloff never accumulates along the run.
+            // Smooth C2 Gaussian-like radial falloff tube; overlapping gradient
+            // disks combine with max, eliminating concentric Mach-band rings.
             mp.setPen(Qt::NoPen);
             for (const StrokeSample &s : samples) {
                 const qreal r = qMax<qreal>(0.5, s.width * 1.8);
                 QRadialGradient grad(s.pos, r);
-                grad.setColorAt(0.0, grayLevel(1.0));
-                grad.setColorAt(0.25, grayLevel(1.0));
-                grad.setColorAt(0.30, grayLevel(0.35));
-                grad.setColorAt(0.55, grayLevel(0.12));
-                grad.setColorAt(0.92, grayLevel(0.12));
-                grad.setColorAt(1.0, grayLevel(0.0));
+                grad.setColorAt(0.00, grayLevel(1.00));
+                grad.setColorAt(0.14, grayLevel(0.94));
+                grad.setColorAt(0.28, grayLevel(0.78));
+                grad.setColorAt(0.42, grayLevel(0.56));
+                grad.setColorAt(0.56, grayLevel(0.35));
+                grad.setColorAt(0.70, grayLevel(0.18));
+                grad.setColorAt(0.85, grayLevel(0.06));
+                grad.setColorAt(1.00, grayLevel(0.00));
                 mp.setBrush(grad);
                 mp.drawEllipse(s.pos, r, r);
             }
@@ -623,16 +625,48 @@ void KisAiStrokeCoverageRaster::paintStroke(QPainter &painter,
     const int cg = color.green();
     const int cb = color.blue();
     const int ca = color.alpha();
-    for (int y = 0; y < bounds.height(); ++y) {
+    const int tw = bounds.width();
+    const int th = bounds.height();
+    const bool isWatercolor = (texture.style == TextureStyle::Watercolor) && !brush.isEraser;
+    const bool isImpasto =
+        (texture.style == TextureStyle::Bristle || texture.style == TextureStyle::Charcoal) && !brush.isEraser;
+
+    for (int y = 0; y < th; ++y) {
         const QRgb *m = reinterpret_cast<const QRgb *>(mask.constScanLine(y));
+        const QRgb *mPrev = reinterpret_cast<const QRgb *>(mask.constScanLine(qMax(0, y - 1)));
+        const QRgb *mNext = reinterpret_cast<const QRgb *>(mask.constScanLine(qMin(th - 1, y + 1)));
         QRgb *t = reinterpret_cast<QRgb *>(tile.scanLine(y));
-        for (int x = 0; x < bounds.width(); ++x) {
+        for (int x = 0; x < tw; ++x) {
             const int cov = qRed(m[x]);
             if (cov <= 0 || ca <= 0) {
                 t[x] = 0;
                 continue;
             }
-            t[x] = qRgba(cr, cg, cb, (ca * cov + 127) / 255);
+            int pr = cr;
+            int pg = cg;
+            int pb = cb;
+            if (isWatercolor) {
+                // Wet-edge pigment pooling: darken and warm-shift where coverage gradient is steep
+                const int cx0 = qRed(m[qMax(0, x - 1)]);
+                const int cx1 = qRed(m[qMin(tw - 1, x + 1)]);
+                const int cy0 = qRed(mPrev[x]);
+                const int cy1 = qRed(mNext[x]);
+                const qreal gx = (cx1 - cx0) / 255.0;
+                const qreal gy = (cy1 - cy0) / 255.0;
+                const qreal rim = qBound<qreal>(0.0, std::hypot(gx, gy) * 0.85, 1.0);
+                // Slightly luminous interior (+3%), darker saturated wet rim (-14% V, slight warm/cool shift)
+                const qreal lumBoost = (1.0 - rim) * 0.03 - rim * 0.14;
+                pr = qBound(0, qRound(cr * (1.0 + lumBoost * 0.90)), 255);
+                pg = qBound(0, qRound(cg * (1.0 + lumBoost * 1.05)), 255);
+                pb = qBound(0, qRound(cb * (1.0 + lumBoost * 0.95)), 255);
+            } else if (isImpasto) {
+                // Impasto ridge/valley micro-contrast based on local coverage height
+                const qreal ridge = (cov - 185) / 255.0 * 0.10;
+                pr = qBound(0, qRound(cr * (1.0 + ridge)), 255);
+                pg = qBound(0, qRound(cg * (1.0 + ridge)), 255);
+                pb = qBound(0, qRound(cb * (1.0 + ridge)), 255);
+            }
+            t[x] = qRgba(pr, pg, pb, (ca * cov + 127) / 255);
         }
     }
     tile = tile.convertToFormat(QImage::Format_ARGB32_Premultiplied);

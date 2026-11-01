@@ -520,6 +520,21 @@ public:
         qreal grainIntensity = 0.05,
         quint32 seed = 1337
     );
+
+    /**
+     * V12 2D Signed Distance Field (Chamfer 3-4-5) & Pseudo-Normal Volumetric Polygon Renderer.
+     * Reconstructs a smooth 3D cushion surface normal from the polygon's contour distance field,
+     * evaluating Half-Lambert shading, Subsurface Scattering (SSS) terminator warmth, and
+     * contour Ambient Occlusion (AO) within the exact antialiased silhouette.
+     */
+    static QImage renderVolumetricPolygonWash(
+        const QPolygonF &pixelPoly,
+        const QColor &baseColor,
+        const QPointF &lightDir = QPointF(-0.45, -0.65),
+        qreal volumeStrength = 0.28,
+        qreal sssStrength = 0.18,
+        QPoint *outTopLeft = nullptr
+    );
 };
 
 #endif // KIS_AI_STROKE_QUALITY_UTILS_H

@@ -26,6 +26,8 @@
 #include "aiillustration/KisAiQualityVector.h"
 #include "aiillustration/KisAiRigLibrary.h"
 #include "aiillustration/KisAiSceneSpec.h"
+#include "aiillustration/KisAiPrimitiveExpander.h"
+#include "aiillustration/KisAiStrokeGraph.h"
 #include "aiillustration/KisAiStrokeProgram.h"
 #include "aiillustration/KisAiStrokeQualityUtils.h"
 #include "aiillustration/KisAiStrokeRenderer.h"
@@ -473,6 +475,97 @@ void KisAiV10QualityTest::testMediumFinishAndQualityGates()
     QCOMPARE(KisAi::QualityProfile::forMedium(QStringLiteral("watercolor")).weights.value(
                  QStringLiteral("perceptual.colorEntropy")),
              KisAi::QualityProfile::watercolorSoft().weights.value(QStringLiteral("perceptual.colorEntropy")));
+}
+
+void KisAiV10QualityTest::testVolumetricPolygonWashAndZOrdering()
+{
+    // 1. Volumetric SDF polygon wash produces smooth 3D tonal variation
+    QImage canvas(128, 128, QImage::Format_ARGB32_Premultiplied);
+    canvas.fill(Qt::transparent);
+    QPainter painter(&canvas);
+    QPolygonF circlePoly;
+    for (int i = 0; i < 24; ++i) {
+        const qreal a = 2.0 * M_PI * i / 24.0;
+        circlePoly.append(QPointF(64.0 + std::cos(a) * 44.0, 64.0 + std::sin(a) * 44.0));
+    }
+    QPoint topLeft;
+    const QImage washTile = KisAiStrokeQualityUtils::renderVolumetricPolygonWash(
+        circlePoly, QColor(240, 195, 175), QPointF(-0.55, -0.65), 0.28, 0.22, &topLeft);
+    QVERIFY(!washTile.isNull());
+    painter.drawImage(topLeft, washTile);
+    painter.end();
+
+    const QColor litSide = canvas.pixelColor(46, 46);    // facing upper-left key light
+    const QColor shadeSide = canvas.pixelColor(84, 84);  // facing lower-right shadow rim
+    QVERIFY(litSide.alpha() > 200);
+    QVERIFY(shadeSide.alpha() > 200);
+    QVERIFY2(litSide.red() > shadeSide.red(), "Volumetric SDF wash must brighten key-lit dome over shadow rim");
+
+    // 2. Anatomical Z-ordering keeps hair_back and neck behind face_skin, and face_skin behind eyes/bangs
+    KisAiStrokeOperation faceSkin;
+    faceSkin.id = QStringLiteral("face_skin");
+    faceSkin.layer = QStringLiteral("Flats");
+    faceSkin.kind = KisAiStrokeOperation::Kind::Fill;
+    faceSkin.polygon = {QPointF(0.3, 0.3), QPointF(0.7, 0.3), QPointF(0.7, 0.7), QPointF(0.3, 0.7)};
+
+    KisAiStrokeOperation hairBack = faceSkin;
+    hairBack.id = QStringLiteral("hair_back");
+
+    KisAiStrokeOperation neckBase = faceSkin;
+    neckBase.id = QStringLiteral("neck");
+
+    KisAiStrokeOperation hairFront = faceSkin;
+    hairFront.id = QStringLiteral("hair_front_bangs");
+
+    const QVector<KisAiStrokeOperation> ordered =
+        KisAiStrokeGraph::orderForCommit({hairFront, faceSkin, neckBase, hairBack}, QSize(512, 512));
+    int idxHairBack = -1, idxNeck = -1, idxFace = -1, idxHairFront = -1;
+    for (int i = 0; i < ordered.size(); ++i) {
+        if (ordered.at(i).id == QLatin1String("hair_back")) idxHairBack = i;
+        else if (ordered.at(i).id == QLatin1String("neck")) idxNeck = i;
+        else if (ordered.at(i).id == QLatin1String("face_skin")) idxFace = i;
+        else if (ordered.at(i).id == QLatin1String("hair_front_bangs")) idxHairFront = i;
+    }
+    QVERIFY2(idxHairBack < idxFace, "Back hair must commit before face_skin");
+    QVERIFY2(idxNeck < idxFace, "Neck must commit before face_skin");
+    QVERIFY2(idxFace < idxHairFront, "Face skin must commit before front bangs");
+
+    // 3. Full-body characterProgram emits rig_torso_mass exactly once (no duplicate bodyRigOps)
+    KisAiSceneSpec spec;
+    spec.prompt = QStringLiteral("full body anime girl");
+    spec.canvasSize = QSize(512, 512);
+    spec.composition.framing = QStringLiteral("full_body");
+    const KisAiStrokeProgram prog = KisAiLayoutEngine::generateProgram(spec, QSize(512, 512));
+    int torsoCount = 0;
+    for (const auto &op : prog.operations) {
+        if (op.id == QLatin1String("rig_torso_mass")) {
+            ++torsoCount;
+        }
+    }
+    QCOMPARE(torsoCount, 1);
+
+    // 4. PrimitiveExpander::expand(AnimeEye) emits 28-vertex almond sclera and multi-stop radial iris depth
+    KisAiStrokeOperation eyeOp;
+    eyeOp.kind = KisAiStrokeOperation::Kind::AnimeEye;
+    eyeOp.id = QStringLiteral("hero_eye_l");
+    eyeOp.layer = QStringLiteral("Flats");
+    eyeOp.eyeCenter = QPointF(0.42, 0.40);
+    eyeOp.eyeSize = QSizeF(0.10, 0.12);
+    eyeOp.eyeIrisColor = QColor(50, 120, 230);
+    const QVector<KisAiStrokeOperation> eyeAtoms = KisAiPrimitiveExpander::expand(eyeOp, QSize(512, 512));
+    bool hasIrisDepthGrad = false;
+    bool hasIrisGlowGrad = false;
+    for (const auto &atom : eyeAtoms) {
+        if (atom.id == QLatin1String("eye_l_sclera")) {
+            QVERIFY2(atom.polygon.size() >= 24, "Expanded sclera must be a smooth 28-vertex almond contour");
+        } else if (atom.id == QLatin1String("eye_l_iris_depth")) {
+            hasIrisDepthGrad = (atom.kind == KisAiStrokeOperation::Kind::GradientFill && atom.gradientColors.size() >= 4);
+        } else if (atom.id == QLatin1String("eye_l_iris_glow")) {
+            hasIrisGlowGrad = (atom.kind == KisAiStrokeOperation::Kind::GradientFill && atom.isRadial);
+        }
+    }
+    QVERIFY(hasIrisDepthGrad);
+    QVERIFY(hasIrisGlowGrad);
 }
 
 KISTEST_MAIN(KisAiV10QualityTest)

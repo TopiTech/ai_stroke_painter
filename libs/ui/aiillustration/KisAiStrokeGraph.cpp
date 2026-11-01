@@ -131,6 +131,58 @@ bool snapEndpointToAnchors(QPointF *pt, const QVector<QPointF> &anchors, bool cl
     }
     return false;
 }
+
+int anatomicalZPlane(const KisAiStrokeOperation &op)
+{
+    const QString id = op.id.toLower();
+    const QString group = op.groupId.toLower();
+    if (id.contains(QLatin1String("white_canvas")) || id.contains(QLatin1String("bg"))
+        || id.contains(QLatin1String("sky")) || id.contains(QLatin1String("mountain"))
+        || id.contains(QLatin1String("cloud")) || id.contains(QLatin1String("water"))
+        || id.contains(QLatin1String("meadow")) || id.contains(QLatin1String("ground"))
+        || id.contains(QLatin1String("horizon")) || id.contains(QLatin1String("sun"))
+        || id.contains(QLatin1String("moon")) || id.contains(QLatin1String("backdrop"))) {
+        return 0;
+    }
+    if (id.contains(QLatin1String("hair_back")) || id.contains(QLatin1String("twin_tail"))
+        || id.contains(QLatin1String("pony_tail")) || id.contains(QLatin1String("braid"))) {
+        return 1;
+    }
+    if (id.startsWith(QLatin1String("neck")) || id.contains(QLatin1String("_neck"))
+        || id.contains(QLatin1String("clavicle")) || group == QLatin1String("torso")
+        || group == QLatin1String("arm_l") || group == QLatin1String("arm_r")) {
+        return 2;
+    }
+    if (id.contains(QLatin1String("cloth")) || id.contains(QLatin1String("collar"))
+        || id.contains(QLatin1String("ribbon")) || id.contains(QLatin1String("hood"))
+        || id.contains(QLatin1String("dress")) || id.contains(QLatin1String("casual"))
+        || id.contains(QLatin1String("wrinkle")) || id.contains(QLatin1String("fold"))
+        || id.contains(QLatin1String("drapery")) || id.contains(QLatin1String("torso"))) {
+        return 3;
+    }
+    if (id.contains(QLatin1String("face_skin")) || id.contains(QLatin1String("ear_"))
+        || id.contains(QLatin1String("face_contour")) || id.contains(QLatin1String("jaw"))
+        || id.contains(QLatin1String("blush")) || id.contains(QLatin1String("sss_"))
+        || id.contains(QLatin1String("chin"))) {
+        return 4;
+    }
+    if (KisAiDeliberateStroke::isFaceDetail(op.id) || group.startsWith(QLatin1String("eye"))
+        || group.startsWith(QLatin1String("brow")) || group == QLatin1String("mouth")
+        || id.contains(QLatin1String("nose")) || id.contains(QLatin1String("eyelid"))
+        || id.contains(QLatin1String("tear_trough"))) {
+        return 5;
+    }
+    if (id.contains(QLatin1String("hair")) || id.contains(QLatin1String("fringe"))
+        || id.contains(QLatin1String("bang")) || id.contains(QLatin1String("side_lock"))
+        || id.contains(QLatin1String("ahoge")) || id.contains(QLatin1String("halo"))) {
+        return 6;
+    }
+    if (group == QLatin1String("hand_l") || group == QLatin1String("hand_r")
+        || id.contains(QLatin1String("hand_"))) {
+        return 7;
+    }
+    return 4;
+}
 } // namespace
 
 QString KisAiStrokeGraph::inferGroupId(const KisAiStrokeOperation &op)
@@ -235,6 +287,8 @@ QVector<KisAiStrokeOperation> KisAiStrokeGraph::orderForCommit(const QVector<Kis
         int layer;
         int role;
         int clipDepth;
+        int zPlane;
+        int firstPairIndex;
         QString pair;
         int side;
         bool face;
@@ -242,9 +296,13 @@ QVector<KisAiStrokeOperation> KisAiStrokeGraph::orderForCommit(const QVector<Kis
         int bodyRank;
     };
     QHash<QString, int> byId;
+    QHash<QString, int> firstIndexForPair;
     for (int i = 0; i < annotated.size(); ++i) {
         if (!annotated.at(i).id.isEmpty())
             byId.insert(annotated.at(i).id, i);
+        const QString pk = pairKey(annotated.at(i).id);
+        if (!firstIndexForPair.contains(pk))
+            firstIndexForPair.insert(pk, i);
     }
     auto clipDepthOf = [&](const KisAiStrokeOperation &op) {
         int depth = 0;
@@ -277,11 +335,14 @@ QVector<KisAiStrokeOperation> KisAiStrokeGraph::orderForCommit(const QVector<Kis
             bodyRank = 1;
         else if (group == QLatin1String("hand_l") || group == QLatin1String("hand_r"))
             bodyRank = 2;
+        const QString pk = pairKey(op.id);
         items.append({i,
                       layerRank(op.layer),
                       KisAiInkRole::rank(op.role),
                       clipDepthOf(op),
-                      pairKey(op.id),
+                      anatomicalZPlane(op),
+                      firstIndexForPair.value(pk, i),
+                      pk,
                       sideRank(op.id),
                       KisAiDeliberateStroke::isFaceDetail(op.id),
                       massRank.at(i),
@@ -296,12 +357,18 @@ QVector<KisAiStrokeOperation> KisAiStrokeGraph::orderForCommit(const QVector<Kis
         if (a.bodyRank != b.bodyRank)
             return a.bodyRank < b.bodyRank;
         // Jaw / hair masses before facial details, otherwise pair-key
-        // lexicographic order puts "eye_*" lashes ahead of "face_contour".
+        // order puts "eye_*" lashes ahead of "face_contour".
         if (a.face != b.face)
             return !a.face && b.face;
+        // Anatomical back-to-front depth plane (back hair -> neck -> cloth -> face -> eye -> front hair -> hand)
+        if (a.zPlane != b.zPlane)
+            return a.zPlane < b.zPlane;
         // clipToId children (iris in sclera, pupil in iris) paint after parents.
         if (a.clipDepth != b.clipDepth)
             return a.clipDepth < b.clipDepth;
+        // Preserve emission order across distinct pairs while pulling L/R counterparts together
+        if (a.firstPairIndex != b.firstPairIndex)
+            return a.firstPairIndex < b.firstPairIndex;
         if (a.pair != b.pair)
             return a.pair < b.pair;
         if (a.side != b.side)

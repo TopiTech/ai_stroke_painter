@@ -91,9 +91,14 @@ QVector<KisAiStrokeOperation> KisAiStrokeCommitter::prepareAtomicOps(const QVect
 
 KisAiStrokeOperation KisAiStrokeCommitter::stabilizeOperation(const KisAiStrokeOperation &op, const QSize &canvasSize)
 {
+    if (op.style.contains(QLatin1String("stabilized"))) {
+        return op;
+    }
     KisAiStrokeOperation out = op;
-    const bool advanced = KisAiModelRouter::shouldUseAdvancedStrokeLogic();
-    if (op.kind == KisAiStrokeOperation::Kind::Path && op.points.size() >= 3) {
+    const bool isLineart = (op.layer.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) == 0);
+    const bool advanced = KisAiModelRouter::shouldUseAdvancedStrokeLogic() || isLineart
+        || (op.brush.profile.compare(QLatin1String("gpen"), Qt::CaseInsensitive) == 0);
+    if (op.kind == KisAiStrokeOperation::Kind::Path && op.points.size() >= 2) {
         if (advanced) {
             out.points = KisAiDeliberateStroke::applyFlagshipInkDynamics(
                 KisAiDeliberateStroke::smoothFlagshipStroke(op.points,
@@ -109,6 +114,7 @@ KisAiStrokeOperation KisAiStrokeCommitter::stabilizeOperation(const KisAiStrokeO
                                                        KisAiStrokeProgramCodec::stableSeed(op.id)),
                 canvasSize);
         }
+        out.style = out.style.isEmpty() ? QStringLiteral("stabilized") : (out.style + QStringLiteral("|stabilized"));
     } else if (op.kind == KisAiStrokeOperation::Kind::Ribbon) {
         QVector<KisAiStrokePoint> spinePts;
         QVector<QPointF> raw = op.spine;
@@ -135,6 +141,7 @@ KisAiStrokeOperation KisAiStrokeCommitter::stabilizeOperation(const KisAiStrokeO
             out.spine.append(p.pos);
             out.points.append(p);
         }
+        out.style = out.style.isEmpty() ? QStringLiteral("stabilized") : (out.style + QStringLiteral("|stabilized"));
     }
     return out;
 }
@@ -146,6 +153,9 @@ KisAiStrokeOperation KisAiStrokeCommitter::repairOperation(const KisAiStrokeOper
     KisAiStrokeOperation out = op;
     if (!lint.needsRepair)
         return out;
+
+    out.style.remove(QStringLiteral("|stabilized"));
+    out.style.remove(QStringLiteral("stabilized"));
 
     if (lint.reasons.contains(QLatin1String("invalid-brush"))) {
         if (!out.brush.color.isValid())

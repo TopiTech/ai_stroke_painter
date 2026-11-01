@@ -813,15 +813,14 @@ QString KisAiStrokeProgramCodec::buildFlagshipDirectives()
 {
     return QStringLiteral(
         "=== ADVANCED FLAGSHIP & DELIBERATE ART DIRECTION ===\n"
-        "You are operating in High-Precision Flagship Mode with a Rig-first contract. The deterministic "
-        "LayoutEngine owns all coordinates, symmetry, T-stops and coverage guarantees; your job is meaning, "
-        "rig parameters and critique-driven patches, never raw geometry invention:\n"
-        "0. Rig-First Contract (HIGHEST STRUCTURAL PRIORITY):\n"
-        "   - Prefer meaning-only direction: describe WHAT/WHERE in words plus 'artistic_plan' and SceneSpec "
-        "'rig' values (eye_aperture, iris_ratio, hair_strand_density, mouth_width_scale, ...) over hand-placed "
-        "coordinates.\n"
-        "   - When coordinates are emitted (legacy path), keep them inside silhouettes, symmetric about the face "
-        "axis, and clipped via 'clip_to_id'; the engine clamps, de-duplicates and drops degenerate ops.\n"
+        "You are operating in High-Precision Flagship Mode with a Rig-first contract and Autonomous Coordinate Mastery:\n"
+        "0. Rig-First Contract & High-Density Coordinate Mastery (HIGHEST STRUCTURAL PRIORITY):\n"
+        "   - When operating in SceneSpec mode, the deterministic LayoutEngine owns rig coordinates and T-stops; focus on "
+        "'artistic_plan' and SceneSpec 'rig' values (eye_aperture, iris_ratio, hair_strand_density, mouth_width_scale, ...).\n"
+        "   - When generating a StrokeProgram operations array directly, act as a master digital illustrator: emit "
+        "high-density organic polygons (12 to 28 vertices for face contours, hair masses, and drapery—never blocky 4-6 vertex boxes), "
+        "leverage composite primitives ('anime_eye', 'anime_mouth', 'cloth_drapery', 'hair_flow_cluster', 'form_shading', 'bezier_path'), "
+        "and keep paired features symmetric about the face axis and clipped via 'clip_to_id'.\n"
         "   - Never emit Unknown kinds, empty ids, named colors, or free-form blend modes: use hex colors and the "
         "schema blend_mode enum only.\n"
         "1. Master Deliberate Inking & Catmull-Rom Curvature (Single-Stroke Craftsmanship):\n"
@@ -839,7 +838,7 @@ QString KisAiStrokeProgramCodec::buildFlagshipDirectives()
         "   - Along the terminator between light and shadow on skin and warm organic surfaces, introduce warm transition accents (coral, peach, or rose).\n"
         "   - Avoid dead neutral gray or muddy black shading.\n"
         "4. Facial Micro-Anatomy Mastery:\n"
-        "   - Use micro-detail precision strokes for eye corners, eyelashes, double eyelids, iris limbal rings, and lips.\n"
+        "   - Use 'anime_eye' and 'anime_mouth' primitives or micro-detail precision strokes for eye corners, eyelashes, double eyelids, iris limbal rings, and lips.\n"
         "   - Place eye catchlights precisely on the pupil/iris boundary without blurry spill.\n"
         "5. Hair Clump Architecture:\n"
         "   - Foundation mass on 'Flats' -> underside occlusion shading on 'Shading' -> ribbon spine clumps ('ribbon' with width_start/mid/end) -> delicate flyaways on 'Lineart'.\n"
@@ -4661,6 +4660,45 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
                      [&layerOrder](const KisAiStrokeOperation &a, const KisAiStrokeOperation &b) {
                          return layerOrder(a.layer) < layerOrder(b.layer);
                      });
+
+    // Auto-bind missing clipToId for Shading polygon ops that predominantly overlap a Flats silhouette
+    // so form-shadow diffusion and boundary vertices never spill outside their parent mass.
+    {
+        QVector<int> flatIndices;
+        for (int i = 0; i < refined.operations.size(); ++i) {
+            const KisAiStrokeOperation &fop = refined.operations.at(i);
+            if (fop.layer == QLatin1String("Flats") && fop.polygon.size() >= 3 && !fop.id.isEmpty()) {
+                flatIndices.append(i);
+            }
+        }
+        if (!flatIndices.isEmpty()) {
+            for (int i = 0; i < refined.operations.size(); ++i) {
+                KisAiStrokeOperation &sop = refined.operations[i];
+                if (sop.layer != QLatin1String("Shading") || !sop.clipToId.isEmpty() || sop.polygon.size() < 3) {
+                    continue;
+                }
+                int bestFlatIdx = -1;
+                qreal bestInsideRatio = 0.0;
+                for (int fIdx : flatIndices) {
+                    const QPolygonF &fPoly = refined.operations.at(fIdx).polygon;
+                    int insideCount = 0;
+                    for (const QPointF &pt : sop.polygon) {
+                        if (fPoly.containsPoint(pt, Qt::OddEvenFill)) {
+                            ++insideCount;
+                        }
+                    }
+                    const qreal ratio = qreal(insideCount) / qreal(sop.polygon.size());
+                    if (ratio >= 0.75 && ratio > bestInsideRatio) {
+                        bestInsideRatio = ratio;
+                        bestFlatIdx = fIdx;
+                    }
+                }
+                if (bestFlatIdx >= 0) {
+                    sop.clipToId = refined.operations.at(bestFlatIdx).id;
+                }
+            }
+        }
+    }
 
     localReport.outputOperations = refined.operations.size();
     localReport.score = qualityScore(refined);

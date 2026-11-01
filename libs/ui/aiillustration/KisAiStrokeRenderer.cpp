@@ -409,6 +409,14 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
             }
         }
     }
+    for (const KisAiStrokeOperation &op : expandedOps) {
+        if (op.kind == KisAiStrokeOperation::Kind::Fill && op.polygon.size() >= 3) {
+            const QString lowerId = op.id.toLower();
+            if (lowerId.contains(QLatin1String("sclera")) || lowerId.contains(QLatin1String("face_skin"))) {
+                faceExclusionPath.addPolygon(scalePolygon(op.polygon, size));
+            }
+        }
+    }
 
     // Build cross-layer silhouette dictionary for clip_to_id targeted clipping
     QMap<QString, QPolygonF> globalSilhouettes;
@@ -441,8 +449,11 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
         const bool isHighlights = (layerKey.compare(QLatin1String("Highlights"), Qt::CaseInsensitive) == 0);
         const bool isFx = (layerKey.compare(QLatin1String("FX"), Qt::CaseInsensitive) == 0);
 
-        QImage layerImage = isFx ? renderOperationsToImage(ops, size, faceExclusionPath, globalSilhouettes)
-                                 : renderOperationsToImage(ops, size, QPainterPath(), globalSilhouettes);
+        QImage layerImage;
+        if (!isShading) {
+            layerImage = isFx ? renderOperationsToImage(ops, size, faceExclusionPath, globalSilhouettes)
+                              : renderOperationsToImage(ops, size, QPainterPath(), globalSilhouettes);
+        }
 
         if (isFlats) {
             if (hasFlats && !flatsImage.isNull()) {
@@ -469,14 +480,39 @@ QImage KisAiStrokeRenderer::renderProgramToImage(const KisAiStrokeProgram &progr
                 }
             }
 
-            QImage formImage;
+            QImage formImage(size, QImage::Format_ARGB32_Premultiplied);
+            formImage.fill(Qt::transparent);
             if (!formOps.isEmpty()) {
-                formImage = renderOperationsToImage(formOps, size, QPainterPath(), globalSilhouettes);
                 const int formDiffusionRadius = qMax(4, qRound(qMin(size.width(), size.height()) * 0.010));
-                applySoftEdgeDiffusion(formImage, formDiffusionRadius);
-            } else {
-                formImage = QImage(size, QImage::Format_ARGB32_Premultiplied);
-                formImage.fill(Qt::transparent);
+                // Group formOps by clipToId so soft-edge diffusion never bleeds across internal silhouette boundaries
+                QMap<QString, QVector<KisAiStrokeOperation>> byClip;
+                for (const KisAiStrokeOperation &fop : formOps) {
+                    const QString key = (!fop.clipToId.isEmpty() && globalSilhouettes.contains(fop.clipToId))
+                        ? fop.clipToId
+                        : QString();
+                    byClip[key].append(fop);
+                }
+                QPainter formAccumulator(&formImage);
+                formAccumulator.setRenderHint(QPainter::Antialiasing, true);
+                for (auto it = byClip.constBegin(); it != byClip.constEnd(); ++it) {
+                    QImage groupImg = renderOperationsToImage(it.value(), size, QPainterPath(), globalSilhouettes);
+                    applySoftEdgeDiffusion(groupImg, formDiffusionRadius);
+                    if (!it.key().isEmpty()) {
+                        QImage maskImg(size, QImage::Format_ARGB32_Premultiplied);
+                        maskImg.fill(Qt::transparent);
+                        {
+                            QPainter mp(&maskImg);
+                            mp.setRenderHint(QPainter::Antialiasing, true);
+                            mp.setPen(Qt::NoPen);
+                            mp.setBrush(Qt::white);
+                            mp.drawPolygon(scalePolygon(globalSilhouettes.value(it.key()), size));
+                        }
+                        QPainter cp(&groupImg);
+                        cp.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+                        cp.drawImage(0, 0, maskImg);
+                    }
+                    formAccumulator.drawImage(0, 0, groupImg);
+                }
             }
 
             if (!castOps.isEmpty()) {
@@ -719,6 +755,14 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
             }
         }
     }
+    for (const KisAiStrokeOperation &op : expandedOps) {
+        if (op.kind == KisAiStrokeOperation::Kind::Fill && op.polygon.size() >= 3) {
+            const QString lowerId = op.id.toLower();
+            if (lowerId.contains(QLatin1String("sclera")) || lowerId.contains(QLatin1String("face_skin"))) {
+                faceExclusionPath.addPolygon(scalePolygon(op.polygon, canvasSize));
+            }
+        }
+    }
 
     int layersAdded = 0;
 
@@ -761,8 +805,11 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
         const bool isBackground = (layerKey.compare(QLatin1String("Background"), Qt::CaseInsensitive) == 0);
         const bool isFx = (layerKey.compare(QLatin1String("FX"), Qt::CaseInsensitive) == 0);
 
-        QImage layerImage = isFx ? renderOperationsToImage(ops, canvasSize, faceExclusionPath, globalSilhouettes)
-                                 : renderOperationsToImage(ops, canvasSize, QPainterPath(), globalSilhouettes);
+        QImage layerImage;
+        if (!isShading) {
+            layerImage = isFx ? renderOperationsToImage(ops, canvasSize, faceExclusionPath, globalSilhouettes)
+                              : renderOperationsToImage(ops, canvasSize, QPainterPath(), globalSilhouettes);
+        }
 
         if (isFlats) {
             if (hasFlats && !flatsImage.isNull()) {
@@ -789,14 +836,38 @@ bool KisAiStrokeRenderer::renderProgramToLayers(KisImageWSP image,
                 }
             }
 
-            QImage formImage;
+            QImage formImage(canvasSize, QImage::Format_ARGB32_Premultiplied);
+            formImage.fill(Qt::transparent);
             if (!formOps.isEmpty()) {
-                formImage = renderOperationsToImage(formOps, canvasSize, QPainterPath(), globalSilhouettes);
                 const int formDiffusionRadius = qMax(4, qRound(qMin(canvasSize.width(), canvasSize.height()) * 0.010));
-                applySoftEdgeDiffusion(formImage, formDiffusionRadius);
-            } else {
-                formImage = QImage(canvasSize, QImage::Format_ARGB32_Premultiplied);
-                formImage.fill(Qt::transparent);
+                QMap<QString, QVector<KisAiStrokeOperation>> byClip;
+                for (const KisAiStrokeOperation &fop : formOps) {
+                    const QString key = (!fop.clipToId.isEmpty() && globalSilhouettes.contains(fop.clipToId))
+                        ? fop.clipToId
+                        : QString();
+                    byClip[key].append(fop);
+                }
+                QPainter formAccumulator(&formImage);
+                formAccumulator.setRenderHint(QPainter::Antialiasing, true);
+                for (auto it = byClip.constBegin(); it != byClip.constEnd(); ++it) {
+                    QImage groupImg = renderOperationsToImage(it.value(), canvasSize, QPainterPath(), globalSilhouettes);
+                    applySoftEdgeDiffusion(groupImg, formDiffusionRadius);
+                    if (!it.key().isEmpty()) {
+                        QImage maskImg(canvasSize, QImage::Format_ARGB32_Premultiplied);
+                        maskImg.fill(Qt::transparent);
+                        {
+                            QPainter mp(&maskImg);
+                            mp.setRenderHint(QPainter::Antialiasing, true);
+                            mp.setPen(Qt::NoPen);
+                            mp.setBrush(Qt::white);
+                            mp.drawPolygon(scalePolygon(globalSilhouettes.value(it.key()), canvasSize));
+                        }
+                        QPainter cp(&groupImg);
+                        cp.setCompositionMode(QPainter::CompositionMode_DestinationIn);
+                        cp.drawImage(0, 0, maskImg);
+                    }
+                    formAccumulator.drawImage(0, 0, groupImg);
+                }
             }
 
             if (!castOps.isEmpty()) {
@@ -1104,8 +1175,18 @@ QImage KisAiStrokeRenderer::renderOperationsToImage(const QVector<KisAiStrokeOpe
         scaledFacePath = tr.map(scaledFacePath);
     }
 
-    // V9: expand composites, graph-order, then commit one stroke at a time.
-    const QVector<KisAiStrokeOperation> atomicOps = KisAiStrokeCommitter::prepareAtomicOps(operations, canvasSize);
+    // V9/V12: expand composites and graph-order only if not already prepared by caller.
+    bool alreadyPrepared = !operations.isEmpty() && (KisAiPrimitiveExpander::leftoverCompositeCount(operations) == 0);
+    if (alreadyPrepared) {
+        for (const KisAiStrokeOperation &op : operations) {
+            if (op.groupId.isEmpty() || op.role.isEmpty()) {
+                alreadyPrepared = false;
+                break;
+            }
+        }
+    }
+    const QVector<KisAiStrokeOperation> atomicOps =
+        alreadyPrepared ? operations : KisAiStrokeCommitter::prepareAtomicOps(operations, canvasSize);
 
     {
         QPainter painter(&working);
@@ -1240,26 +1321,32 @@ void KisAiStrokeRenderer::drawPathOperation(QPainter &painter,
     }
 
     const bool isLineart = (op.layer.compare(QLatin1String("Lineart"), Qt::CaseInsensitive) == 0);
-    const bool advanced = KisAiModelRouter::shouldUseAdvancedStrokeLogic() || isLineart
-        || (op.brush.profile.compare(QLatin1String("gpen"), Qt::CaseInsensitive) == 0);
-    const QVector<KisAiStrokePoint> stablePoints = advanced
-        ? KisAiDeliberateStroke::applyFlagshipInkDynamics(
-            KisAiDeliberateStroke::smoothFlagshipStroke(op.points,
-                                                        canvasSize,
-                                                        op.closed,
-                                                        KisAiStrokeProgramCodec::stableSeed(op.id)),
-            canvasSize)
-        : KisAiDeliberateStroke::applyInkDynamics(
-            KisAiDeliberateStroke::stabilizeStroke(op.points,
-                                                   canvasSize,
-                                                   op.closed,
-                                                   KisAiStrokeProgramCodec::stableSeed(op.id)),
-            canvasSize);
-    KisAiStrokeOperation lintOp = op;
-    lintOp.points = stablePoints;
-    const KisAiStrokeLintReport lint = KisAiDeliberateStroke::lintStroke(lintOp, canvasSize);
-    if (lint.drop) {
-        return; // micro/off-canvas/degenerate strokes never reach ink
+    const bool alreadyStabilized = op.style.contains(QLatin1String("stabilized"));
+    QVector<KisAiStrokePoint> stablePoints;
+    if (alreadyStabilized) {
+        stablePoints = op.points;
+    } else {
+        const bool advanced = KisAiModelRouter::shouldUseAdvancedStrokeLogic() || isLineart
+            || (op.brush.profile.compare(QLatin1String("gpen"), Qt::CaseInsensitive) == 0);
+        stablePoints = advanced
+            ? KisAiDeliberateStroke::applyFlagshipInkDynamics(
+                KisAiDeliberateStroke::smoothFlagshipStroke(op.points,
+                                                            canvasSize,
+                                                            op.closed,
+                                                            KisAiStrokeProgramCodec::stableSeed(op.id)),
+                canvasSize)
+            : KisAiDeliberateStroke::applyInkDynamics(
+                KisAiDeliberateStroke::stabilizeStroke(op.points,
+                                                       canvasSize,
+                                                       op.closed,
+                                                       KisAiStrokeProgramCodec::stableSeed(op.id)),
+                canvasSize);
+        KisAiStrokeOperation lintOp = op;
+        lintOp.points = stablePoints;
+        const KisAiStrokeLintReport lint = KisAiDeliberateStroke::lintStroke(lintOp, canvasSize);
+        if (lint.drop) {
+            return; // micro/off-canvas/degenerate strokes never reach ink
+        }
     }
 
     // Scale input points and extract pressures
@@ -1435,8 +1522,25 @@ void KisAiStrokeRenderer::drawFillOperation(QPainter &painter, const KisAiStroke
         }
 
         painter.setPen(Qt::NoPen);
-        painter.setBrush(grad);
-        painter.drawPolygon(poly);
+        const bool isFullCanvasBg = (b.width() >= canvasSize.width() * 0.92 && b.height() >= canvasSize.height() * 0.92)
+            || lowerId.contains(QLatin1String("white_canvas")) || lowerId.contains(QLatin1String("sky"));
+        bool drewVolumetric = false;
+        if (!isFullCanvasBg && b.width() >= 14.0 && b.height() >= 14.0 && (b.width() * b.height()) <= 1500000.0) {
+            QPoint topLeft;
+            const QPointF lightVec(-std::cos(rad), -std::sin(rad));
+            const qreal volStrength = isShading ? 0.30 : (isSkin ? 0.16 : 0.22);
+            const qreal sssAmt = isSkin ? 0.22 : (isHair ? 0.10 : 0.14);
+            const QImage volImg = KisAiStrokeQualityUtils::renderVolumetricPolygonWash(
+                poly, color, lightVec, volStrength, sssAmt, &topLeft);
+            if (!volImg.isNull()) {
+                painter.drawImage(topLeft, volImg);
+                drewVolumetric = true;
+            }
+        }
+        if (!drewVolumetric) {
+            painter.setBrush(grad);
+            painter.drawPolygon(poly);
+        }
 
         // Artistic Watercolor Wet-Edge Fringe: water pooling along paint boundaries
         // CRITICAL: Exclude Shading layer to prevent ugly, stained-glass contour lines and mottled skin bruising
@@ -1658,17 +1762,21 @@ void KisAiStrokeRenderer::drawRibbonOperation(QPainter &painter,
 
     const qreal baseDim = qMin(canvasSize.width(), canvasSize.height());
 
-    // D0: stabilize the spine (jitter removal) before any envelope math.
-    QVector<KisAiStrokePoint> spinePts;
-    spinePts.reserve(rawSpine.size());
-    for (const QPointF &pt : rawSpine)
-        spinePts.append(KisAiStrokePoint(pt.x(), pt.y(), 0.8));
-    const QVector<KisAiStrokePoint> stableSpine =
-        KisAiDeliberateStroke::stabilizeStroke(spinePts, canvasSize, false, KisAiStrokeProgramCodec::stableSeed(op.id));
+    // D0/V12: stabilize the spine (jitter removal) before any envelope math unless already stabilized.
     QVector<QPointF> stableRaw;
-    stableRaw.reserve(stableSpine.size());
-    for (const KisAiStrokePoint &pt : stableSpine)
-        stableRaw.append(pt.pos);
+    if (op.style.contains(QLatin1String("stabilized"))) {
+        stableRaw = rawSpine;
+    } else {
+        QVector<KisAiStrokePoint> spinePts;
+        spinePts.reserve(rawSpine.size());
+        for (const QPointF &pt : rawSpine)
+            spinePts.append(KisAiStrokePoint(pt.x(), pt.y(), 0.8));
+        const QVector<KisAiStrokePoint> stableSpine =
+            KisAiDeliberateStroke::stabilizeStroke(spinePts, canvasSize, false, KisAiStrokeProgramCodec::stableSeed(op.id));
+        stableRaw.reserve(stableSpine.size());
+        for (const KisAiStrokePoint &pt : stableSpine)
+            stableRaw.append(pt.pos);
+    }
 
     // Scale spine and smooth
     QVector<QPointF> scaledSpine;

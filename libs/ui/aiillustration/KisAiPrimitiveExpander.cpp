@@ -6,6 +6,7 @@
 #include "KisAiPrimitiveExpander.h"
 
 #include "KisAiStrokeGraph.h"
+#include "KisAiStrokeQualityUtils.h"
 
 #include <QRandomGenerator>
 #include <QtMath>
@@ -40,7 +41,7 @@ sampleQuad(const QPointF &a, const QPointF &ctrl, const QPointF &b, int steps, q
     return pts;
 }
 
-QPolygonF ellipsePoly(const QPointF &c, qreal rx, qreal ry, int steps = 16)
+QPolygonF ellipsePoly(const QPointF &c, qreal rx, qreal ry, int steps = 24)
 {
     QPolygonF poly;
     poly.reserve(steps);
@@ -49,6 +50,121 @@ QPolygonF ellipsePoly(const QPointF &c, qreal rx, qreal ry, int steps = 16)
         poly.append(QPointF(c.x() + std::cos(a) * rx, c.y() + std::sin(a) * ry));
     }
     return poly;
+}
+
+QPolygonF almondEyePoly(const QPointF &c, qreal w, qreal h, qreal outerSign, int steps = 28)
+{
+    QPolygonF poly;
+    poly.reserve(steps);
+    const qreal rx = w * 0.50;
+    const qreal ry = h * 0.48;
+    for (int i = 0; i < steps; ++i) {
+        const qreal a = 2.0 * PI * qreal(i) / qreal(steps);
+        const qreal cosA = std::cos(a);
+        const qreal sinA = std::sin(a);
+        // Subtle almond pinch at inner/outer corners and slight upward outer tilt
+        const qreal cornerPinch = 1.0 - 0.12 * std::pow(cosA, 4.0);
+        const qreal tiltOffset = (cosA * outerSign) * (h * 0.035);
+        poly.append(QPointF(c.x() + cosA * rx, c.y() + sinA * ry * cornerPinch - tiltOffset));
+    }
+    return poly;
+}
+
+QPolygonF starSparklePoly(const QPointF &c, qreal rx, qreal ry)
+{
+    QPolygonF poly;
+    constexpr int kSpikes = 4;
+    poly.reserve(kSpikes * 2);
+    for (int i = 0; i < kSpikes * 2; ++i) {
+        const qreal a = (PI * qreal(i)) / qreal(kSpikes);
+        const qreal scale = (i % 2 == 0) ? 1.0 : 0.22;
+        poly.append(QPointF(c.x() + std::cos(a) * rx * scale, c.y() + std::sin(a) * ry * scale));
+    }
+    return poly;
+}
+
+QPolygonF sakuraPetalPoly(const QPointF &c, qreal r, qreal angleRad)
+{
+    QPolygonF poly;
+    constexpr int kSteps = 16;
+    poly.reserve(kSteps);
+    const qreal cosR = std::cos(angleRad);
+    const qreal sinR = std::sin(angleRad);
+    for (int i = 0; i < kSteps; ++i) {
+        const qreal t = 2.0 * PI * qreal(i) / qreal(kSteps);
+        // Teardrop/petal contour with characteristic sakura apical cleft near t = 0
+        const qreal cleft = (std::cos(t) > 0.75) ? (1.0 - 0.32 * std::pow((std::cos(t) - 0.75) / 0.25, 2.0)) : 1.0;
+        const qreal lx = std::cos(t) * r * 1.15 * cleft;
+        const qreal ly = std::sin(t) * r * 0.72 * (0.85 + 0.15 * std::cos(t));
+        poly.append(QPointF(c.x() + lx * cosR - ly * sinR, c.y() + lx * sinR + ly * cosR));
+    }
+    return poly;
+}
+
+KisAiStrokeOperation makeLinearGradientFill(const QString &id,
+                                            const QString &groupId,
+                                            const QString &layer,
+                                            const QPolygonF &poly,
+                                            const QPointF &startPt,
+                                            const QPointF &endPt,
+                                            const QVector<QColor> &colors,
+                                            qreal opacity,
+                                            const QString &role,
+                                            const QString &clipToId = QString(),
+                                            const QString &blendMode = QStringLiteral("normal"))
+{
+    KisAiStrokeOperation op;
+    op.kind = KisAiStrokeOperation::Kind::GradientFill;
+    op.id = id;
+    op.groupId = groupId;
+    op.role = role;
+    op.layer = layer;
+    op.polygon = poly;
+    op.isRadial = false;
+    op.fillStyle = QStringLiteral("directional");
+    op.points = {KisAiStrokePoint(startPt.x(), startPt.y(), 1.0),
+                 KisAiStrokePoint(endPt.x(), endPt.y(), 1.0)};
+    op.gradientColors = colors;
+    op.brush.color = colors.isEmpty() ? QColor(128, 128, 128) : colors.first();
+    op.brush.opacity = opacity;
+    op.brush.profile = QStringLiteral("auto");
+    op.clipToId = clipToId;
+    op.blendMode = blendMode;
+    op.smooth = true;
+    return op;
+}
+
+KisAiStrokeOperation makeRadialGradientFill(const QString &id,
+                                            const QString &groupId,
+                                            const QString &layer,
+                                            const QPolygonF &poly,
+                                            const QPointF &centerPt,
+                                            qreal radius,
+                                            const QVector<QColor> &colors,
+                                            qreal opacity,
+                                            const QString &role,
+                                            const QString &clipToId = QString(),
+                                            const QString &blendMode = QStringLiteral("normal"))
+{
+    KisAiStrokeOperation op;
+    op.kind = KisAiStrokeOperation::Kind::GradientFill;
+    op.id = id;
+    op.groupId = groupId;
+    op.role = role;
+    op.layer = layer;
+    op.polygon = poly;
+    op.isRadial = true;
+    op.fillStyle = QStringLiteral("radial");
+    op.gradientCenter = centerPt;
+    op.gradientRadius = radius;
+    op.gradientColors = colors;
+    op.brush.color = colors.isEmpty() ? QColor(255, 255, 255) : colors.first();
+    op.brush.opacity = opacity;
+    op.brush.profile = QStringLiteral("auto");
+    op.clipToId = clipToId;
+    op.blendMode = blendMode;
+    op.smooth = true;
+    return op;
 }
 
 QString sideTag(const KisAiStrokeOperation &op)
@@ -155,53 +271,119 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandEye(const KisAiStrok
     const qreal outerSign = op.eyeIsRight ? 1.0 : -1.0;
     const qreal innerSign = -outerSign;
     const QColor iris = op.eyeIrisColor.isValid() ? op.eyeIrisColor : QColor(60, 120, 240);
-    QColor dark = iris.darker(300).darker(140);
+    const QColor deepIris = KisAiStrokeQualityUtils::calculateHueShiftedShadow(iris, QColor(20, 22, 48), 0.62);
+    QColor dark = deepIris.darker(220);
     dark.setAlpha(255);
-    const QString scleraId = QStringLiteral("%1_sclera").arg(group);
+    const QColor glow = op.eyeSecondaryColor.isValid()
+        ? op.eyeSecondaryColor
+        : KisAiStrokeQualityUtils::calculateHueShiftedHighlight(iris, QColor(245, 255, 255), 0.58);
 
+    const QString scleraId = QStringLiteral("%1_sclera").arg(group);
+    const QPolygonF scleraPoly = almondEyePoly(c, w, h, outerSign, 28);
+
+    // 1. Base Sclera (Keep Kind::Fill on Flats so KisAiStrokeGraph::critiqueGroup & silhouette clip find it)
     out.append(makeFill(scleraId,
                         group,
                         QStringLiteral("Flats"),
-                        ellipsePoly(c, w * 0.50, h * 0.48),
+                        scleraPoly,
                         QColor(252, 252, 255),
                         1.0,
                         QStringLiteral("mass")));
 
+    // 1b. Inner corner lacrimal caruncle (warm pink tear duct)
+    const QPointF caruncleCenter(c.x() + innerSign * w * 0.42, c.y() + h * 0.03);
+    out.append(makeFill(QStringLiteral("%1_caruncle").arg(group),
+                        group,
+                        QStringLiteral("Flats"),
+                        ellipsePoly(caruncleCenter, w * 0.065, h * 0.075, 12),
+                        QColor(242, 172, 180),
+                        0.85,
+                        QStringLiteral("mass"),
+                        scleraId));
+
+    // 1c. Sclera upper-lid cast shadow gradient
+    out.append(makeLinearGradientFill(
+        QStringLiteral("%1_sclera_shade").arg(group),
+        group,
+        QStringLiteral("Shading"),
+        scleraPoly,
+        QPointF(c.x(), c.y() - h * 0.48),
+        QPointF(c.x(), c.y() + h * 0.12),
+        {QColor(175, 182, 215, 185),
+         QColor(205, 210, 232, 80),
+         QColor(252, 252, 255, 0)},
+        0.75,
+        QStringLiteral("mass"),
+        scleraId,
+        QStringLiteral("multiply")));
+
+    // 2. Iris Limbal Ring & Main Iris Base
     const QString irisId = QStringLiteral("%1_iris").arg(group);
     const QPointF irisC(c.x(), c.y() - h * 0.02);
+    const qreal irisRx = w * 0.32;
+    const qreal irisRy = h * 0.42;
+    const QPolygonF irisPoly = ellipsePoly(irisC, irisRx, irisRy, 28);
+
+    // Keep Kind::Fill on irisId for centroid symmetry checks and child clipToId anchoring
     out.append(makeFill(irisId,
                         group,
                         QStringLiteral("Flats"),
-                        ellipsePoly(irisC, w * 0.31, h * 0.41),
+                        irisPoly,
                         iris,
                         1.0,
                         QStringLiteral("mass"),
                         scleraId));
 
-    const QColor glow = op.eyeSecondaryColor.isValid() ? op.eyeSecondaryColor : iris.lighter(150);
-    out.append(makeFill(QStringLiteral("%1_iris_glow").arg(group),
-                        group,
-                        QStringLiteral("Flats"),
-                        ellipsePoly(QPointF(c.x(), c.y() + h * 0.10), w * 0.22, h * 0.18),
-                        glow,
-                        0.85,
-                        QStringLiteral("mass"),
-                        irisId));
+    // 2b. Multi-stop Deep Volumetric Iris Gradient (clipped to irisId)
+    out.append(makeLinearGradientFill(
+        QStringLiteral("%1_iris_depth").arg(group),
+        group,
+        QStringLiteral("Flats"),
+        irisPoly,
+        QPointF(irisC.x(), irisC.y() - irisRy),
+        QPointF(irisC.x(), irisC.y() + irisRy),
+        {dark, deepIris, iris, glow},
+        0.95,
+        QStringLiteral("mass"),
+        irisId));
 
-    // Geometric eye center stays on iris body; pupil sits above it.
-    out.append(makeFill(QStringLiteral("%1_pupil").arg(group),
-                        group,
-                        QStringLiteral("Flats"),
-                        ellipsePoly(QPointF(c.x(), c.y() - h * 0.14), w * 0.07, h * 0.10),
-                        dark,
-                        1.0,
-                        QStringLiteral("mass"),
-                        irisId));
-    // Upper limbal arc only. A full-ellipse Path envelope would flood the iris.
+    // 2c. Lower Caustics Luminescence Crescent
+    const QPointF causticsC(irisC.x(), irisC.y() + irisRy * 0.35);
+    out.append(makeRadialGradientFill(
+        QStringLiteral("%1_iris_glow").arg(group),
+        group,
+        QStringLiteral("Flats"),
+        ellipsePoly(QPointF(c.x(), c.y() + h * 0.10), w * 0.24, h * 0.20, 20),
+        causticsC,
+        qMax(w, h) * 0.24,
+        {glow.lighter(120), glow, QColor(glow.red(), glow.green(), glow.blue(), 0)},
+        0.88,
+        QStringLiteral("mass"),
+        irisId));
+
+    // 3. Soft-Edge Volumetric Pupil
+    const QPointF pupilC(c.x(), c.y() - h * 0.04);
+    const qreal pupilRx = w * 0.11;
+    const qreal pupilRy = h * 0.145;
+    out.append(makeRadialGradientFill(
+        QStringLiteral("%1_pupil").arg(group),
+        group,
+        QStringLiteral("Flats"),
+        ellipsePoly(pupilC, pupilRx, pupilRy, 20),
+        pupilC,
+        qMax(pupilRx, pupilRy),
+        {QColor(12, 10, 22, 255), dark, deepIris},
+        1.0,
+        QStringLiteral("mass"),
+        irisId));
+
+    // 4. Upper Limbal Ring Definition Arc
     QVector<KisAiStrokePoint> limbal;
-    for (int i = 0; i <= 8; ++i) {
-        const qreal t = PI * (0.15 + 0.70 * qreal(i) / 8.0);
-        limbal.append(KisAiStrokePoint(irisC.x() + std::cos(t) * w * 0.31, irisC.y() - std::sin(t) * h * 0.41, 0.7));
+    for (int i = 0; i <= 12; ++i) {
+        const qreal t = PI * (0.08 + 0.84 * qreal(i) / 12.0);
+        limbal.append(KisAiStrokePoint(irisC.x() + std::cos(t) * irisRx,
+                                       irisC.y() - std::sin(t) * irisRy,
+                                       0.55 + 0.35 * std::sin(PI * qreal(i) / 12.0)));
     }
     KisAiStrokeOperation limbalOp = makePath(QStringLiteral("%1_limbal").arg(group),
                                              group,
@@ -210,55 +392,94 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandEye(const KisAiStrok
                                              dark,
                                              QStringLiteral("fineliner"),
                                              0.0016,
-                                             0.85,
+                                             0.88,
                                              QStringLiteral("internal"),
                                              irisId);
     limbalOp.closed = false;
     out.append(limbalOp);
-    const int striations = 8;
+
+    // 5. Radial Iris Striations (12 delicate fibers)
+    const int striations = 12;
     for (int i = 0; i < striations; ++i) {
-        const qreal angle = (PI * 0.15) + (PI * 0.70) * (qreal(i) / qreal(striations - 1));
+        const qreal angle = (PI * 0.10) + (PI * 0.80) * (qreal(i) / qreal(striations - 1));
         QVector<KisAiStrokePoint> st;
-        st.append(
-            KisAiStrokePoint(c.x() + std::cos(angle) * w * 0.08, c.y() - h * 0.08 + std::sin(angle) * h * 0.10, 0.3));
-        st.append(
-            KisAiStrokePoint(c.x() + std::cos(angle) * w * 0.22, c.y() - h * 0.04 + std::sin(angle) * h * 0.28, 0.6));
-        out.append(makePath(QStringLiteral("%1_striation_%2").arg(group).arg(i),
-                            group,
-                            QStringLiteral("Highlights"),
-                            st,
-                            iris.lighter(140),
-                            QStringLiteral("fineliner"),
-                            0.0009,
-                            0.45,
-                            QStringLiteral("internal"),
-                            irisId));
+        st.append(KisAiStrokePoint(pupilC.x() + std::cos(angle) * (pupilRx * 1.05),
+                                   pupilC.y() + std::sin(angle) * (pupilRy * 0.95),
+                                   0.35));
+        st.append(KisAiStrokePoint(irisC.x() + std::cos(angle) * (irisRx * 0.82),
+                                   irisC.y() + std::sin(angle) * (irisRy * 0.78),
+                                   0.70));
+        KisAiStrokeOperation stOp = makePath(QStringLiteral("%1_striation_%2").arg(group).arg(i),
+                                             group,
+                                             QStringLiteral("Highlights"),
+                                             st,
+                                             (i % 2 == 0) ? glow.lighter(115) : iris.lighter(145),
+                                             QStringLiteral("fineliner"),
+                                             0.0009,
+                                             0.52,
+                                             QStringLiteral("internal"),
+                                             irisId);
+        stOp.clipToId = irisId;
+        stOp.blendMode = QStringLiteral("screen");
+        out.append(stOp);
     }
+
+    // 6. Multi-Layered Catchlights (Bloom Halo + Primary + Secondary + Star Glint)
+    const QPointF mainCatchC(c.x() - w * 0.12, c.y() - h * 0.16);
+    out.append(makeRadialGradientFill(
+        QStringLiteral("%1_catch_halo").arg(group),
+        group,
+        QStringLiteral("Highlights"),
+        ellipsePoly(mainCatchC, w * 0.085, h * 0.095, 16),
+        mainCatchC,
+        qMax(w, h) * 0.095,
+        {QColor(255, 255, 255, 190),
+         QColor(225, 245, 255, 95),
+         QColor(225, 245, 255, 0)},
+        0.75,
+        QStringLiteral("accent"),
+        scleraId,
+        QStringLiteral("screen")));
 
     out.append(makeFill(QStringLiteral("%1_catch_main").arg(group),
                         group,
                         QStringLiteral("Highlights"),
-                        ellipsePoly(QPointF(c.x() - w * 0.12, c.y() - h * 0.16), w * 0.045, h * 0.05),
+                        ellipsePoly(mainCatchC, w * 0.048, h * 0.056, 16),
                         QColor(255, 255, 255),
-                        1.0,
+                        0.98,
                         QStringLiteral("accent"),
-                        irisId));
+                        scleraId));
+
+    const QPointF subCatchC(c.x() + w * 0.11, c.y() + h * 0.10);
     out.append(makeFill(QStringLiteral("%1_catch_sub").arg(group),
                         group,
                         QStringLiteral("Highlights"),
-                        ellipsePoly(QPointF(c.x() + w * 0.10, c.y() + h * 0.08), w * 0.022, h * 0.024),
-                        QColor(255, 255, 255),
-                        0.85,
+                        ellipsePoly(subCatchC, w * 0.025, h * 0.028, 12),
+                        QColor(245, 252, 255),
+                        0.90,
                         QStringLiteral("accent"),
                         irisId));
 
-    const QPointF lashStart(c.x() + innerSign * w * 0.44, c.y() + h * 0.02);
-    const QPointF lashCtrl(c.x() + outerSign * w * 0.05, c.y() - h * 0.56);
-    const QPointF lashEnd(c.x() + outerSign * w * 0.46, c.y() - h * 0.12);
-    QVector<KisAiStrokePoint> upper = sampleQuad(lashStart, lashCtrl, lashEnd, 10, 0.55, 0.95);
-    const QPointF flickCtrl(c.x() + outerSign * w * 0.54, c.y() - h * 0.22);
-    const QPointF flickEnd(c.x() + outerSign * w * 0.58, c.y() - h * 0.30);
-    upper.append(sampleQuad(lashEnd, flickCtrl, flickEnd, 4, 0.90, 0.25));
+    if (op.eyeStyle != QLatin1String("minimal")) {
+        const QPointF starC(c.x() + outerSign * w * 0.12, c.y() - h * 0.08);
+        out.append(makeFill(QStringLiteral("%1_catch_star").arg(group),
+                            group,
+                            QStringLiteral("Highlights"),
+                            starSparklePoly(starC, w * 0.042, h * 0.048),
+                            QColor(255, 255, 255),
+                            0.92,
+                            QStringLiteral("accent"),
+                            scleraId));
+    }
+
+    // 7. Upper Lash Line + Cat-Eye Wing Flick + Tapered Lash Clumps
+    const QPointF lashStart(c.x() + innerSign * w * 0.46, c.y() + h * 0.02);
+    const QPointF lashCtrl(c.x() + outerSign * w * 0.04, c.y() - h * 0.56);
+    const QPointF lashEnd(c.x() + outerSign * w * 0.48, c.y() - h * 0.10);
+    QVector<KisAiStrokePoint> upper = sampleQuad(lashStart, lashCtrl, lashEnd, 14, 0.45, 0.98);
+    const QPointF flickCtrl(c.x() + outerSign * w * 0.55, c.y() - h * 0.22);
+    const QPointF flickEnd(c.x() + outerSign * w * 0.60, c.y() - h * 0.31);
+    upper.append(sampleQuad(lashEnd, flickCtrl, flickEnd, 5, 0.92, 0.22));
     out.append(makePath(QStringLiteral("%1_lash_upper").arg(group),
                         group,
                         QStringLiteral("Lineart"),
@@ -269,12 +490,12 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandEye(const KisAiStrok
                         1.0,
                         QStringLiteral("contour")));
 
-    QVector<KisAiStrokePoint> clump1 = sampleQuad(QPointF(c.x() + outerSign * w * 0.38, c.y() - h * 0.35),
-                                                  QPointF(c.x() + outerSign * w * 0.48, c.y() - h * 0.46),
-                                                  QPointF(c.x() + outerSign * w * 0.54, c.y() - h * 0.50),
-                                                  5,
-                                                  0.7,
-                                                  0.2);
+    QVector<KisAiStrokePoint> clump1 = sampleQuad(QPointF(c.x() + outerSign * w * 0.36, c.y() - h * 0.36),
+                                                  QPointF(c.x() + outerSign * w * 0.46, c.y() - h * 0.47),
+                                                  QPointF(c.x() + outerSign * w * 0.53, c.y() - h * 0.51),
+                                                  6,
+                                                  0.75,
+                                                  0.18);
     out.append(makePath(QStringLiteral("%1_lash_clump_1").arg(group),
                         group,
                         QStringLiteral("Lineart"),
@@ -286,12 +507,12 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandEye(const KisAiStrok
                         QStringLiteral("contour"),
                         QStringLiteral("%1_lash_upper").arg(group)));
 
-    QVector<KisAiStrokePoint> clump2 = sampleQuad(QPointF(c.x() + outerSign * w * 0.46, c.y() - h * 0.20),
-                                                  QPointF(c.x() + outerSign * w * 0.56, c.y() - h * 0.32),
-                                                  QPointF(c.x() + outerSign * w * 0.62, c.y() - h * 0.34),
-                                                  5,
-                                                  0.65,
-                                                  0.2);
+    QVector<KisAiStrokePoint> clump2 = sampleQuad(QPointF(c.x() + outerSign * w * 0.45, c.y() - h * 0.21),
+                                                  QPointF(c.x() + outerSign * w * 0.55, c.y() - h * 0.33),
+                                                  QPointF(c.x() + outerSign * w * 0.62, c.y() - h * 0.35),
+                                                  6,
+                                                  0.68,
+                                                  0.18);
     out.append(makePath(QStringLiteral("%1_lash_clump_2").arg(group),
                         group,
                         QStringLiteral("Lineart"),
@@ -303,11 +524,12 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandEye(const KisAiStrok
                         QStringLiteral("contour"),
                         QStringLiteral("%1_lash_upper").arg(group)));
 
-    QVector<KisAiStrokePoint> crease = sampleQuad(QPointF(c.x() + innerSign * w * 0.28, c.y() - h * 0.60),
+    // 8. Double-Eyelid Crease & Lower Lashes
+    QVector<KisAiStrokePoint> crease = sampleQuad(QPointF(c.x() + innerSign * w * 0.30, c.y() - h * 0.58),
                                                   QPointF(c.x() + outerSign * w * 0.05, c.y() - h * 0.68),
-                                                  QPointF(c.x() + outerSign * w * 0.36, c.y() - h * 0.54),
-                                                  6,
-                                                  0.4,
+                                                  QPointF(c.x() + outerSign * w * 0.38, c.y() - h * 0.53),
+                                                  8,
+                                                  0.35,
                                                   0.55);
     out.append(makePath(QStringLiteral("%1_crease").arg(group),
                         group,
@@ -319,12 +541,12 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandEye(const KisAiStrok
                         0.75,
                         QStringLiteral("internal")));
 
-    QVector<KisAiStrokePoint> lower1 = sampleQuad(QPointF(c.x() + outerSign * w * 0.16, c.y() + h * 0.46),
-                                                  QPointF(c.x() + outerSign * w * 0.28, c.y() + h * 0.48),
-                                                  QPointF(c.x() + outerSign * w * 0.38, c.y() + h * 0.38),
-                                                  5,
-                                                  0.5,
-                                                  0.2);
+    QVector<KisAiStrokePoint> lower1 = sampleQuad(QPointF(c.x() + outerSign * w * 0.14, c.y() + h * 0.45),
+                                                  QPointF(c.x() + outerSign * w * 0.27, c.y() + h * 0.47),
+                                                  QPointF(c.x() + outerSign * w * 0.39, c.y() + h * 0.37),
+                                                  6,
+                                                  0.50,
+                                                  0.18);
     out.append(makePath(QStringLiteral("%1_lash_lower_1").arg(group),
                         group,
                         QStringLiteral("Lineart"),
@@ -332,15 +554,15 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandEye(const KisAiStrok
                         dark,
                         QStringLiteral("fineliner"),
                         0.0014,
-                        0.70,
+                        0.72,
                         QStringLiteral("contour"),
                         scleraId));
-    QVector<KisAiStrokePoint> lower2 = sampleQuad(QPointF(c.x() + outerSign * w * 0.32, c.y() + h * 0.44),
+    QVector<KisAiStrokePoint> lower2 = sampleQuad(QPointF(c.x() + outerSign * w * 0.31, c.y() + h * 0.43),
                                                   QPointF(c.x() + outerSign * w * 0.40, c.y() + h * 0.48),
-                                                  QPointF(c.x() + outerSign * w * 0.44, c.y() + h * 0.52),
-                                                  4,
+                                                  QPointF(c.x() + outerSign * w * 0.45, c.y() + h * 0.52),
+                                                  5,
                                                   0.45,
-                                                  0.18);
+                                                  0.16);
     out.append(makePath(QStringLiteral("%1_lash_lower_2").arg(group),
                         group,
                         QStringLiteral("Lineart"),
@@ -376,58 +598,73 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandMouth(const KisAiStr
     const bool isCat = (expr == QLatin1String("cat_mouth"));
 
     if (isOpen) {
-        QPolygonF cavity;
-        cavity.append(QPointF(c.x() - halfW * 0.85, c.y()));
-        cavity.append(QPointF(c.x(), c.y() - h * 0.15));
-        cavity.append(QPointF(c.x() + halfW * 0.85, c.y()));
-        cavity.append(QPointF(c.x(), c.y() + h * 0.85));
-        out.append(makeFill(QStringLiteral("%1_cavity").arg(group),
-                            group,
-                            QStringLiteral("Flats"),
-                            cavity,
-                            lip.darker(280),
-                            1.0,
-                            QStringLiteral("mass")));
+        const QString cavityId = QStringLiteral("%1_cavity").arg(group);
+        const QPolygonF cavity = ellipsePoly(QPointF(c.x(), c.y() + h * 0.35), halfW * 0.82, h * 0.52, 20);
+        out.append(makeLinearGradientFill(
+            cavityId,
+            group,
+            QStringLiteral("Flats"),
+            cavity,
+            QPointF(c.x(), c.y() - h * 0.15),
+            QPointF(c.x(), c.y() + h * 0.85),
+            {lip.darker(320), lip.darker(240), lip.darker(180)},
+            1.0,
+            QStringLiteral("mass")));
+
+        // Warm tongue dome clipped inside the oral cavity
+        const QPointF tongueC(c.x(), c.y() + h * 0.62);
+        out.append(makeRadialGradientFill(
+            QStringLiteral("%1_tongue").arg(group),
+            group,
+            QStringLiteral("Flats"),
+            ellipsePoly(tongueC, halfW * 0.62, h * 0.38, 16),
+            tongueC,
+            qMax(halfW, h) * 0.55,
+            {lip.lighter(115), lip, lip.darker(135)},
+            0.95,
+            QStringLiteral("mass"),
+            cavityId));
     }
 
-    // Soft lip blush tint (subtle translucent wash)
-    QPolygonF lipBlush;
-    lipBlush.append(QPointF(c.x() - halfW * 0.65, c.y() + (isSmile ? -h * 0.05 : 0.0)));
-    lipBlush.append(QPointF(c.x(), c.y() - h * 0.15));
-    lipBlush.append(QPointF(c.x() + halfW * 0.65, c.y() + (isSmile ? -h * 0.05 : 0.0)));
-    lipBlush.append(QPointF(c.x(), c.y() + h * 0.55));
-    out.append(makeFill(QStringLiteral("%1_tint").arg(group),
-                        group,
-                        QStringLiteral("Flats"),
-                        lipBlush,
-                        lip,
-                        0.28,
-                        QStringLiteral("wash")));
+    // Soft volumetric lip blush tint
+    const QPolygonF lipBlush = ellipsePoly(QPointF(c.x(), c.y() + h * 0.18), halfW * 0.72, h * 0.38, 16);
+    out.append(makeRadialGradientFill(
+        QStringLiteral("%1_tint").arg(group),
+        group,
+        QStringLiteral("Flats"),
+        lipBlush,
+        QPointF(c.x(), c.y() + h * 0.15),
+        qMax(halfW, h) * 0.65,
+        {QColor(lip.red(), lip.green(), lip.blue(), 110),
+         QColor(lip.red(), lip.green(), lip.blue(), 45),
+         QColor(lip.red(), lip.green(), lip.blue(), 0)},
+        0.55,
+        QStringLiteral("wash")));
 
     QVector<KisAiStrokePoint> upper;
     if (isCat) {
         upper = sampleQuad(QPointF(c.x() - halfW, c.y()),
                            QPointF(c.x() - halfW * 0.5, c.y() - h * 0.4),
                            QPointF(c.x(), c.y()),
-                           5,
-                           0.4,
-                           0.8);
+                           6,
+                           0.35,
+                           0.85);
         upper.append(sampleQuad(QPointF(c.x(), c.y()),
                                 QPointF(c.x() + halfW * 0.5, c.y() - h * 0.4),
                                 QPointF(c.x() + halfW, c.y()),
-                                5,
-                                0.8,
-                                0.4));
+                                6,
+                                0.85,
+                                0.35));
     } else {
         const qreal arch = isSmile ? -h * 0.35 : (isOpen ? -h * 0.15 : 0.0);
-        const QPointF left(c.x() - halfW, c.y() + (isSmile ? -h * 0.1 : 0.0));
-        const QPointF right(c.x() + halfW, c.y() + (isSmile ? -h * 0.1 : 0.0));
+        const QPointF left(c.x() - halfW, c.y() + (isSmile ? -h * 0.12 : 0.0));
+        const QPointF right(c.x() + halfW, c.y() + (isSmile ? -h * 0.12 : 0.0));
         const QPointF peakL(c.x() - halfW * 0.25, c.y() + arch - h * 0.10);
-        const QPointF centerDip(c.x(), c.y() + arch);
+        const QPointF centerDip(c.x(), c.y() + arch + h * 0.04);
         const QPointF peakR(c.x() + halfW * 0.25, c.y() + arch - h * 0.10);
 
-        upper = sampleQuad(left, peakL, centerDip, 6, 0.30, 0.85);
-        QVector<KisAiStrokePoint> rightHalf = sampleQuad(centerDip, peakR, right, 6, 0.85, 0.30);
+        upper = sampleQuad(left, peakL, centerDip, 8, 0.28, 0.88);
+        QVector<KisAiStrokePoint> rightHalf = sampleQuad(centerDip, peakR, right, 8, 0.88, 0.28);
         for (int i = 1; i < rightHalf.size(); ++i) {
             upper.append(rightHalf.at(i));
         }
@@ -473,35 +710,53 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandMouth(const KisAiStr
     }
 
     if (!isOpen) {
-        QVector<KisAiStrokePoint> lower = sampleQuad(QPointF(c.x() - halfW * 0.32, c.y() + h * 0.45),
-                                                     QPointF(c.x(), c.y() + h * 0.55),
-                                                     QPointF(c.x() + halfW * 0.32, c.y() + h * 0.45),
-                                                     6,
-                                                     0.4,
-                                                     0.4);
+        QVector<KisAiStrokePoint> lower = sampleQuad(QPointF(c.x() - halfW * 0.34, c.y() + h * 0.44),
+                                                     QPointF(c.x(), c.y() + h * 0.56),
+                                                     QPointF(c.x() + halfW * 0.34, c.y() + h * 0.44),
+                                                     8,
+                                                     0.32,
+                                                     0.32);
         out.append(makePath(QStringLiteral("%1_lower_lip").arg(group),
                             group,
                             QStringLiteral("Lineart"),
                             lower,
-                            lip.darker(150),
+                            lip.darker(155),
                             QStringLiteral("fineliner"),
                             0.0020,
-                            0.70,
+                            0.72,
                             QStringLiteral("contour"),
                             upperId));
 
-        // Soft under-lower-lip shadow wedge
+        // Soft under-lower-lip shadow cushion
         QPolygonF lowerShade;
-        lowerShade.append(QPointF(c.x() - halfW * 0.22, c.y() + h * 0.58));
-        lowerShade.append(QPointF(c.x() + halfW * 0.22, c.y() + h * 0.58));
+        lowerShade.append(QPointF(c.x() - halfW * 0.24, c.y() + h * 0.56));
+        lowerShade.append(QPointF(c.x() + halfW * 0.24, c.y() + h * 0.56));
         lowerShade.append(QPointF(c.x(), c.y() + h * 0.85));
         out.append(makeFill(QStringLiteral("%1_shadow").arg(group),
                             group,
                             QStringLiteral("Shading"),
                             lowerShade,
-                            lip.darker(160),
-                            0.25,
+                            lip.darker(165),
+                            0.28,
                             QStringLiteral("wash")));
+    } else {
+        // Open mouth lower lip contour arc
+        QVector<KisAiStrokePoint> lowerOpen = sampleQuad(QPointF(c.x() - halfW * 0.52, c.y() + h * 0.72),
+                                                         QPointF(c.x(), c.y() + h * 0.92),
+                                                         QPointF(c.x() + halfW * 0.52, c.y() + h * 0.72),
+                                                         8,
+                                                         0.30,
+                                                         0.30);
+        out.append(makePath(QStringLiteral("%1_lower_lip").arg(group),
+                            group,
+                            QStringLiteral("Lineart"),
+                            lowerOpen,
+                            lip.darker(160),
+                            QStringLiteral("fineliner"),
+                            0.0020,
+                            0.75,
+                            QStringLiteral("contour"),
+                            upperId));
     }
 
     if (op.mouthHasHighlight) {
@@ -509,9 +764,9 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandMouth(const KisAiStr
         out.append(makeFill(QStringLiteral("%1_gloss").arg(group),
                             group,
                             QStringLiteral("Highlights"),
-                            ellipsePoly(gloss, w * 0.035, h * 0.07, 10),
-                            QColor(255, 255, 255),
-                            0.80,
+                            ellipsePoly(gloss, w * 0.040, h * 0.075, 12),
+                            QColor(255, 250, 252),
+                            0.85,
                             QStringLiteral("accent")));
     }
     return out;
@@ -597,16 +852,19 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandMangaLines(const Kis
         const qreal sinA = std::sin(angle);
         const qreal innerDist = op.innerRadius * (1.0 + (rng.generateDouble() - 0.5) * jitter * 0.8);
         const qreal outerDist = op.outerRadius * (1.0 + (rng.generateDouble() - 0.5) * jitter);
+        // Multi-point tapered path (needle tip at innerDist -> bold outer edge)
+        const qreal midDist = innerDist + (outerDist - innerDist) * 0.45;
         QVector<KisAiStrokePoint> pts;
-        pts.append(KisAiStrokePoint(center.x() + cosA * innerDist, center.y() + sinA * innerDist, 0.25));
-        pts.append(KisAiStrokePoint(center.x() + cosA * outerDist, center.y() + sinA * outerDist, 0.85));
+        pts.append(KisAiStrokePoint(center.x() + cosA * innerDist, center.y() + sinA * innerDist, 0.12));
+        pts.append(KisAiStrokePoint(center.x() + cosA * midDist, center.y() + sinA * midDist, 0.55));
+        pts.append(KisAiStrokePoint(center.x() + cosA * outerDist, center.y() + sinA * outerDist, 0.95));
         out.append(makePath(QStringLiteral("%1_ray_%2").arg(group).arg(i),
                             group,
                             op.layer.isEmpty() ? QStringLiteral("FX") : op.layer,
                             pts,
                             op.brush.color,
                             QStringLiteral("gpen"),
-                            qMax<qreal>(0.0015, op.brush.size),
+                            qMax<qreal>(0.0018, op.brush.size),
                             op.brush.opacity,
                             QStringLiteral("accent")));
     }
@@ -623,18 +881,68 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandParticles(const KisA
     const QString group = op.groupId.isEmpty() ? (op.id.isEmpty() ? QStringLiteral("particles") : op.id) : op.groupId;
     const QRectF bounds = op.bounds.isValid() ? op.bounds : QRectF(0.0, 0.0, 1.0, 1.0);
     const int count = qBound(1, op.particleCount, 60);
+    const QString shape = op.particleShape.trimmed().toLower();
+    const QString targetLayer = op.layer.isEmpty() ? QStringLiteral("FX") : op.layer;
+    const QColor baseColor = op.brush.color.isValid() ? op.brush.color : QColor(255, 220, 235);
     QRandomGenerator rng(KisAiStrokeProgramCodec::stableSeed(op.id.isEmpty() ? QStringLiteral("particles") : op.id));
+
     for (int i = 0; i < count; ++i) {
         const qreal x = bounds.left() + rng.generateDouble() * bounds.width();
         const qreal y = bounds.top() + rng.generateDouble() * bounds.height();
-        const qreal r = 0.004 + rng.generateDouble() * 0.006;
-        out.append(makeFill(QStringLiteral("%1_dot_%2").arg(group).arg(i),
-                            group,
-                            op.layer.isEmpty() ? QStringLiteral("FX") : op.layer,
-                            ellipsePoly(QPointF(x, y), r, r, 8),
-                            op.brush.color,
-                            qBound<qreal>(0.05, op.brush.opacity * 0.85, 0.90),
-                            QStringLiteral("accent")));
+        const qreal depthScale = 0.55 + rng.generateDouble() * 0.90;
+        const qreal r = qMax<qreal>(0.003, (op.brush.size > 0.0 ? op.brush.size : 0.006) * depthScale);
+        const qreal alpha = qBound<qreal>(0.08, op.brush.opacity * (0.45 + 0.50 * depthScale), 0.95);
+        const QPointF pt(x, y);
+
+        if (shape == QLatin1String("petal") || shape == QLatin1String("sakura")) {
+            const qreal angleRad = rng.generateDouble() * 2.0 * PI;
+            const QPolygonF petal = sakuraPetalPoly(pt, r * 1.35, angleRad);
+            const QColor petalCol = (i % 3 == 0) ? baseColor.lighter(115) : baseColor;
+            KisAiStrokeOperation pOp = makeFill(QStringLiteral("%1_dot_%2").arg(group).arg(i),
+                                                group,
+                                                targetLayer,
+                                                petal,
+                                                petalCol,
+                                                alpha,
+                                                QStringLiteral("accent"));
+            pOp.fillStyle = QStringLiteral("wash");
+            out.append(pOp);
+        } else if (shape == QLatin1String("sparkle") || shape == QLatin1String("star")) {
+            const QPolygonF star = starSparklePoly(pt, r * 1.5, r * 1.5);
+            KisAiStrokeOperation sOp = makeFill(QStringLiteral("%1_dot_%2").arg(group).arg(i),
+                                                group,
+                                                targetLayer,
+                                                star,
+                                                baseColor.lighter(125),
+                                                alpha,
+                                                QStringLiteral("accent"));
+            sOp.blendMode = QStringLiteral("screen");
+            out.append(sOp);
+        } else if (shape == QLatin1String("bokeh")) {
+            const QPolygonF circle = ellipsePoly(pt, r * 1.8, r * 1.8, 16);
+            out.append(makeRadialGradientFill(
+                QStringLiteral("%1_dot_%2").arg(group).arg(i),
+                group,
+                targetLayer,
+                circle,
+                pt,
+                r * 1.8,
+                {QColor(baseColor.red(), baseColor.green(), baseColor.blue(), 140),
+                 QColor(baseColor.red(), baseColor.green(), baseColor.blue(), 220),
+                 QColor(baseColor.red(), baseColor.green(), baseColor.blue(), 0)},
+                alpha * 0.75,
+                QStringLiteral("accent"),
+                QString(),
+                QStringLiteral("screen")));
+        } else {
+            out.append(makeFill(QStringLiteral("%1_dot_%2").arg(group).arg(i),
+                                group,
+                                targetLayer,
+                                ellipsePoly(pt, r, r, 12),
+                                baseColor,
+                                alpha,
+                                QStringLiteral("accent")));
+        }
     }
     return out;
 }
@@ -908,6 +1216,7 @@ QVector<KisAiStrokeOperation> KisAiPrimitiveExpander::expandFormShading(const Ki
     shadowOp.blendMode = (op.blendMode.isEmpty() || op.blendMode == QLatin1String("normal"))
         ? QStringLiteral("multiply")
         : op.blendMode;
+    shadowOp.fillStyle = QStringLiteral("wash");
     shadowOp.style = QStringLiteral("wash");
     return {shadowOp};
 }

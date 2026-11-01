@@ -36,6 +36,7 @@ private Q_SLOTS:
     void testSmoothCubicHairClumpsAndDrapery();
     void testBodyRigAnchoringAndSymmetry();
     void testMediumFinishAndQualityGates();
+    void testVolumetricPolygonWashAndZOrdering();
 };
 
 #endif // KIS_AI_V10_QUALITY_TEST_H

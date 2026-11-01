@@ -417,34 +417,55 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
             issue.requiresUserConsent = false;
             plan.issues.append(issue);
 
-            // 修正案: 該当 Shading op を Flats の内側にクリップ (代表 1 op)
+            // 修正案: 該当 Shading op を Flats シルエットとの幾何積 (QPainterPath::intersected) で正確にクリップ
+            QPainterPath flatsUnion;
+            flatsUnion.setFillRule(Qt::WindingFill);
+            for (int i = 0; i < program.operations.size(); ++i) {
+                const KisAiStrokeOperation &fop = program.operations.at(i);
+                if (normalizeLayerLocal(fop.layer) == QStringLiteral("Flats") && fop.polygon.size() >= 3) {
+                    QPainterPath sub;
+                    sub.addPolygon(fop.polygon);
+                    sub.closeSubpath();
+                    flatsUnion = flatsUnion.united(sub);
+                }
+            }
+
             for (int i = 0; i < program.operations.size(); ++i) {
                 const KisAiStrokeOperation &op = program.operations.at(i);
                 if (normalizeLayerLocal(op.layer) != QStringLiteral("Shading"))
                     continue;
-                if (op.polygon.isEmpty())
+                if (op.polygon.size() < 3)
                     continue;
                 PerceptualFix fix;
                 fix.issue = issue;
                 fix.action = PerceptualFix::ClipPolygon;
                 fix.targetOpIndex = i;
                 fix.targetOpId = op.id;
-                // クリップ後のポリゴンは元の 0.95 倍に縮小 (近似)。厳密には Sutherland-Hodgman だが、
-                // コスト的に代表点縮小で代用。
-                QPolygonF shrunk;
-                QPointF centroid;
-                for (int p = 0; p < op.polygon.size(); ++p) {
-                    centroid += op.polygon.at(p);
+
+                QPolygonF clippedPoly;
+                if (!flatsUnion.isEmpty()) {
+                    QPainterPath shadePath;
+                    shadePath.addPolygon(op.polygon);
+                    shadePath.closeSubpath();
+                    const QPainterPath inter = shadePath.intersected(flatsUnion);
+                    const QPolygonF candidate = inter.toFillPolygon();
+                    if (candidate.size() >= 3) {
+                        clippedPoly = candidate;
+                    }
                 }
-                if (!op.polygon.isEmpty()) {
+                if (clippedPoly.size() < 3) {
+                    QPointF centroid;
+                    for (int p = 0; p < op.polygon.size(); ++p) {
+                        centroid += op.polygon.at(p);
+                    }
                     centroid /= op.polygon.size();
                     for (int p = 0; p < op.polygon.size(); ++p) {
                         const QPointF pt = op.polygon.at(p);
-                        shrunk.append(centroid + (pt - centroid) * 0.95);
+                        clippedPoly.append(centroid + (pt - centroid) * 0.92);
                     }
                 }
-                fix.newPolygon = shrunk;
-                fix.description = QStringLiteral("Clip Shading polygon to within Flats (centroid shrink)");
+                fix.newPolygon = clippedPoly;
+                fix.description = QStringLiteral("Clip Shading polygon '%1' to Flats silhouette").arg(op.id);
                 plan.fixes.append(fix);
                 plan.autoFixSummaries.append(fix.description);
                 break; // 代表 1 件のみ
@@ -537,9 +558,47 @@ PerceptualRepairPlan KisAiPerceptualRepairer::diagnose(const KisAiStrokeProgram 
         }
     }
 
-    // ---- 5. 左右非対称検出 (Lineart op の x 座標分布) ----
+    // ---- 5. 左右非対称検出 (AnimeEye ペアおよび Lineart op の x 座標分布) ----
     {
-        if (spec && program.operations.size() >= 2) {
+        QVector<int> eyeIndices;
+        for (int i = 0; i < program.operations.size(); ++i) {
+            if (program.operations.at(i).kind == KisAiStrokeOperation::Kind::AnimeEye) {
+                eyeIndices.append(i);
+            }
+        }
+        if (eyeIndices.size() == 2) {
+            const KisAiStrokeOperation &e0 = program.operations.at(eyeIndices.at(0));
+            const KisAiStrokeOperation &e1 = program.operations.at(eyeIndices.at(1));
+            const qreal yDiff = qAbs(e0.eyeCenter.y() - e1.eyeCenter.y());
+            const qreal wDiff = qAbs(e0.eyeSize.width() - e1.eyeSize.width());
+            const qreal hDiff = qAbs(e0.eyeSize.height() - e1.eyeSize.height());
+            if (yDiff > 0.04 || wDiff > 0.04 || hDiff > 0.04) {
+                PerceptualIssue issue;
+                issue.type = PerceptualIssue::AsymmetryEye;
+                issue.region = QRectF(0.2, 0.2, 0.6, 0.4);
+                issue.severity = qBound<qreal>(0.0, qMax(yDiff, qMax(wDiff, hDiff)) * 4.0, 1.0);
+                issue.description =
+                    QStringLiteral("AnimeEye pair asymmetry detected (dy=%1, dw=%2, dh=%3)")
+                        .arg(yDiff, 0, 'f', 3)
+                        .arg(wDiff, 0, 'f', 3)
+                        .arg(hDiff, 0, 'f', 3);
+                issue.requiresUserConsent = true;
+                plan.issues.append(issue);
+                plan.hasUserConsentRequired = true;
+                plan.consentSummaries.append(issue.description);
+
+                PerceptualFix fix;
+                fix.issue = issue;
+                fix.action = PerceptualFix::ResizeOp;
+                fix.targetOpIndex = eyeIndices.at(1);
+                fix.targetOpId = e1.id;
+                fix.newPolygon = QPolygonF()
+                    << QPointF(e1.eyeCenter.x(), e0.eyeCenter.y())
+                    << QPointF(e0.eyeSize.width(), e0.eyeSize.height());
+                fix.description = QStringLiteral("Align right eye height and size to left eye");
+                plan.fixes.append(fix);
+            }
+        } else if (spec && program.operations.size() >= 2) {
             const qreal axis = spec->composition.headCenter.x();
             qreal leftCount = 0, rightCount = 0;
             for (int i = 0; i < program.operations.size(); ++i) {
@@ -818,8 +877,20 @@ KisAiStrokeProgram KisAiPerceptualRepairer::apply(const KisAiStrokeProgram &prog
             result.operations.append(op);
             break;
         }
-        case PerceptualFix::ResizeOp:
+        case PerceptualFix::ResizeOp: {
+            const int targetIdx = findTargetIndex(fix);
+            if (targetIdx < 0 || targetIdx >= result.operations.size())
+                break;
+            KisAiStrokeOperation op = result.operations.at(targetIdx);
+            if (op.kind == KisAiStrokeOperation::Kind::AnimeEye && fix.newPolygon.size() >= 2) {
+                op.eyeCenter = fix.newPolygon.at(0);
+                op.eyeSize = QSizeF(fix.newPolygon.at(1).x(), fix.newPolygon.at(1).y());
+            } else if (fix.newSize > 0.0) {
+                op.brush.size = fix.newSize;
+            }
+            result.operations[targetIdx] = op;
             break;
+        }
         }
     }
 
