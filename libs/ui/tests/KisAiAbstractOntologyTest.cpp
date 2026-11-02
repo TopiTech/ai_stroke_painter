@@ -263,4 +263,64 @@ void KisAiAbstractOntologyTest::testStyleArtStyleIdSyncsMediumId()
     QCOMPARE(spec.medium.mediumId, QStringLiteral("watercolor_wash"));
 }
 
+void KisAiAbstractOntologyTest::testNanAndInfinitySanitized()
+{
+    // Test 1: fromJson with NaN / Infinity
+    QJsonObject ruleObj;
+    ruleObj[QStringLiteral("specPath")] = QStringLiteral("colorScript.accentWeight");
+    ruleObj[QStringLiteral("kind")] = QStringLiteral("AddNumber");
+    ruleObj[QStringLiteral("keywords")] = QJsonArray{QStringLiteral("testkeyword")};
+    ruleObj[QStringLiteral("numberValue")] = std::numeric_limits<double>::quiet_NaN();
+    ruleObj[QStringLiteral("weight")] = std::numeric_limits<double>::infinity();
+
+    QJsonArray array;
+    array.append(ruleObj);
+
+    const OntologyRuleset set = OntologyRuleset::fromJson(array);
+    QCOMPARE(set.rules.size(), 1);
+    QVERIFY(std::isfinite(set.rules.first().numberValue));
+    QVERIFY(std::isfinite(set.rules.first().weight));
+    QCOMPARE(set.rules.first().numberValue, 0.0);
+    QCOMPARE(set.rules.first().weight, 1.0);
+
+    // Test 2: apply rules with un-sanitized / malicious double via OntologyApplier
+    OntologyRule badRule;
+    badRule.triggerWords = QStringList{QStringLiteral("testkeyword")};
+    badRule.specPath = QStringLiteral("colorScript.accentWeight");
+    badRule.kind = OntologyRule::AddNumber;
+    badRule.numberValue = std::numeric_limits<double>::quiet_NaN();
+    badRule.weight = 1.0;
+
+    OntologyRuleset badRuleset;
+    badRuleset.rules.append(badRule);
+
+    KisAiSceneSpec spec;
+    spec.colorScript.accentWeight = 0.5;
+    spec.style.detailLevel = 0.5;
+    spec.medium.finishStrength = 0.5;
+
+    // Apply AddNumber rule with NaN - must not corrupt accentWeight
+    OntologyApplier::apply(QStringLiteral("testkeyword"), &spec, badRuleset);
+    QVERIFY(std::isfinite(spec.colorScript.accentWeight));
+    QCOMPARE(spec.colorScript.accentWeight, 0.5);
+
+    // SetNumber with NaN
+    badRuleset.rules[0].kind = OntologyRule::SetNumber;
+    OntologyApplier::apply(QStringLiteral("testkeyword"), &spec, badRuleset);
+    QVERIFY(std::isfinite(spec.colorScript.accentWeight));
+    QCOMPARE(spec.colorScript.accentWeight, 0.5);
+
+    // detailLevel with NaN
+    badRuleset.rules[0].specPath = QStringLiteral("style.detailLevel");
+    OntologyApplier::apply(QStringLiteral("testkeyword"), &spec, badRuleset);
+    QVERIFY(std::isfinite(spec.style.detailLevel));
+    QCOMPARE(spec.style.detailLevel, 0.5);
+
+    // finishStrength with NaN
+    badRuleset.rules[0].specPath = QStringLiteral("medium.finishStrength");
+    OntologyApplier::apply(QStringLiteral("testkeyword"), &spec, badRuleset);
+    QVERIFY(std::isfinite(spec.medium.finishStrength));
+    QCOMPARE(spec.medium.finishStrength, 0.5);
+}
+
 KISTEST_MAIN(KisAiAbstractOntologyTest)

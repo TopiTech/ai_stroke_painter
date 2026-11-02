@@ -30,6 +30,7 @@ private Q_SLOTS:
     void testDefaultSpecForPromptAppliesOntology();
     void testMediumContractMapping();
     void testStyleArtStyleIdSyncsMediumId();
+    void testNanAndInfinitySanitized();
 };
 
 #endif // KIS_AI_ABSTRACT_ONTOLOGY_TEST_H

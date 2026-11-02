@@ -763,6 +763,10 @@ KisAiStrokeProgram KisAiPerceptualRepairer::apply(const KisAiStrokeProgram &prog
                                                   bool includeConsentFixes)
 {
     KisAiStrokeProgram result = program;
+    QVector<int> originalToCurrent(program.operations.size());
+    for (int i = 0; i < originalToCurrent.size(); ++i) {
+        originalToCurrent[i] = i;
+    }
 
     auto findTargetIndex = [&](const PerceptualFix &fix) -> int {
         if (!fix.targetOpId.isEmpty()) {
@@ -772,8 +776,8 @@ KisAiStrokeProgram KisAiPerceptualRepairer::apply(const KisAiStrokeProgram &prog
                 }
             }
         }
-        if (fix.targetOpIndex >= 0 && fix.targetOpIndex < result.operations.size()) {
-            return fix.targetOpIndex;
+        if (fix.targetOpIndex >= 0 && fix.targetOpIndex < originalToCurrent.size()) {
+            return originalToCurrent.at(fix.targetOpIndex);
         }
         return -1;
     };
@@ -790,6 +794,13 @@ KisAiStrokeProgram KisAiPerceptualRepairer::apply(const KisAiStrokeProgram &prog
             const int targetIdx = findTargetIndex(fix);
             if (targetIdx >= 0 && targetIdx < result.operations.size()) {
                 result.operations.remove(targetIdx);
+                for (int i = 0; i < originalToCurrent.size(); ++i) {
+                    if (originalToCurrent.at(i) == targetIdx) {
+                        originalToCurrent[i] = -1;
+                    } else if (originalToCurrent.at(i) > targetIdx) {
+                        originalToCurrent[i]--;
+                    }
+                }
             }
             break;
         }

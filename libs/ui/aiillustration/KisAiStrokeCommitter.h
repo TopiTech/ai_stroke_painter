@@ -65,12 +65,9 @@ public:
                                                          const QMap<QString, QPolygonF> &globalSilhouettes,
                                                          KisAiStrokeCommitLog *log = nullptr);
 
-    static const KisAiStrokeCommitLog &lastLog();
+    static KisAiStrokeCommitLog lastLog();
 
     static qreal atomicStrokeRatio(const QVector<KisAiStrokeOperation> &ops);
-
-private:
-    static KisAiStrokeCommitLog s_lastLog;
 };
 
 #endif // KIS_AI_STROKE_COMMITTER_H

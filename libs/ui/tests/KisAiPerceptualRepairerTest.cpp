@@ -561,4 +561,55 @@ void KisAiPerceptualRepairerTest::testColorBandingOnColoredGradients()
     QVERIFY(plan.issueCount(PerceptualIssue::ColorBanding) >= 1);
 }
 
+void KisAiPerceptualRepairerTest::testAnonymousOpDropAndModifyIndexTracking()
+{
+    KisAiStrokeProgram prog;
+    KisAiStrokeOperation op0, op1, op2;
+    // Anonymous ops with no targetOpId
+    op0.id = QString();
+    op0.kind = KisAiStrokeOperation::Kind::Path;
+    op0.brush.profile = QStringLiteral("ink");
+
+    op1.id = QString();
+    op1.kind = KisAiStrokeOperation::Kind::Path;
+    op1.brush.profile = QStringLiteral("original_one");
+
+    op2.id = QString();
+    op2.kind = KisAiStrokeOperation::Kind::Path;
+    op2.brush.profile = QStringLiteral("original_two");
+
+    prog.operations << op0 << op1 << op2;
+
+    PerceptualRepairPlan plan;
+    PerceptualIssue issue;
+    issue.requiresUserConsent = false;
+
+    // Fix 1: Drop anonymous op0 at index 0
+    PerceptualFix fixDrop;
+    fixDrop.issue = issue;
+    fixDrop.action = PerceptualFix::DropOp;
+    fixDrop.targetOpIndex = 0;
+    fixDrop.targetOpId = QString();
+
+    // Fix 2: Replace op2 (originally index 2) with Fill kind
+    PerceptualFix fixModify;
+    fixModify.issue = issue;
+    fixModify.action = PerceptualFix::ReplaceOpKind;
+    fixModify.replaceKindName = QStringLiteral("Fill");
+    fixModify.targetOpIndex = 2;
+    fixModify.targetOpId = QString();
+
+    plan.fixes << fixDrop << fixModify;
+
+    const KisAiStrokeProgram outProg = KisAiPerceptualRepairer::apply(prog, plan, false);
+    QCOMPARE(outProg.operations.size(), 2);
+    // op0 was dropped.
+    // op1 (originally index 1) is now index 0 and was NOT modified by fixModify!
+    QCOMPARE(outProg.operations[0].brush.profile, QStringLiteral("original_one"));
+    QCOMPARE(outProg.operations[0].kind, KisAiStrokeOperation::Kind::Path);
+
+    // op2 (originally index 2) is now index 1 and WAS correctly modified by fixModify!
+    QCOMPARE(outProg.operations[1].kind, KisAiStrokeOperation::Kind::Fill);
+}
+
 KISTEST_MAIN(KisAiPerceptualRepairerTest)

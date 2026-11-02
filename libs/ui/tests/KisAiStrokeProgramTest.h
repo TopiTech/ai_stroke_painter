@@ -29,6 +29,7 @@ private Q_SLOTS:
     void testNormalizeLayerName();
     void testCountLayerOperationsAndFormatSummary();
     void testRefineForRenderingRepairsModelGeometry();
+    void testEraserStrokesPreservedInRefine();
     void testStructuralQualityScore();
     void testParseGeometrySafetyLimits();
     void testParticleCountClamping();

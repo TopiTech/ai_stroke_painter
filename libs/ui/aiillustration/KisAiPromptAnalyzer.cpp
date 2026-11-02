@@ -1237,9 +1237,9 @@ QString KisAiPromptAnalyzer::parseExpandedPrompt(const QByteArray &responseBytes
         return QString();
     }
 
-    // Strip reasoning tags (<think>...</think>) from reasoning models
+    // Strip reasoning tags (<think>...</think>, <thought>...</thought>) from reasoning models, including unclosed trailing blocks
     static const QRegularExpression thinkRe(
-        QStringLiteral(R"(<think>[\s\S]*?</think>)"),
+        QStringLiteral(R"(<(?:think|thought)>[\s\S]*?(?:</(?:think|thought)>|$))"),
         QRegularExpression::CaseInsensitiveOption);
     content.remove(thinkRe);
 

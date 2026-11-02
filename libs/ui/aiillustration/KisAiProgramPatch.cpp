@@ -11,17 +11,25 @@
 #include <QJsonDocument>
 #include <QJsonParseError>
 
+#include <cmath>
+
 namespace
 {
 constexpr int MAX_PATCHES_PER_RESPONSE = 64;
 constexpr int MAX_PATCH_JSON_BYTES = 512 * 1024;
 
+qreal safeDouble(const QJsonValue &value, qreal fallback)
+{
+    const double d = value.toDouble(fallback);
+    return std::isfinite(d) ? d : fallback;
+}
+
 bool rigKeyToField(const QString &key, KisAiSceneRigOverrides &rig, const QJsonValue &value)
 {
     if (key == QLatin1String("eye_aperture")) {
-        rig.eyeAperture = qBound<qreal>(0.0, value.toDouble(rig.eyeAperture), 1.0);
+        rig.eyeAperture = qBound<qreal>(0.0, safeDouble(value, rig.eyeAperture), 1.0);
     } else if (key == QLatin1String("iris_ratio")) {
-        rig.irisRatio = qBound<qreal>(0.35, value.toDouble(rig.irisRatio), 0.85);
+        rig.irisRatio = qBound<qreal>(0.35, safeDouble(value, rig.irisRatio), 0.85);
     } else if (key == QLatin1String("eye_highlight")) {
         const QString v = value.toString();
         if (v == QLatin1String("twin_dot") || v == QLatin1String("streak") || v == QLatin1String("soft"))
@@ -31,24 +39,24 @@ bool rigKeyToField(const QString &key, KisAiSceneRigOverrides &rig, const QJsonV
     } else if (key == QLatin1String("double_lid")) {
         rig.doubleLid = value.toBool(rig.doubleLid);
     } else if (key == QLatin1String("hair_strand_density")) {
-        rig.hairStrandDensity = qBound<qreal>(0.0, value.toDouble(rig.hairStrandDensity), 1.0);
+        rig.hairStrandDensity = qBound<qreal>(0.0, safeDouble(value, rig.hairStrandDensity), 1.0);
     } else if (key == QLatin1String("hair_flyaway")) {
-        rig.hairFlyaway = qBound<qreal>(0.0, value.toDouble(rig.hairFlyaway), 1.0);
+        rig.hairFlyaway = qBound<qreal>(0.0, safeDouble(value, rig.hairFlyaway), 1.0);
     } else if (key == QLatin1String("hair_highlight_bands")) {
         // 範囲外 double → int 変換は UB のため、先に倍精度でクランプしてから丸める。
-        rig.hairHighlightBands = qBound(0, qRound(qBound(0.0, value.toDouble(rig.hairHighlightBands), 3.0)), 3);
+        rig.hairHighlightBands = qBound(0, qRound(qBound(0.0, safeDouble(value, rig.hairHighlightBands), 3.0)), 3);
     } else if (key == QLatin1String("mouth_width_scale")) {
-        rig.mouthWidthScale = qBound<qreal>(0.6, value.toDouble(rig.mouthWidthScale), 1.4);
+        rig.mouthWidthScale = qBound<qreal>(0.6, safeDouble(value, rig.mouthWidthScale), 1.4);
     } else if (key == QLatin1String("has_brows")) {
         rig.hasBrows = value.toBool(rig.hasBrows);
     } else if (key == QLatin1String("body_shoulder_width")) {
-        rig.bodyShoulderWidth = qBound<qreal>(0.7, value.toDouble(rig.bodyShoulderWidth), 1.5);
+        rig.bodyShoulderWidth = qBound<qreal>(0.7, safeDouble(value, rig.bodyShoulderWidth), 1.5);
     } else if (key == QLatin1String("body_torso_length")) {
-        rig.bodyTorsoLength = qBound<qreal>(0.7, value.toDouble(rig.bodyTorsoLength), 1.6);
+        rig.bodyTorsoLength = qBound<qreal>(0.7, safeDouble(value, rig.bodyTorsoLength), 1.6);
     } else if (key == QLatin1String("body_arm_length")) {
-        rig.bodyArmLength = qBound<qreal>(0.7, value.toDouble(rig.bodyArmLength), 1.4);
+        rig.bodyArmLength = qBound<qreal>(0.7, safeDouble(value, rig.bodyArmLength), 1.4);
     } else if (key == QLatin1String("body_hand_size")) {
-        rig.bodyHandSize = qBound<qreal>(0.7, value.toDouble(rig.bodyHandSize), 1.4);
+        rig.bodyHandSize = qBound<qreal>(0.7, safeDouble(value, rig.bodyHandSize), 1.4);
     } else if (key == QLatin1String("body_pose")) {
         const QString v = value.toString().trimmed().toLower();
         if (v == QLatin1String("neutral") || v == QLatin1String("reach")
@@ -497,7 +505,7 @@ KisAiStrokeProgram KisAiProgramPatchCodec::applyPatches(
 
         if (tail == QLatin1String("brush/opacity")) {
             result.operations[index].brush.opacity =
-                qBound<qreal>(0.0, patch.value.toDouble(result.operations.at(index).brush.opacity), 1.0);
+                qBound<qreal>(0.0, safeDouble(patch.value, result.operations.at(index).brush.opacity), 1.0);
         } else if (tail == QLatin1String("brush/color")) {
             const QColor c = KisAiStrokeProgramCodec::parseColor(patch.value.toString(),
                                                                  result.operations.at(index).brush.color);

@@ -483,8 +483,9 @@ QString KisAiIllustrationRenderer::encodeReferenceImageBase64(const QImage &imag
     buffer.open(QIODevice::WriteOnly);
     bool saved = rgb.save(&buffer, "JPEG", 85);
     if (!saved || bytes.isEmpty()) {
-        buffer.seek(0);
+        buffer.close();
         bytes.clear();
+        buffer.open(QIODevice::WriteOnly);
         saved = rgb.save(&buffer, "PNG");
     }
 

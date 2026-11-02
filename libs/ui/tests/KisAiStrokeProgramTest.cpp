@@ -2735,6 +2735,72 @@ void KisAiStrokeProgramTest::testParseColorAlphaOverflowIsSafe()
 
     // Short hex forms must keep working.
     QCOMPARE(KisAiStrokeProgramCodec::parseColor(QStringLiteral("#f00")).rgb(), QColor(255, 0, 0).rgb());
+
+    // 4 hex (#rgba), 5 hex (clamped), 7 hex (clamped), 8 hex (#rrggbbaa with alpha)
+    const QColor c4 = KisAiStrokeProgramCodec::parseColor(QStringLiteral("#0f08"));
+    QVERIFY(c4.isValid());
+    QCOMPARE(c4.red(), 0);
+    QCOMPARE(c4.green(), 255);
+    QCOMPARE(c4.blue(), 0);
+    QCOMPARE(c4.alpha(), 136); // 0x88
+
+    const QColor c8 = KisAiStrokeProgramCodec::parseColor(QStringLiteral("#11223380"));
+    QVERIFY(c8.isValid());
+    QCOMPARE(c8.red(), 0x11);
+    QCOMPARE(c8.green(), 0x22);
+    QCOMPARE(c8.blue(), 0x33);
+    QCOMPARE(c8.alpha(), 0x80);
+
+    const QColor c5 = KisAiStrokeProgramCodec::parseColor(QStringLiteral("#ff001"));
+    QVERIFY(c5.isValid());
+    const QColor c7 = KisAiStrokeProgramCodec::parseColor(QStringLiteral("#ff00001"));
+    QVERIFY(c7.isValid());
+    QCOMPARE(c7.red(), 255);
+    QCOMPARE(c7.green(), 0);
+    QCOMPARE(c7.blue(), 0);
+}
+
+void KisAiStrokeProgramTest::testEraserStrokesPreservedInRefine()
+{
+    KisAiStrokeProgram prog;
+    prog.canvasSize = QSize(1000, 1000);
+
+    // 1. Single-point non-eraser (noise) -> should be dropped
+    KisAiStrokeOperation noiseDot;
+    noiseDot.kind = KisAiStrokeOperation::Kind::Path;
+    noiseDot.id = QStringLiteral("random_noise_dot");
+    noiseDot.layer = QStringLiteral("Lineart");
+    noiseDot.brush.isEraser = false;
+    noiseDot.points = { KisAiStrokePoint(0.5, 0.5, 0.5) };
+    prog.operations.append(noiseDot);
+
+    // 2. Single-point eraser dab -> MUST BE PRESERVED
+    KisAiStrokeOperation eraserDab;
+    eraserDab.kind = KisAiStrokeOperation::Kind::Path;
+    eraserDab.id = QStringLiteral("eraser_dab_correction");
+    eraserDab.layer = QStringLiteral("Lineart");
+    eraserDab.brush.isEraser = true;
+    eraserDab.points = { KisAiStrokePoint(0.4, 0.4, 0.8) };
+    prog.operations.append(eraserDab);
+
+    // 3. Short 2-point eraser stroke (dist < 0.005) -> MUST BE PRESERVED
+    KisAiStrokeOperation eraserMicro;
+    eraserMicro.kind = KisAiStrokeOperation::Kind::Path;
+    eraserMicro.id = QStringLiteral("eraser_micro_adjust");
+    eraserMicro.layer = QStringLiteral("Lineart");
+    eraserMicro.brush.isEraser = true;
+    eraserMicro.points = {
+        KisAiStrokePoint(0.3, 0.3, 0.5),
+        KisAiStrokePoint(0.301, 0.301, 0.5)
+    };
+    prog.operations.append(eraserMicro);
+
+    KisAiStrokeQualityReport report;
+    const KisAiStrokeProgram refined = KisAiStrokeProgramCodec::refineForRendering(prog, &report);
+    QCOMPARE(report.inputOperations, 3);
+    QCOMPARE(refined.operations.size(), 2);
+    QCOMPARE(refined.operations[0].id, QStringLiteral("eraser_dab_correction"));
+    QCOMPARE(refined.operations[1].id, QStringLiteral("eraser_micro_adjust"));
 }
 
 void KisAiStrokeProgramTest::testSseCarryOverBufferIsBounded()

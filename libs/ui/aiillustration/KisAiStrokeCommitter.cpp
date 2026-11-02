@@ -12,12 +12,18 @@
 #include "KisAiStrokeQualityUtils.h"
 #include "KisAiStrokeRenderer.h"
 
+#include <QMutex>
+#include <QMutexLocker>
 #include <QPainter>
 #include <QtMath>
 
 #include <cmath>
 
-KisAiStrokeCommitLog KisAiStrokeCommitter::s_lastLog;
+namespace
+{
+QMutex s_committerLogMutex;
+KisAiStrokeCommitLog s_committerLastLog;
+} // namespace
 
 namespace
 {
@@ -381,15 +387,19 @@ QVector<KisAiStrokeOperation> KisAiStrokeCommitter::commitToPainter(QPainter &pa
         }
     }
 
-    s_lastLog = local;
+    {
+        QMutexLocker locker(&s_committerLogMutex);
+        s_committerLastLog = local;
+    }
     if (log)
         *log = local;
     return kept;
 }
 
-const KisAiStrokeCommitLog &KisAiStrokeCommitter::lastLog()
+KisAiStrokeCommitLog KisAiStrokeCommitter::lastLog()
 {
-    return s_lastLog;
+    QMutexLocker locker(&s_committerLogMutex);
+    return s_committerLastLog;
 }
 
 qreal KisAiStrokeCommitter::atomicStrokeRatio(const QVector<KisAiStrokeOperation> &ops)

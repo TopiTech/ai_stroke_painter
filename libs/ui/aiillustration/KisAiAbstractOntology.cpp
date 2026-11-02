@@ -631,9 +631,11 @@ OntologyRuleset OntologyRuleset::fromJson(const QJsonArray &array)
         const QString colorStr = obj.value(QStringLiteral("colorValue")).toString();
         if (!colorStr.isEmpty())
             rule.colorValue = QColor(colorStr);
-        rule.numberValue = obj.value(QStringLiteral("numberValue")).toDouble();
+        const double numVal = obj.value(QStringLiteral("numberValue")).toDouble();
+        rule.numberValue = std::isfinite(numVal) ? numVal : 0.0;
         rule.artStyleHint = obj.value(QStringLiteral("artStyleHint")).toString();
-        rule.weight = obj.value(QStringLiteral("weight")).toDouble(1.0);
+        const double wVal = obj.value(QStringLiteral("weight")).toDouble(1.0);
+        rule.weight = (std::isfinite(wVal) && wVal > 0.0) ? wVal : 1.0;
         rule.category = obj.value(QStringLiteral("category")).toString();
         rule.description = obj.value(QStringLiteral("description")).toString();
         r.rules.append(rule);
@@ -706,11 +708,14 @@ void applyRuleToSpec(const OntologyRule &rule, KisAiSceneSpec *spec)
     const QString path = rule.specPath;
     if (path == QStringLiteral("colorScript.accentWeight")) {
         if (rule.kind == OntologyRule::AddNumber) {
+            if (!std::isfinite(rule.numberValue))
+                return;
             const qreal weight = (rule.weight > 0.0 && std::isfinite(rule.weight)) ? rule.weight : 1.0;
             spec->colorScript.accentWeight =
                 qBound<qreal>(0.0, spec->colorScript.accentWeight + rule.numberValue * weight, 1.0);
         } else if (rule.kind == OntologyRule::SetNumber) {
-            spec->colorScript.accentWeight = qBound<qreal>(0.0, rule.numberValue, 1.0);
+            if (std::isfinite(rule.numberValue))
+                spec->colorScript.accentWeight = qBound<qreal>(0.0, rule.numberValue, 1.0);
         }
     } else if (path == QStringLiteral("colorScript.shadow")) {
         if (rule.kind == OntologyRule::SetColor && rule.colorValue.isValid()) {
@@ -730,7 +735,7 @@ void applyRuleToSpec(const OntologyRule &rule, KisAiSceneSpec *spec)
             spec->style.lineWeight = rule.stringValue;
         }
     } else if (path == QStringLiteral("style.detailLevel")) {
-        if (rule.kind == OntologyRule::SetNumber) {
+        if (rule.kind == OntologyRule::SetNumber && std::isfinite(rule.numberValue)) {
             spec->style.detailLevel = qBound<qreal>(0.0, rule.numberValue, 1.0);
         }
     } else if (path == QStringLiteral("narrative.weather")) {
@@ -761,11 +766,14 @@ void applyRuleToSpec(const OntologyRule &rule, KisAiSceneSpec *spec)
         }
     } else if (path == QStringLiteral("medium.finishStrength")) {
         if (rule.kind == OntologyRule::AddNumber) {
+            if (!std::isfinite(rule.numberValue))
+                return;
             const qreal weight = (rule.weight > 0.0 && std::isfinite(rule.weight)) ? rule.weight : 1.0;
             spec->medium.finishStrength =
                 qBound<qreal>(0.0, spec->medium.finishStrength + rule.numberValue * weight, 1.0);
         } else if (rule.kind == OntologyRule::SetNumber) {
-            spec->medium.finishStrength = qBound<qreal>(0.0, rule.numberValue, 1.0);
+            if (std::isfinite(rule.numberValue))
+                spec->medium.finishStrength = qBound<qreal>(0.0, rule.numberValue, 1.0);
         }
     }
 }

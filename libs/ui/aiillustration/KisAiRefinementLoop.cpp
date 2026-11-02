@@ -8,6 +8,8 @@
 #include "KisAiLayoutEngine.h"
 #include "KisAiVisionCritic.h"
 
+#include <cmath>
+
 KisAiNBestResult KisAiRefinementLoop::selectBestSpecFromBodies(const QString &prompt,
                                                                const QSize &canvasSize,
                                                                const QVector<QByteArray> &bodies)
@@ -53,10 +55,14 @@ KisAiRefinementLoop::ResolvedSampling KisAiRefinementLoop::samplingFor(KisAiMode
         !configuredReasoningEffort.trimmed().isEmpty() ? configuredReasoningEffort : plan.reasoningEffort;
     // User pins still win for the base knobs; the Router owns stage deltas.
     if (stage == KisAiModelRouter::Stage::SceneSpec || stage == KisAiModelRouter::Stage::GoalStep) {
-        out.temperature = qBound<qreal>(0.0, configuredTemperature, 2.0);
+        if (std::isfinite(configuredTemperature)) {
+            out.temperature = qBound<qreal>(0.0, configuredTemperature, 2.0);
+        }
         // topP は API 仕様上 (0,1] のみ有効。UI は 0.05–1.0 に制限しているが、
         // 破損設定や直接呼び出しで範囲外が来ても API エラーにしないよう clamp する。
-        out.topP = qBound<qreal>(0.01, configuredTopP, 1.0);
+        if (std::isfinite(configuredTopP)) {
+            out.topP = qBound<qreal>(0.01, configuredTopP, 1.0);
+        }
     }
     // 負の maxTokens は未指定扱い (0) とし、異常に大きな値は上限で抑える。
     out.maxTokens = qBound(0, configuredMaxTokens, 131072);

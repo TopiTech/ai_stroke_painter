@@ -284,10 +284,8 @@ QColor KisAiStrokeProgramCodec::parseColor(const QString &colorStr, const QColor
                 cleanHex.append(ch);
             }
         }
-        if (cleanHex.length() == 3 || cleanHex.length() == 4 || cleanHex.length() == 6 || cleanHex.length() == 8) {
-            s = cleanHex;
-        } else if (cleanHex.length() == 7 || cleanHex.length() > 8) {
-            s = cleanHex.left(cleanHex.length() >= 8 ? 8 : 6);
+        if (cleanHex.length() == 7 || cleanHex.length() > 8) {
+            s = cleanHex.left(cleanHex.length() > 8 ? 8 : 6);
         } else if (cleanHex.length() == 5) {
             s = cleanHex.left(4);
         } else {
@@ -321,7 +319,10 @@ QColor KisAiStrokeProgramCodec::parseColor(const QString &colorStr, const QColor
         bool ok = false;
         const uint val = s.toUInt(&ok, 16);
         if (ok)
-            return QColor((val >> 24) & 0xFF, (val >> 16) & 0xFF, (val >> 8) & 0xFF, val & 0xFF);
+            return QColor(static_cast<int>((val >> 24) & 0xFF),
+                          static_cast<int>((val >> 16) & 0xFF),
+                          static_cast<int>((val >> 8) & 0xFF),
+                          static_cast<int>(val & 0xFF));
     }
 
     const QColor fromStr = QColor::fromString(colorStr.trimmed());
@@ -4370,7 +4371,10 @@ KisAiStrokeProgram KisAiStrokeProgramCodec::refineForRendering(const KisAiStroke
             op.points = points;
             renderable = !op.points.isEmpty();
             // Phase 1: Suppress isolated stippling / tiny dot noise
-            if (op.points.size() == 1) {
+            if (op.brush.isEraser) {
+                // Intentional eraser tap/dab strokes must be preserved
+                renderable = true;
+            } else if (op.points.size() == 1) {
                 const QString lowerId = op.id.toLower();
                 const bool isIntentionalCatchlight = lowerId.contains(QLatin1String("glint"))
                     || lowerId.contains(QLatin1String("catchlight")) || lowerId.contains(QLatin1String("highlight"))
